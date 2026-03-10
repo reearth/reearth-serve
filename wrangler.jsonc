@@ -1,0 +1,27 @@
+{
+  "name": "reearth-serve",
+  "main": "./worker/index.ts",
+  "compatibility_date": "2025-03-10",
+  "compatibility_flags": ["nodejs_compat"],
+  "observability": {
+    "enabled": true
+  },
+  "vars": {
+    "ASSET_TTL_SECONDS": "3600",
+    "BASE_URL": "http://localhost:8787"
+  },
+  "r2_buckets": [
+    {
+      "binding": "STORAGE",
+      "bucket_name": "reearth-serve"
+    }
+  ],
+  "kv_namespaces": [
+    {
+      "binding": "KV",
+      "id": "reearth-serve"
+    }
+  ]
+  // TODO: Cron trigger for expired asset cleanup
+  // "triggers": { "crons": ["*/10 * * * *"] }
+}
