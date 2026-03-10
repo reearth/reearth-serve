@@ -13,8 +13,14 @@ export async function uploadFile(
   filename: string,
   contentType: string,
 ): Promise<{ status: number; body: any }> {
-  const form = new FormData();
-  form.append("file", new Blob([content as BlobPart], { type: contentType }), filename);
-  const res = await fetch(`${BASE}/assets`, { method: "POST", body: form });
+  const res = await fetch(`${BASE}/assets`, {
+    method: "POST",
+    headers: {
+      "Content-Type": contentType,
+      "Content-Length": String(content.byteLength),
+      "X-Filename": filename,
+    },
+    body: content as BodyInit,
+  });
   return { status: res.status, body: await res.json() };
 }

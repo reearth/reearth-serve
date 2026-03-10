@@ -7,9 +7,9 @@ export interface MetadataStore {
 }
 
 export interface FileStorage {
-  put(key: string, body: ArrayBuffer | ReadableStream, contentType: string): Promise<number>;
+  put(key: string, body: ReadableStream<Uint8Array>, contentType: string, size: number, options?: { contentEncoding?: string }): Promise<void>;
   get(key: string, range?: { offset: number; length: number }): Promise<StoredFile | null>;
-  head(key: string): Promise<{ size: number } | null>;
+  head(key: string): Promise<{ size: number; contentEncoding?: string } | null>;
   delete(key: string): Promise<void>;
 }
 
@@ -20,8 +20,8 @@ export interface UploadSessionStore {
 }
 
 export interface PresignedUrlGenerator {
-  generatePutUrl(key: string, contentType: string, expiresInSeconds: number): Promise<string>;
-  createMultipartUpload(key: string, contentType: string): Promise<string>;
+  generatePutUrl(key: string, contentType: string, expiresInSeconds: number, options?: { contentEncoding?: string }): Promise<string>;
+  createMultipartUpload(key: string, contentType: string, options?: { contentEncoding?: string }): Promise<string>;
   generateUploadPartUrl(key: string, uploadId: string, partNumber: number, expiresInSeconds: number): Promise<string>;
   completeMultipartUpload(key: string, uploadId: string, parts: UploadPart[]): Promise<void>;
   abortMultipartUpload(key: string, uploadId: string): Promise<void>;

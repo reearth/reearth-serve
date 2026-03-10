@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { AppEnv } from "../types";
 import { getAssetFile } from "../asset/usecase";
+import { decompressStream } from "../asset/compression";
 
 export const fileRoutes = new Hono<AppEnv>();
 
@@ -13,18 +14,86 @@ fileRoutes.get("/:id/:filename", async (c) => {
   const metadata = c.get("metadata");
   const storage = c.get("storage");
   const id = c.req.param("id");
-
-  // Parse Range header
   const rangeHeader = c.req.header("Range");
+  const acceptEncoding = c.req.header("Accept-Encoding") ?? "";
+  const clientAcceptsGzip = acceptEncoding.includes("gzip");
+
+  // For gzip-stored files without range, or non-gzip files,
+  // we can request the range directly from R2
   const range = parseRange(rangeHeader);
 
-  const result = await getAssetFile(metadata, storage, id, range ?? undefined);
+  // First, get asset metadata to check contentEncoding
+  const result = await getAssetFile(metadata, storage, id);
   if (!result) {
     return c.json({ error: "File not found" }, 404);
   }
 
   const { asset, file } = result;
+  const isGzipStored = asset.contentEncoding === "gzip";
 
+  // --- Non-gzip file: existing behavior with range support ---
+  if (!isGzipStored) {
+    // If range was requested, re-fetch with range
+    if (range) {
+      const rangedResult = await getAssetFile(metadata, storage, id, range);
+      if (!rangedResult) return c.json({ error: "File not found" }, 404);
+
+      const { file: rangedFile } = rangedResult;
+      const headers: Record<string, string> = {
+        "Content-Type": asset.contentType,
+        "Accept-Ranges": "bytes",
+        "Cache-Control": "public, max-age=3600, immutable",
+        "Content-Disposition": `inline; filename="${encodeURIComponent(asset.filename)}"`,
+      };
+
+      if (rangedFile.range) {
+        const { offset, length, totalSize } = rangedFile.range;
+        headers["Content-Range"] = `bytes ${offset}-${offset + length - 1}/${totalSize}`;
+        headers["Content-Length"] = String(length);
+        return new Response(rangedFile.body, { status: 206, headers });
+      }
+    }
+
+    const headers: Record<string, string> = {
+      "Content-Type": asset.contentType,
+      "Accept-Ranges": "bytes",
+      "Cache-Control": "public, max-age=3600, immutable",
+      "Content-Disposition": `inline; filename="${encodeURIComponent(asset.filename)}"`,
+      "Content-Length": String(file.size),
+    };
+    return new Response(file.body, { status: 200, headers });
+  }
+
+  // --- Gzip-stored file + client accepts gzip + no range → pass through ---
+  if (clientAcceptsGzip && !rangeHeader) {
+    const headers: Record<string, string> = {
+      "Content-Type": asset.contentType,
+      "Content-Encoding": "gzip",
+      "Content-Length": String(file.size),
+      "Cache-Control": "public, max-age=3600, immutable",
+      "Content-Disposition": `inline; filename="${encodeURIComponent(asset.filename)}"`,
+    };
+    return new Response(file.body, { status: 200, headers });
+  }
+
+  // --- Gzip-stored file: decompress ---
+  const decompressed = decompressStream(file.body);
+  const originalSize = asset.originalSize;
+
+  // No range requested: return full decompressed content
+  if (!range) {
+    const headers: Record<string, string> = {
+      "Content-Type": asset.contentType,
+      "Accept-Ranges": "bytes",
+      "Cache-Control": "public, max-age=3600, immutable",
+      "Content-Disposition": `inline; filename="${encodeURIComponent(asset.filename)}"`,
+    };
+    if (originalSize) headers["Content-Length"] = String(originalSize);
+    return new Response(decompressed, { status: 200, headers });
+  }
+
+  // Range on gzip: decompress, skip to offset, stream the range, stop
+  const sliced = sliceStream(decompressed, range.offset, range.length, originalSize);
   const headers: Record<string, string> = {
     "Content-Type": asset.contentType,
     "Accept-Ranges": "bytes",
@@ -32,16 +101,14 @@ fileRoutes.get("/:id/:filename", async (c) => {
     "Content-Disposition": `inline; filename="${encodeURIComponent(asset.filename)}"`,
   };
 
-  // Range response
-  if (file.range) {
-    const { offset, length, totalSize } = file.range;
-    headers["Content-Range"] = `bytes ${offset}-${offset + length - 1}/${totalSize}`;
+  if (originalSize) {
+    const end = Math.min(range.offset + range.length, originalSize) - 1;
+    const length = end - range.offset + 1;
+    headers["Content-Range"] = `bytes ${range.offset}-${end}/${originalSize}`;
     headers["Content-Length"] = String(length);
-    return new Response(file.body, { status: 206, headers });
   }
 
-  headers["Content-Length"] = String(file.size);
-  return new Response(file.body, { status: 200, headers });
+  return new Response(sliced, { status: 206, headers });
 });
 
 function parseRange(header: string | undefined): { offset: number; length: number } | null {
@@ -57,9 +124,60 @@ function parseRange(header: string | undefined): { offset: number; length: numbe
     return { offset: start, length: end - start + 1 };
   }
 
-  // Open-ended range: bytes=100- (read from offset to end)
-  // We use a large length; R2 will clamp to actual size
   return { offset: start, length: Number.MAX_SAFE_INTEGER };
+}
+
+function sliceStream(
+  stream: ReadableStream<Uint8Array>,
+  offset: number,
+  length: number,
+  totalSize?: number,
+): ReadableStream<Uint8Array> {
+  const actualLength = totalSize ? Math.min(length, totalSize - offset) : length;
+  let skipped = 0;
+  let sent = 0;
+
+  return new ReadableStream({
+    async start() {},
+    async pull(controller) {
+      const reader = (this as any)._reader ?? ((this as any)._reader = stream.getReader());
+
+      while (sent < actualLength) {
+        const { done, value } = await reader.read();
+        if (done) { controller.close(); return; }
+
+        const chunk = value;
+        const chunkStart = skipped;
+        const chunkEnd = skipped + chunk.length;
+
+        if (chunkEnd <= offset) {
+          // Entire chunk before range — skip
+          skipped += chunk.length;
+          continue;
+        }
+
+        // Determine the slice within this chunk we need
+        const sliceStart = Math.max(0, offset - chunkStart);
+        const remaining = actualLength - sent;
+        const sliceEnd = Math.min(chunk.length, sliceStart + remaining);
+        const slice = chunk.subarray(sliceStart, sliceEnd);
+
+        controller.enqueue(slice);
+        sent += slice.length;
+        skipped += chunk.length;
+
+        if (sent >= actualLength) {
+          controller.close();
+          reader.cancel();
+          return;
+        }
+      }
+    },
+    cancel() {
+      const reader = (this as any)._reader;
+      if (reader) reader.cancel();
+    },
+  });
 }
 
 if (import.meta.vitest) {
@@ -82,5 +200,51 @@ if (import.meta.vitest) {
 
   test("parseRange returns null for invalid header", () => {
     expect(parseRange("invalid")).toBeNull();
+  });
+
+  test("sliceStream extracts correct range", async () => {
+    const data = new Uint8Array([0, 1, 2, 3, 4, 5, 6, 7, 8, 9]);
+    const input = new ReadableStream<Uint8Array>({
+      start(c) { c.enqueue(data); c.close(); },
+    });
+
+    const sliced = sliceStream(input, 3, 4, 10);
+    const reader = sliced.getReader();
+    const chunks: Uint8Array[] = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+
+    const result = new Uint8Array(chunks.reduce((a, c) => a + c.length, 0));
+    let off = 0;
+    for (const c of chunks) { result.set(c, off); off += c.length; }
+    expect(result).toEqual(new Uint8Array([3, 4, 5, 6]));
+  });
+
+  test("sliceStream works with multiple chunks", async () => {
+    const input = new ReadableStream<Uint8Array>({
+      start(c) {
+        c.enqueue(new Uint8Array([0, 1, 2]));
+        c.enqueue(new Uint8Array([3, 4, 5]));
+        c.enqueue(new Uint8Array([6, 7, 8, 9]));
+        c.close();
+      },
+    });
+
+    const sliced = sliceStream(input, 2, 5, 10);
+    const reader = sliced.getReader();
+    const chunks: Uint8Array[] = [];
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      chunks.push(value);
+    }
+
+    const result = new Uint8Array(chunks.reduce((a, c) => a + c.length, 0));
+    let off = 0;
+    for (const c of chunks) { result.set(c, off); off += c.length; }
+    expect(result).toEqual(new Uint8Array([2, 3, 4, 5, 6]));
   });
 }

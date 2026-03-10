@@ -27,28 +27,35 @@ export class R2PresignedUrlGenerator implements PresignedUrlGenerator {
     return new URL(`/${this.bucket}/${key}`, this.endpoint);
   }
 
-  async generatePutUrl(key: string, contentType: string, expiresInSeconds: number): Promise<string> {
+  async generatePutUrl(key: string, contentType: string, expiresInSeconds: number, options?: { contentEncoding?: string }): Promise<string> {
     const url = this.objectUrl(key);
     url.searchParams.set("X-Amz-Expires", String(expiresInSeconds));
 
+    const headers: Record<string, string> = { "Content-Type": contentType };
+    if (options?.contentEncoding) {
+      headers["Content-Encoding"] = options.contentEncoding;
+    }
+
     const signed = await this.client.sign(
-      new Request(url, {
-        method: "PUT",
-        headers: { "Content-Type": contentType },
-      }),
+      new Request(url, { method: "PUT", headers }),
       { aws: { signQuery: true } },
     );
 
     return signed.url;
   }
 
-  async createMultipartUpload(key: string, contentType: string): Promise<string> {
+  async createMultipartUpload(key: string, contentType: string, options?: { contentEncoding?: string }): Promise<string> {
     const url = this.objectUrl(key);
     url.searchParams.set("uploads", "");
 
+    const headers: Record<string, string> = { "Content-Type": contentType };
+    if (options?.contentEncoding) {
+      headers["Content-Encoding"] = options.contentEncoding;
+    }
+
     const res = await this.client.fetch(url, {
       method: "POST",
-      headers: { "Content-Type": contentType },
+      headers,
     });
 
     if (!res.ok) {

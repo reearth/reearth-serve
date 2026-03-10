@@ -4,11 +4,15 @@ import type { FileStorage } from "../asset/repository";
 export class R2FileStorage implements FileStorage {
   constructor(private bucket: R2Bucket) {}
 
-  async put(key: string, body: ArrayBuffer | ReadableStream, contentType: string): Promise<number> {
-    const obj = await this.bucket.put(key, body, {
-      httpMetadata: { contentType },
+  async put(key: string, body: ReadableStream<Uint8Array>, contentType: string, size: number, options?: { contentEncoding?: string }): Promise<void> {
+    const { readable, writable } = new FixedLengthStream(size);
+    body.pipeTo(writable).catch(() => {}); // errors propagate through readable
+    await this.bucket.put(key, readable, {
+      httpMetadata: {
+        contentType,
+        ...(options?.contentEncoding && { contentEncoding: options.contentEncoding }),
+      },
     });
-    return obj?.size ?? 0;
   }
 
   async get(key: string, range?: { offset: number; length: number }): Promise<StoredFile | null> {
@@ -23,6 +27,7 @@ export class R2FileStorage implements FileStorage {
       body: obj.body,
       size: obj.size,
       contentType: obj.httpMetadata?.contentType ?? "application/octet-stream",
+      contentEncoding: obj.httpMetadata?.contentEncoding,
     };
 
     if (range) {
@@ -36,10 +41,10 @@ export class R2FileStorage implements FileStorage {
     return result;
   }
 
-  async head(key: string): Promise<{ size: number } | null> {
+  async head(key: string): Promise<{ size: number; contentEncoding?: string } | null> {
     const obj = await this.bucket.head(key);
     if (!obj) return null;
-    return { size: obj.size };
+    return { size: obj.size, contentEncoding: obj.httpMetadata?.contentEncoding };
   }
 
   async delete(key: string): Promise<void> {

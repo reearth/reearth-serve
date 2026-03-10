@@ -34,6 +34,8 @@ export async function completeUploadSession(
     size: head.size,
     createdAt: session.createdAt,
     expiresAt: Date.now() + ttlSeconds * 1000,
+    ...(head.contentEncoding && { contentEncoding: head.contentEncoding }),
+    ...(head.contentEncoding && session.size && { originalSize: session.size }),
   };
 
   await metadata.save(asset, ttlSeconds);
@@ -57,21 +59,12 @@ if (import.meta.vitest) {
     };
   }
 
-  function mockStorage(): FileStorage {
-    const store = new Map<string, ArrayBuffer>();
+  function mockStorage(headResult: { size: number; contentEncoding?: string } | null = null): FileStorage {
     return {
-      put: vi.fn(async (key: string, body: ArrayBuffer | ReadableStream, _ct: string) => {
-        const buf = body instanceof ArrayBuffer ? body : new ArrayBuffer(0);
-        store.set(key, buf);
-        return buf.byteLength;
-      }),
+      put: vi.fn(async () => {}),
       get: vi.fn(async () => null),
-      head: vi.fn(async (key: string) => {
-        const buf = store.get(key);
-        if (!buf) return null;
-        return { size: buf.byteLength };
-      }),
-      delete: vi.fn(async (key: string) => { store.delete(key); }),
+      head: vi.fn(async () => headResult),
+      delete: vi.fn(async () => {}),
     };
   }
 
@@ -97,7 +90,7 @@ if (import.meta.vitest) {
   test("completeUploadSession finalizes single upload when file exists", async () => {
     const sessions = mockSessions();
     const md = mockMetadata();
-    const st = mockStorage();
+    const st = mockStorage({ size: 100 });
     const presigned = mockPresignedUrls();
 
     const { createUploadSession } = await import("./create-upload-session");
@@ -107,9 +100,6 @@ if (import.meta.vitest) {
       3600,
     );
 
-    const key = `assets/${session.uploadId}/data.bin`;
-    await st.put(key, new ArrayBuffer(100), "application/octet-stream");
-
     const result = await completeUploadSession(sessions, md, st, presigned, session.uploadId, 3600, "https://example.com");
 
     expect(result).not.toBeNull();
@@ -118,14 +108,13 @@ if (import.meta.vitest) {
     expect(result!.url).toContain("/files/");
     expect(md.save).toHaveBeenCalledOnce();
     expect(sessions.delete).toHaveBeenCalledOnce();
-    // Single upload: completeMultipartUpload should NOT be called
     expect(presigned.completeMultipartUpload).not.toHaveBeenCalled();
   });
 
   test("completeUploadSession finalizes multipart upload with parts", async () => {
     const sessions = mockSessions();
     const md = mockMetadata();
-    const st = mockStorage();
+    const st = mockStorage({ size: 1000 });
     const presigned = mockPresignedUrls();
 
     const { createUploadSession } = await import("./create-upload-session");
@@ -134,10 +123,6 @@ if (import.meta.vitest) {
       { filename: "huge.tar", contentType: "application/x-tar", size: 10_000_000_000, partCount: 2 },
       3600,
     );
-
-    // Simulate: multipart upload completed, file now in R2
-    const key = `assets/${session.uploadId}/huge.tar`;
-    await st.put(key, new ArrayBuffer(1000), "application/x-tar");
 
     const parts = [
       { partNumber: 1, etag: '"etag1"' },
@@ -155,7 +140,7 @@ if (import.meta.vitest) {
   test("completeUploadSession returns null for multipart without parts", async () => {
     const sessions = mockSessions();
     const md = mockMetadata();
-    const st = mockStorage();
+    const st = mockStorage({ size: 1000 });
     const presigned = mockPresignedUrls();
 
     const { createUploadSession } = await import("./create-upload-session");
@@ -165,7 +150,6 @@ if (import.meta.vitest) {
       3600,
     );
 
-    // Try to complete multipart session without providing parts
     const result = await completeUploadSession(sessions, md, st, presigned, session.uploadId, 3600, "https://example.com");
     expect(result).toBeNull();
   });
@@ -182,7 +166,7 @@ if (import.meta.vitest) {
   test("completeUploadSession returns null if file not uploaded", async () => {
     const sessions = mockSessions();
     const md = mockMetadata();
-    const st = mockStorage();
+    const st = mockStorage(); // head returns null
     const presigned = mockPresignedUrls();
 
     const { createUploadSession } = await import("./create-upload-session");

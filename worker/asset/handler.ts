@@ -55,30 +55,52 @@ assetRoutes.post("/uploads/:id/complete", async (c) => {
   return c.json(result, 201);
 });
 
-// POST /assets — upload a file (direct, for local dev / small files)
+// POST /assets — upload a file (direct, streaming)
+// Headers: Content-Type (file type), X-Filename (filename), Content-Length (size)
+// Optional: Content-Encoding: gzip, X-Original-Size (uncompressed size)
 assetRoutes.post("/", async (c) => {
   const metadata = c.get("metadata");
   const storage = c.get("storage");
   const ttlSeconds = c.get("ttlSeconds");
   const baseUrl = c.get("baseUrl");
 
-  const formData = await c.req.raw.formData();
-  const file = formData.get("file");
-
-  if (!file || !(file instanceof File)) {
-    return c.json({ error: "Missing 'file' field in multipart form data" }, 400);
+  const filename = c.req.header("X-Filename");
+  const contentLength = c.req.header("Content-Length");
+  if (!filename || !contentLength) {
+    return c.json({ error: "Missing required headers: X-Filename, Content-Length" }, 400);
   }
 
-  const body = await file.arrayBuffer();
-  const result = await uploadAsset(
-    metadata,
-    storage,
-    { name: file.name, type: file.type, body },
-    ttlSeconds,
-    baseUrl,
-  );
+  const size = parseInt(contentLength, 10);
+  if (isNaN(size) || size <= 0) {
+    return c.json({ error: "Invalid Content-Length" }, 400);
+  }
 
-  return c.json(result, 201);
+  const body = c.req.raw.body;
+  if (!body) {
+    return c.json({ error: "Missing request body" }, 400);
+  }
+
+  const contentType = c.req.header("Content-Type") || "application/octet-stream";
+  const contentEncoding = c.req.header("Content-Encoding") || undefined;
+  const originalSizeHeader = c.req.header("X-Original-Size");
+  const originalSize = originalSizeHeader ? parseInt(originalSizeHeader, 10) : undefined;
+
+  try {
+    const result = await uploadAsset(
+      metadata,
+      storage,
+      { name: filename, type: contentType, body, size, contentEncoding, originalSize },
+      ttlSeconds,
+      baseUrl,
+    );
+    return c.json(result, 201);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    if (msg.includes("exceeds") || msg.includes("FixedLengthStream")) {
+      return c.json({ error: "Request body exceeds declared Content-Length" }, 400);
+    }
+    throw e;
+  }
 });
 
 // GET /assets/:id — get metadata

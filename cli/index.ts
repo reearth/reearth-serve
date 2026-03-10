@@ -1,11 +1,25 @@
 import { readFileSync, statSync } from "node:fs";
 import { basename } from "node:path";
+import { gzipSync } from "node:zlib";
 import { lookup } from "./mime";
 
 const DEFAULT_ENDPOINT = "http://localhost:8787";
 const MULTIPART_THRESHOLD = 100 * 1024 * 1024; // 100MB
 const PART_SIZE = 100 * 1024 * 1024; // 100MB per part
 const MAX_CONCURRENCY = 4;
+const COMPRESSIBLE_EXTENSIONS = new Set([
+  "json", "geojson", "topojson", "csv", "tsv",
+  "xml", "kml", "gml", "czml",
+  "html", "htm", "js", "mjs", "css",
+  "svg", "txt", "md", "yaml", "yml",
+]);
+const MIN_COMPRESS_SIZE = 1024;
+
+function shouldCompress(filename: string, size: number): boolean {
+  if (size < MIN_COMPRESS_SIZE) return false;
+  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
+  return COMPRESSIBLE_EXTENSIONS.has(ext);
+}
 
 interface UploadResult {
   asset: { id: string };
@@ -17,11 +31,13 @@ interface SingleSessionResponse {
   url: string;
   method: "PUT";
   headers: Record<string, string>;
+  contentEncoding?: string;
 }
 
 interface MultipartSessionResponse {
   uploadId: string;
   parts: { partNumber: number; url: string }[];
+  contentEncoding?: string;
 }
 
 function isMultipartResponse(res: SingleSessionResponse | MultipartSessionResponse): res is MultipartSessionResponse {
@@ -78,6 +94,12 @@ async function uploadViaPresigned(
 
   const session = await initRes.json() as SingleSessionResponse | MultipartSessionResponse;
 
+  // Compress data locally if server requests gzip encoding
+  let uploadData = fileData;
+  if (session.contentEncoding === "gzip") {
+    uploadData = new Uint8Array(gzipSync(fileData));
+  }
+
   // Step 2: Upload file data
   if (isMultipartResponse(session)) {
     // Multipart: upload parts in parallel with concurrency limit
@@ -89,8 +111,8 @@ async function uploadViaPresigned(
       const results = await Promise.all(
         batch.map(async (part) => {
           const start = (part.partNumber - 1) * PART_SIZE;
-          const end = Math.min(start + PART_SIZE, fileData.byteLength);
-          const chunk = fileData.subarray(start, end);
+          const end = Math.min(start + PART_SIZE, uploadData.byteLength);
+          const chunk = uploadData.subarray(start, end);
           const etag = await uploadPartWithRetry(part.url, chunk);
           return { partNumber: part.partNumber, etag };
         }),
@@ -116,8 +138,8 @@ async function uploadViaPresigned(
   // Single PUT upload
   const putRes = await fetch(session.url, {
     method: "PUT",
-    headers: { "Content-Type": contentType },
-    body: fileData as BodyInit,
+    headers: session.headers,
+    body: uploadData as BodyInit,
   });
 
   if (!putRes.ok) {
@@ -144,10 +166,24 @@ async function uploadDirect(
   contentType: string,
   fileData: Uint8Array,
 ): Promise<UploadResult> {
-  const form = new FormData();
-  form.append("file", new Blob([fileData as BlobPart], { type: contentType }), fileName);
+  const compress = shouldCompress(fileName, fileData.byteLength);
+  const uploadData = compress ? new Uint8Array(gzipSync(fileData)) : fileData;
 
-  const res = await fetch(`${endpoint}/assets`, { method: "POST", body: form });
+  const headers: Record<string, string> = {
+    "Content-Type": contentType,
+    "Content-Length": String(uploadData.byteLength),
+    "X-Filename": fileName,
+  };
+  if (compress) {
+    headers["Content-Encoding"] = "gzip";
+    headers["X-Original-Size"] = String(fileData.byteLength);
+  }
+
+  const res = await fetch(`${endpoint}/assets`, {
+    method: "POST",
+    headers,
+    body: uploadData as BodyInit,
+  });
 
   if (!res.ok) {
     const body = await res.text();

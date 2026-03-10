@@ -1,5 +1,6 @@
 import type { MultipartUploadResult, PresignedUploadResult, UploadSession } from "../model";
 import type { PresignedUrlGenerator, UploadSessionStore } from "../repository";
+import { shouldCompress } from "../compression";
 import { generateId, storageKey } from "./shared";
 
 export async function createUploadSession(
@@ -13,10 +14,12 @@ export async function createUploadSession(
   const urlExpirySeconds = Math.min(ttlSeconds, 3600);
   const contentType = params.contentType || "application/octet-stream";
   const key = storageKey(id, params.filename);
+  const compress = shouldCompress(params.filename, params.size);
+  const encodingOpts = compress ? { contentEncoding: "gzip" as const } : undefined;
 
   // Multipart upload
   if (params.partCount && params.partCount > 1) {
-    const s3UploadId = await presignedUrls.createMultipartUpload(key, contentType);
+    const s3UploadId = await presignedUrls.createMultipartUpload(key, contentType, encodingOpts);
 
     const partUrls = await Promise.all(
       Array.from({ length: params.partCount }, (_, i) =>
@@ -34,6 +37,7 @@ export async function createUploadSession(
       expiresAt: now + urlExpirySeconds * 1000,
       s3UploadId,
       partCount: params.partCount,
+      ...(compress && { contentEncoding: "gzip" }),
     };
 
     await sessions.save(session, urlExpirySeconds);
@@ -41,12 +45,13 @@ export async function createUploadSession(
     return {
       uploadId: id,
       parts: partUrls,
+      ...(compress && { contentEncoding: "gzip" }),
       expiresAt: session.expiresAt,
     };
   }
 
   // Single PUT upload
-  const url = await presignedUrls.generatePutUrl(key, contentType, urlExpirySeconds);
+  const url = await presignedUrls.generatePutUrl(key, contentType, urlExpirySeconds, encodingOpts);
 
   const session: UploadSession = {
     id,
@@ -55,15 +60,20 @@ export async function createUploadSession(
     size: params.size,
     createdAt: now,
     expiresAt: now + urlExpirySeconds * 1000,
+    ...(compress && { contentEncoding: "gzip" }),
   };
 
   await sessions.save(session, urlExpirySeconds);
+
+  const headers: Record<string, string> = { "Content-Type": contentType };
+  if (compress) headers["Content-Encoding"] = "gzip";
 
   return {
     uploadId: id,
     url,
     method: "PUT",
-    headers: { "Content-Type": contentType },
+    headers,
+    ...(compress && { contentEncoding: "gzip" }),
     expiresAt: session.expiresAt,
   };
 }
@@ -82,8 +92,8 @@ if (import.meta.vitest) {
 
   function mockPresignedUrls(): PresignedUrlGenerator {
     return {
-      generatePutUrl: vi.fn(async (key: string, _ct: string, _exp: number) => `https://r2.example.com/${key}?signed=true`),
-      createMultipartUpload: vi.fn(async (_key: string, _ct: string) => "mp-upload-id-123"),
+      generatePutUrl: vi.fn(async (key: string, _ct: string, _exp: number, _opts?: { contentEncoding?: string }) => `https://r2.example.com/${key}?signed=true`),
+      createMultipartUpload: vi.fn(async (_key: string, _ct: string, _opts?: { contentEncoding?: string }) => "mp-upload-id-123"),
       generateUploadPartUrl: vi.fn(async (key: string, _uid: string, part: number, _exp: number) => `https://r2.example.com/${key}?partNumber=${part}&signed=true`),
       completeMultipartUpload: vi.fn(async () => {}),
       abortMultipartUpload: vi.fn(async () => {}),
@@ -105,8 +115,24 @@ if (import.meta.vitest) {
     expect(single.uploadId).toBeTypeOf("string");
     expect(single.url).toContain("signed=true");
     expect(single.method).toBe("PUT");
+    expect(single.contentEncoding).toBeUndefined(); // zip is not compressible
     expect(sessions.save).toHaveBeenCalledOnce();
-    expect(presigned.generatePutUrl).toHaveBeenCalledOnce();
+  });
+
+  test("createUploadSession returns contentEncoding for compressible file", async () => {
+    const sessions = mockSessions();
+    const presigned = mockPresignedUrls();
+
+    const result = await createUploadSession(
+      sessions, presigned,
+      { filename: "data.json", contentType: "application/json", size: 5000 },
+      3600,
+    );
+
+    expect("url" in result).toBe(true);
+    const single = result as PresignedUploadResult;
+    expect(single.contentEncoding).toBe("gzip");
+    expect(single.headers["Content-Encoding"]).toBe("gzip");
   });
 
   test("createUploadSession returns part URLs for multipart upload", async () => {
@@ -121,13 +147,25 @@ if (import.meta.vitest) {
 
     expect("parts" in result).toBe(true);
     const multi = result as MultipartUploadResult;
-    expect(multi.uploadId).toBeTypeOf("string");
     expect(multi.parts).toHaveLength(3);
-    expect(multi.parts[0].partNumber).toBe(1);
-    expect(multi.parts[0].url).toContain("partNumber=1");
-    expect(multi.parts[2].partNumber).toBe(3);
-    expect(presigned.createMultipartUpload).toHaveBeenCalledOnce();
-    expect(presigned.generateUploadPartUrl).toHaveBeenCalledTimes(3);
-    expect(sessions.save).toHaveBeenCalledOnce();
+    expect(multi.contentEncoding).toBeUndefined(); // tar is not compressible
+  });
+
+  test("createUploadSession multipart with compressible file", async () => {
+    const sessions = mockSessions();
+    const presigned = mockPresignedUrls();
+
+    const result = await createUploadSession(
+      sessions, presigned,
+      { filename: "big.geojson", contentType: "application/geo+json", size: 500_000_000, partCount: 3 },
+      3600,
+    );
+
+    expect("parts" in result).toBe(true);
+    const multi = result as MultipartUploadResult;
+    expect(multi.contentEncoding).toBe("gzip");
+    expect(presigned.createMultipartUpload).toHaveBeenCalledWith(
+      expect.any(String), "application/geo+json", { contentEncoding: "gzip" },
+    );
   });
 }

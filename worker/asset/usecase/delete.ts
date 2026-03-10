@@ -31,16 +31,14 @@ if (import.meta.vitest) {
   }
 
   function mockStorage(): FileStorage {
-    const store = new Map<string, ArrayBuffer>();
     return {
-      put: vi.fn(async (key: string, body: ArrayBuffer | ReadableStream, _ct: string) => {
-        const buf = body instanceof ArrayBuffer ? body : new ArrayBuffer(0);
-        store.set(key, buf);
-        return buf.byteLength;
+      put: vi.fn(async (_key: string, body: ReadableStream<Uint8Array>, _ct: string, _size: number) => {
+        const reader = body.getReader();
+        while (!(await reader.read()).done) {}
       }),
       get: vi.fn(async () => null),
       head: vi.fn(async () => null),
-      delete: vi.fn(async (key: string) => { store.delete(key); }),
+      delete: vi.fn(async () => {}),
     };
   }
 
@@ -48,9 +46,12 @@ if (import.meta.vitest) {
     const md = mockMetadata();
     const st = mockStorage();
     const { uploadAsset } = await import("./upload");
-    const body = new TextEncoder().encode("data").buffer as ArrayBuffer;
+    const data = new TextEncoder().encode("data");
+    const body = new ReadableStream<Uint8Array>({
+      start(c) { c.enqueue(data); c.close(); },
+    });
 
-    const { asset } = await uploadAsset(md, st, { name: "f.bin", type: "application/octet-stream", body }, 3600, "https://example.com");
+    const { asset } = await uploadAsset(md, st, { name: "f.bin", type: "application/octet-stream", body, size: 4 }, 3600, "https://example.com");
 
     const deleted = await deleteAsset(md, st, asset.id);
     expect(deleted).toBe(true);

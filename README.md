@@ -19,7 +19,11 @@ npm run cli -- myfile.geojson
 ### Upload a file (API)
 
 ```bash
-curl -F "file=@myfile.geojson" http://localhost:5173/assets
+curl -X POST http://localhost:5173/assets \
+  -H "Content-Type: application/geo+json" \
+  -H "X-Filename: myfile.geojson" \
+  -H "Content-Length: $(wc -c < myfile.geojson)" \
+  --data-binary @myfile.geojson
 ```
 
 ## Architecture
@@ -35,25 +39,12 @@ curl -F "file=@myfile.geojson" http://localhost:5173/assets
 
 ### Project Structure
 
-```
-worker/
-├── index.ts              # Entry point (ExportedHandler)
-├── app.ts                # Hono app factory with DI
-├── types.ts              # Shared Hono env types
-├── asset/
-│   ├── model.ts          # Asset domain types
-│   ├── repository.ts     # MetadataStore / FileStorage interfaces
-│   ├── usecase.ts        # Business logic + in-source tests
-│   └── handler.ts        # POST/GET/DELETE /assets
-├── file/
-│   └── handler.ts        # GET /files/:id/:filename (CORS *, Range)
-└── infra/
-    ├── storage.ts        # R2 FileStorage implementation
-    └── metadata.ts       # KV MetadataStore implementation
-app/                      # React Router frontend
-cli/                      # CLI client
-e2e/                      # E2E tests
-```
+| Directory | Description |
+|-----------|-------------|
+| `worker/` | Cloudflare Worker (Hono routes, domain logic, infra adapters) |
+| `app/` | React Router frontend |
+| `cli/` | CLI client |
+| `e2e/` | E2E tests |
 
 ## API
 
@@ -62,10 +53,27 @@ e2e/                      # E2E tests
 | `POST` | `/assets` | Upload a file (multipart/form-data) |
 | `GET` | `/assets/:id` | Get asset metadata |
 | `DELETE` | `/assets/:id` | Delete an asset |
+| `POST` | `/assets/uploads` | Create presigned upload session |
+| `POST` | `/assets/uploads/:id/complete` | Complete upload session |
 | `GET` | `/files/:id/:filename` | Download file (CORS `*`, Range support) |
 | `GET` | `/health` | Health check |
 
 Assets are **immutable** (upload or delete, no overwrite) and **ephemeral** (auto-expire after 1 hour).
+
+### Presigned URL Uploads
+
+For large files (>100MB or multi-GB), presigned URL uploads bypass the Worker body size limit. When S3 credentials are configured, the server generates presigned URLs for direct-to-R2 uploads. Files >100MB are automatically split into multipart uploads.
+
+The CLI automatically uses presigned URLs when available, falling back to direct upload.
+
+### Gzip Compression
+
+Compression is the **uploader's responsibility** — the server never buffers or compresses on the upload path.
+
+- **Presigned URL upload**: For compressible files (JSON, GeoJSON, CSV, XML, KML, GML, SVG, etc.) over 1KB, the server returns `contentEncoding: "gzip"` in the session response. The CLI compresses locally before uploading
+- **Direct upload** (`POST /assets`): Files are stored as-is without server-side compression
+- **Download**: If the file is stored with gzip encoding and the client sends `Accept-Encoding: gzip`, the compressed data is passed through directly. Otherwise, the server decompresses on the fly via streaming
+- **Range requests**: Supported on gzip-stored files — the server decompresses, seeks to the requested byte offset, and streams the range
 
 ## Scripts
 
@@ -103,6 +111,19 @@ Add the following secrets to your GitHub repository:
 |--------|-------------|
 | `CLOUDFLARE_API_TOKEN` | Cloudflare API token with Workers + R2 + KV permissions |
 | `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare account ID |
+
+### Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `ASSET_TTL_SECONDS` | Yes | Asset expiry time in seconds (default: 3600) |
+| `BASE_URL` | Yes | Public base URL for file download links |
+| `R2_S3_ENDPOINT` | No | R2 S3-compatible endpoint for presigned URLs |
+| `R2_ACCESS_KEY_ID` | No | R2 API token access key ID |
+| `R2_SECRET_ACCESS_KEY` | No | R2 API token secret access key |
+| `R2_BUCKET_NAME` | No | R2 bucket name for presigned URLs |
+
+When `R2_S3_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_BUCKET_NAME` are all set, presigned URL uploads and S3 multipart uploads are enabled.
 
 ### Initial Setup
 

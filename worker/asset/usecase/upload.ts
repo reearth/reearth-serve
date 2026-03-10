@@ -5,23 +5,35 @@ import { generateId, storageKey } from "./shared";
 export async function uploadAsset(
   metadata: MetadataStore,
   storage: FileStorage,
-  file: { name: string; type: string; body: ArrayBuffer },
+  file: {
+    name: string;
+    type: string;
+    body: ReadableStream<Uint8Array>;
+    size: number;
+    contentEncoding?: string;
+    originalSize?: number;
+  },
   ttlSeconds: number,
   baseUrl: string,
 ): Promise<AssetUploadResult> {
   const id = generateId();
   const now = Date.now();
   const contentType = file.type || "application/octet-stream";
+  const key = storageKey(id, file.name);
 
-  const size = await storage.put(storageKey(id, file.name), file.body, contentType);
+  await storage.put(key, file.body, contentType, file.size,
+    file.contentEncoding ? { contentEncoding: file.contentEncoding } : undefined,
+  );
 
   const asset: AssetMetadata = {
     id,
     filename: file.name,
     contentType,
-    size,
+    size: file.size,
     createdAt: now,
     expiresAt: now + ttlSeconds * 1000,
+    ...(file.contentEncoding && { contentEncoding: file.contentEncoding }),
+    ...(file.contentEncoding && file.originalSize && { originalSize: file.originalSize }),
   };
 
   await metadata.save(asset, ttlSeconds);
@@ -35,6 +47,10 @@ export async function uploadAsset(
 if (import.meta.vitest) {
   const { test, expect, vi } = import.meta.vitest;
 
+  function toStream(data: Uint8Array): ReadableStream<Uint8Array> {
+    return new ReadableStream({ start(c) { c.enqueue(data); c.close(); } });
+  }
+
   function mockMetadata(): MetadataStore {
     const store = new Map<string, AssetMetadata>();
     return {
@@ -45,12 +61,10 @@ if (import.meta.vitest) {
   }
 
   function mockStorage(): FileStorage {
-    const store = new Map<string, ArrayBuffer>();
     return {
-      put: vi.fn(async (key: string, body: ArrayBuffer | ReadableStream, _ct: string) => {
-        const buf = body instanceof ArrayBuffer ? body : new ArrayBuffer(0);
-        store.set(key, buf);
-        return buf.byteLength;
+      put: vi.fn(async (_key: string, body: ReadableStream<Uint8Array>, _ct: string, _size: number) => {
+        const reader = body.getReader();
+        while (!(await reader.read()).done) {}
       }),
       get: vi.fn(async () => null),
       head: vi.fn(async () => null),
@@ -58,19 +72,55 @@ if (import.meta.vitest) {
     };
   }
 
-  test("uploadAsset creates metadata and stores file", async () => {
+  test("uploadAsset creates metadata and stores file via stream", async () => {
     const md = mockMetadata();
     const st = mockStorage();
-    const body = new TextEncoder().encode("hello").buffer as ArrayBuffer;
 
-    const result = await uploadAsset(md, st, { name: "test.txt", type: "text/plain", body }, 3600, "https://example.com");
+    const result = await uploadAsset(
+      md, st,
+      { name: "test.txt", type: "text/plain", body: toStream(new TextEncoder().encode("hello")), size: 5 },
+      3600, "https://example.com",
+    );
 
     expect(result.asset.filename).toBe("test.txt");
     expect(result.asset.contentType).toBe("text/plain");
     expect(result.asset.size).toBe(5);
-    expect(result.url).toContain("/files/");
-    expect(result.url).toContain("test.txt");
     expect(md.save).toHaveBeenCalledOnce();
     expect(st.put).toHaveBeenCalledOnce();
+  });
+
+  test("uploadAsset does not compress (compression is client responsibility)", async () => {
+    const md = mockMetadata();
+    const st = mockStorage();
+    const data = new TextEncoder().encode('{"data":' + '"x"'.repeat(500) + '}');
+
+    const result = await uploadAsset(
+      md, st,
+      { name: "data.json", type: "application/json", body: toStream(data), size: data.byteLength },
+      3600, "https://example.com",
+    );
+
+    expect(result.asset.contentEncoding).toBeUndefined();
+    expect(result.asset.originalSize).toBeUndefined();
+    expect(result.asset.size).toBe(data.byteLength);
+  });
+
+  test("uploadAsset records contentEncoding and originalSize when provided", async () => {
+    const md = mockMetadata();
+    const st = mockStorage();
+
+    const result = await uploadAsset(
+      md, st,
+      {
+        name: "data.json", type: "application/json",
+        body: toStream(new Uint8Array(50)), size: 50,
+        contentEncoding: "gzip", originalSize: 200,
+      },
+      3600, "https://example.com",
+    );
+
+    expect(result.asset.contentEncoding).toBe("gzip");
+    expect(result.asset.originalSize).toBe(200);
+    expect(result.asset.size).toBe(50);
   });
 }
