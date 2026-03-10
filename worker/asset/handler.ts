@@ -1,10 +1,61 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../types";
-import { uploadAsset, getAssetMetadata, deleteAsset } from "./usecase";
+import { uploadAsset, getAssetMetadata, deleteAsset, createUploadSession, completeUploadSession } from "./usecase";
 
 export const assetRoutes = new Hono<AppEnv>();
 
-// POST /assets — upload a file
+// POST /assets/uploads — create upload session with presigned URL(s)
+assetRoutes.post("/uploads", async (c) => {
+  const presignedUrls = c.get("presignedUrls");
+  if (!presignedUrls) {
+    return c.json({ error: "Presigned URL uploads not available. Use POST /assets for direct upload." }, 501);
+  }
+
+  const body = await c.req.json<{ filename?: string; contentType?: string; size?: number; partCount?: number }>();
+  if (!body.filename || !body.size) {
+    return c.json({ error: "Missing required fields: filename, size" }, 400);
+  }
+
+  const sessions = c.get("uploadSessions");
+  const ttlSeconds = c.get("ttlSeconds");
+
+  const result = await createUploadSession(sessions, presignedUrls, {
+    filename: body.filename,
+    contentType: body.contentType || "application/octet-stream",
+    size: body.size,
+    partCount: body.partCount,
+  }, ttlSeconds);
+
+  return c.json(result, 201);
+});
+
+// POST /assets/uploads/:id/complete — confirm upload and create asset
+assetRoutes.post("/uploads/:id/complete", async (c) => {
+  const sessions = c.get("uploadSessions");
+  const metadata = c.get("metadata");
+  const storage = c.get("storage");
+  const presignedUrls = c.get("presignedUrls");
+  const ttlSeconds = c.get("ttlSeconds");
+  const baseUrl = c.get("baseUrl");
+  const id = c.req.param("id");
+
+  // For multipart uploads, client sends parts with ETags
+  let parts: { partNumber: number; etag: string }[] | undefined;
+  const contentType = c.req.header("Content-Type") || "";
+  if (contentType.includes("application/json")) {
+    const body = await c.req.json<{ parts?: { partNumber: number; etag: string }[] }>();
+    parts = body.parts;
+  }
+
+  const result = await completeUploadSession(sessions, metadata, storage, presignedUrls, id, ttlSeconds, baseUrl, parts);
+  if (!result) {
+    return c.json({ error: "Upload session not found or file not yet uploaded" }, 404);
+  }
+
+  return c.json(result, 201);
+});
+
+// POST /assets — upload a file (direct, for local dev / small files)
 assetRoutes.post("/", async (c) => {
   const metadata = c.get("metadata");
   const storage = c.get("storage");
