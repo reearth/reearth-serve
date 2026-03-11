@@ -1,3 +1,7 @@
+export type AssetType = "file" | "archive";
+export type AssetStatus = "ready" | "extracting" | "failed";
+export type ArchiveFormat = "zip" | "tar" | "tar.gz" | "tar.bz2";
+
 export interface AssetMetadata {
   id: string;
   filename: string;
@@ -7,6 +11,29 @@ export interface AssetMetadata {
   expiresAt: number;
   contentEncoding?: string;
   originalSize?: number;
+  // Phase 1: archive support
+  type?: AssetType;
+  status?: AssetStatus;
+  archiveFormat?: ArchiveFormat;
+  fileCount?: number;
+  extractedSize?: number;
+  jobId?: string;
+}
+
+const archiveExtensions: Record<string, ArchiveFormat> = {
+  ".zip": "zip",
+  ".tar": "tar",
+  ".tar.gz": "tar.gz",
+  ".tgz": "tar.gz",
+  ".tar.bz2": "tar.bz2",
+};
+
+export function detectArchiveFormat(filename: string): ArchiveFormat | null {
+  const lower = filename.toLowerCase();
+  for (const [ext, format] of Object.entries(archiveExtensions)) {
+    if (lower.endsWith(ext)) return format;
+  }
+  return null;
 }
 
 export interface StoredFile {

@@ -1,0 +1,139 @@
+# ADR-000: Ephemeral Asset Hosting
+
+- **Status:** Accepted
+- **Date:** 2026-03-11
+- **Deciders:** @rot1024
+
+## Context
+
+Re:Earth Serve is a spatial data delivery layer for the Re:Earth ecosystem. The first milestone is a minimal viable file hosting service — no UI, no auth, no tile processing — that validates the Cloudflare-native architecture and provides immediate utility for sharing spatial data files.
+
+Key requirements:
+- Upload arbitrary files and receive a public URL
+- Serve files with correct `Content-Type`, `Content-Encoding`, and HTTP Range support
+- Auto-expire assets after 1 hour (ephemeral / demo mode)
+- Support large files (multi-GB) without Worker CPU/memory limits blocking upload
+- Compress compressible files (JSON, GeoJSON, CSV) to reduce storage and transfer costs
+
+## Decision
+
+### Cloudflare Workers + R2 + KV
+
+| Component | Role |
+|---|---|
+| Cloudflare Workers | HTTP API runtime (Hono framework) |
+| Cloudflare R2 | Object storage (zero egress cost) |
+| Cloudflare KV | Asset metadata with TTL-based auto-expiration |
+
+R2's zero egress pricing is critical for tile delivery workloads where bandwidth costs dominate. KV provides built-in TTL expiration, eliminating the need for a separate cleanup mechanism for ephemeral assets.
+
+### Streaming upload (direct)
+
+`POST /assets` accepts a raw body stream. The Worker pipes the request body directly to R2 via `put()` — no buffering the entire file in memory. This keeps Worker memory usage constant regardless of file size.
+
+```
+Client → Worker (stream) → R2.put()
+```
+
+Headers `X-Filename` and `Content-Type` provide metadata. The response includes an asset ID and public file URL.
+
+### Presigned URL upload (S3 multipart)
+
+For large files or when clients need direct-to-storage upload:
+
+1. `POST /assets/uploads` — Worker creates an S3 multipart upload via R2's S3-compatible API, returns presigned URLs for each part
+2. Client uploads parts directly to R2 (bypassing the Worker)
+3. `POST /assets/uploads/:id/complete` — Worker completes the multipart upload and creates the asset metadata
+
+This avoids Worker CPU time limits for large uploads. The S3-compatible API requires `aws4fetch` for request signing.
+
+### Gzip compression strategy
+
+Compression is the **uploader's responsibility**, not the server's:
+
+- The CLI detects compressible content types (JSON, GeoJSON, CSV, XML, etc.) and files above a size threshold (1 KB), compresses with gzip locally, and uploads with `Content-Encoding: gzip` and `X-Original-Size` headers
+- The server stores the compressed bytes as-is in R2
+- On download, if the client sends `Accept-Encoding: gzip`, the server passes through the compressed bytes with `Content-Encoding: gzip`
+- If the client does not accept gzip, the server decompresses on-the-fly via `DecompressionStream`
+
+This approach was chosen over server-side compression because:
+- Worker CPU time is limited and expensive for compression
+- The CLI has no CPU constraints
+- Presigned uploads bypass the Worker entirely, so server-side compression is impossible for that path
+
+### Immutable assets
+
+Assets are write-once. Once uploaded, the content cannot be overwritten — only deleted. This simplifies caching (no invalidation needed), enables aggressive `Cache-Control` headers, and aligns with the future versioning model (Phase 8).
+
+### File serving with Range support
+
+`GET /files/:id/:filename` serves files with:
+- Correct `Content-Type` from asset metadata
+- `Content-Encoding: gzip` passthrough when client supports it
+- HTTP Range requests (206 Partial Content) for seeking in large files
+- `Cache-Control: public, max-age=3600, immutable`
+- CORS `Access-Control-Allow-Origin: *`
+
+For gzip-stored files with Range requests from non-gzip clients, the server decompresses the full stream and slices to the requested byte range. This is acceptable because Range requests on compressed files are rare in practice.
+
+### KV metadata model
+
+```
+Key:   asset:{id}
+Value: {
+  id, filename, contentType, size, createdAt, expiresAt,
+  contentEncoding?, originalSize?
+}
+TTL:   3600s (auto-expire)
+```
+
+KV's built-in TTL handles ephemeral asset cleanup. A scheduled worker (`Cron Trigger`) cleans up orphaned R2 objects whose KV entries have already expired.
+
+### CLI
+
+The CLI (`npx tsx cli/index.ts`) provides:
+- `<file>` — upload a file, print the public URL
+- `--direct` — force direct upload (skip presigned)
+- `--json` — structured JSON output for scripting and AI agents
+- `--endpoint` — custom server endpoint
+
+The CLI auto-detects compressible files and applies gzip compression before upload.
+
+## API
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/assets` | Upload a file (raw body streaming) |
+| `GET` | `/assets/:id` | Get asset metadata |
+| `DELETE` | `/assets/:id` | Delete an asset |
+| `POST` | `/assets/uploads` | Create presigned upload session |
+| `POST` | `/assets/uploads/:id/complete` | Complete presigned upload |
+| `GET` | `/files/:id/:filename` | Download file |
+| `GET` | `/health` | Health check |
+
+## Alternatives considered
+
+### Server-side compression
+
+Rejected because: Worker CPU time is limited (10ms on free plan, 30s on paid), compression of large files would hit limits. Presigned uploads bypass the Worker entirely, making server-side compression impossible for that path.
+
+### D1 (SQLite) for metadata
+
+Rejected because: KV's built-in TTL is a perfect fit for ephemeral assets. D1 would require manual expiration logic and adds complexity for simple key-value metadata.
+
+### Durable Objects for upload sessions
+
+Considered for presigned upload state tracking. Deferred — KV is sufficient for the current session model. May revisit if upload sessions need stronger consistency guarantees.
+
+### R2 lifecycle rules for cleanup
+
+R2 doesn't support object-level TTL or lifecycle policies (unlike S3). A Cron Trigger worker is needed to scan and delete expired objects.
+
+## Consequences
+
+- Files up to several GB can be uploaded via presigned multipart upload
+- Compressible files are stored 60–90% smaller, reducing R2 storage costs
+- Ephemeral assets auto-expire via KV TTL — no manual cleanup needed for metadata
+- R2 object cleanup requires a separate scheduled worker
+- The CLI provides immediate utility for sharing spatial data without a UI
+- The architecture validates Cloudflare Workers + R2 + KV as viable for the full roadmap

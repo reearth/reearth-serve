@@ -33,6 +33,7 @@ curl -X POST http://localhost:5173/assets \
 | Runtime | Cloudflare Workers |
 | Storage | Cloudflare R2 (zero egress) |
 | Metadata | Cloudflare KV |
+| Containers | Cloudflare Containers (Go) |
 | API | Hono |
 | UI | React Router (SSR) + Tailwind CSS |
 | CLI | tsx |
@@ -44,6 +45,7 @@ curl -X POST http://localhost:5173/assets \
 | `worker/` | Cloudflare Worker (Hono routes, domain logic, infra adapters) |
 | `app/` | React Router frontend |
 | `cli/` | CLI client |
+| `container/archive-extractor/` | Archive extraction container (Go) — ZIP/tar/tar.gz → R2 |
 | `e2e/` | E2E tests |
 
 ## API
@@ -56,9 +58,23 @@ curl -X POST http://localhost:5173/assets \
 | `POST` | `/assets/uploads` | Create presigned upload session |
 | `POST` | `/assets/uploads/:id/complete` | Complete upload session |
 | `GET` | `/files/:id/:filename` | Download file (CORS `*`, Range support) |
+| `GET` | `/files/:id/:filename/*` | Download extracted archive file |
+| `GET` | `/jobs/:id` | Get extraction job status |
+| `POST` | `/jobs/:id/retry` | Retry a failed extraction job |
 | `GET` | `/health` | Health check |
 
 Assets are **immutable** (upload or delete, no overwrite) and **ephemeral** (auto-expire after 1 hour).
+
+### Archive Extraction
+
+When an archive file (ZIP, tar, tar.gz) is uploaded, it is automatically extracted in a Cloudflare Container. Individual files are stored in R2 and served via `/files/:id/:filename/*`.
+
+- Supports ZIP (random access via Range requests), tar, and tar.gz formats
+- Handles multi-GB archives with hundreds of thousands of files
+- Resume support via checkpoints — survives container restarts
+- Windows path separators (`\`) are normalized to `/`
+- Root folder auto-stripping (e.g., `data.zip/data/...` → strips `data/`)
+- Compressible files (JSON, GeoJSON, CSV, etc.) are gzip-compressed on upload
 
 ### Presigned URL Uploads
 
@@ -85,6 +101,7 @@ Compression is the **uploader's responsibility** — the server never buffers or
 | `npm run check` | Type check + unit tests |
 | `npm run test` | Unit tests only |
 | `npm run test:e2e` | E2E tests (requires running dev server) |
+| `cd container/archive-extractor && go test ./...` | Container unit tests |
 | `npm run typecheck` | TypeScript type check |
 | `npm run typegen` | Generate Wrangler + React Router types |
 | `npm run cli -- <file>` | Upload a file via CLI |
@@ -101,7 +118,7 @@ E2E_ENDPOINT=http://localhost:5173 npm run test:e2e
 
 ## Deployment
 
-Deployment is handled via GitHub Actions on push to `main`.
+CI runs on every push/PR to `main`: TypeScript type check + unit tests, production build, and Go lint + tests for containers. Deployment is handled via GitHub Actions on push to `main`.
 
 ### Prerequisites
 

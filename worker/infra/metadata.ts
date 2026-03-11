@@ -1,5 +1,7 @@
 import type { AssetMetadata, UploadSession } from "../asset/model";
 import type { MetadataStore, UploadSessionStore } from "../asset/repository";
+import type { Job } from "../job/model";
+import type { JobStore } from "../job/repository";
 
 export class KVMetadataStore implements MetadataStore {
   constructor(private kv: KVNamespace) {}
@@ -38,5 +40,23 @@ export class KVUploadSessionStore implements UploadSessionStore {
 
   async delete(id: string): Promise<void> {
     await this.kv.delete(`upload:${id}`);
+  }
+}
+
+export class KVJobStore implements JobStore {
+  constructor(private kv: KVNamespace) {}
+
+  async save(job: Job): Promise<void> {
+    await this.kv.put(`job:${job.id}`, JSON.stringify(job));
+  }
+
+  async find(id: string): Promise<Job | null> {
+    const raw = await this.kv.get(`job:${id}`);
+    if (!raw) return null;
+    return JSON.parse(raw) as Job;
+  }
+
+  async delete(id: string): Promise<void> {
+    await this.kv.delete(`job:${id}`);
   }
 }

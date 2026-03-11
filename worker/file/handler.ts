@@ -1,7 +1,6 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { AppEnv } from "../types";
-import { getAssetFile } from "../asset/usecase";
 import { decompressStream } from "../asset/compression";
 
 export const fileRoutes = new Hono<AppEnv>();
@@ -9,41 +8,50 @@ export const fileRoutes = new Hono<AppEnv>();
 // CORS only on file delivery routes
 fileRoutes.use("/*", cors({ origin: "*" }));
 
-// GET /files/:id/:filename — serve file content
-fileRoutes.get("/:id/:filename", async (c) => {
-  const metadata = c.get("metadata");
+// GET /files/:id/:filename — serve single-file asset
+// GET /files/:id/path/to/file — serve extracted file from archive asset
+fileRoutes.get("/:id/:path{.+}", async (c) => {
+  const metadataStore = c.get("metadata");
   const storage = c.get("storage");
   const id = c.req.param("id");
+  const filePath = c.req.param("path");
   const rangeHeader = c.req.header("Range");
   const acceptEncoding = c.req.header("Accept-Encoding") ?? "";
   const clientAcceptsGzip = acceptEncoding.includes("gzip");
-
-  // For gzip-stored files without range, or non-gzip files,
-  // we can request the range directly from R2
   const range = parseRange(rangeHeader);
 
-  // First, get asset metadata to check contentEncoding
-  const result = await getAssetFile(metadata, storage, id);
-  if (!result) {
+  const asset = await metadataStore.find(id);
+  if (!asset) {
     return c.json({ error: "File not found" }, 404);
   }
 
-  const { asset, file } = result;
-  const isGzipStored = asset.contentEncoding === "gzip";
+  // Determine storage key and content info based on asset type
+  const isArchiveSubpath = asset.type === "archive" && filePath !== asset.filename;
+  const storageKeyPath = isArchiveSubpath
+    ? `assets/${id}/files/${filePath}`
+    : `assets/${id}/${asset.filename}`;
 
-  // --- Non-gzip file: existing behavior with range support ---
+  const file = await storage.get(storageKeyPath, undefined);
+  if (!file) {
+    return c.json({ error: "File not found" }, 404);
+  }
+
+  const contentType = isArchiveSubpath ? file.contentType : asset.contentType;
+  const contentEncoding = isArchiveSubpath ? file.contentEncoding : asset.contentEncoding;
+  const displayName = isArchiveSubpath ? filePath.split("/").pop() || filePath : asset.filename;
+  const isGzipStored = contentEncoding === "gzip";
+
+  // --- Non-gzip file ---
   if (!isGzipStored) {
-    // If range was requested, re-fetch with range
     if (range) {
-      const rangedResult = await getAssetFile(metadata, storage, id, range);
-      if (!rangedResult) return c.json({ error: "File not found" }, 404);
+      const rangedFile = await storage.get(storageKeyPath, range);
+      if (!rangedFile) return c.json({ error: "File not found" }, 404);
 
-      const { file: rangedFile } = rangedResult;
       const headers: Record<string, string> = {
-        "Content-Type": asset.contentType,
+        "Content-Type": contentType,
         "Accept-Ranges": "bytes",
         "Cache-Control": "public, max-age=3600, immutable",
-        "Content-Disposition": `inline; filename="${encodeURIComponent(asset.filename)}"`,
+        "Content-Disposition": `inline; filename="${encodeURIComponent(displayName)}"`,
       };
 
       if (rangedFile.range) {
@@ -55,50 +63,49 @@ fileRoutes.get("/:id/:filename", async (c) => {
     }
 
     const headers: Record<string, string> = {
-      "Content-Type": asset.contentType,
+      "Content-Type": contentType,
       "Accept-Ranges": "bytes",
       "Cache-Control": "public, max-age=3600, immutable",
-      "Content-Disposition": `inline; filename="${encodeURIComponent(asset.filename)}"`,
+      "Content-Disposition": `inline; filename="${encodeURIComponent(displayName)}"`,
       "Content-Length": String(file.size),
     };
     return new Response(file.body, { status: 200, headers });
   }
 
-  // --- Gzip-stored file + client accepts gzip + no range → pass through ---
+  // --- Gzip-stored + client accepts gzip + no range → pass through ---
   if (clientAcceptsGzip && !rangeHeader) {
     const headers: Record<string, string> = {
-      "Content-Type": asset.contentType,
+      "Content-Type": contentType,
       "Content-Encoding": "gzip",
       "Content-Length": String(file.size),
       "Cache-Control": "public, max-age=3600, immutable",
-      "Content-Disposition": `inline; filename="${encodeURIComponent(asset.filename)}"`,
+      "Content-Disposition": `inline; filename="${encodeURIComponent(displayName)}"`,
     };
     return new Response(file.body, { status: 200, headers });
   }
 
-  // --- Gzip-stored file: decompress ---
+  // --- Gzip-stored: decompress ---
   const decompressed = decompressStream(file.body);
   const originalSize = asset.originalSize;
 
-  // No range requested: return full decompressed content
   if (!range) {
     const headers: Record<string, string> = {
-      "Content-Type": asset.contentType,
+      "Content-Type": contentType,
       "Accept-Ranges": "bytes",
       "Cache-Control": "public, max-age=3600, immutable",
-      "Content-Disposition": `inline; filename="${encodeURIComponent(asset.filename)}"`,
+      "Content-Disposition": `inline; filename="${encodeURIComponent(displayName)}"`,
     };
     if (originalSize) headers["Content-Length"] = String(originalSize);
     return new Response(decompressed, { status: 200, headers });
   }
 
-  // Range on gzip: decompress, skip to offset, stream the range, stop
+  // Range on gzip: decompress, skip to offset, stream the range
   const sliced = sliceStream(decompressed, range.offset, range.length, originalSize);
   const headers: Record<string, string> = {
-    "Content-Type": asset.contentType,
+    "Content-Type": contentType,
     "Accept-Ranges": "bytes",
     "Cache-Control": "public, max-age=3600, immutable",
-    "Content-Disposition": `inline; filename="${encodeURIComponent(asset.filename)}"`,
+    "Content-Disposition": `inline; filename="${encodeURIComponent(displayName)}"`,
   };
 
   if (originalSize) {
@@ -151,12 +158,10 @@ function sliceStream(
         const chunkEnd = skipped + chunk.length;
 
         if (chunkEnd <= offset) {
-          // Entire chunk before range — skip
           skipped += chunk.length;
           continue;
         }
 
-        // Determine the slice within this chunk we need
         const sliceStart = Math.max(0, offset - chunkStart);
         const remaining = actualLength - sent;
         const sliceEnd = Math.min(chunk.length, sliceStart + remaining);

@@ -19,11 +19,12 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // API routes: /health, /assets/*, /files/*
+    // API routes: /health, /assets/*, /files/*, /jobs/*
     if (
       url.pathname === "/health" ||
       url.pathname.startsWith("/assets") ||
-      url.pathname.startsWith("/files")
+      url.pathname.startsWith("/files") ||
+      url.pathname.startsWith("/jobs")
     ) {
       const app = createApp(env);
       return app.fetch(request, env, ctx);

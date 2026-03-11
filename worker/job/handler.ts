@@ -1,0 +1,93 @@
+import { Hono } from "hono";
+import type { AppEnv } from "../types";
+
+export const jobRoutes = new Hono<AppEnv>();
+
+// GET /jobs/:id — Get job progress
+jobRoutes.get("/:id", async (c) => {
+  const jobs = c.get("jobs");
+  const job = await jobs.find(c.req.param("id"));
+  if (!job) {
+    return c.json({ error: "Job not found" }, 404);
+  }
+  return c.json(job);
+});
+
+// POST /jobs/:id/retry — Restart a stalled job
+jobRoutes.post("/:id/retry", async (c) => {
+  const jobs = c.get("jobs");
+  const job = await jobs.find(c.req.param("id"));
+  if (!job) {
+    return c.json({ error: "Job not found" }, 404);
+  }
+  if (job.status === "completed") {
+    return c.json({ error: "Job already completed" }, 400);
+  }
+
+  // Reset to pending so the container can be re-triggered
+  job.status = "pending";
+  job.updatedAt = Date.now();
+  await jobs.save(job);
+
+  // TODO: trigger container restart
+  return c.json(job);
+});
+
+// POST /jobs/:id/status — Container → Worker: update job status (internal API)
+jobRoutes.post("/:id/status", async (c) => {
+  const jobs = c.get("jobs");
+  const job = await jobs.find(c.req.param("id"));
+  if (!job) {
+    return c.json({ error: "Job not found" }, 404);
+  }
+
+  const body = await c.req.json<{
+    status: "running" | "completed" | "failed";
+    fileCount?: number;
+    extractedSize?: number;
+    error?: string;
+  }>();
+
+  job.status = body.status;
+  job.updatedAt = Date.now();
+
+  if (body.status === "completed" || body.status === "failed") {
+    job.completedAt = Date.now();
+  }
+  if (body.fileCount !== undefined) {
+    job.fileCount = body.fileCount;
+  }
+  if (body.extractedSize !== undefined) {
+    job.extractedSize = body.extractedSize;
+  }
+  if (body.error) {
+    job.error = body.error;
+  }
+
+  await jobs.save(job);
+
+  // If completed, update asset metadata
+  if (body.status === "completed") {
+    const metadata = c.get("metadata");
+    const asset = await metadata.find(job.assetId);
+    if (asset) {
+      asset.status = "ready";
+      asset.fileCount = body.fileCount;
+      asset.extractedSize = body.extractedSize;
+      const ttl = c.get("ttlSeconds");
+      await metadata.save(asset, ttl);
+    }
+  }
+
+  if (body.status === "failed") {
+    const metadata = c.get("metadata");
+    const asset = await metadata.find(job.assetId);
+    if (asset) {
+      asset.status = "failed";
+      const ttl = c.get("ttlSeconds");
+      await metadata.save(asset, ttl);
+    }
+  }
+
+  return c.json({ ok: true });
+});

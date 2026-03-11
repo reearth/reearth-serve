@@ -1,8 +1,9 @@
 import { Hono } from "hono";
 import { assetRoutes } from "./asset/handler";
 import { fileRoutes } from "./file/handler";
+import { jobRoutes } from "./job/handler";
 import { R2FileStorage } from "./infra/storage";
-import { KVMetadataStore, KVUploadSessionStore } from "./infra/metadata";
+import { KVMetadataStore, KVUploadSessionStore, KVJobStore } from "./infra/metadata";
 import { R2PresignedUrlGenerator } from "./infra/presigned";
 import type { AppEnv } from "./types";
 
@@ -10,6 +11,7 @@ export function createApp(env: Env) {
   const metadata = new KVMetadataStore(env.KV);
   const storage = new R2FileStorage(env.STORAGE);
   const uploadSessions = new KVUploadSessionStore(env.KV);
+  const jobs = new KVJobStore(env.KV);
   const ttlSeconds = parseInt(env.ASSET_TTL_SECONDS, 10) || 3600;
   const baseUrl = env.BASE_URL;
 
@@ -30,6 +32,7 @@ export function createApp(env: Env) {
     c.set("storage", storage);
     c.set("uploadSessions", uploadSessions);
     c.set("presignedUrls", presignedUrls);
+    c.set("jobs", jobs);
     c.set("ttlSeconds", ttlSeconds);
     c.set("baseUrl", baseUrl);
     await next();
@@ -38,6 +41,7 @@ export function createApp(env: Env) {
   app.get("/health", (c) => c.json({ ok: true }));
   app.route("/assets", assetRoutes);
   app.route("/files", fileRoutes);
+  app.route("/jobs", jobRoutes);
 
   return app;
 }
