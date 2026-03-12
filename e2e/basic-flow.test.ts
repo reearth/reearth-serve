@@ -7,7 +7,7 @@ describe("Basic flow", () => {
   const fileContent = "hello, reearth-serve!";
 
   beforeAll(async () => {
-    const res = await fetch(`${BASE}/health`);
+    const res = await fetch(`${BASE}/api/v1/health`);
     if (!res.ok) throw new Error(`Server not reachable at ${BASE}`);
   });
 
@@ -30,8 +30,8 @@ describe("Basic flow", () => {
     fileUrl = rewriteUrl(body.url);
   });
 
-  test("GET /assets/:id returns correct metadata", async () => {
-    const res = await fetch(`${BASE}/assets/${assetId}`);
+  test("GET /api/v1/assets/:id returns correct metadata", async () => {
+    const res = await fetch(`${BASE}/api/v1/assets/${assetId}`);
     expect(res.status).toBe(200);
     const body = await res.json() as any;
     expect(body.asset.id).toBe(assetId);
@@ -80,12 +80,12 @@ describe("Basic flow", () => {
   });
 
   test("DELETE returns 204", async () => {
-    const res = await fetch(`${BASE}/assets/${assetId}`, { method: "DELETE" });
+    const res = await fetch(`${BASE}/api/v1/assets/${assetId}`, { method: "DELETE" });
     expect(res.status).toBe(204);
   });
 
   test("After deletion, metadata and file return 404", async () => {
-    const metaRes = await fetch(`${BASE}/assets/${assetId}`);
+    const metaRes = await fetch(`${BASE}/api/v1/assets/${assetId}`);
     expect(metaRes.status).toBe(404);
 
     const fileRes = await fetch(fileUrl);

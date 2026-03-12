@@ -86,7 +86,7 @@ The container cannot access Worker bindings (`env.STORAGE`, `env.KV`), so:
 |---|---|
 | R2 file I/O | S3-compatible API directly (`aws-sdk-go-v2`) |
 | Checkpoint persistence | JSON file in R2 (no KV dependency) |
-| Job status updates | HTTP POST to Worker API (`/jobs/:id/status`) |
+| Job status updates | HTTP POST to Worker API (`/api/internal/jobs/:id/status`) |
 
 ### Path normalization
 
@@ -126,19 +126,24 @@ JSONL allows streaming read/write without loading all entries into memory.
 
 ## API changes
 
-### New endpoints
+### New public endpoints (`/api/v1`)
 
 | Method | Path | Description |
 |---|---|---|
-| `GET` | `/jobs/:id` | Job progress |
-| `POST` | `/jobs/:id/retry` | Restart a stalled job |
-| `POST` | `/jobs/:id/status` | Internal: container → Worker status update |
+| `GET` | `/api/v1/jobs/:id` | Job progress |
+| `POST` | `/api/v1/jobs/:id/retry` | Restart a stalled job |
+
+### New internal endpoints (`/api/internal`)
+
+| Method | Path | Description |
+|---|---|---|
+| `POST` | `/api/internal/jobs/:id/status` | Container → Worker status update |
 
 ### Modified endpoints
 
 | Method | Path | Change |
 |---|---|---|
-| `GET` | `/assets/:id` | Added `type`, `status`, `archiveFormat`, `fileCount`, `extractedSize`, `jobId` fields |
+| `GET` | `/api/v1/assets/:id` | Added `type`, `status`, `archiveFormat`, `fileCount`, `extractedSize`, `jobId` fields |
 | `GET` | `/files/:id/*path` | Subpath routing for extracted archive files |
 
 ## Alternatives considered
@@ -161,4 +166,4 @@ Rejected because: Range request adapter enables Central Directory reading with m
 - The extraction container is independently testable via `MemoryStorage` mock
 - Path normalization handles Windows-created archives transparently
 - Compressible files (JSON, GeoJSON, CSV, etc.) are gzip-compressed before upload, saving storage and transfer costs
-- Container restart detection requires a Cron Trigger or manual retry via `/jobs/:id/retry` (not yet implemented)
+- Container restart detection requires a Cron Trigger or manual retry via `/api/v1/jobs/:id/retry` (not yet implemented)

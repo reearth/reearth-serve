@@ -57,14 +57,14 @@ Minimal viable file delivery service. No UI, no auth, no tile processing.
 
 ### Capabilities
 
-- [x] **Upload**: `POST /assets` — upload a file (raw body streaming), receive a public URL
+- [x] **Upload**: `POST /api/v1/assets` — upload a file (raw body streaming), receive a public URL
 - [x] **Download**: `GET /files/:id/:filename` — serve the file with correct `Content-Type`, `Content-Encoding`, and `Range` request support (HTTP 206)
-- [x] **Delete**: `DELETE /assets/:id` — remove an asset immediately
+- [x] **Delete**: `DELETE /api/v1/assets/:id` — remove an asset immediately
 - [x] **Immutable assets**: once uploaded, an asset cannot be overwritten — upload or delete only
 - [x] **Auto-expiration**: assets expire after 1 hour; a scheduled worker cleans up R2 objects
 - [x] **CORS**: `Access-Control-Allow-Origin: *` on all asset responses
 - [x] **CLI**: `reearth-serve <file>` uploads the file and prints the public URL
-- [x] **Presigned URL upload**: `POST /assets/uploads` creates a presigned upload session; supports S3 multipart for large files (>100MB)
+- [x] **Presigned URL upload**: `POST /api/v1/assets/uploads` creates a presigned upload session; supports S3 multipart for large files (>100MB)
 - [x] **Gzip compression**: compression is the uploader's responsibility — CLI compresses compressible files locally; server stores as-is and decompresses on download when needed
 
 ### Data Model (KV)
@@ -79,13 +79,13 @@ TTL:   3600s (auto-expire)
 
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/assets` | Upload a file (raw body streaming) |
-| `GET` | `/assets/:id` | Get asset metadata |
-| `DELETE` | `/assets/:id` | Delete an asset |
-| `POST` | `/assets/uploads` | Create presigned upload session |
-| `POST` | `/assets/uploads/:id/complete` | Complete upload session |
+| `POST` | `/api/v1/assets` | Upload a file (raw body streaming) |
+| `GET` | `/api/v1/assets/:id` | Get asset metadata |
+| `DELETE` | `/api/v1/assets/:id` | Delete an asset |
+| `POST` | `/api/v1/assets/uploads` | Create presigned upload session |
+| `POST` | `/api/v1/assets/uploads/:id/complete` | Complete upload session |
 | `GET` | `/files/:id/:filename` | Download file (CORS `*`, Range support) |
-| `GET` | `/health` | Health check |
+| `GET` | `/api/v1/health` | Health check |
 
 ---
 

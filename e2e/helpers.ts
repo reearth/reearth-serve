@@ -13,7 +13,7 @@ export async function uploadFile(
   filename: string,
   contentType: string,
 ): Promise<{ status: number; body: any }> {
-  const res = await fetch(`${BASE}/assets`, {
+  const res = await fetch(`${BASE}/api/v1/assets`, {
     method: "POST",
     headers: {
       "Content-Type": contentType,

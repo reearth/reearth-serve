@@ -3,7 +3,7 @@ import { BASE, rewriteUrl, uploadFile } from "./helpers";
 
 describe("Archive & Job", () => {
   beforeAll(async () => {
-    const res = await fetch(`${BASE}/health`);
+    const res = await fetch(`${BASE}/api/v1/health`);
     if (!res.ok) throw new Error(`Server not reachable at ${BASE}`);
   });
 
@@ -40,22 +40,22 @@ describe("Archive & Job", () => {
   // --- Job API ---
 
   describe("Job API", () => {
-    test("GET /jobs/:id returns 404 for non-existent job", async () => {
-      const res = await fetch(`${BASE}/jobs/nonexistent-job-id`);
+    test("GET /api/v1/jobs/:id returns 404 for non-existent job", async () => {
+      const res = await fetch(`${BASE}/api/v1/jobs/nonexistent-job-id`);
       expect(res.status).toBe(404);
       const body = await res.json() as any;
       expect(body.error).toContain("not found");
     });
 
-    test("POST /jobs/:id/retry returns 404 for non-existent job", async () => {
-      const res = await fetch(`${BASE}/jobs/nonexistent-job-id/retry`, {
+    test("POST /api/v1/jobs/:id/retry returns 404 for non-existent job", async () => {
+      const res = await fetch(`${BASE}/api/v1/jobs/nonexistent-job-id/retry`, {
         method: "POST",
       });
       expect(res.status).toBe(404);
     });
 
-    test("POST /jobs/:id/status returns 404 for non-existent job", async () => {
-      const res = await fetch(`${BASE}/jobs/nonexistent-job-id/status`, {
+    test("POST /api/internal/jobs/:id/status returns 404 for non-existent job", async () => {
+      const res = await fetch(`${BASE}/api/internal/jobs/nonexistent-job-id/status`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: "running" }),
@@ -76,7 +76,7 @@ describe("Archive & Job", () => {
       // We need to pre-create the job. Since there's no public create endpoint,
       // we'll use the status update endpoint. It returns 404 because the job
       // doesn't exist yet — this is expected behavior.
-      const statusRes = await fetch(`${BASE}/jobs/${assetId}/status`, {
+      const statusRes = await fetch(`${BASE}/api/internal/jobs/${assetId}/status`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: "running" }),

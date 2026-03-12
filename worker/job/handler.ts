@@ -1,9 +1,11 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../types";
 
+// --- Public API routes (mounted at /api/v1/jobs) ---
+
 export const jobRoutes = new Hono<AppEnv>();
 
-// GET /jobs/:id — Get job progress
+// GET /api/v1/jobs/:id — Get job progress
 jobRoutes.get("/:id", async (c) => {
   const jobs = c.get("jobs");
   const job = await jobs.find(c.req.param("id"));
@@ -13,7 +15,7 @@ jobRoutes.get("/:id", async (c) => {
   return c.json(job);
 });
 
-// POST /jobs/:id/retry — Restart a stalled job
+// POST /api/v1/jobs/:id/retry — Restart a stalled job
 jobRoutes.post("/:id/retry", async (c) => {
   const jobs = c.get("jobs");
   const job = await jobs.find(c.req.param("id"));
@@ -33,8 +35,12 @@ jobRoutes.post("/:id/retry", async (c) => {
   return c.json(job);
 });
 
-// POST /jobs/:id/status — Container → Worker: update job status (internal API)
-jobRoutes.post("/:id/status", async (c) => {
+// --- Internal API routes (mounted at /api/internal/jobs) ---
+
+export const jobInternalRoutes = new Hono<AppEnv>();
+
+// POST /api/internal/jobs/:id/status — Container → Worker: update job status
+jobInternalRoutes.post("/:id/status", async (c) => {
   const jobs = c.get("jobs");
   const job = await jobs.find(c.req.param("id"));
   if (!job) {

@@ -333,7 +333,7 @@ func (w *ExtractionWorker) updateJobStatus(ctx context.Context, status string, f
 	payload := fmt.Sprintf(`{"status":%q,"fileCount":%d,"extractedSize":%d}`,
 		status, fileCount, extractedBytes)
 
-	url := strings.TrimRight(w.cfg.WorkerAPIURL, "/") + fmt.Sprintf("/jobs/%s/status", w.cfg.AssetID)
+	url := strings.TrimRight(w.cfg.WorkerAPIURL, "/") + fmt.Sprintf("/api/internal/jobs/%s/status", w.cfg.AssetID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(payload))
 	if err != nil {
 		return err

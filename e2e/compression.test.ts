@@ -4,7 +4,7 @@ import { BASE, rewriteUrl, uploadFile } from "./helpers";
 
 describe("Compression", () => {
   beforeAll(async () => {
-    const res = await fetch(`${BASE}/health`);
+    const res = await fetch(`${BASE}/api/v1/health`);
     if (!res.ok) throw new Error(`Server not reachable at ${BASE}`);
   });
 
@@ -38,7 +38,7 @@ describe("Compression", () => {
     const original = new TextEncoder().encode(data);
     const compressed = new Uint8Array(gzipSync(original));
 
-    const res = await fetch(`${BASE}/assets`, {
+    const res = await fetch(`${BASE}/api/v1/assets`, {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
@@ -107,7 +107,7 @@ describe("Compression", () => {
 
   test("Presigned upload session indicates compression for compressible files", async () => {
     // Create upload session — server should indicate gzip for compressible files
-    const res = await fetch(`${BASE}/assets/uploads`, {
+    const res = await fetch(`${BASE}/api/v1/assets/uploads`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ filename: "data.json", contentType: "application/json", size: 5000 }),
@@ -122,7 +122,7 @@ describe("Compression", () => {
   });
 
   test("Presigned upload session does NOT indicate compression for small files", async () => {
-    const res = await fetch(`${BASE}/assets/uploads`, {
+    const res = await fetch(`${BASE}/api/v1/assets/uploads`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ filename: "tiny.json", contentType: "application/json", size: 100 }),
@@ -136,7 +136,7 @@ describe("Compression", () => {
   });
 
   test("Presigned upload session does NOT indicate compression for binary files", async () => {
-    const res = await fetch(`${BASE}/assets/uploads`, {
+    const res = await fetch(`${BASE}/api/v1/assets/uploads`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ filename: "image.png", contentType: "image/png", size: 50000 }),

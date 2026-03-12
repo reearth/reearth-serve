@@ -19,7 +19,7 @@ npm run cli -- myfile.geojson
 ### Upload a file (API)
 
 ```bash
-curl -X POST http://localhost:5173/assets \
+curl -X POST http://localhost:5173/api/v1/assets \
   -H "Content-Type: application/geo+json" \
   -H "X-Filename: myfile.geojson" \
   -H "Content-Length: $(wc -c < myfile.geojson)" \
@@ -50,18 +50,31 @@ curl -X POST http://localhost:5173/assets \
 
 ## API
 
+### Public API (`/api/v1`)
+
 | Method | Path | Description |
 |--------|------|-------------|
-| `POST` | `/assets` | Upload a file (multipart/form-data) |
-| `GET` | `/assets/:id` | Get asset metadata |
-| `DELETE` | `/assets/:id` | Delete an asset |
-| `POST` | `/assets/uploads` | Create presigned upload session |
-| `POST` | `/assets/uploads/:id/complete` | Complete upload session |
+| `GET` | `/api/v1/health` | Health check |
+| `POST` | `/api/v1/assets` | Upload a file (streaming) |
+| `GET` | `/api/v1/assets/:id` | Get asset metadata |
+| `DELETE` | `/api/v1/assets/:id` | Delete an asset |
+| `POST` | `/api/v1/assets/uploads` | Create presigned upload session |
+| `POST` | `/api/v1/assets/uploads/:id/complete` | Complete upload session |
+| `GET` | `/api/v1/jobs/:id` | Get extraction job status |
+| `POST` | `/api/v1/jobs/:id/retry` | Retry a failed extraction job |
+
+### Internal API (`/api/internal`)
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/api/internal/jobs/:id/status` | Container → Worker job status update |
+
+### File Delivery
+
+| Method | Path | Description |
+|--------|------|-------------|
 | `GET` | `/files/:id/:filename` | Download file (CORS `*`, Range support) |
 | `GET` | `/files/:id/:filename/*` | Download extracted archive file |
-| `GET` | `/jobs/:id` | Get extraction job status |
-| `POST` | `/jobs/:id/retry` | Retry a failed extraction job |
-| `GET` | `/health` | Health check |
 
 Assets are **immutable** (upload or delete, no overwrite) and **ephemeral** (auto-expire after 1 hour).
 
@@ -87,7 +100,7 @@ The CLI automatically uses presigned URLs when available, falling back to direct
 Compression is the **uploader's responsibility** — the server never buffers or compresses on the upload path.
 
 - **Presigned URL upload**: For compressible files (JSON, GeoJSON, CSV, XML, KML, GML, SVG, etc.) over 1KB, the server returns `contentEncoding: "gzip"` in the session response. The CLI compresses locally before uploading
-- **Direct upload** (`POST /assets`): Files are stored as-is without server-side compression
+- **Direct upload** (`POST /api/v1/assets`): Files are stored as-is without server-side compression
 - **Download**: If the file is stored with gzip encoding and the client sends `Accept-Encoding: gzip`, the compressed data is passed through directly. Otherwise, the server decompresses on the fly via streaming
 - **Range requests**: Supported on gzip-stored files — the server decompresses, seeks to the requested byte offset, and streams the range
 

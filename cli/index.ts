@@ -75,7 +75,7 @@ async function uploadViaPresigned(
   const partCount = isMultipart ? Math.ceil(fileData.byteLength / PART_SIZE) : undefined;
 
   // Step 1: Create upload session
-  const initRes = await fetch(`${endpoint}/assets/uploads`, {
+  const initRes = await fetch(`${endpoint}/api/v1/assets/uploads`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
@@ -121,7 +121,7 @@ async function uploadViaPresigned(
     }
 
     // Step 3: Complete multipart upload
-    const completeRes = await fetch(`${endpoint}/assets/uploads/${session.uploadId}/complete`, {
+    const completeRes = await fetch(`${endpoint}/api/v1/assets/uploads/${session.uploadId}/complete`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ parts: etags }),
@@ -148,7 +148,7 @@ async function uploadViaPresigned(
   }
 
   // Step 3: Complete single upload
-  const completeRes = await fetch(`${endpoint}/assets/uploads/${session.uploadId}/complete`, {
+  const completeRes = await fetch(`${endpoint}/api/v1/assets/uploads/${session.uploadId}/complete`, {
     method: "POST",
   });
 
@@ -179,7 +179,7 @@ async function uploadDirect(
     headers["X-Original-Size"] = String(fileData.byteLength);
   }
 
-  const res = await fetch(`${endpoint}/assets`, {
+  const res = await fetch(`${endpoint}/api/v1/assets`, {
     method: "POST",
     headers,
     body: uploadData as BodyInit,

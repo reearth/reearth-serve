@@ -1,7 +1,7 @@
 import { Hono } from "hono";
 import { assetRoutes } from "./asset/handler";
 import { fileRoutes } from "./file/handler";
-import { jobRoutes } from "./job/handler";
+import { jobRoutes, jobInternalRoutes } from "./job/handler";
 import { R2FileStorage } from "./infra/storage";
 import { KVMetadataStore, KVUploadSessionStore, KVJobStore } from "./infra/metadata";
 import { R2PresignedUrlGenerator } from "./infra/presigned";
@@ -38,10 +38,16 @@ export function createApp(env: Env) {
     await next();
   });
 
-  app.get("/health", (c) => c.json({ ok: true }));
-  app.route("/assets", assetRoutes);
+  // Public API (versioned)
+  app.get("/api/v1/health", (c) => c.json({ ok: true }));
+  app.route("/api/v1/assets", assetRoutes);
+  app.route("/api/v1/jobs", jobRoutes);
+
+  // Internal API (no versioning, no compatibility guarantee)
+  app.route("/api/internal/jobs", jobInternalRoutes);
+
+  // File delivery (not behind /api — permalink URLs)
   app.route("/files", fileRoutes);
-  app.route("/jobs", jobRoutes);
 
   return app;
 }

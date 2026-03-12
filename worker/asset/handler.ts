@@ -4,11 +4,11 @@ import { uploadAsset, getAssetMetadata, deleteAsset, createUploadSession, comple
 
 export const assetRoutes = new Hono<AppEnv>();
 
-// POST /assets/uploads — create upload session with presigned URL(s)
+// POST /api/v1/assets/uploads — create upload session with presigned URL(s)
 assetRoutes.post("/uploads", async (c) => {
   const presignedUrls = c.get("presignedUrls");
   if (!presignedUrls) {
-    return c.json({ error: "Presigned URL uploads not available. Use POST /assets for direct upload." }, 501);
+    return c.json({ error: "Presigned URL uploads not available. Use POST /api/v1/assets for direct upload." }, 501);
   }
 
   const body = await c.req.json<{ filename?: string; contentType?: string; size?: number; partCount?: number }>();
@@ -29,7 +29,7 @@ assetRoutes.post("/uploads", async (c) => {
   return c.json(result, 201);
 });
 
-// POST /assets/uploads/:id/complete — confirm upload and create asset
+// POST /api/v1/assets/uploads/:id/complete — confirm upload and create asset
 assetRoutes.post("/uploads/:id/complete", async (c) => {
   const sessions = c.get("uploadSessions");
   const metadata = c.get("metadata");
@@ -55,7 +55,7 @@ assetRoutes.post("/uploads/:id/complete", async (c) => {
   return c.json(result, 201);
 });
 
-// POST /assets — upload a file (direct, streaming)
+// POST /api/v1/assets — upload a file (direct, streaming)
 // Headers: Content-Type (file type), X-Filename (filename), Content-Length (size)
 // Optional: Content-Encoding: gzip, X-Original-Size (uncompressed size)
 assetRoutes.post("/", async (c) => {
@@ -103,7 +103,7 @@ assetRoutes.post("/", async (c) => {
   }
 });
 
-// GET /assets/:id — get metadata
+// GET /api/v1/assets/:id — get metadata
 assetRoutes.get("/:id", async (c) => {
   const metadata = c.get("metadata");
   const id = c.req.param("id");
@@ -116,7 +116,7 @@ assetRoutes.get("/:id", async (c) => {
   return c.json({ asset });
 });
 
-// DELETE /assets/:id — delete asset
+// DELETE /api/v1/assets/:id — delete asset
 assetRoutes.delete("/:id", async (c) => {
   const metadata = c.get("metadata");
   const storage = c.get("storage");

@@ -29,7 +29,7 @@ R2's zero egress pricing is critical for tile delivery workloads where bandwidth
 
 ### Streaming upload (direct)
 
-`POST /assets` accepts a raw body stream. The Worker pipes the request body directly to R2 via `put()` — no buffering the entire file in memory. This keeps Worker memory usage constant regardless of file size.
+`POST /api/v1/assets` accepts a raw body stream. The Worker pipes the request body directly to R2 via `put()` — no buffering the entire file in memory. This keeps Worker memory usage constant regardless of file size.
 
 ```
 Client → Worker (stream) → R2.put()
@@ -41,9 +41,9 @@ Headers `X-Filename` and `Content-Type` provide metadata. The response includes 
 
 For large files or when clients need direct-to-storage upload:
 
-1. `POST /assets/uploads` — Worker creates an S3 multipart upload via R2's S3-compatible API, returns presigned URLs for each part
+1. `POST /api/v1/assets/uploads` — Worker creates an S3 multipart upload via R2's S3-compatible API, returns presigned URLs for each part
 2. Client uploads parts directly to R2 (bypassing the Worker)
-3. `POST /assets/uploads/:id/complete` — Worker completes the multipart upload and creates the asset metadata
+3. `POST /api/v1/assets/uploads/:id/complete` — Worker completes the multipart upload and creates the asset metadata
 
 This avoids Worker CPU time limits for large uploads. The S3-compatible API requires `aws4fetch` for request signing.
 
@@ -101,15 +101,22 @@ The CLI auto-detects compressible files and applies gzip compression before uplo
 
 ## API
 
+### Public API (`/api/v1`)
+
 | Method | Path | Description |
 |---|---|---|
-| `POST` | `/assets` | Upload a file (raw body streaming) |
-| `GET` | `/assets/:id` | Get asset metadata |
-| `DELETE` | `/assets/:id` | Delete an asset |
-| `POST` | `/assets/uploads` | Create presigned upload session |
-| `POST` | `/assets/uploads/:id/complete` | Complete presigned upload |
+| `GET` | `/api/v1/health` | Health check |
+| `POST` | `/api/v1/assets` | Upload a file (raw body streaming) |
+| `GET` | `/api/v1/assets/:id` | Get asset metadata |
+| `DELETE` | `/api/v1/assets/:id` | Delete an asset |
+| `POST` | `/api/v1/assets/uploads` | Create presigned upload session |
+| `POST` | `/api/v1/assets/uploads/:id/complete` | Complete presigned upload |
+
+### File Delivery
+
+| Method | Path | Description |
+|---|---|---|
 | `GET` | `/files/:id/:filename` | Download file |
-| `GET` | `/health` | Health check |
 
 ## Alternatives considered
 

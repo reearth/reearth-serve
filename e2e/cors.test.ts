@@ -5,7 +5,7 @@ describe("CORS", () => {
   let fileUrl: string;
 
   beforeAll(async () => {
-    const res = await fetch(`${BASE}/health`);
+    const res = await fetch(`${BASE}/api/v1/health`);
     if (!res.ok) throw new Error(`Server not reachable at ${BASE}`);
 
     const { body } = await uploadFile(
@@ -44,7 +44,7 @@ describe("CORS", () => {
       "nocors.txt",
       "text/plain",
     );
-    const res = await fetch(`${BASE}/assets/${body.asset.id}`);
+    const res = await fetch(`${BASE}/api/v1/assets/${body.asset.id}`);
     expect(res.headers.get("Access-Control-Allow-Origin")).toBeNull();
   });
 });

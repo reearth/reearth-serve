@@ -10,7 +10,7 @@ describe("CLI", () => {
   let tmpFile: string;
 
   beforeAll(async () => {
-    const res = await fetch(`${BASE}/health`);
+    const res = await fetch(`${BASE}/api/v1/health`);
     if (!res.ok) throw new Error(`Server not reachable at ${BASE}`);
 
     tmpDir = mkdtempSync(join(tmpdir(), "serve-e2e-"));
