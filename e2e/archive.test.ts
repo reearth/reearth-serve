@@ -17,6 +17,10 @@ describe("Archive & Job", () => {
       expect(body.asset.filename).toBe("test.zip");
       expect(body.asset.contentType).toBe("application/zip");
       expect(body.asset.size).toBe(zipBytes.byteLength);
+      expect(body.asset.type).toBe("archive");
+      expect(body.asset.status).toBe("pending");
+      expect(body.asset.archiveFormat).toBe("zip");
+      expect(body.asset.jobId).toBe(body.asset.id);
       expect(body.url).toContain("/files/");
 
       // Download the raw ZIP back
@@ -34,6 +38,9 @@ describe("Archive & Job", () => {
       const { status, body } = await uploadFile(content, "data.tar.gz", "application/gzip");
       expect(status).toBe(201);
       expect(body.asset.filename).toBe("data.tar.gz");
+      expect(body.asset.type).toBe("archive");
+      expect(body.asset.status).toBe("pending");
+      expect(body.asset.archiveFormat).toBe("tar.gz");
     });
   });
 
@@ -63,26 +70,47 @@ describe("Archive & Job", () => {
       expect(res.status).toBe(404);
     });
 
-    test("Job lifecycle: create via status update, query, complete", async () => {
-      // First, upload a file to get an asset ID
-      const { body: uploadBody } = await uploadFile(
-        new TextEncoder().encode("dummy"),
-        "test-job.zip",
-        "application/zip",
-      );
+    test("Job lifecycle: upload creates job, status transitions through pending → extracting → ready", async () => {
+      // Upload a ZIP — job should be auto-created
+      const zipBytes = buildMiniZip({ "a.txt": "hello" });
+      const { body: uploadBody } = await uploadFile(zipBytes, "lifecycle.zip", "application/zip");
       const assetId = uploadBody.asset.id;
 
-      // Simulate: container creates the job via internal API
-      // We need to pre-create the job. Since there's no public create endpoint,
-      // we'll use the status update endpoint. It returns 404 because the job
-      // doesn't exist yet — this is expected behavior.
-      const statusRes = await fetch(`${BASE}/api/internal/jobs/${assetId}/status`, {
+      // Asset should have pending status
+      expect(uploadBody.asset.type).toBe("archive");
+      expect(uploadBody.asset.status).toBe("pending");
+      expect(uploadBody.asset.archiveFormat).toBe("zip");
+      expect(uploadBody.asset.jobId).toBe(assetId);
+
+      // Job should exist and be pending
+      const jobRes = await fetch(`${BASE}/api/v1/jobs/${assetId}`);
+      expect(jobRes.status).toBe(200);
+      const job = await jobRes.json() as any;
+      expect(job.status).toBe("pending");
+
+      // Container reports running → asset becomes extracting
+      const runRes = await fetch(`${BASE}/api/internal/jobs/${assetId}/status`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ status: "running" }),
       });
-      // The job doesn't exist yet (no automatic creation on upload currently)
-      expect(statusRes.status).toBe(404);
+      expect(runRes.status).toBe(200);
+
+      const assetDuring = await (await fetch(`${BASE}/api/v1/assets/${assetId}`)).json() as any;
+      expect(assetDuring.asset.status).toBe("extracting");
+
+      // Container reports completed → asset becomes ready
+      const completeRes = await fetch(`${BASE}/api/internal/jobs/${assetId}/status`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "completed", fileCount: 1, extractedSize: 5 }),
+      });
+      expect(completeRes.status).toBe(200);
+
+      const assetAfter = await (await fetch(`${BASE}/api/v1/assets/${assetId}`)).json() as any;
+      expect(assetAfter.asset.status).toBe("ready");
+      expect(assetAfter.asset.fileCount).toBe(1);
+      expect(assetAfter.asset.extractedSize).toBe(5);
     });
   });
 

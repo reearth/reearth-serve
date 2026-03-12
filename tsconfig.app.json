@@ -6,6 +6,7 @@
     "app/**/.server/**/*",
     "app/**/.client/**/*",
     "worker/**/*",
+    "shared/**/*",
     "cli/**/*",
     "e2e/**/*",
     "env.d.ts"

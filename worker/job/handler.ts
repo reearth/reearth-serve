@@ -72,6 +72,17 @@ jobInternalRoutes.post("/:id/status", async (c) => {
 
   await jobs.save(job);
 
+  // Update asset status to reflect job progress
+  if (body.status === "running") {
+    const metadata = c.get("metadata");
+    const asset = await metadata.find(job.assetId);
+    if (asset) {
+      asset.status = "extracting";
+      const ttl = c.get("ttlSeconds");
+      await metadata.save(asset, ttl);
+    }
+  }
+
   // If completed, update asset metadata
   if (body.status === "completed") {
     const metadata = c.get("metadata");

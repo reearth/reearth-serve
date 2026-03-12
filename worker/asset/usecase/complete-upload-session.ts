@@ -1,5 +1,8 @@
 import type { AssetMetadata, AssetUploadResult, UploadPart, UploadSession } from "../model";
+import { detectArchiveFormat } from "../model";
 import type { FileStorage, MetadataStore, PresignedUrlGenerator, UploadSessionStore } from "../repository";
+import type { JobStore } from "../../job/repository";
+import type { Job } from "../../job/model";
 import { storageKey } from "./shared";
 
 export async function completeUploadSession(
@@ -7,6 +10,7 @@ export async function completeUploadSession(
   metadata: MetadataStore,
   storage: FileStorage,
   presignedUrls: PresignedUrlGenerator | null,
+  jobs: JobStore,
   id: string,
   ttlSeconds: number,
   baseUrl: string,
@@ -27,16 +31,38 @@ export async function completeUploadSession(
   const head = await storage.head(key);
   if (!head) return null;
 
+  const archiveFormat = detectArchiveFormat(session.filename);
+  const now = Date.now();
+
   const asset: AssetMetadata = {
     id,
     filename: session.filename,
     contentType: session.contentType,
     size: head.size,
     createdAt: session.createdAt,
-    expiresAt: Date.now() + ttlSeconds * 1000,
+    expiresAt: now + ttlSeconds * 1000,
     ...(head.contentEncoding && { contentEncoding: head.contentEncoding }),
     ...(head.contentEncoding && session.size && { originalSize: session.size }),
+    ...(archiveFormat && {
+      type: "archive" as const,
+      status: "pending" as const,
+      archiveFormat,
+    }),
   };
+
+  // Create extraction job for archives
+  if (archiveFormat) {
+    const job: Job = {
+      id,
+      assetId: id,
+      type: "archive-extraction",
+      status: "pending",
+      createdAt: now,
+      updatedAt: now,
+    };
+    await jobs.save(job);
+    asset.jobId = id;
+  }
 
   await metadata.save(asset, ttlSeconds);
   await sessions.delete(id);
@@ -87,11 +113,21 @@ if (import.meta.vitest) {
     };
   }
 
+  function mockJobs(): JobStore {
+    const store = new Map<string, Job>();
+    return {
+      save: vi.fn(async (job: Job) => { store.set(job.id, job); }),
+      find: vi.fn(async (id: string) => store.get(id) ?? null),
+      delete: vi.fn(async (id: string) => { store.delete(id); }),
+    };
+  }
+
   test("completeUploadSession finalizes single upload when file exists", async () => {
     const sessions = mockSessions();
     const md = mockMetadata();
     const st = mockStorage({ size: 100 });
     const presigned = mockPresignedUrls();
+    const jb = mockJobs();
 
     const { createUploadSession } = await import("./create-upload-session");
     const session = await createUploadSession(
@@ -100,15 +136,17 @@ if (import.meta.vitest) {
       3600,
     );
 
-    const result = await completeUploadSession(sessions, md, st, presigned, session.uploadId, 3600, "https://example.com");
+    const result = await completeUploadSession(sessions, md, st, presigned, jb, session.uploadId, 3600, "https://example.com");
 
     expect(result).not.toBeNull();
     expect(result!.asset.id).toBe(session.uploadId);
     expect(result!.asset.filename).toBe("data.bin");
     expect(result!.url).toContain("/files/");
+    expect(result!.asset.type).toBeUndefined();
     expect(md.save).toHaveBeenCalledOnce();
     expect(sessions.delete).toHaveBeenCalledOnce();
     expect(presigned.completeMultipartUpload).not.toHaveBeenCalled();
+    expect(jb.save).not.toHaveBeenCalled();
   });
 
   test("completeUploadSession finalizes multipart upload with parts", async () => {
@@ -116,6 +154,7 @@ if (import.meta.vitest) {
     const md = mockMetadata();
     const st = mockStorage({ size: 1000 });
     const presigned = mockPresignedUrls();
+    const jb = mockJobs();
 
     const { createUploadSession } = await import("./create-upload-session");
     const session = await createUploadSession(
@@ -129,12 +168,17 @@ if (import.meta.vitest) {
       { partNumber: 2, etag: '"etag2"' },
     ];
 
-    const result = await completeUploadSession(sessions, md, st, presigned, session.uploadId, 3600, "https://example.com", parts);
+    const result = await completeUploadSession(sessions, md, st, presigned, jb, session.uploadId, 3600, "https://example.com", parts);
 
     expect(result).not.toBeNull();
     expect(result!.asset.filename).toBe("huge.tar");
+    expect(result!.asset.type).toBe("archive");
+    expect(result!.asset.status).toBe("pending");
+    expect(result!.asset.archiveFormat).toBe("tar");
+    expect(result!.asset.jobId).toBeDefined();
     expect(presigned.completeMultipartUpload).toHaveBeenCalledOnce();
     expect(md.save).toHaveBeenCalledOnce();
+    expect(jb.save).toHaveBeenCalledOnce();
   });
 
   test("completeUploadSession returns null for multipart without parts", async () => {
@@ -142,6 +186,7 @@ if (import.meta.vitest) {
     const md = mockMetadata();
     const st = mockStorage({ size: 1000 });
     const presigned = mockPresignedUrls();
+    const jb = mockJobs();
 
     const { createUploadSession } = await import("./create-upload-session");
     const session = await createUploadSession(
@@ -150,7 +195,7 @@ if (import.meta.vitest) {
       3600,
     );
 
-    const result = await completeUploadSession(sessions, md, st, presigned, session.uploadId, 3600, "https://example.com");
+    const result = await completeUploadSession(sessions, md, st, presigned, jb, session.uploadId, 3600, "https://example.com");
     expect(result).toBeNull();
   });
 
@@ -158,8 +203,9 @@ if (import.meta.vitest) {
     const sessions = mockSessions();
     const md = mockMetadata();
     const st = mockStorage();
+    const jb = mockJobs();
 
-    const result = await completeUploadSession(sessions, md, st, null, "nonexistent", 3600, "https://example.com");
+    const result = await completeUploadSession(sessions, md, st, null, jb, "nonexistent", 3600, "https://example.com");
     expect(result).toBeNull();
   });
 
@@ -168,6 +214,7 @@ if (import.meta.vitest) {
     const md = mockMetadata();
     const st = mockStorage(); // head returns null
     const presigned = mockPresignedUrls();
+    const jb = mockJobs();
 
     const { createUploadSession } = await import("./create-upload-session");
     const session = await createUploadSession(
@@ -176,7 +223,7 @@ if (import.meta.vitest) {
       3600,
     );
 
-    const result = await completeUploadSession(sessions, md, st, presigned, session.uploadId, 3600, "https://example.com");
+    const result = await completeUploadSession(sessions, md, st, presigned, jb, session.uploadId, 3600, "https://example.com");
     expect(result).toBeNull();
   });
 }

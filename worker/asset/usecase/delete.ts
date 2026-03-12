@@ -42,16 +42,26 @@ if (import.meta.vitest) {
     };
   }
 
+  function mockJobs() {
+    const store = new Map();
+    return {
+      save: vi.fn(async (job: any) => { store.set(job.id, job); }),
+      find: vi.fn(async (id: string) => store.get(id) ?? null),
+      delete: vi.fn(async (id: string) => { store.delete(id); }),
+    };
+  }
+
   test("deleteAsset removes both metadata and file", async () => {
     const md = mockMetadata();
     const st = mockStorage();
+    const jb = mockJobs();
     const { uploadAsset } = await import("./upload");
     const data = new TextEncoder().encode("data");
     const body = new ReadableStream<Uint8Array>({
       start(c) { c.enqueue(data); c.close(); },
     });
 
-    const { asset } = await uploadAsset(md, st, { name: "f.bin", type: "application/octet-stream", body, size: 4 }, 3600, "https://example.com");
+    const { asset } = await uploadAsset(md, st, jb, { name: "f.bin", type: "application/octet-stream", body, size: 4 }, 3600, "https://example.com");
 
     const deleted = await deleteAsset(md, st, asset.id);
     expect(deleted).toBe(true);

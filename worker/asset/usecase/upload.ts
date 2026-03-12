@@ -1,10 +1,14 @@
 import type { AssetMetadata, AssetUploadResult } from "../model";
+import { detectArchiveFormat } from "../model";
 import type { FileStorage, MetadataStore } from "../repository";
+import type { JobStore } from "../../job/repository";
+import type { Job } from "../../job/model";
 import { generateId, storageKey } from "./shared";
 
 export async function uploadAsset(
   metadata: MetadataStore,
   storage: FileStorage,
+  jobs: JobStore,
   file: {
     name: string;
     type: string;
@@ -25,6 +29,8 @@ export async function uploadAsset(
     file.contentEncoding ? { contentEncoding: file.contentEncoding } : undefined,
   );
 
+  const archiveFormat = detectArchiveFormat(file.name);
+
   const asset: AssetMetadata = {
     id,
     filename: file.name,
@@ -34,7 +40,26 @@ export async function uploadAsset(
     expiresAt: now + ttlSeconds * 1000,
     ...(file.contentEncoding && { contentEncoding: file.contentEncoding }),
     ...(file.contentEncoding && file.originalSize && { originalSize: file.originalSize }),
+    ...(archiveFormat && {
+      type: "archive" as const,
+      status: "pending" as const,
+      archiveFormat,
+    }),
   };
+
+  // Create extraction job for archives
+  if (archiveFormat) {
+    const job: Job = {
+      id,
+      assetId: id,
+      type: "archive-extraction",
+      status: "pending",
+      createdAt: now,
+      updatedAt: now,
+    };
+    await jobs.save(job);
+    asset.jobId = id;
+  }
 
   await metadata.save(asset, ttlSeconds);
 
@@ -72,12 +97,22 @@ if (import.meta.vitest) {
     };
   }
 
+  function mockJobs(): JobStore {
+    const store = new Map<string, Job>();
+    return {
+      save: vi.fn(async (job: Job) => { store.set(job.id, job); }),
+      find: vi.fn(async (id: string) => store.get(id) ?? null),
+      delete: vi.fn(async (id: string) => { store.delete(id); }),
+    };
+  }
+
   test("uploadAsset creates metadata and stores file via stream", async () => {
     const md = mockMetadata();
     const st = mockStorage();
+    const jb = mockJobs();
 
     const result = await uploadAsset(
-      md, st,
+      md, st, jb,
       { name: "test.txt", type: "text/plain", body: toStream(new TextEncoder().encode("hello")), size: 5 },
       3600, "https://example.com",
     );
@@ -85,17 +120,55 @@ if (import.meta.vitest) {
     expect(result.asset.filename).toBe("test.txt");
     expect(result.asset.contentType).toBe("text/plain");
     expect(result.asset.size).toBe(5);
+    expect(result.asset.type).toBeUndefined();
+    expect(result.asset.status).toBeUndefined();
     expect(md.save).toHaveBeenCalledOnce();
     expect(st.put).toHaveBeenCalledOnce();
+    expect(jb.save).not.toHaveBeenCalled();
+  });
+
+  test("uploadAsset detects ZIP and creates job", async () => {
+    const md = mockMetadata();
+    const st = mockStorage();
+    const jb = mockJobs();
+
+    const result = await uploadAsset(
+      md, st, jb,
+      { name: "data.zip", type: "application/zip", body: toStream(new Uint8Array(10)), size: 10 },
+      3600, "https://example.com",
+    );
+
+    expect(result.asset.type).toBe("archive");
+    expect(result.asset.status).toBe("pending");
+    expect(result.asset.archiveFormat).toBe("zip");
+    expect(result.asset.jobId).toBe(result.asset.id);
+    expect(jb.save).toHaveBeenCalledOnce();
+  });
+
+  test("uploadAsset detects tar.gz and creates job", async () => {
+    const md = mockMetadata();
+    const st = mockStorage();
+    const jb = mockJobs();
+
+    const result = await uploadAsset(
+      md, st, jb,
+      { name: "data.tar.gz", type: "application/gzip", body: toStream(new Uint8Array(10)), size: 10 },
+      3600, "https://example.com",
+    );
+
+    expect(result.asset.type).toBe("archive");
+    expect(result.asset.archiveFormat).toBe("tar.gz");
+    expect(jb.save).toHaveBeenCalledOnce();
   });
 
   test("uploadAsset does not compress (compression is client responsibility)", async () => {
     const md = mockMetadata();
     const st = mockStorage();
+    const jb = mockJobs();
     const data = new TextEncoder().encode('{"data":' + '"x"'.repeat(500) + '}');
 
     const result = await uploadAsset(
-      md, st,
+      md, st, jb,
       { name: "data.json", type: "application/json", body: toStream(data), size: data.byteLength },
       3600, "https://example.com",
     );
@@ -108,9 +181,10 @@ if (import.meta.vitest) {
   test("uploadAsset records contentEncoding and originalSize when provided", async () => {
     const md = mockMetadata();
     const st = mockStorage();
+    const jb = mockJobs();
 
     const result = await uploadAsset(
-      md, st,
+      md, st, jb,
       {
         name: "data.json", type: "application/json",
         body: toStream(new Uint8Array(50)), size: 50,

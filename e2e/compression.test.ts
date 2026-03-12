@@ -96,7 +96,7 @@ describe("Compression", () => {
     writeFileSync(tmpFile, data);
 
     try {
-      const output = execSync(`npx tsx cli/index.ts "${tmpFile}" --endpoint ${BASE} --direct --json`, { encoding: "utf-8" });
+      const output = execSync(`npx tsx cli/index.ts --endpoint ${BASE} --json upload --direct "${tmpFile}"`, { encoding: "utf-8" });
       const result = JSON.parse(output);
       expect(result.asset.contentEncoding).toBe("gzip");
       expect(result.asset.originalSize).toBe(Buffer.byteLength(data));

@@ -1,15 +1,7 @@
-export interface Job {
-  id: string;
-  assetId: string;
-  type: "archive-extraction";
-  status: "pending" | "running" | "completed" | "failed";
-  createdAt: number;
-  updatedAt: number;
-  completedAt?: number;
-  error?: string;
-  fileCount?: number;
-  extractedSize?: number;
-}
+// Re-export shared API types
+export type { Job } from "../../shared/api";
+
+// Worker-only types
 
 export interface FileEntry {
   path: string;
