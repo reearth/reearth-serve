@@ -18,9 +18,9 @@ describe("CLI", () => {
     writeFileSync(tmpFile, "cli test content");
   });
 
-  test("CLI outputs a URL that works", async () => {
+  test("CLI upload outputs a URL that works", async () => {
     const out = execSync(
-      `npx tsx cli/index.ts "${tmpFile}" --endpoint ${BASE}`,
+      `npx tsx cli/index.ts --endpoint ${BASE} upload "${tmpFile}"`,
       { encoding: "utf-8" },
     ).trim();
     expect(out).toContain("/files/");
@@ -32,14 +32,61 @@ describe("CLI", () => {
     expect(text).toBe("cli test content");
   });
 
-  test("CLI --json outputs JSON", () => {
+  test("CLI upload --json outputs JSON", () => {
     const out = execSync(
-      `npx tsx cli/index.ts "${tmpFile}" --endpoint ${BASE} --json`,
+      `npx tsx cli/index.ts --endpoint ${BASE} --json upload "${tmpFile}"`,
       { encoding: "utf-8" },
     ).trim();
     const parsed = JSON.parse(out);
     expect(parsed.asset).toBeDefined();
     expect(parsed.url).toContain("/files/");
+  });
+
+  test("CLI asset create works same as upload", async () => {
+    const out = execSync(
+      `npx tsx cli/index.ts --endpoint ${BASE} asset create "${tmpFile}"`,
+      { encoding: "utf-8" },
+    ).trim();
+    expect(out).toContain("/files/");
+    expect(out).toContain("sample.txt");
+  });
+
+  test("CLI asset show returns metadata", async () => {
+    // Upload first
+    const uploadOut = execSync(
+      `npx tsx cli/index.ts --endpoint ${BASE} --json upload "${tmpFile}"`,
+      { encoding: "utf-8" },
+    ).trim();
+    const { asset } = JSON.parse(uploadOut);
+
+    const out = execSync(
+      `npx tsx cli/index.ts --endpoint ${BASE} asset show ${asset.id}`,
+      { encoding: "utf-8" },
+    ).trim();
+    expect(out).toContain(asset.id);
+    expect(out).toContain("sample.txt");
+  });
+
+  test("CLI asset delete removes asset", async () => {
+    const uploadOut = execSync(
+      `npx tsx cli/index.ts --endpoint ${BASE} --json upload "${tmpFile}"`,
+      { encoding: "utf-8" },
+    ).trim();
+    const { asset } = JSON.parse(uploadOut);
+
+    const out = execSync(
+      `npx tsx cli/index.ts --endpoint ${BASE} asset delete ${asset.id}`,
+      { encoding: "utf-8" },
+    ).trim();
+    expect(out).toContain("Deleted");
+  });
+
+  test("CLI health checks server", () => {
+    const out = execSync(
+      `npx tsx cli/index.ts --endpoint ${BASE} health`,
+      { encoding: "utf-8" },
+    ).trim();
+    expect(out).toBe("OK");
   });
 
   test("CLI --help exits 0", () => {
@@ -49,16 +96,16 @@ describe("CLI", () => {
     expect(out).toContain("Usage:");
   });
 
-  test("CLI --help shows --direct flag", () => {
-    const out = execSync("npx tsx cli/index.ts --help", {
+  test("CLI upload --help shows --direct flag", () => {
+    const out = execSync("npx tsx cli/index.ts upload --help", {
       encoding: "utf-8",
     }).trim();
     expect(out).toContain("--direct");
   });
 
-  test("CLI with non-existent file exits with error", () => {
+  test("CLI upload with non-existent file exits with error", () => {
     expect(() => {
-      execSync("npx tsx cli/index.ts /tmp/does_not_exist_12345.bin", {
+      execSync("npx tsx cli/index.ts upload /tmp/does_not_exist_12345.bin", {
         encoding: "utf-8",
         stdio: "pipe",
       });

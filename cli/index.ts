@@ -1,7 +1,16 @@
+import { Command } from "commander";
 import { readFileSync, statSync } from "node:fs";
 import { basename } from "node:path";
 import { gzipSync } from "node:zlib";
 import { lookup } from "./mime";
+import { PATHS } from "../shared/paths";
+import type {
+  AssetMetadata,
+  AssetUploadResult,
+  PresignedUploadResult,
+  MultipartUploadResult,
+  Job,
+} from "../shared/api";
 
 const DEFAULT_ENDPOINT = "http://localhost:8787";
 const MULTIPART_THRESHOLD = 100 * 1024 * 1024; // 100MB
@@ -21,42 +30,100 @@ function shouldCompress(filename: string, size: number): boolean {
   return COMPRESSIBLE_EXTENSIONS.has(ext);
 }
 
-interface UploadResult {
-  asset: { id: string };
-  url: string;
+// --- Output helpers ---
+
+function output(data: unknown, json: boolean) {
+  if (json) {
+    console.log(JSON.stringify(data, null, 2));
+  } else if (typeof data === "string") {
+    console.log(data);
+  } else {
+    console.log(data);
+  }
 }
 
-interface SingleSessionResponse {
-  uploadId: string;
-  url: string;
-  method: "PUT";
-  headers: Record<string, string>;
-  contentEncoding?: string;
+function formatAsset(asset: AssetMetadata): string {
+  const lines = [
+    `ID:           ${asset.id}`,
+    `Filename:     ${asset.filename}`,
+    `Content-Type: ${asset.contentType}`,
+    `Size:         ${formatBytes(asset.size)}`,
+    `Created:      ${new Date(asset.createdAt).toISOString()}`,
+    `Expires:      ${new Date(asset.expiresAt).toISOString()}`,
+  ];
+  if (asset.contentEncoding) lines.push(`Encoding:     ${asset.contentEncoding}`);
+  if (asset.originalSize) lines.push(`Original:     ${formatBytes(asset.originalSize)}`);
+  if (asset.type) lines.push(`Type:         ${asset.type}`);
+  if (asset.status) lines.push(`Status:       ${asset.status}`);
+  if (asset.archiveFormat) lines.push(`Archive:      ${asset.archiveFormat}`);
+  if (asset.fileCount) lines.push(`Files:        ${asset.fileCount}`);
+  if (asset.jobId) lines.push(`Job:          ${asset.jobId}`);
+  return lines.join("\n");
 }
 
-interface MultipartSessionResponse {
-  uploadId: string;
-  parts: { partNumber: number; url: string }[];
-  contentEncoding?: string;
+function formatJob(job: Job): string {
+  const lines = [
+    `ID:        ${job.id}`,
+    `Asset:     ${job.assetId}`,
+    `Type:      ${job.type}`,
+    `Status:    ${job.status}`,
+    `Updated:   ${new Date(job.updatedAt).toISOString()}`,
+  ];
+  if (job.completedAt) lines.push(`Completed: ${new Date(job.completedAt).toISOString()}`);
+  if (job.fileCount) lines.push(`Files:     ${job.fileCount}`);
+  if (job.extractedSize) lines.push(`Extracted: ${formatBytes(job.extractedSize)}`);
+  if (job.error) lines.push(`Error:     ${job.error}`);
+  return lines.join("\n");
 }
 
-function isMultipartResponse(res: SingleSessionResponse | MultipartSessionResponse): res is MultipartSessionResponse {
-  return "parts" in res;
+function formatBytes(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
 }
+
+// --- HTTP helpers ---
+
+async function apiGet<T>(endpoint: string, path: string): Promise<T> {
+  const res = await fetch(`${endpoint}${path}`);
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`${res.status}: ${body}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+async function apiPost<T>(endpoint: string, path: string, body?: unknown): Promise<T> {
+  const res = await fetch(`${endpoint}${path}`, {
+    method: "POST",
+    ...(body ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`${res.status}: ${text}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+async function apiDelete(endpoint: string, path: string): Promise<void> {
+  const res = await fetch(`${endpoint}${path}`, { method: "DELETE" });
+  if (!res.ok) {
+    const body = await res.text();
+    throw new Error(`${res.status}: ${body}`);
+  }
+}
+
+// --- Upload logic ---
 
 async function uploadPartWithRetry(url: string, data: Uint8Array, retries = 2): Promise<string> {
   for (let attempt = 0; attempt <= retries; attempt++) {
-    const res = await fetch(url, {
-      method: "PUT",
-      body: data as BodyInit,
-    });
-
+    const res = await fetch(url, { method: "PUT", body: data as BodyInit });
     if (res.ok) {
       const etag = res.headers.get("ETag");
       if (!etag) throw new Error("Missing ETag in part upload response");
       return etag;
     }
-
     if (attempt === retries) {
       const body = await res.text();
       throw new Error(`Part upload failed (${res.status}): ${body}`);
@@ -70,42 +137,32 @@ async function uploadViaPresigned(
   fileName: string,
   contentType: string,
   fileData: Uint8Array,
-): Promise<UploadResult | null> {
+): Promise<AssetUploadResult | null> {
   const isMultipart = fileData.byteLength > MULTIPART_THRESHOLD;
   const partCount = isMultipart ? Math.ceil(fileData.byteLength / PART_SIZE) : undefined;
 
-  // Step 1: Create upload session
-  const initRes = await fetch(`${endpoint}/api/v1/assets/uploads`, {
+  const initRes = await fetch(`${endpoint}${PATHS.uploads}`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      filename: fileName,
-      contentType,
-      size: fileData.byteLength,
-      partCount,
-    }),
+    body: JSON.stringify({ filename: fileName, contentType, size: fileData.byteLength, partCount }),
   });
 
-  if (initRes.status === 501) return null; // not available, fallback to direct
+  if (initRes.status === 501) return null;
   if (!initRes.ok) {
     const body = await initRes.text();
     throw new Error(`Upload session creation failed (${initRes.status}): ${body}`);
   }
 
-  const session = await initRes.json() as SingleSessionResponse | MultipartSessionResponse;
+  const session = await initRes.json() as PresignedUploadResult | MultipartUploadResult;
 
-  // Compress data locally if server requests gzip encoding
   let uploadData = fileData;
-  if (session.contentEncoding === "gzip") {
+  if ("contentEncoding" in session && session.contentEncoding === "gzip") {
     uploadData = new Uint8Array(gzipSync(fileData));
   }
 
-  // Step 2: Upload file data
-  if (isMultipartResponse(session)) {
-    // Multipart: upload parts in parallel with concurrency limit
+  if ("parts" in session) {
     const parts = session.parts;
     const etags: { partNumber: number; etag: string }[] = [];
-
     for (let i = 0; i < parts.length; i += MAX_CONCURRENCY) {
       const batch = parts.slice(i, i + MAX_CONCURRENCY);
       const results = await Promise.all(
@@ -120,44 +177,38 @@ async function uploadViaPresigned(
       etags.push(...results);
     }
 
-    // Step 3: Complete multipart upload
-    const completeRes = await fetch(`${endpoint}/api/v1/assets/uploads/${session.uploadId}/complete`, {
+    const completeRes = await fetch(`${endpoint}${PATHS.completeUpload(session.uploadId)}`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ parts: etags }),
     });
-
     if (!completeRes.ok) {
       const body = await completeRes.text();
       throw new Error(`Upload completion failed (${completeRes.status}): ${body}`);
     }
-
-    return completeRes.json() as Promise<UploadResult>;
+    return completeRes.json() as Promise<AssetUploadResult>;
   }
 
-  // Single PUT upload
-  const putRes = await fetch(session.url, {
+  // Single PUT
+  const singleSession = session as PresignedUploadResult;
+  const putRes = await fetch(singleSession.url, {
     method: "PUT",
-    headers: session.headers,
+    headers: singleSession.headers,
     body: uploadData as BodyInit,
   });
-
   if (!putRes.ok) {
     const body = await putRes.text();
     throw new Error(`Direct upload to storage failed (${putRes.status}): ${body}`);
   }
 
-  // Step 3: Complete single upload
-  const completeRes = await fetch(`${endpoint}/api/v1/assets/uploads/${session.uploadId}/complete`, {
+  const completeRes = await fetch(`${endpoint}${PATHS.completeUpload(singleSession.uploadId)}`, {
     method: "POST",
   });
-
   if (!completeRes.ok) {
     const body = await completeRes.text();
     throw new Error(`Upload completion failed (${completeRes.status}): ${body}`);
   }
-
-  return completeRes.json() as Promise<UploadResult>;
+  return completeRes.json() as Promise<AssetUploadResult>;
 }
 
 async function uploadDirect(
@@ -165,7 +216,7 @@ async function uploadDirect(
   fileName: string,
   contentType: string,
   fileData: Uint8Array,
-): Promise<UploadResult> {
+): Promise<AssetUploadResult> {
   const compress = shouldCompress(fileName, fileData.byteLength);
   const uploadData = compress ? new Uint8Array(gzipSync(fileData)) : fileData;
 
@@ -179,59 +230,22 @@ async function uploadDirect(
     headers["X-Original-Size"] = String(fileData.byteLength);
   }
 
-  const res = await fetch(`${endpoint}/api/v1/assets`, {
+  const res = await fetch(`${endpoint}${PATHS.assets}`, {
     method: "POST",
     headers,
     body: uploadData as BodyInit,
   });
-
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`Upload failed (${res.status}): ${body}`);
   }
-
-  return res.json() as Promise<UploadResult>;
+  return res.json() as Promise<AssetUploadResult>;
 }
 
-async function main() {
-  const args = process.argv.slice(2);
-
-  if (args.length === 0 || args.includes("--help") || args.includes("-h")) {
-    console.log(`Usage: reearth-serve <file> [--endpoint <url>]
-
-Upload a file and get a public URL.
-
-Options:
-  --endpoint <url>  Server endpoint (default: ${DEFAULT_ENDPOINT})
-  --direct          Force direct upload (skip presigned URL)
-  --json            Output JSON instead of just the URL
-  --help, -h        Show this help`);
-    process.exit(args.includes("--help") || args.includes("-h") ? 0 : 1);
-  }
-
-  let endpoint = DEFAULT_ENDPOINT;
-  let jsonOutput = false;
-  let directMode = false;
-  let filePath: string | undefined;
-
-  for (let i = 0; i < args.length; i++) {
-    if (args[i] === "--endpoint" && args[i + 1]) {
-      endpoint = args[++i];
-    } else if (args[i] === "--json") {
-      jsonOutput = true;
-    } else if (args[i] === "--direct") {
-      directMode = true;
-    } else if (!args[i].startsWith("-")) {
-      filePath = args[i];
-    }
-  }
-
-  if (!filePath) {
-    console.error("Error: No file specified.");
-    console.error("Hint:  Run `reearth-serve --help` for usage.");
-    process.exit(1);
-  }
-
+async function doUpload(
+  filePath: string,
+  opts: { endpoint: string; direct: boolean; json: boolean },
+): Promise<void> {
   try {
     statSync(filePath);
   } catch {
@@ -243,25 +257,129 @@ Options:
   const fileData = new Uint8Array(readFileSync(filePath));
   const contentType = lookup(fileName);
 
-  let data: UploadResult;
-
-  if (directMode) {
-    data = await uploadDirect(endpoint, fileName, contentType, fileData);
+  let result: AssetUploadResult;
+  if (opts.direct) {
+    result = await uploadDirect(opts.endpoint, fileName, contentType, fileData);
   } else {
-    // Try presigned URL first, fallback to direct
-    const presigned = await uploadViaPresigned(endpoint, fileName, contentType, fileData);
-    if (presigned) {
-      data = presigned;
-    } else {
-      data = await uploadDirect(endpoint, fileName, contentType, fileData);
-    }
+    const presigned = await uploadViaPresigned(opts.endpoint, fileName, contentType, fileData);
+    result = presigned ?? await uploadDirect(opts.endpoint, fileName, contentType, fileData);
   }
 
-  if (jsonOutput) {
-    console.log(JSON.stringify(data, null, 2));
+  if (opts.json) {
+    output(result, true);
   } else {
-    console.log(data.url);
+    console.log(result.url);
   }
 }
 
-main();
+// --- Program ---
+
+const program = new Command()
+  .name("reearth-serve")
+  .description("Re:Earth Serve CLI — spatial data delivery")
+  .version("0.1.0")
+  .option("--endpoint <url>", "Server endpoint", DEFAULT_ENDPOINT)
+  .option("--json", "Output JSON", false);
+
+// upload (shortcut)
+program
+  .command("upload")
+  .description("Upload a file and get a public URL")
+  .argument("<file>", "File to upload")
+  .option("--direct", "Force direct upload (skip presigned URL)")
+  .action(async (file: string, cmdOpts: { direct?: boolean }) => {
+    const globalOpts = program.opts<{ endpoint: string; json: boolean }>();
+    await doUpload(file, { endpoint: globalOpts.endpoint, direct: !!cmdOpts.direct, json: globalOpts.json });
+  });
+
+// asset
+const asset = program
+  .command("asset")
+  .description("Manage assets");
+
+asset
+  .command("create")
+  .description("Upload a file (alias for upload)")
+  .argument("<file>", "File to upload")
+  .option("--direct", "Force direct upload (skip presigned URL)")
+  .action(async (file: string, cmdOpts: { direct?: boolean }) => {
+    const globalOpts = program.opts<{ endpoint: string; json: boolean }>();
+    await doUpload(file, { endpoint: globalOpts.endpoint, direct: !!cmdOpts.direct, json: globalOpts.json });
+  });
+
+asset
+  .command("show")
+  .description("Show asset metadata")
+  .argument("<id>", "Asset ID")
+  .action(async (id: string) => {
+    const opts = program.opts<{ endpoint: string; json: boolean }>();
+    const data = await apiGet<{ asset: AssetMetadata }>(opts.endpoint, PATHS.asset(id));
+    if (opts.json) {
+      output(data, true);
+    } else {
+      console.log(formatAsset(data.asset));
+    }
+  });
+
+asset
+  .command("delete")
+  .description("Delete an asset")
+  .argument("<id>", "Asset ID")
+  .action(async (id: string) => {
+    const opts = program.opts<{ endpoint: string; json: boolean }>();
+    await apiDelete(opts.endpoint, PATHS.asset(id));
+    if (opts.json) {
+      output({ ok: true }, true);
+    } else {
+      console.log(`Deleted: ${id}`);
+    }
+  });
+
+// job
+const job = program
+  .command("job")
+  .description("Manage jobs");
+
+job
+  .command("show")
+  .description("Show job status")
+  .argument("<id>", "Job ID")
+  .action(async (id: string) => {
+    const opts = program.opts<{ endpoint: string; json: boolean }>();
+    const data = await apiGet<Job>(opts.endpoint, PATHS.job(id));
+    if (opts.json) {
+      output(data, true);
+    } else {
+      console.log(formatJob(data));
+    }
+  });
+
+job
+  .command("retry")
+  .description("Retry a failed job")
+  .argument("<id>", "Job ID")
+  .action(async (id: string) => {
+    const opts = program.opts<{ endpoint: string; json: boolean }>();
+    const data = await apiPost<Job>(opts.endpoint, PATHS.jobRetry(id));
+    if (opts.json) {
+      output(data, true);
+    } else {
+      console.log(formatJob(data));
+    }
+  });
+
+// health
+program
+  .command("health")
+  .description("Check server health")
+  .action(async () => {
+    const opts = program.opts<{ endpoint: string; json: boolean }>();
+    const data = await apiGet<{ ok: boolean }>(opts.endpoint, PATHS.health);
+    if (opts.json) {
+      output(data, true);
+    } else {
+      console.log(data.ok ? "OK" : "UNHEALTHY");
+    }
+  });
+
+program.parse();
