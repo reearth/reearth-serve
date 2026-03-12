@@ -124,6 +124,32 @@ assets/{assetId}/files/{path}                     # Extracted files
 
 JSONL allows streaming read/write without loading all entries into memory.
 
+## Asset status lifecycle
+
+Archive assets follow a state machine driven by the extraction container's progress reports:
+
+```
+upload
+  │
+  ▼
+pending ──── container reports "running" ────▶ extracting
+                                                  │
+                                    ┌──────────────┼──────────────┐
+                                    ▼                             ▼
+                                  ready                        failed
+                            (container reports            (container reports
+                              "completed")                   "failed")
+```
+
+| Status | Meaning | Trigger |
+|---|---|---|
+| `pending` | Archive uploaded, waiting for extraction container to start | Asset upload (direct or presigned) |
+| `extracting` | Container is running, files are being extracted to R2 | Container POST `/api/internal/jobs/:id/status` with `status: "running"` |
+| `ready` | Extraction complete, all files are accessible via `/files/:id/*path` | Container POST with `status: "completed"` |
+| `failed` | Extraction failed (timeout, corrupt archive, etc.) | Container POST with `status: "failed"` |
+
+Non-archive assets (single files) have no `status` field — they are immediately accessible after upload.
+
 ## API changes
 
 ### New public endpoints (`/api/v1`)
