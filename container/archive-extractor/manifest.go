@@ -17,6 +17,7 @@ type FileEntry struct {
 	Size            int64  `json:"size"`
 	ContentType     string `json:"contentType"`
 	ContentEncoding string `json:"contentEncoding,omitempty"`
+	Hash            string `json:"hash,omitempty"` // "md5:<hex>"
 }
 
 // ManifestWriter manages writing manifest chunks and the final manifest to storage.

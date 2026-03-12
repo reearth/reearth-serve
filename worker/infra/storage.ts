@@ -41,10 +41,10 @@ export class R2FileStorage implements FileStorage {
     return result;
   }
 
-  async head(key: string): Promise<{ size: number; contentEncoding?: string } | null> {
+  async head(key: string): Promise<{ size: number; contentEncoding?: string; etag?: string } | null> {
     const obj = await this.bucket.head(key);
     if (!obj) return null;
-    return { size: obj.size, contentEncoding: obj.httpMetadata?.contentEncoding };
+    return { size: obj.size, contentEncoding: obj.httpMetadata?.contentEncoding, etag: obj.etag };
   }
 
   async delete(key: string): Promise<void> {

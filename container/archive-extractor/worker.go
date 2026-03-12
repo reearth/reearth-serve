@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -181,7 +182,8 @@ func (w *ExtractionWorker) phaseB(ctx context.Context, cp *JobCheckpoint) error 
 			defer wg.Done()
 			defer func() { <-sem }()
 
-			if err := w.extractAndUpload(ctx, extractor, e); err != nil {
+			fileHash, err := w.extractAndUpload(ctx, extractor, e)
+			if err != nil {
 				log.Printf("error extracting %q: %v", e.NormalizedPath, err)
 				mu.Lock()
 				cp.Errors = append(cp.Errors, EntryError{
@@ -197,6 +199,7 @@ func (w *ExtractionWorker) phaseB(ctx context.Context, cp *JobCheckpoint) error 
 				Path:        e.NormalizedPath,
 				Size:        e.Size,
 				ContentType: DetectContentType(e.NormalizedPath),
+				Hash:        fileHash,
 			}
 			if ShouldCompress(e.NormalizedPath, e.Size) {
 				fe.ContentEncoding = "gzip"
@@ -263,29 +266,31 @@ func (w *ExtractionWorker) phaseC(ctx context.Context, cp *JobCheckpoint) error 
 	return nil
 }
 
-func (w *ExtractionWorker) extractAndUpload(ctx context.Context, extractor ArchiveExtractor, entry ArchiveEntry) error {
+func (w *ExtractionWorker) extractAndUpload(ctx context.Context, extractor ArchiveExtractor, entry ArchiveEntry) (string, error) {
 	rc, err := extractor.ExtractEntry(ctx, entry)
 	if err != nil {
-		return fmt.Errorf("extract: %w", err)
+		return "", fmt.Errorf("extract: %w", err)
 	}
 	defer func() { _ = rc.Close() }()
 
 	r2Key := fmt.Sprintf("assets/%s/files/%s", w.cfg.AssetID, entry.NormalizedPath)
 	contentType := DetectContentType(entry.NormalizedPath)
 
-	var body io.Reader = rc
+	// Compute MD5 while streaming the uncompressed data
+	hash := md5.New()
+	var body io.Reader = io.TeeReader(rc, hash)
 	var opts *PutOptions
 
 	if ShouldCompress(entry.NormalizedPath, entry.Size) {
-		body = GzipReader(rc)
+		body = GzipReader(body)
 		opts = &PutOptions{ContentEncoding: "gzip"}
 	}
 
 	if err := w.storage.PutObject(ctx, r2Key, body, contentType, opts); err != nil {
-		return fmt.Errorf("upload: %w", err)
+		return "", fmt.Errorf("upload: %w", err)
 	}
 
-	return nil
+	return fmt.Sprintf("md5:%x", hash.Sum(nil)), nil
 }
 
 func (w *ExtractionWorker) loadEntryList(ctx context.Context) ([]ArchiveEntry, error) {

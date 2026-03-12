@@ -7,6 +7,8 @@ export const PATHS = {
   asset: (id: string) => `${API_V1}/assets/${id}`,
   uploads: `${API_V1}/assets/uploads`,
   completeUpload: (id: string) => `${API_V1}/assets/uploads/${id}/complete`,
+  assetFiles: (id: string, prefix?: string) =>
+    `${API_V1}/assets/${id}/files${prefix ? `?prefix=${encodeURIComponent(prefix)}` : ""}`,
   jobs: `${API_V1}/jobs`,
   job: (id: string) => `${API_V1}/jobs/${id}`,
   jobRetry: (id: string) => `${API_V1}/jobs/${id}/retry`,

@@ -114,6 +114,58 @@ describe("Archive & Job", () => {
     });
   });
 
+  // --- File list API (NDJSON) ---
+
+  describe("File list API", () => {
+    test("GET /api/v1/assets/:id/files streams single entry for non-archive asset", async () => {
+      const content = new TextEncoder().encode("hello");
+      const { body } = await uploadFile(content, "simple.txt", "text/plain");
+      const assetId = body.asset.id;
+
+      const res = await fetch(`${BASE}/api/v1/assets/${assetId}/files`);
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Content-Type")).toContain("application/x-ndjson");
+      const entries = parseNdjson(await res.text());
+      expect(entries).toHaveLength(1);
+      expect(entries[0].path).toBe("simple.txt");
+      expect(entries[0].size).toBe(5);
+    });
+
+    test("GET /api/v1/assets/:id/files returns empty for pending archive", async () => {
+      const zipBytes = buildMiniZip({ "a.txt": "data" });
+      const { body } = await uploadFile(zipBytes, "pending.zip", "application/zip");
+      const assetId = body.asset.id;
+
+      const res = await fetch(`${BASE}/api/v1/assets/${assetId}/files`);
+      expect(res.status).toBe(200);
+      const entries = parseNdjson(await res.text());
+      expect(entries).toHaveLength(0);
+    });
+
+    test("GET /api/v1/assets/:id/files supports prefix filter", async () => {
+      const content = new TextEncoder().encode("hello");
+      const { body } = await uploadFile(content, "data.txt", "text/plain");
+      const assetId = body.asset.id;
+
+      // Matching prefix
+      const res1 = await fetch(`${BASE}/api/v1/assets/${assetId}/files?prefix=data`);
+      expect(res1.status).toBe(200);
+      const entries1 = parseNdjson(await res1.text());
+      expect(entries1).toHaveLength(1);
+
+      // Non-matching prefix
+      const res2 = await fetch(`${BASE}/api/v1/assets/${assetId}/files?prefix=other`);
+      expect(res2.status).toBe(200);
+      const entries2 = parseNdjson(await res2.text());
+      expect(entries2).toHaveLength(0);
+    });
+
+    test("GET /api/v1/assets/:id/files returns 404 for non-existent asset", async () => {
+      const res = await fetch(`${BASE}/api/v1/assets/nonexistent/files`);
+      expect(res.status).toBe(404);
+    });
+  });
+
   // --- File subpath routing ---
 
   describe("File subpath routing", () => {
@@ -233,6 +285,10 @@ function buildMiniZip(files: Record<string, string>): Uint8Array {
   result.set(new Uint8Array(eocd), pos);
 
   return result;
+}
+
+function parseNdjson(text: string): any[] {
+  return text.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
 
 /** Simple CRC-32 implementation for ZIP. */

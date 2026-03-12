@@ -12,7 +12,7 @@ npm run dev        # Start dev server (React Router + Cloudflare Workers)
 ### Upload a file (CLI)
 
 ```bash
-npm run cli -- myfile.geojson
+npm run cli -- upload myfile.geojson
 # → http://localhost:5173/files/abc123/myfile.geojson
 ```
 
@@ -36,15 +36,16 @@ curl -X POST http://localhost:5173/api/v1/assets \
 | Containers | Cloudflare Containers (Go) |
 | API | Hono |
 | UI | React Router (SSR) + Tailwind CSS |
-| CLI | tsx |
+| CLI | Commander.js + tsx |
 
 ### Project Structure
 
 | Directory | Description |
 |-----------|-------------|
 | `worker/` | Cloudflare Worker (Hono routes, domain logic, infra adapters) |
+| `shared/` | Shared types (Zod schemas) and API path constants |
 | `app/` | React Router frontend |
-| `cli/` | CLI client |
+| `cli/` | CLI client (Commander.js) |
 | `container/archive-extractor/` | Archive extraction container (Go) — ZIP/tar/tar.gz → R2 |
 | `e2e/` | E2E tests |
 
@@ -57,6 +58,7 @@ curl -X POST http://localhost:5173/api/v1/assets \
 | `GET` | `/api/v1/health` | Health check |
 | `POST` | `/api/v1/assets` | Upload a file (streaming) |
 | `GET` | `/api/v1/assets/:id` | Get asset metadata |
+| `GET` | `/api/v1/assets/:id/files` | List files (NDJSON stream, `?prefix=` filter) |
 | `DELETE` | `/api/v1/assets/:id` | Delete an asset |
 | `POST` | `/api/v1/assets/uploads` | Create presigned upload session |
 | `POST` | `/api/v1/assets/uploads/:id/complete` | Complete upload session |
@@ -104,6 +106,39 @@ Compression is the **uploader's responsibility** — the server never buffers or
 - **Download**: If the file is stored with gzip encoding and the client sends `Accept-Encoding: gzip`, the compressed data is passed through directly. Otherwise, the server decompresses on the fly via streaming
 - **Range requests**: Supported on gzip-stored files — the server decompresses, seeks to the requested byte offset, and streams the range
 
+### CLI
+
+The CLI (`npm run cli --`) provides subcommands for managing assets and files.
+
+```bash
+# Upload
+npm run cli -- upload myfile.geojson
+npm run cli -- upload --direct myfile.geojson   # skip presigned URLs
+
+# Asset management
+npm run cli -- asset show <id>
+npm run cli -- asset delete <id>
+
+# File operations
+npm run cli -- file ls <id>                     # list files
+npm run cli -- file ls -l <id> tiles/           # detailed list with prefix filter
+npm run cli -- file cp <id>:tileset.json .       # download single file
+npm run cli -- file cp -r <id>:tiles/ ./out     # recursive download
+npm run cli -- file cp -rf <id>:tiles/ ./out    # recursive + overwrite
+npm run cli -- file sync <id> ./local           # hash-based diff sync
+npm run cli -- file sync --delete <id> ./local  # sync + remove extra local files
+
+# Job management
+npm run cli -- job show <id>
+npm run cli -- job retry <id>
+
+# Global options
+npm run cli -- --endpoint https://example.com upload myfile.geojson
+npm run cli -- --json asset show <id>           # JSON output
+```
+
+`file sync` uses MD5 hash comparison (matching R2 ETags) to skip unchanged files. When no hash is available, it falls back to size comparison.
+
 ## Scripts
 
 | Command | Description |
@@ -117,7 +152,11 @@ Compression is the **uploader's responsibility** — the server never buffers or
 | `cd container/archive-extractor && go test ./...` | Container unit tests |
 | `npm run typecheck` | TypeScript type check |
 | `npm run typegen` | Generate Wrangler + React Router types |
-| `npm run cli -- <file>` | Upload a file via CLI |
+| `npm run cli -- upload <file>` | Upload a file via CLI |
+| `npm run cli -- file ls <id>` | List files in an asset |
+| `npm run cli -- file cp <id> <dest>` | Download a file |
+| `npm run cli -- file sync <id> <dir>` | Sync asset files to local directory |
+| `npm run cli -- --help` | Show all commands |
 
 ### Running E2E Tests
 

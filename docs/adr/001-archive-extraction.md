@@ -118,9 +118,11 @@ assets/{assetId}/files/{path}                     # Extracted files
 ### Manifest format (`_manifest.jsonl`)
 
 ```jsonl
-{"path":"tiles/0/0/0.pbf","size":1234,"contentType":"application/x-protobuf"}
-{"path":"tileset.json","size":456,"contentType":"application/json","contentEncoding":"gzip"}
+{"path":"tiles/0/0/0.pbf","size":1234,"contentType":"application/x-protobuf","hash":"md5:a1b2c3..."}
+{"path":"tileset.json","size":456,"contentType":"application/json","contentEncoding":"gzip","hash":"md5:d4e5f6..."}
 ```
+
+Each entry includes an MD5 hash (`md5:<hex>`) of the uncompressed file content, computed during extraction via `io.TeeReader`. MD5 was chosen for consistency with R2/S3 ETags, which are MD5-based — this allows the file list API to return a unified hash format for both single-file assets (ETag) and archive-extracted files (manifest hash). The hash is used by the CLI `file sync` command for diff-based synchronization.
 
 JSONL allows streaming read/write without loading all entries into memory.
 
@@ -156,6 +158,7 @@ Non-archive assets (single files) have no `status` field — they are immediatel
 
 | Method | Path | Description |
 |---|---|---|
+| `GET` | `/api/v1/assets/:id/files` | File list (NDJSON stream, `?prefix=` filter) |
 | `GET` | `/api/v1/jobs/:id` | Job progress |
 | `POST` | `/api/v1/jobs/:id/retry` | Restart a stalled job |
 

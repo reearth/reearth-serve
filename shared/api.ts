@@ -38,7 +38,7 @@ export const presignedUploadResultSchema = z.object({
   uploadId: z.string(),
   url: z.string(),
   method: z.literal("PUT"),
-  headers: z.record(z.string()),
+  headers: z.record(z.string(), z.string()),
   contentEncoding: z.string().optional(),
   expiresAt: z.number(),
 });
@@ -71,6 +71,16 @@ export const jobSchema = z.object({
   error: z.string().optional(),
   fileCount: z.number().optional(),
   extractedSize: z.number().optional(),
+});
+
+// --- File entry (archive manifest) ---
+
+export const fileEntrySchema = z.object({
+  path: z.string(),
+  size: z.number(),
+  contentType: z.string(),
+  contentEncoding: z.string().optional(),
+  hash: z.string().optional(),
 });
 
 // --- Request bodies ---
@@ -114,3 +124,4 @@ export type CreateUploadSessionBody = z.infer<typeof createUploadSessionBodySche
 export type CompleteUploadBody = z.infer<typeof completeUploadBodySchema>;
 export type UpdateJobStatusBody = z.infer<typeof updateJobStatusBodySchema>;
 export type ErrorResponse = z.infer<typeof errorResponseSchema>;
+export type FileEntry = z.infer<typeof fileEntrySchema>;
