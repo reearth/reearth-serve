@@ -12,4 +12,8 @@ interface Env {
   OIDC_ISSUER_URL?: string;
   OIDC_AUDIENCE?: string;
   OIDC_CLIENT_ID?: string;
+  // JWKS cache TTL (default: 3600s)
+  JWKS_CACHE_TTL_SECONDS?: string;
+  // Authorization
+  CERBOS_ENDPOINT?: string;
 }

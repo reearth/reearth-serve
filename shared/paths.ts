@@ -13,5 +13,7 @@ export const PATHS = {
   job: (id: string) => `${API_V1}/jobs/${id}`,
   jobRetry: (id: string) => `${API_V1}/jobs/${id}/retry`,
   jobStatus: (id: string) => `${API_INTERNAL}/jobs/${id}/status`,
+  projects: `${API_V1}/projects`,
+  project: (id: string) => `${API_V1}/projects/${id}`,
   file: (id: string, filename: string) => `/files/${id}/${encodeURIComponent(filename)}`,
 } as const;

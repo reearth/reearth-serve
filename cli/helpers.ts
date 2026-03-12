@@ -3,6 +3,7 @@ import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync } f
 import { dirname, join, relative } from "node:path";
 import { Writable } from "node:stream";
 import type { AssetMetadata, FileEntry, Job } from "../shared/api";
+import { loadCredentials } from "./config";
 
 // --- Output helpers ---
 
@@ -59,8 +60,16 @@ export function formatBytes(bytes: number): string {
 
 // --- HTTP helpers ---
 
+function authHeaders(): Record<string, string> {
+  const creds = loadCredentials();
+  if (!creds) return {};
+  return { Authorization: `Bearer ${creds.accessToken}` };
+}
+
 export async function apiGet<T>(endpoint: string, path: string): Promise<T> {
-  const res = await fetch(`${endpoint}${path}`);
+  const res = await fetch(`${endpoint}${path}`, {
+    headers: { ...authHeaders() },
+  });
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`${res.status}: ${body}`);
@@ -69,9 +78,13 @@ export async function apiGet<T>(endpoint: string, path: string): Promise<T> {
 }
 
 export async function apiPost<T>(endpoint: string, path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = { ...authHeaders() };
+  if (body) headers["Content-Type"] = "application/json";
+
   const res = await fetch(`${endpoint}${path}`, {
     method: "POST",
-    ...(body ? { headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) } : {}),
+    headers,
+    ...(body ? { body: JSON.stringify(body) } : {}),
   });
   if (!res.ok) {
     const text = await res.text();
@@ -81,7 +94,10 @@ export async function apiPost<T>(endpoint: string, path: string, body?: unknown)
 }
 
 export async function apiDelete(endpoint: string, path: string): Promise<void> {
-  const res = await fetch(`${endpoint}${path}`, { method: "DELETE" });
+  const res = await fetch(`${endpoint}${path}`, {
+    method: "DELETE",
+    headers: { ...authHeaders() },
+  });
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`${res.status}: ${body}`);
@@ -139,7 +155,9 @@ export function listLocalFiles(dir: string): string[] {
 }
 
 export async function* streamNdjson(endpoint: string, path: string): AsyncGenerator<FileEntry> {
-  const res = await fetch(`${endpoint}${path}`);
+  const res = await fetch(`${endpoint}${path}`, {
+    headers: { ...authHeaders() },
+  });
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`${res.status}: ${text}`);

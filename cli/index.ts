@@ -4,6 +4,7 @@ import type { AssetMetadata, Job } from "../shared/api";
 import { apiGet, apiPost, apiDelete, output, formatAsset, formatJob } from "./helpers";
 import { doUpload } from "./upload";
 import { registerFileCommands } from "./file";
+import { login, logout, whoami } from "./auth";
 
 const DEFAULT_ENDPOINT = "http://localhost:8787";
 
@@ -109,6 +110,33 @@ const file = program
   .description("Manage asset files");
 
 registerFileCommands(program, file);
+
+// login
+program
+  .command("login")
+  .description("Log in via OAuth2 (opens browser)")
+  .option("--issuer <url>", "OIDC issuer URL")
+  .option("--client-id <id>", "OAuth2 client ID")
+  .action(async (cmdOpts: { issuer?: string; clientId?: string }) => {
+    await login(cmdOpts);
+  });
+
+// logout
+program
+  .command("logout")
+  .description("Clear stored credentials")
+  .action(() => {
+    logout();
+  });
+
+// whoami
+program
+  .command("whoami")
+  .description("Show current user info")
+  .action(() => {
+    const opts = program.opts<{ json: boolean }>();
+    whoami(opts.json);
+  });
 
 // health
 program
