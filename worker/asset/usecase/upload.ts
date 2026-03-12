@@ -19,6 +19,7 @@ export async function uploadAsset(
   },
   ttlSeconds: number,
   baseUrl: string,
+  options?: { sessionId?: string | null; projectId?: string | null },
 ): Promise<AssetUploadResult> {
   const id = generateId();
   const now = Date.now();
@@ -45,6 +46,8 @@ export async function uploadAsset(
       status: "pending" as const,
       archiveFormat,
     }),
+    ...(options?.sessionId && { sessionId: options.sessionId }),
+    ...(options?.projectId && { projectId: options.projectId }),
   };
 
   // Create extraction job for archives
@@ -56,6 +59,7 @@ export async function uploadAsset(
       status: "pending",
       createdAt: now,
       updatedAt: now,
+      ...(options?.projectId && { projectId: options.projectId }),
     };
     await jobs.save(job);
     asset.jobId = id;
@@ -94,6 +98,7 @@ if (import.meta.vitest) {
       get: vi.fn(async () => null),
       head: vi.fn(async () => null),
       delete: vi.fn(async () => {}),
+      list: vi.fn(async () => ({ keys: [], cursor: undefined })),
     };
   }
 

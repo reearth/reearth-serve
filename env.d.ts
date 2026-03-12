@@ -8,4 +8,8 @@ interface Env {
   R2_ACCESS_KEY_ID?: string;
   R2_SECRET_ACCESS_KEY?: string;
   R2_BUCKET_NAME?: string;
+  // OIDC authentication
+  OIDC_ISSUER_URL?: string;
+  OIDC_AUDIENCE?: string;
+  OIDC_CLIENT_ID?: string;
 }

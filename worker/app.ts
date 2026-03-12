@@ -5,6 +5,9 @@ import { jobRoutes, jobInternalRoutes } from "./job/handler";
 import { R2FileStorage } from "./infra/storage";
 import { KVMetadataStore, KVUploadSessionStore, KVJobStore } from "./infra/metadata";
 import { R2PresignedUrlGenerator } from "./infra/presigned";
+import { authMiddleware } from "./auth/middleware";
+import { sessionMiddleware } from "./session/middleware";
+import { KVSessionStore } from "./infra/metadata";
 import type { AppEnv } from "./types";
 
 export function createApp(env: Env) {
@@ -12,6 +15,7 @@ export function createApp(env: Env) {
   const storage = new R2FileStorage(env.STORAGE);
   const uploadSessions = new KVUploadSessionStore(env.KV);
   const jobs = new KVJobStore(env.KV);
+  const sessions = new KVSessionStore(env.KV);
   const ttlSeconds = parseInt(env.ASSET_TTL_SECONDS, 10) || 3600;
   const baseUrl = env.BASE_URL;
 
@@ -25,6 +29,12 @@ export function createApp(env: Env) {
     : null;
 
   const app = new Hono<AppEnv>();
+
+  // Authentication middleware
+  app.use("*", authMiddleware(env));
+
+  // Anonymous session tracking (for unauthenticated users)
+  app.use("*", sessionMiddleware(sessions, ttlSeconds));
 
   // Inject dependencies into all routes
   app.use("*", async (c, next) => {

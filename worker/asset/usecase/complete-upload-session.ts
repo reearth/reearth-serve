@@ -15,6 +15,7 @@ export async function completeUploadSession(
   ttlSeconds: number,
   baseUrl: string,
   parts?: UploadPart[],
+  options?: { sessionId?: string | null; projectId?: string | null },
 ): Promise<AssetUploadResult | null> {
   const session = await sessions.find(id);
   if (!session) return null;
@@ -48,6 +49,8 @@ export async function completeUploadSession(
       status: "pending" as const,
       archiveFormat,
     }),
+    ...(options?.sessionId && { sessionId: options.sessionId }),
+    ...(options?.projectId && { projectId: options.projectId }),
   };
 
   // Create extraction job for archives
@@ -59,6 +62,7 @@ export async function completeUploadSession(
       status: "pending",
       createdAt: now,
       updatedAt: now,
+      ...(options?.projectId && { projectId: options.projectId }),
     };
     await jobs.save(job);
     asset.jobId = id;
@@ -91,6 +95,7 @@ if (import.meta.vitest) {
       get: vi.fn(async () => null),
       head: vi.fn(async () => headResult),
       delete: vi.fn(async () => {}),
+      list: vi.fn(async () => ({ keys: [], cursor: undefined })),
     };
   }
 

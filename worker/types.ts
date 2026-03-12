@@ -1,5 +1,6 @@
 import type { FileStorage, MetadataStore, UploadSessionStore, PresignedUrlGenerator } from "./asset/repository";
 import type { JobStore } from "./job/repository";
+import type { AuthUser } from "./auth/types";
 
 export type AppEnv = {
   Variables: {
@@ -10,5 +11,7 @@ export type AppEnv = {
     jobs: JobStore;
     ttlSeconds: number;
     baseUrl: string;
+    user: AuthUser | null;
+    sessionId: string | null;
   };
 };

@@ -8,6 +8,24 @@ export const archiveFormatSchema = z.enum(["zip", "tar", "tar.gz", "tar.bz2"]);
 export const jobTypeSchema = z.literal("archive-extraction");
 export const jobStatusSchema = z.enum(["pending", "running", "completed", "failed"]);
 
+// --- Role ---
+
+export const roleSchema = z.enum(["owner", "admin", "editor", "viewer"]);
+
+// --- Project ---
+
+export const projectSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+  ownerId: z.string(),
+});
+
+export const createProjectBodySchema = z.object({
+  name: z.string().min(1).max(100),
+});
+
 // --- Asset ---
 
 export const assetMetadataSchema = z.object({
@@ -25,6 +43,8 @@ export const assetMetadataSchema = z.object({
   fileCount: z.number().optional(),
   extractedSize: z.number().optional(),
   jobId: z.string().optional(),
+  sessionId: z.string().optional(),
+  projectId: z.string().optional(),
 });
 
 export const assetUploadResultSchema = z.object({
@@ -71,6 +91,7 @@ export const jobSchema = z.object({
   error: z.string().optional(),
   fileCount: z.number().optional(),
   extractedSize: z.number().optional(),
+  projectId: z.string().optional(),
 });
 
 // --- File entry (archive manifest) ---
@@ -111,6 +132,9 @@ export const errorResponseSchema = z.object({
 
 // --- Inferred types ---
 
+export type Role = z.infer<typeof roleSchema>;
+export type Project = z.infer<typeof projectSchema>;
+export type CreateProjectBody = z.infer<typeof createProjectBodySchema>;
 export type AssetType = z.infer<typeof assetTypeSchema>;
 export type AssetStatus = z.infer<typeof assetStatusSchema>;
 export type ArchiveFormat = z.infer<typeof archiveFormatSchema>;

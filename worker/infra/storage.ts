@@ -50,4 +50,16 @@ export class R2FileStorage implements FileStorage {
   async delete(key: string): Promise<void> {
     await this.bucket.delete(key);
   }
+
+  async list(prefix: string, options?: { limit?: number; cursor?: string }): Promise<{ keys: string[]; cursor?: string }> {
+    const result = await this.bucket.list({
+      prefix,
+      limit: options?.limit ?? 1000,
+      cursor: options?.cursor,
+    });
+    return {
+      keys: result.objects.map((obj) => obj.key),
+      cursor: result.truncated ? result.cursor : undefined,
+    };
+  }
 }

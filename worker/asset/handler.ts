@@ -48,7 +48,8 @@ assetRoutes.post("/uploads/:id/complete", async (c) => {
   }
 
   const jobs = c.get("jobs");
-  const result = await completeUploadSession(sessions, metadata, storage, presignedUrls, jobs, id, ttlSeconds, baseUrl, parts);
+  const sessionId = c.get("sessionId");
+  const result = await completeUploadSession(sessions, metadata, storage, presignedUrls, jobs, id, ttlSeconds, baseUrl, parts, { sessionId });
   if (!result) {
     return c.json({ error: "Upload session not found or file not yet uploaded" }, 404);
   }
@@ -87,6 +88,7 @@ assetRoutes.post("/", async (c) => {
   const originalSize = originalSizeHeader ? parseInt(originalSizeHeader, 10) : undefined;
 
   const jobs = c.get("jobs");
+  const sessionId = c.get("sessionId");
 
   try {
     const result = await uploadAsset(
@@ -96,6 +98,7 @@ assetRoutes.post("/", async (c) => {
       { name: filename, type: contentType, body, size, contentEncoding, originalSize },
       ttlSeconds,
       baseUrl,
+      { sessionId },
     );
     return c.json(result, 201);
   } catch (e) {

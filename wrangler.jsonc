@@ -21,7 +21,8 @@
       "binding": "KV",
       "id": "reearth-serve"
     }
-  ]
-  // TODO: Cron trigger for expired asset cleanup
-  // "triggers": { "crons": ["*/10 * * * *"] }
+  ],
+  "triggers": {
+    "crons": ["*/10 * * * *"]
+  }
 }

@@ -11,6 +11,7 @@ export interface FileStorage {
   get(key: string, range?: { offset: number; length: number }): Promise<StoredFile | null>;
   head(key: string): Promise<{ size: number; contentEncoding?: string; etag?: string } | null>;
   delete(key: string): Promise<void>;
+  list(prefix: string, options?: { limit?: number; cursor?: string }): Promise<{ keys: string[]; cursor?: string }>;
 }
 
 export interface UploadSessionStore {

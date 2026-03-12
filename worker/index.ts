@@ -1,5 +1,6 @@
 import { createRequestHandler } from "react-router";
 import { createApp } from "./app";
+import { handleScheduled } from "./cleanup/handler";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -32,5 +33,9 @@ export default {
     return requestHandler(request, {
       cloudflare: { env, ctx },
     });
+  },
+
+  async scheduled(_event, env, _ctx) {
+    await handleScheduled(env);
   },
 } satisfies ExportedHandler<Env>;

@@ -39,6 +39,7 @@ if (import.meta.vitest) {
       get: vi.fn(async () => null),
       head: vi.fn(async () => null),
       delete: vi.fn(async () => {}),
+      list: vi.fn(async () => ({ keys: [], cursor: undefined })),
     };
   }
 
