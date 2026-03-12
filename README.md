@@ -64,6 +64,18 @@ curl -X POST http://localhost:5173/api/v1/assets \
 | `POST` | `/api/v1/assets/uploads/:id/complete` | Complete upload session |
 | `GET` | `/api/v1/jobs/:id` | Get extraction job status |
 | `POST` | `/api/v1/jobs/:id/retry` | Retry a failed extraction job |
+| `GET` | `/api/v1/me` | Get current user info + workspace list |
+| `GET` | `/api/v1/projects` | List projects (`?workspaceId=` filter) |
+| `POST` | `/api/v1/projects` | Create project |
+| `GET` | `/api/v1/projects/:id` | Get project |
+| `DELETE` | `/api/v1/projects/:id` | Delete project |
+| `POST` | `/api/v1/workspaces` | Create workspace |
+| `GET` | `/api/v1/workspaces/:id` | Get workspace |
+| `DELETE` | `/api/v1/workspaces/:id` | Delete workspace |
+| `GET` | `/api/v1/workspaces/:id/members` | List workspace members |
+| `POST` | `/api/v1/workspaces/:id/members` | Add member |
+| `PATCH` | `/api/v1/workspaces/:id/members/:userId` | Update member role |
+| `DELETE` | `/api/v1/workspaces/:id/members/:userId` | Remove member |
 
 ### Internal API (`/api/internal`)
 
@@ -132,6 +144,29 @@ npm run cli -- file sync --delete <id> ./local  # sync + remove extra local file
 npm run cli -- job show <id>
 npm run cli -- job retry <id>
 
+# Project management
+npm run cli -- project list
+npm run cli -- project create <name>
+npm run cli -- project show <id>
+npm run cli -- project delete <id>
+npm run cli -- project use <id>                 # set default project
+
+# Workspace management
+npm run cli -- workspace list
+npm run cli -- workspace create <name>
+npm run cli -- workspace show <id>
+npm run cli -- workspace delete <id>
+npm run cli -- workspace use <id>               # set default workspace
+npm run cli -- workspace member list
+npm run cli -- workspace member add <userId> --role editor
+npm run cli -- workspace member update <userId> --role admin
+npm run cli -- workspace member remove <userId>
+
+# Authentication
+npm run cli -- login --issuer <url> --client-id <id>
+npm run cli -- whoami
+npm run cli -- logout
+
 # Global options
 npm run cli -- --endpoint https://example.com upload myfile.geojson
 npm run cli -- --json asset show <id>           # JSON output
@@ -196,6 +231,10 @@ Add the following secrets to your GitHub repository:
 | `R2_ACCESS_KEY_ID` | No | R2 API token access key ID |
 | `R2_SECRET_ACCESS_KEY` | No | R2 API token secret access key |
 | `R2_BUCKET_NAME` | No | R2 bucket name for presigned URLs |
+| `OIDC_ISSUER_URL` | No | OIDC Issuer URL for JWT authentication |
+| `OIDC_AUDIENCE` | No | JWT audience claim for token validation |
+| `OIDC_CLIENT_ID` | No | OAuth2 Client ID |
+| `CERBOS_ENDPOINT` | No | Cerbos PDP endpoint URL for authorization |
 
 When `R2_S3_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_BUCKET_NAME` are all set, presigned URL uploads and S3 multipart uploads are enabled.
 

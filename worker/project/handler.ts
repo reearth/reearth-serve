@@ -12,7 +12,8 @@ projectRoutes.get("/", async (c) => {
   }
 
   const projects = c.get("projects");
-  const list = await listProjects(projects, user.sub);
+  const workspaceId = c.req.query("workspaceId");
+  const list = await listProjects(projects, workspaceId ? { workspaceId } : { ownerId: user.sub });
   return c.json({ projects: list });
 });
 
@@ -23,13 +24,13 @@ projectRoutes.post("/", async (c) => {
     return c.json({ error: "Authentication required" }, 401);
   }
 
-  const body = await c.req.json<{ name?: string }>();
+  const body = await c.req.json<{ name?: string; workspaceId?: string }>();
   if (!body.name) {
     return c.json({ error: "Missing required field: name" }, 400);
   }
 
   const projects = c.get("projects");
-  const project = await createProject(projects, body.name, user.sub);
+  const project = await createProject(projects, body.name, user.sub, body.workspaceId);
   return c.json({ project }, 201);
 });
 

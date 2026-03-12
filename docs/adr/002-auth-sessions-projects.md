@@ -69,13 +69,15 @@ Project {
   createdAt: number;
   updatedAt: number;
   ownerId: string;
+  workspaceId?: string;  // optional — projects can belong to a workspace
 }
 ```
 
 **KV key patterns:**
 ```
-project:{id}           →  Project JSON
-project_list:{ownerId} →  [id, id, ...]  (JSON array of project IDs)
+project:{id}                  →  Project JSON
+project_list:{ownerId}        →  [id, id, ...]  (JSON array of project IDs)
+project_list_ws:{workspaceId} →  [id, id, ...]  (workspace's project IDs)
 ```
 
 KV lacks range queries, so `project_list:{ownerId}` stores a JSON array of project IDs, updated atomically on project create/delete. This is acceptable for the expected cardinality (tens of projects per user, not thousands).
@@ -86,18 +88,69 @@ Both `AssetMetadata` and `Job` schemas include an optional `projectId` field. Wh
 
 **R2 key design decision:** R2 keys remain `assets/{assetId}/` — no project ID in R2 paths. R2 does not support object rename, so adding project ID to R2 keys would require copying all objects on project assignment changes. Only KV metadata carries `projectId`.
 
-### Role Model
+### Workspace Model
 
-Four roles are defined for future authorization:
+Workspaces provide multi-user collaboration. Projects belong to workspaces. Membership (and roles) are scoped to workspaces, not projects.
 
-| Role | Project | Asset | Job |
-|------|---------|-------|-----|
-| owner | CRUD + delete + manage members | CRUD | view, retry |
-| admin | read + manage members (except owner) | CRUD | view, retry |
-| editor | read | create, read, delete | view, retry |
-| viewer | read | read only | view |
+**Design rationale:** Workspace, member, and project management will eventually be handled by an external account/identity application. The current implementation uses interfaces (`WorkspaceStore`, `MemberStore`) with KV-backed stand-in implementations to enable local development and testing.
 
-Role definitions are in the shared Zod schema (`roleSchema`). Authorization enforcement is deferred to a subsequent implementation step (Cerbos integration).
+**Model:**
+```typescript
+Workspace {
+  id: string;
+  name: string;
+  createdAt: number;
+  updatedAt: number;
+}
+```
+
+No `ownerId` on workspace — ownership is expressed through the Member model (role = "owner").
+
+**KV key patterns:**
+```
+workspace:{id}                →  Workspace JSON
+member:{workspaceId}:{userId} →  Member JSON
+member_list:{workspaceId}     →  [userId, ...]
+user_workspaces:{userId}      →  [wsId, ...]  (inverse index)
+project_list_ws:{workspaceId} →  [projectId, ...]
+```
+
+### Member Model
+
+```typescript
+Member {
+  workspaceId: string;
+  userId: string;
+  role: Role;
+  createdAt: number;
+  updatedAt: number;
+}
+```
+
+When a workspace is created, the creator is automatically added as `owner`. The last owner cannot be removed or demoted.
+
+### Role Model & Permission Table
+
+Four roles are defined with workspace-level scoping:
+
+| Resource | Action | owner | admin | editor | viewer |
+|----------|--------|:-----:|:-----:|:------:|:------:|
+| **workspace** | read | ✓ | ✓ | ✓ | ✓ |
+| **workspace** | update | ✓ | ✓ | - | - |
+| **workspace** | delete | ✓ | - | - | - |
+| **workspace** | manage-members | ✓ | ✓ | - | - |
+| **project** | read | ✓ | ✓ | ✓ | ✓ |
+| **project** | create | ✓ | ✓ | - | - |
+| **project** | delete | ✓ | - | - | - |
+| **asset** | read | ✓ | ✓ | ✓ | ✓ |
+| **asset** | create | ✓ | ✓ | ✓ | - |
+| **asset** | delete | ✓ | ✓ | ✓ | - |
+| **job** | read | ✓ | ✓ | ✓ | ✓ |
+| **job** | retry | ✓ | ✓ | ✓ | - |
+
+Role definitions are in `shared/api.ts` (`roleSchema`). The permission map is in `worker/auth/roles.ts`. Authorization is enforced by `Authorizer` interface implementations:
+- `SimpleAuthorizer` (`worker/infra/authorizer.ts`) — in-process, uses the permission map directly
+- `CerbosAuthorizer` (`worker/auth/authorizer.ts`) — delegates to external Cerbos PDP
 
 ## Middleware ordering
 
@@ -133,5 +186,8 @@ Deferred. `jose.createRemoteJWKSet` handles in-memory caching per isolate. If JW
 - Authenticated users are identified by their JWT `sub` claim
 - Anonymous users can track their uploads via `X-Session-Id` header
 - Assets and jobs carry optional `projectId` for future project-scoped queries
-- The role model is defined but not yet enforced — authorization is a separate step
+- Workspaces provide multi-user collaboration with role-based access control
+- Workspace/member stores use interfaces — KV implementations are stand-ins for a future external account API
+- The permission table is enforced via `Authorizer` interface (SimpleAuthorizer for local dev, CerbosAuthorizer for production)
+- `/api/v1/me` returns user info + workspace list in a single request
 - No data migration is needed — all new fields are optional and additive

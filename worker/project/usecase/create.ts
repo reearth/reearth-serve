@@ -5,10 +5,14 @@ export async function createProject(
   projects: ProjectStore,
   name: string,
   ownerId: string,
+  workspaceId?: string,
 ): Promise<Project> {
   const id = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
   const now = Date.now();
-  const project: Project = { id, name, createdAt: now, updatedAt: now, ownerId };
+  const project: Project = {
+    id, name, createdAt: now, updatedAt: now, ownerId,
+    ...(workspaceId && { workspaceId }),
+  };
   await projects.save(project);
   return project;
 }
@@ -21,7 +25,7 @@ if (import.meta.vitest) {
     return {
       save: vi.fn(async (p: Project) => { store.set(p.id, p); }),
       find: vi.fn(async (id: string) => store.get(id) ?? null),
-      list: vi.fn(async () => [...store.values()]),
+      list: vi.fn(async () => [...store.values()]) as ProjectStore["list"],
       delete: vi.fn(),
     };
   }

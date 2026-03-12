@@ -12,6 +12,38 @@ export const jobStatusSchema = z.enum(["pending", "running", "completed", "faile
 
 export const roleSchema = z.enum(["owner", "admin", "editor", "viewer"]);
 
+// --- Workspace ---
+
+export const workspaceSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+
+export const createWorkspaceBodySchema = z.object({
+  name: z.string().min(1).max(100),
+});
+
+// --- Member ---
+
+export const memberSchema = z.object({
+  workspaceId: z.string(),
+  userId: z.string(),
+  role: roleSchema,
+  createdAt: z.number(),
+  updatedAt: z.number(),
+});
+
+export const addMemberBodySchema = z.object({
+  userId: z.string(),
+  role: roleSchema,
+});
+
+export const updateMemberBodySchema = z.object({
+  role: roleSchema,
+});
+
 // --- Project ---
 
 export const projectSchema = z.object({
@@ -20,10 +52,12 @@ export const projectSchema = z.object({
   createdAt: z.number(),
   updatedAt: z.number(),
   ownerId: z.string(),
+  workspaceId: z.string().optional(),
 });
 
 export const createProjectBodySchema = z.object({
   name: z.string().min(1).max(100),
+  workspaceId: z.string().optional(),
 });
 
 // --- Asset ---
@@ -133,6 +167,11 @@ export const errorResponseSchema = z.object({
 // --- Inferred types ---
 
 export type Role = z.infer<typeof roleSchema>;
+export type Workspace = z.infer<typeof workspaceSchema>;
+export type CreateWorkspaceBody = z.infer<typeof createWorkspaceBodySchema>;
+export type Member = z.infer<typeof memberSchema>;
+export type AddMemberBody = z.infer<typeof addMemberBodySchema>;
+export type UpdateMemberBody = z.infer<typeof updateMemberBodySchema>;
 export type Project = z.infer<typeof projectSchema>;
 export type CreateProjectBody = z.infer<typeof createProjectBodySchema>;
 export type AssetType = z.infer<typeof assetTypeSchema>;

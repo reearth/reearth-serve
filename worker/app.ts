@@ -3,13 +3,17 @@ import { assetRoutes } from "./asset/handler";
 import { fileRoutes } from "./file/handler";
 import { jobRoutes, jobInternalRoutes } from "./job/handler";
 import { R2FileStorage } from "./infra/storage";
-import { KVMetadataStore, KVUploadSessionStore, KVJobStore, KVProjectStore } from "./infra/metadata";
+import {
+  KVMetadataStore, KVUploadSessionStore, KVJobStore, KVProjectStore,
+  KVWorkspaceStore, KVMemberStore, KVSessionStore,
+} from "./infra/metadata";
 import { projectRoutes } from "./project/handler";
+import { workspaceRoutes } from "./workspace/handler";
+import { meRoutes } from "./me/handler";
 import { R2PresignedUrlGenerator } from "./infra/presigned";
 import { authMiddleware } from "./auth/middleware";
 import { CerbosAuthorizer } from "./auth/authorizer";
 import { sessionMiddleware } from "./session/middleware";
-import { KVSessionStore } from "./infra/metadata";
 import { SimpleAuthorizer } from "./infra/authorizer";
 import type { AppEnv } from "./types";
 
@@ -19,6 +23,8 @@ export function createApp(env: Env) {
   const uploadSessions = new KVUploadSessionStore(env.KV);
   const jobs = new KVJobStore(env.KV);
   const projects = new KVProjectStore(env.KV);
+  const workspaces = new KVWorkspaceStore(env.KV);
+  const memberStore = new KVMemberStore(env.KV);
   const sessions = new KVSessionStore(env.KV);
   const authorizer = env.CERBOS_ENDPOINT
     ? new CerbosAuthorizer(env.CERBOS_ENDPOINT)
@@ -54,6 +60,8 @@ export function createApp(env: Env) {
     c.set("baseUrl", baseUrl);
     c.set("authorizer", authorizer);
     c.set("projects", projects);
+    c.set("workspaces", workspaces);
+    c.set("members", memberStore);
     await next();
   });
 
@@ -61,7 +69,9 @@ export function createApp(env: Env) {
   app.get("/api/v1/health", (c) => c.json({ ok: true }));
   app.route("/api/v1/assets", assetRoutes);
   app.route("/api/v1/jobs", jobRoutes);
+  app.route("/api/v1/me", meRoutes);
   app.route("/api/v1/projects", projectRoutes);
+  app.route("/api/v1/workspaces", workspaceRoutes);
 
   // Internal API (no versioning, no compatibility guarantee)
   app.route("/api/internal/jobs", jobInternalRoutes);

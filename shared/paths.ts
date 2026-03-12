@@ -13,7 +13,12 @@ export const PATHS = {
   job: (id: string) => `${API_V1}/jobs/${id}`,
   jobRetry: (id: string) => `${API_V1}/jobs/${id}/retry`,
   jobStatus: (id: string) => `${API_INTERNAL}/jobs/${id}/status`,
+  me: `${API_V1}/me`,
   projects: `${API_V1}/projects`,
   project: (id: string) => `${API_V1}/projects/${id}`,
+  workspaces: `${API_V1}/workspaces`,
+  workspace: (id: string) => `${API_V1}/workspaces/${id}`,
+  workspaceMembers: (id: string) => `${API_V1}/workspaces/${id}/members`,
+  workspaceMember: (wsId: string, userId: string) => `${API_V1}/workspaces/${wsId}/members/${userId}`,
   file: (id: string, filename: string) => `/files/${id}/${encodeURIComponent(filename)}`,
 } as const;

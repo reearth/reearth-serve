@@ -18,19 +18,51 @@ if (import.meta.vitest) {
 
   const authorizer = new SimpleAuthorizer();
 
+  // --- Workspace permissions ---
+
+  test("owner can do everything on workspace", async () => {
+    const base = { resource: { kind: "workspace", id: "ws1" } };
+    expect(await authorizer.check({ principal: { id: "u1", roles: ["owner"] }, ...base, action: "read" })).toBe(true);
+    expect(await authorizer.check({ principal: { id: "u1", roles: ["owner"] }, ...base, action: "update" })).toBe(true);
+    expect(await authorizer.check({ principal: { id: "u1", roles: ["owner"] }, ...base, action: "delete" })).toBe(true);
+    expect(await authorizer.check({ principal: { id: "u1", roles: ["owner"] }, ...base, action: "manage-members" })).toBe(true);
+  });
+
+  test("admin can update and manage-members on workspace but not delete", async () => {
+    const base = { resource: { kind: "workspace", id: "ws1" } };
+    expect(await authorizer.check({ principal: { id: "u1", roles: ["admin"] }, ...base, action: "read" })).toBe(true);
+    expect(await authorizer.check({ principal: { id: "u1", roles: ["admin"] }, ...base, action: "update" })).toBe(true);
+    expect(await authorizer.check({ principal: { id: "u1", roles: ["admin"] }, ...base, action: "manage-members" })).toBe(true);
+    expect(await authorizer.check({ principal: { id: "u1", roles: ["admin"] }, ...base, action: "delete" })).toBe(false);
+  });
+
+  test("editor can only read workspace", async () => {
+    const base = { resource: { kind: "workspace", id: "ws1" } };
+    expect(await authorizer.check({ principal: { id: "u1", roles: ["editor"] }, ...base, action: "read" })).toBe(true);
+    expect(await authorizer.check({ principal: { id: "u1", roles: ["editor"] }, ...base, action: "update" })).toBe(false);
+    expect(await authorizer.check({ principal: { id: "u1", roles: ["editor"] }, ...base, action: "delete" })).toBe(false);
+    expect(await authorizer.check({ principal: { id: "u1", roles: ["editor"] }, ...base, action: "manage-members" })).toBe(false);
+  });
+
+  test("viewer can only read workspace", async () => {
+    const base = { resource: { kind: "workspace", id: "ws1" } };
+    expect(await authorizer.check({ principal: { id: "u1", roles: ["viewer"] }, ...base, action: "read" })).toBe(true);
+    expect(await authorizer.check({ principal: { id: "u1", roles: ["viewer"] }, ...base, action: "update" })).toBe(false);
+  });
+
+  // --- Project permissions ---
+
   test("owner can do everything on project", async () => {
     const base = { resource: { kind: "project", id: "p1" } };
     expect(await authorizer.check({ principal: { id: "u1", roles: ["owner"] }, ...base, action: "read" })).toBe(true);
     expect(await authorizer.check({ principal: { id: "u1", roles: ["owner"] }, ...base, action: "create" })).toBe(true);
     expect(await authorizer.check({ principal: { id: "u1", roles: ["owner"] }, ...base, action: "delete" })).toBe(true);
-    expect(await authorizer.check({ principal: { id: "u1", roles: ["owner"] }, ...base, action: "manage-members" })).toBe(true);
   });
 
-  test("admin can manage members but not create/delete project", async () => {
+  test("admin can create projects but not delete", async () => {
     const base = { resource: { kind: "project", id: "p1" } };
     expect(await authorizer.check({ principal: { id: "u1", roles: ["admin"] }, ...base, action: "read" })).toBe(true);
-    expect(await authorizer.check({ principal: { id: "u1", roles: ["admin"] }, ...base, action: "manage-members" })).toBe(true);
-    expect(await authorizer.check({ principal: { id: "u1", roles: ["admin"] }, ...base, action: "create" })).toBe(false);
+    expect(await authorizer.check({ principal: { id: "u1", roles: ["admin"] }, ...base, action: "create" })).toBe(true);
     expect(await authorizer.check({ principal: { id: "u1", roles: ["admin"] }, ...base, action: "delete" })).toBe(false);
   });
 
@@ -49,6 +81,11 @@ if (import.meta.vitest) {
       principal: { id: "u1", roles: ["editor"] },
       resource: { kind: "project", id: "p1" },
       action: "delete",
+    })).toBe(false);
+    expect(await authorizer.check({
+      principal: { id: "u1", roles: ["editor"] },
+      resource: { kind: "project", id: "p1" },
+      action: "create",
     })).toBe(false);
   });
 

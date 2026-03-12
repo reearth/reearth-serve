@@ -6,6 +6,7 @@ import { doUpload } from "./upload";
 import { registerFileCommands } from "./file";
 import { login, logout, whoami } from "./auth";
 import { registerProjectCommands } from "./project";
+import { registerWorkspaceCommands } from "./workspace";
 
 const DEFAULT_ENDPOINT = "http://localhost:8787";
 
@@ -118,6 +119,13 @@ const project = program
   .description("Manage projects");
 
 registerProjectCommands(program, project);
+
+// workspace
+const workspace = program
+  .command("workspace")
+  .description("Manage workspaces");
+
+registerWorkspaceCommands(program, workspace);
 
 // login
 program

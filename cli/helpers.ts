@@ -93,6 +93,22 @@ export async function apiPost<T>(endpoint: string, path: string, body?: unknown)
   return res.json() as Promise<T>;
 }
 
+export async function apiPatch<T>(endpoint: string, path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = { ...authHeaders() };
+  if (body) headers["Content-Type"] = "application/json";
+
+  const res = await fetch(`${endpoint}${path}`, {
+    method: "PATCH",
+    headers,
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`${res.status}: ${text}`);
+  }
+  return res.json() as Promise<T>;
+}
+
 export async function apiDelete(endpoint: string, path: string): Promise<void> {
   const res = await fetch(`${endpoint}${path}`, {
     method: "DELETE",

@@ -3,7 +3,7 @@ import type { ProjectStore } from "../repository";
 
 export async function listProjects(
   projects: ProjectStore,
-  ownerId: string,
+  params: { ownerId?: string; workspaceId?: string },
 ): Promise<Project[]> {
-  return projects.list(ownerId);
+  return projects.list(params);
 }

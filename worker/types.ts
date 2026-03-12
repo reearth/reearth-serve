@@ -3,6 +3,8 @@ import type { JobStore } from "./job/repository";
 import type { AuthUser } from "./auth/types";
 import type { Authorizer } from "./auth/authorizer";
 import type { ProjectStore } from "./project/repository";
+import type { WorkspaceStore } from "./workspace/repository";
+import type { MemberStore } from "./member/repository";
 
 export type AppEnv = {
   Variables: {
@@ -17,5 +19,7 @@ export type AppEnv = {
     sessionId: string | null;
     authorizer: Authorizer;
     projects: ProjectStore;
+    workspaces: WorkspaceStore;
+    members: MemberStore;
   };
 };

@@ -1,12 +1,17 @@
 import type { Role } from "../../shared/api";
 
-/** Permission map: resource kind → action → minimum role required */
+/** Permission map: resource kind → action → allowed roles */
 const permissions: Record<string, Record<string, Set<Role>>> = {
-  project: {
+  workspace: {
     read: new Set(["owner", "admin", "editor", "viewer"]),
-    create: new Set(["owner"]),
+    update: new Set(["owner", "admin"]),
     delete: new Set(["owner"]),
     "manage-members": new Set(["owner", "admin"]),
+  },
+  project: {
+    read: new Set(["owner", "admin", "editor", "viewer"]),
+    create: new Set(["owner", "admin"]),
+    delete: new Set(["owner"]),
   },
   asset: {
     read: new Set(["owner", "admin", "editor", "viewer"]),

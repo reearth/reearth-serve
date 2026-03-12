@@ -11,6 +11,7 @@ export interface Config {
   oidcIssuer?: string;
   clientId?: string;
   defaultProject?: string;
+  defaultWorkspace?: string;
 }
 
 export interface Credentials {
