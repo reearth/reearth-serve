@@ -149,6 +149,7 @@ npm run cli -- --json asset show <id>           # JSON output
 | `npm run check` | Type check + unit tests |
 | `npm run test` | Unit tests only |
 | `npm run test:e2e` | E2E tests (requires running dev server) |
+| `npm run test:e2e:dev` | Start dev server, run E2E tests, and shut down |
 | `cd container/archive-extractor && go test ./...` | Container unit tests |
 | `npm run typecheck` | TypeScript type check |
 | `npm run typegen` | Generate Wrangler + React Router types |
@@ -161,6 +162,10 @@ npm run cli -- --json asset show <id>           # JSON output
 ### Running E2E Tests
 
 ```bash
+# One-liner: starts dev server, runs tests, shuts down
+npm run test:e2e:dev
+
+# Or manually in two terminals:
 # Terminal 1
 npm run dev
 
