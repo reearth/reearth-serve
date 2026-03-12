@@ -89,6 +89,23 @@ TTL:   3600s (auto-expire)
 
 KV's built-in TTL handles ephemeral asset cleanup. A scheduled worker (`Cron Trigger`) cleans up orphaned R2 objects whose KV entries have already expired.
 
+### Cron cleanup for expired R2 objects
+
+KV's built-in TTL handles metadata expiration, but R2 objects persist after their KV entries expire. A Cron Trigger (`*/10 * * * *`) runs a scheduled worker that:
+
+1. Scans `R2Bucket.list({ prefix: "assets/" })` to enumerate asset ID prefixes
+2. For each asset ID, checks `KV.get("asset:{id}")` — if null (TTL expired), the asset is orphaned
+3. Deletes all R2 keys under `assets/{id}/` (main file, archive artifacts, extracted files)
+4. Deletes the corresponding `job:{id}` from KV
+5. Limits to 100 assets per invocation with cursor-based pagination to stay within Worker CPU limits (30 seconds)
+
+R2 and KV both return max 1000 keys per page. The cleanup worker processes incrementally across cron invocations rather than attempting to clean everything in one pass.
+
+This approach (R2 scan → KV existence check) was chosen over maintaining a separate expiry index because:
+- It requires no additional state — the KV TTL is the source of truth
+- R2 `list()` is efficient with prefix filtering
+- Incremental processing fits naturally within Worker CPU limits
+
 ### CLI
 
 The CLI (`npx tsx cli/index.ts`) provides:
@@ -141,6 +158,6 @@ R2 doesn't support object-level TTL or lifecycle policies (unlike S3). A Cron Tr
 - Files up to several GB can be uploaded via presigned multipart upload
 - Compressible files are stored 60–90% smaller, reducing R2 storage costs
 - Ephemeral assets auto-expire via KV TTL — no manual cleanup needed for metadata
-- R2 object cleanup requires a separate scheduled worker
+- R2 object cleanup is handled by a Cron Trigger scheduled worker (every 10 minutes)
 - The CLI provides immediate utility for sharing spatial data without a UI
 - The architecture validates Cloudflare Workers + R2 + KV as viable for the full roadmap
