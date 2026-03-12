@@ -5,6 +5,7 @@ import { apiGet, apiPost, apiDelete, output, formatAsset, formatJob } from "./he
 import { doUpload } from "./upload";
 import { registerFileCommands } from "./file";
 import { login, logout, whoami } from "./auth";
+import { registerProjectCommands } from "./project";
 
 const DEFAULT_ENDPOINT = "http://localhost:8787";
 
@@ -110,6 +111,13 @@ const file = program
   .description("Manage asset files");
 
 registerFileCommands(program, file);
+
+// project
+const project = program
+  .command("project")
+  .description("Manage projects");
+
+registerProjectCommands(program, project);
 
 // login
 program
