@@ -4,7 +4,7 @@ set -euo pipefail
 PORT="${E2E_PORT:-5173}"
 ENDPOINT="http://localhost:${PORT}"
 MOCK_OIDC_PORT="${MOCK_OIDC_PORT:-18999}"
-WRANGLER_CONFIG="wrangler.jsonc"
+WRANGLER_CONFIG="wrangler.toml"
 WRANGLER_BACKUP=""
 
 cleanup() {
@@ -51,13 +51,15 @@ OIDC_ISSUER="http://localhost:${MOCK_OIDC_PORT}/"
 echo "Clearing miniflare state..."
 rm -rf .wrangler/state
 
-# Inject OIDC vars into wrangler.jsonc (backup original)
+# Inject OIDC vars into wrangler.toml (backup original)
 WRANGLER_BACKUP="${WRANGLER_CONFIG}.bak.$$"
 cp "${WRANGLER_CONFIG}" "${WRANGLER_BACKUP}"
 
-# Inject OIDC vars into wrangler.jsonc vars section using sed
-# Add OIDC vars right after the BASE_URL line in the vars block
-sed -i '' "s|\"BASE_URL\": \"http://localhost:8787\"|\"BASE_URL\": \"http://localhost:8787\",\n    \"OIDC_ISSUER_URL\": \"${OIDC_ISSUER}\",\n    \"OIDC_AUDIENCE\": \"e2e-audience\"|" "${WRANGLER_CONFIG}"
+# Inject OIDC vars into wrangler.toml vars section
+sed -i '' "/^BASE_URL = /a\\
+OIDC_ISSUER_URL = \"${OIDC_ISSUER}\"\\
+OIDC_AUDIENCE = \"e2e-audience\"
+" "${WRANGLER_CONFIG}"
 
 echo "Starting dev server on port ${PORT}..."
 npm run dev -- --port "$PORT" &

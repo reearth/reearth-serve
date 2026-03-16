@@ -1,0 +1,25 @@
+name = "reearth-serve"
+main = "./worker/index.ts"
+
+[build]
+command = "npm run build"
+compatibility_date = "2025-03-10"
+compatibility_flags = ["nodejs_compat"]
+
+[observability]
+enabled = true
+
+[vars]
+ASSET_TTL_SECONDS = "3600"
+BASE_URL = "https://reearth-serve.re-earth.workers.dev"
+
+[[r2_buckets]]
+binding = "STORAGE"
+bucket_name = "reearth-serve"
+
+[[kv_namespaces]]
+binding = "KV"
+id = "KV_NAMESPACE_ID"
+
+[triggers]
+crons = ["*/10 * * * *"]

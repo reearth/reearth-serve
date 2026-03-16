@@ -4,5 +4,6 @@ build/
 .wrangler/
 .react-router/
 .dev.vars
+.env
 *.log
 *.tsbuildinfo
