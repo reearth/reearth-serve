@@ -15,7 +15,7 @@ enabled = true
 
 [vars]
 ASSET_TTL_SECONDS = "3600"
-BASE_URL = "https://reearth-serve.re-earth.workers.dev"
+BASE_URL = "https://reearth-serve.reearth.workers.dev"
 
 [[r2_buckets]]
 binding = "STORAGE"

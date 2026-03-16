@@ -2,6 +2,8 @@
 
 Spatial Data Delivery — an asset hosting and tile delivery service built on Cloudflare Workers + R2.
 
+![demo](./docs/demo.gif)
+
 ## Quick Start
 
 ```bash
