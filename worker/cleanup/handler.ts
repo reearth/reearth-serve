@@ -46,62 +46,58 @@ async function retriggerPendingJobs(
   queue: Queue,
   stuckThresholdMs: number,
 ): Promise<void> {
-  let cursor: string | undefined;
+  const raw = await kv.get("job_list:all");
+  if (!raw) return;
+  const jobIds: string[] = JSON.parse(raw);
 
-  do {
-    const list = await kv.list({ prefix: "job:", limit: 100, cursor });
+  for (const id of jobIds) {
+    const jobRaw = await kv.get(`job:${id}`);
+    if (!jobRaw) continue;
 
-    for (const key of list.keys) {
-      const raw = await kv.get(key.name);
-      if (!raw) continue;
+    const job = JSON.parse(jobRaw) as Job;
+    if (job.type !== "archive-extraction") continue;
 
-      const job = JSON.parse(raw) as Job;
-      if (job.type !== "archive-extraction") continue;
+    const isStuck = job.status === "running" && (Date.now() - job.updatedAt > stuckThresholdMs);
+    if (job.status !== "pending" && job.status !== "failed" && !isStuck) continue;
 
-      const isStuck = job.status === "running" && (Date.now() - job.updatedAt > stuckThresholdMs);
-      if (job.status !== "pending" && job.status !== "failed" && !isStuck) continue;
-
-      // Mark as permanently failed if max retries exceeded
-      if ((job.retryCount ?? 0) >= MAX_RETRIES) {
-        if (job.status !== "failed") {
-          job.status = "failed";
-          job.error = `Max retries (${MAX_RETRIES}) exceeded`;
-          job.updatedAt = Date.now();
-          job.completedAt = Date.now();
-          await kv.put(key.name, JSON.stringify(job));
-
-          const asset = await metadata.find(job.assetId);
-          if (asset) {
-            asset.status = "failed";
-            await metadata.save(asset, Math.max(0, Math.floor((asset.expiresAt - Date.now()) / 1000)));
-          }
-          console.log(`Marked asset ${job.assetId} as permanently failed: max retries exceeded`);
-        }
-        continue;
-      }
-
-      const asset = await metadata.find(job.assetId);
-      if (!asset || !asset.archiveFormat) continue;
-
-      try {
-        // Increment retry count and reset to pending
-        job.retryCount = (job.retryCount ?? 0) + 1;
-        job.status = "pending";
+    // Mark as permanently failed if max retries exceeded
+    if ((job.retryCount ?? 0) >= MAX_RETRIES) {
+      if (job.status !== "failed") {
+        job.status = "failed";
+        job.error = `Max retries (${MAX_RETRIES}) exceeded`;
         job.updatedAt = Date.now();
-        await kv.put(key.name, JSON.stringify(job));
+        job.completedAt = Date.now();
+        await kv.put(`job:${id}`, JSON.stringify(job));
 
-        await queue.send({
-          assetId: job.assetId,
-          archiveKey: `assets/${job.assetId}/${asset.filename}`,
-          archiveFilename: asset.filename,
-          archiveFormat: asset.archiveFormat,
-        });
-        console.log(`Re-enqueued extraction for asset ${job.assetId} (retry ${job.retryCount}/${MAX_RETRIES})`);
-      } catch (e) {
-        console.error(`Failed to re-enqueue extraction for asset ${job.assetId}:`, e);
+        const asset = await metadata.find(job.assetId);
+        if (asset) {
+          asset.status = "failed";
+          await metadata.save(asset, Math.max(0, Math.floor((asset.expiresAt - Date.now()) / 1000)));
+        }
+        console.log(`Marked asset ${job.assetId} as permanently failed: max retries exceeded`);
       }
+      continue;
     }
 
-    cursor = list.list_complete ? undefined : list.cursor;
-  } while (cursor);
+    const asset = await metadata.find(job.assetId);
+    if (!asset || !asset.archiveFormat) continue;
+
+    try {
+      // Increment retry count and reset to pending
+      job.retryCount = (job.retryCount ?? 0) + 1;
+      job.status = "pending";
+      job.updatedAt = Date.now();
+      await kv.put(`job:${id}`, JSON.stringify(job));
+
+      await queue.send({
+        assetId: job.assetId,
+        archiveKey: `assets/${job.assetId}/${asset.filename}`,
+        archiveFilename: asset.filename,
+        archiveFormat: asset.archiveFormat,
+      });
+      console.log(`Re-enqueued extraction for asset ${job.assetId} (retry ${job.retryCount}/${MAX_RETRIES})`);
+    } catch (e) {
+      console.error(`Failed to re-enqueue extraction for asset ${job.assetId}:`, e);
+    }
+  }
 }
