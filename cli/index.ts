@@ -25,9 +25,10 @@ program
   .description("Upload a file and get a public URL")
   .argument("<file>", "File to upload")
   .option("--direct", "Force direct upload (skip presigned URL)")
-  .action(async (file: string, cmdOpts: { direct?: boolean }) => {
+  .option("--no-extract", "Skip automatic archive extraction")
+  .action(async (file: string, cmdOpts: { direct?: boolean; extract?: boolean }) => {
     const globalOpts = program.opts<{ endpoint: string; json: boolean }>();
-    await doUpload(file, { endpoint: globalOpts.endpoint, direct: !!cmdOpts.direct, json: globalOpts.json });
+    await doUpload(file, { endpoint: globalOpts.endpoint, direct: !!cmdOpts.direct, json: globalOpts.json, skipExtraction: cmdOpts.extract === false });
   });
 
 // asset
@@ -40,9 +41,10 @@ asset
   .description("Upload a file (alias for upload)")
   .argument("<file>", "File to upload")
   .option("--direct", "Force direct upload (skip presigned URL)")
-  .action(async (file: string, cmdOpts: { direct?: boolean }) => {
+  .option("--no-extract", "Skip automatic archive extraction")
+  .action(async (file: string, cmdOpts: { direct?: boolean; extract?: boolean }) => {
     const globalOpts = program.opts<{ endpoint: string; json: boolean }>();
-    await doUpload(file, { endpoint: globalOpts.endpoint, direct: !!cmdOpts.direct, json: globalOpts.json });
+    await doUpload(file, { endpoint: globalOpts.endpoint, direct: !!cmdOpts.direct, json: globalOpts.json, skipExtraction: cmdOpts.extract === false });
   });
 
 asset
@@ -98,6 +100,20 @@ asset
       output({ ok: true }, true);
     } else {
       console.log(`Deleted: ${id}`);
+    }
+  });
+
+asset
+  .command("extract")
+  .description("Start archive extraction")
+  .argument("<id>", "Asset ID")
+  .action(async (id: string) => {
+    const opts = program.opts<{ endpoint: string; json: boolean }>();
+    const data = await apiPost<{ job: Job }>(opts.endpoint, PATHS.assetExtract(id));
+    if (opts.json) {
+      output(data, true);
+    } else {
+      console.log(formatJob(data.job));
     }
   });
 

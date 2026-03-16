@@ -15,7 +15,7 @@ export async function completeUploadSession(
   ttlSeconds: number,
   baseUrl: string,
   parts?: UploadPart[],
-  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: Queue | null },
+  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: Queue | null; skipExtraction?: boolean },
 ): Promise<AssetUploadResult | null> {
   const session = await sessions.find(id);
   if (!session) return null;
@@ -49,15 +49,15 @@ export async function completeUploadSession(
     ...(head.contentEncoding && session.size && { originalSize: session.size }),
     ...(archiveFormat && {
       type: "archive" as const,
-      status: "pending" as const,
+      ...(!session.skipExtraction && { status: "pending" as const }),
       archiveFormat,
     }),
     ...(options?.sessionId && { sessionId: options.sessionId }),
     ...(options?.projectId && { projectId: options.projectId }),
   };
 
-  // Create extraction job for archives
-  if (archiveFormat) {
+  // Create extraction job for archives (unless skipped)
+  if (archiveFormat && !session.skipExtraction) {
     const job: Job = {
       id,
       assetId: id,

@@ -23,7 +23,7 @@ assetRoutes.post("/uploads", async (c) => {
     return c.json({ error: "Presigned URL uploads not available. Use POST /api/v1/assets for direct upload." }, 501);
   }
 
-  const body = await c.req.json<{ filename?: string; contentType?: string; size?: number; partCount?: number }>();
+  const body = await c.req.json<{ filename?: string; contentType?: string; size?: number; partCount?: number; skipExtraction?: boolean }>();
   if (!body.filename || !body.size) {
     return c.json({ error: "Missing required fields: filename, size" }, 400);
   }
@@ -37,7 +37,7 @@ assetRoutes.post("/uploads", async (c) => {
     contentType: body.contentType || "application/octet-stream",
     size: body.size,
     partCount: body.partCount,
-  }, ttlSeconds, { sessionId });
+  }, ttlSeconds, { sessionId, skipExtraction: body.skipExtraction });
 
   return c.json(result, 201);
 });
@@ -100,6 +100,7 @@ assetRoutes.post("/", async (c) => {
   const contentEncoding = c.req.header("Content-Encoding") || undefined;
   const originalSizeHeader = c.req.header("X-Original-Size");
   const originalSize = originalSizeHeader ? parseInt(originalSizeHeader, 10) : undefined;
+  const skipExtraction = c.req.header("X-Skip-Extraction") === "true";
 
   const jobs = c.get("jobs");
   const sessionId = c.get("sessionId");
@@ -113,7 +114,7 @@ assetRoutes.post("/", async (c) => {
       { name: filename, type: contentType, body, size, contentEncoding, originalSize },
       ttlSeconds,
       baseUrl,
-      { sessionId, extractionQueue },
+      { sessionId, extractionQueue, skipExtraction },
     );
     return c.json(result, 201);
   } catch (e) {
@@ -249,6 +250,69 @@ assetRoutes.get("/:id", async (c) => {
   }
 
   return c.json({ asset });
+});
+
+// POST /api/v1/assets/:id/extract — start archive extraction
+assetRoutes.post("/:id/extract", async (c) => {
+  const metadata = c.get("metadata");
+  const jobs = c.get("jobs");
+  const extractionQueue = c.get("extractionQueue");
+  const id = c.req.param("id");
+
+  const asset = await getAssetMetadata(metadata, id);
+  if (!asset || !await canAccessAsset(asset, accessCtx(c), "extract")) {
+    return c.json({ error: "Asset not found" }, 404);
+  }
+
+  if (asset.type !== "archive" || !asset.archiveFormat) {
+    return c.json({ error: "Asset is not an archive" }, 400);
+  }
+
+  if (asset.status === "ready") {
+    return c.json({ error: "Archive already extracted" }, 400);
+  }
+
+  // If a job already exists and is pending/running, return it
+  if (asset.jobId) {
+    const existingJob = await jobs.find(asset.jobId);
+    if (existingJob && (existingJob.status === "pending" || existingJob.status === "running")) {
+      return c.json({ job: existingJob });
+    }
+  }
+
+  // Create new extraction job
+  const now = Date.now();
+  const sessionId = c.get("sessionId");
+  const job = {
+    id,
+    assetId: id,
+    type: "archive-extraction" as const,
+    status: "pending" as const,
+    createdAt: now,
+    updatedAt: now,
+    ...(sessionId && { sessionId }),
+    ...(asset.projectId && { projectId: asset.projectId }),
+  };
+  await jobs.save(job);
+
+  // Update asset status
+  asset.status = "pending";
+  asset.jobId = id;
+  const ttlSeconds = c.get("ttlSeconds");
+  await metadata.save(asset, ttlSeconds);
+
+  // Enqueue
+  if (extractionQueue) {
+    const key = `assets/${id}/${asset.filename}`;
+    await extractionQueue.send({
+      assetId: id,
+      archiveKey: key,
+      archiveFilename: asset.filename,
+      archiveFormat: asset.archiveFormat,
+    });
+  }
+
+  return c.json({ job }, 201);
 });
 
 // DELETE /api/v1/assets/:id — delete asset

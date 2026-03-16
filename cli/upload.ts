@@ -45,6 +45,7 @@ async function uploadViaPresigned(
   fileName: string,
   contentType: string,
   fileData: Uint8Array,
+  skipExtraction?: boolean,
 ): Promise<AssetUploadResult | null> {
   const isMultipart = fileData.byteLength > MULTIPART_THRESHOLD;
   const partCount = isMultipart ? Math.ceil(fileData.byteLength / PART_SIZE) : undefined;
@@ -52,7 +53,7 @@ async function uploadViaPresigned(
   const initRes = await fetch(`${endpoint}${PATHS.uploads}`, {
     method: "POST",
     headers: { "Content-Type": "application/json", ...(await commonHeaders()) },
-    body: JSON.stringify({ filename: fileName, contentType, size: fileData.byteLength, partCount }),
+    body: JSON.stringify({ filename: fileName, contentType, size: fileData.byteLength, partCount, ...(skipExtraction && { skipExtraction: true }) }),
   });
 
 
@@ -126,6 +127,7 @@ async function uploadDirect(
   fileName: string,
   contentType: string,
   fileData: Uint8Array,
+  skipExtraction?: boolean,
 ): Promise<AssetUploadResult> {
   const compress = shouldCompress(fileName, fileData.byteLength);
   const uploadData = compress ? new Uint8Array(gzipSync(fileData)) : fileData;
@@ -139,6 +141,9 @@ async function uploadDirect(
   if (compress) {
     headers["Content-Encoding"] = "gzip";
     headers["X-Original-Size"] = String(fileData.byteLength);
+  }
+  if (skipExtraction) {
+    headers["X-Skip-Extraction"] = "true";
   }
 
   const res = await fetch(`${endpoint}${PATHS.assets}`, {
@@ -156,7 +161,7 @@ async function uploadDirect(
 
 export async function doUpload(
   filePath: string,
-  opts: { endpoint: string; direct: boolean; json: boolean },
+  opts: { endpoint: string; direct: boolean; json: boolean; skipExtraction?: boolean },
 ): Promise<void> {
   try {
     statSync(filePath);
@@ -171,10 +176,10 @@ export async function doUpload(
 
   let result: AssetUploadResult;
   if (opts.direct) {
-    result = await uploadDirect(opts.endpoint, fileName, contentType, fileData);
+    result = await uploadDirect(opts.endpoint, fileName, contentType, fileData, opts.skipExtraction);
   } else {
-    const presigned = await uploadViaPresigned(opts.endpoint, fileName, contentType, fileData);
-    result = presigned ?? await uploadDirect(opts.endpoint, fileName, contentType, fileData);
+    const presigned = await uploadViaPresigned(opts.endpoint, fileName, contentType, fileData, opts.skipExtraction);
+    result = presigned ?? await uploadDirect(opts.endpoint, fileName, contentType, fileData, opts.skipExtraction);
   }
 
   if (opts.json) {

@@ -17,6 +17,7 @@ const permissions: Record<string, Record<string, Set<Role>>> = {
     read: new Set(["owner", "admin", "editor", "viewer"]),
     create: new Set(["owner", "admin", "editor"]),
     delete: new Set(["owner", "admin", "editor"]),
+    extract: new Set(["owner", "admin", "editor"]),
   },
   job: {
     read: new Set(["owner", "admin", "editor", "viewer"]),

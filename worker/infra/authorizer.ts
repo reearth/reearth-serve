@@ -107,6 +107,19 @@ if (import.meta.vitest) {
     })).toBe(false);
   });
 
+  test("editor can extract assets, viewer cannot", async () => {
+    expect(await authorizer.check({
+      principal: { id: "u1", roles: ["editor"] },
+      resource: { kind: "asset", id: "a1" },
+      action: "extract",
+    })).toBe(true);
+    expect(await authorizer.check({
+      principal: { id: "u1", roles: ["viewer"] },
+      resource: { kind: "asset", id: "a1" },
+      action: "extract",
+    })).toBe(false);
+  });
+
   test("viewer can read jobs but not retry", async () => {
     expect(await authorizer.check({
       principal: { id: "u1", roles: ["viewer"] },

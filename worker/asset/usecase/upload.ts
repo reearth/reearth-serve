@@ -19,7 +19,7 @@ export async function uploadAsset(
   },
   ttlSeconds: number,
   baseUrl: string,
-  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: Queue | null },
+  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: Queue | null; skipExtraction?: boolean },
 ): Promise<AssetUploadResult> {
   const id = generateId();
   const now = Date.now();
@@ -43,15 +43,15 @@ export async function uploadAsset(
     ...(file.contentEncoding && file.originalSize && { originalSize: file.originalSize }),
     ...(archiveFormat && {
       type: "archive" as const,
-      status: "pending" as const,
+      ...(!options?.skipExtraction && { status: "pending" as const }),
       archiveFormat,
     }),
     ...(options?.sessionId && { sessionId: options.sessionId }),
     ...(options?.projectId && { projectId: options.projectId }),
   };
 
-  // Create extraction job for archives
-  if (archiveFormat) {
+  // Create extraction job for archives (unless skipped)
+  if (archiveFormat && !options?.skipExtraction) {
     const job: Job = {
       id,
       assetId: id,
@@ -218,5 +218,24 @@ if (import.meta.vitest) {
     expect(result.asset.contentEncoding).toBe("gzip");
     expect(result.asset.originalSize).toBe(200);
     expect(result.asset.size).toBe(50);
+  });
+
+  test("uploadAsset with skipExtraction detects archive but does not create job", async () => {
+    const md = mockMetadata();
+    const st = mockStorage();
+    const jb = mockJobs();
+
+    const result = await uploadAsset(
+      md, st, jb,
+      { name: "data.zip", type: "application/zip", body: toStream(new Uint8Array(10)), size: 10 },
+      3600, "https://example.com",
+      { skipExtraction: true },
+    );
+
+    expect(result.asset.type).toBe("archive");
+    expect(result.asset.archiveFormat).toBe("zip");
+    expect(result.asset.status).toBeUndefined();
+    expect(result.asset.jobId).toBeUndefined();
+    expect(jb.save).not.toHaveBeenCalled();
   });
 }

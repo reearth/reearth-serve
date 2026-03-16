@@ -8,7 +8,7 @@ export async function createUploadSession(
   presignedUrls: PresignedUrlGenerator,
   params: { filename: string; contentType: string; size: number; partCount?: number },
   ttlSeconds: number,
-  options?: { sessionId?: string | null },
+  options?: { sessionId?: string | null; skipExtraction?: boolean },
 ): Promise<PresignedUploadResult | MultipartUploadResult> {
   const id = generateId();
   const now = Date.now();
@@ -40,6 +40,7 @@ export async function createUploadSession(
       partCount: params.partCount,
       ...(compress && { contentEncoding: "gzip" }),
       ...(options?.sessionId && { sessionId: options.sessionId }),
+      ...(options?.skipExtraction && { skipExtraction: true }),
     };
 
     await sessions.save(session, urlExpirySeconds);
