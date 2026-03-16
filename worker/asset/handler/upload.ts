@@ -1,12 +1,32 @@
 import type { Hono } from "hono";
+import { describeRoute } from "hono-openapi";
+import { resolver } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { uploadAsset } from "../usecase";
+import { uploadResultResponseSchema, errorResponseSchema } from "../../../shared/openapi";
 
 export function registerUploadRoute(app: Hono<AppEnv>) {
-  // POST /api/v1/assets — upload a file (direct, streaming)
-  // Headers: Content-Type (file type), X-Filename (filename), Content-Length (size)
-  // Optional: Content-Encoding: gzip, X-Original-Size (uncompressed size)
-  app.post("/", async (c) => {
+  app.post("/",
+    describeRoute({
+      tags: ["Assets"],
+      summary: "Upload a file (direct streaming)",
+      description: "Upload a file using streaming body. Set filename via X-Filename header.",
+      parameters: [
+        { name: "X-Filename", in: "header", required: true, schema: { type: "string" }, description: "Filename of the uploaded file" },
+        { name: "Content-Length", in: "header", required: true, schema: { type: "integer" }, description: "File size in bytes" },
+        { name: "Content-Encoding", in: "header", required: false, schema: { type: "string", enum: ["gzip"] }, description: "Set to 'gzip' for pre-compressed uploads" },
+        { name: "X-Original-Size", in: "header", required: false, schema: { type: "integer" }, description: "Original uncompressed size (when Content-Encoding: gzip)" },
+        { name: "X-Skip-Extraction", in: "header", required: false, schema: { type: "string", enum: ["true"] }, description: "Skip archive extraction" },
+      ],
+      requestBody: {
+        content: { "application/octet-stream": { schema: { type: "string", format: "binary" } } },
+      },
+      responses: {
+        201: { description: "Upload result", content: { "application/json": { schema: resolver(uploadResultResponseSchema) } } },
+        400: { description: "Bad request", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      },
+    }),
+    async (c) => {
     const metadata = c.get("metadata");
     const storage = c.get("storage");
     const ttlSeconds = c.get("ttlSeconds");

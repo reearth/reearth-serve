@@ -1,4 +1,6 @@
 import { Hono } from "hono";
+import { openAPIRouteHandler } from "hono-openapi";
+import { Scalar } from "@scalar/hono-api-reference";
 import { assetRoutes } from "./asset/handler";
 import { fileRoutes } from "./file/handler";
 import { jobRoutes, jobInternalRoutes } from "./job/handler";
@@ -87,6 +89,27 @@ export function createApp(env: Env) {
 
   // File delivery (not behind /api — permalink URLs)
   app.route("/files", fileRoutes);
+
+  // OpenAPI spec + Scalar UI
+  app.get("/api/v1/doc", openAPIRouteHandler(app, {
+    documentation: {
+      info: {
+        title: "Re:Earth Serve API",
+        version: "1.0.0",
+        description: "Spatial Data Delivery API",
+      },
+      servers: [{ url: "/" }],
+      tags: [
+        { name: "Assets", description: "Asset upload, metadata, and management" },
+        { name: "Jobs", description: "Background job tracking" },
+        { name: "Projects", description: "Project management" },
+        { name: "Workspaces", description: "Workspace and member management" },
+        { name: "Auth", description: "Authentication and user info" },
+      ],
+    },
+  }));
+
+  app.get("/api/v1/docs", Scalar({ url: "/api/v1/doc" }));
 
   return app;
 }

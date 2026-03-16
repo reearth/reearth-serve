@@ -65,6 +65,7 @@ curl -X POST http://localhost:5173/api/v1/assets \
 | `DELETE` | `/api/v1/assets/:id` | Delete an asset |
 | `POST` | `/api/v1/assets/uploads` | Create presigned upload session |
 | `POST` | `/api/v1/assets/uploads/:id/complete` | Complete upload session |
+| `POST` | `/api/v1/assets/:id/extract` | Start archive extraction |
 | `GET` | `/api/v1/jobs` | List jobs (`?limit=&cursor=`) |
 | `GET` | `/api/v1/jobs/:id` | Get extraction job status |
 | `POST` | `/api/v1/jobs/:id/retry` | Retry a failed extraction job |
@@ -80,12 +81,15 @@ curl -X POST http://localhost:5173/api/v1/assets \
 | `POST` | `/api/v1/workspaces/:id/members` | Add member |
 | `PATCH` | `/api/v1/workspaces/:id/members/:userId` | Update member role |
 | `DELETE` | `/api/v1/workspaces/:id/members/:userId` | Remove member |
+| `GET` | `/api/v1/doc` | OpenAPI 3.1 JSON spec |
+| `GET` | `/api/v1/docs` | Scalar interactive API reference |
 
 ### Internal API (`/api/internal`)
 
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/api/internal/jobs/:id/status` | Container → Worker job status update |
+| `GET` | `/api/internal/assets/:id/exists` | Container → Worker asset existence check |
 
 ### File Delivery
 

@@ -1,17 +1,31 @@
 import type { Hono } from "hono";
+import { describeRoute } from "hono-openapi";
+import { resolver, validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata } from "../usecase";
 import { canAccessAsset } from "../access";
 import { accessCtx } from "./shared";
+import { errorResponseSchema, fileEntrySchema, idParamSchema, fileListQuerySchema } from "../../../shared/openapi";
 
 export function registerListFilesRoute(app: Hono<AppEnv>) {
-  // GET /api/v1/assets/:id/files — list files in asset (NDJSON stream)
-  // Query params: ?prefix=path/prefix
-  app.get("/:id/files", async (c) => {
-    const metadata = c.get("metadata");
-    const storage = c.get("storage");
-    const id = c.req.param("id");
-    const prefix = c.req.query("prefix") || "";
+  app.get("/:id/files",
+    describeRoute({
+      tags: ["Assets"],
+      summary: "List files in asset (NDJSON stream)",
+      description: "Returns a stream of newline-delimited JSON. Each line is a file entry object.",
+      responses: {
+        200: { description: "NDJSON stream of file entries", content: { "application/x-ndjson": { schema: resolver(fileEntrySchema) } } },
+        404: { description: "Asset not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      },
+    }),
+    zValidator("param", idParamSchema),
+    zValidator("query", fileListQuerySchema),
+    async (c) => {
+      const metadata = c.get("metadata");
+      const storage = c.get("storage");
+      const { id } = c.req.valid("param");
+      const { prefix: prefixParam } = c.req.valid("query");
+      const prefix = prefixParam || "";
 
     const asset = await getAssetMetadata(metadata, id);
     if (!asset || !await canAccessAsset(asset, accessCtx(c))) {

@@ -1,31 +1,45 @@
 import type { Hono } from "hono";
+import { describeRoute } from "hono-openapi";
+import { resolver, validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { createUploadSession } from "../usecase";
+import {
+  uploadSessionResponseSchema, errorResponseSchema,
+  createUploadSessionBodySchema,
+} from "../../../shared/openapi";
 
 export function registerCreateUploadSessionRoute(app: Hono<AppEnv>) {
-  // POST /api/v1/assets/uploads — create upload session with presigned URL(s)
-  app.post("/uploads", async (c) => {
-    const presignedUrls = c.get("presignedUrls");
-    if (!presignedUrls) {
-      return c.json({ error: "Presigned URL uploads not available. Use POST /api/v1/assets for direct upload." }, 501);
-    }
+  app.post("/uploads",
+    describeRoute({
+      tags: ["Assets"],
+      summary: "Create upload session with presigned URL",
+      responses: {
+        201: { description: "Upload session created", content: { "application/json": { schema: resolver(uploadSessionResponseSchema) } } },
+        400: { description: "Bad request", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        501: { description: "Presigned uploads not available", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      },
+    }),
+    zValidator("json", createUploadSessionBodySchema),
+    async (c) => {
+      const presignedUrls = c.get("presignedUrls");
+      if (!presignedUrls) {
+        return c.json({ error: "Presigned URL uploads not available. Use POST /api/v1/assets for direct upload." }, 501);
+      }
 
-    const body = await c.req.json<{ filename?: string; contentType?: string; size?: number; partCount?: number; skipExtraction?: boolean }>();
-    if (!body.filename || !body.size) {
-      return c.json({ error: "Missing required fields: filename, size" }, 400);
-    }
+      const body = c.req.valid("json");
 
-    const sessions = c.get("uploadSessions");
-    const ttlSeconds = c.get("ttlSeconds");
-    const sessionId = c.get("sessionId");
+      const sessions = c.get("uploadSessions");
+      const ttlSeconds = c.get("ttlSeconds");
+      const sessionId = c.get("sessionId");
 
-    const result = await createUploadSession(sessions, presignedUrls, {
-      filename: body.filename,
-      contentType: body.contentType || "application/octet-stream",
-      size: body.size,
-      partCount: body.partCount,
-    }, ttlSeconds, { sessionId, skipExtraction: body.skipExtraction });
+      const result = await createUploadSession(sessions, presignedUrls, {
+        filename: body.filename,
+        contentType: body.contentType || "application/octet-stream",
+        size: body.size,
+        partCount: body.partCount,
+      }, ttlSeconds, { sessionId });
 
-    return c.json(result, 201);
-  });
+      return c.json(result, 201);
+    },
+  );
 }

@@ -1,16 +1,30 @@
 import type { Hono } from "hono";
+import { describeRoute } from "hono-openapi";
+import { resolver, validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata } from "../usecase";
 import { canAccessAsset } from "../access";
 import { accessCtx } from "./shared";
+import { jobResponseSchema, errorResponseSchema, idParamSchema } from "../../../shared/openapi";
 
 export function registerExtractRoute(app: Hono<AppEnv>) {
-  // POST /api/v1/assets/:id/extract — start archive extraction
-  app.post("/:id/extract", async (c) => {
-    const metadata = c.get("metadata");
-    const jobs = c.get("jobs");
-    const extractionQueue = c.get("extractionQueue");
-    const id = c.req.param("id");
+  app.post("/:id/extract",
+    describeRoute({
+      tags: ["Assets"],
+      summary: "Start archive extraction",
+      responses: {
+        200: { description: "Existing extraction job", content: { "application/json": { schema: resolver(jobResponseSchema) } } },
+        201: { description: "Extraction job created", content: { "application/json": { schema: resolver(jobResponseSchema) } } },
+        400: { description: "Bad request", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        404: { description: "Asset not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      },
+    }),
+    zValidator("param", idParamSchema),
+    async (c) => {
+      const metadata = c.get("metadata");
+      const jobs = c.get("jobs");
+      const extractionQueue = c.get("extractionQueue");
+      const { id } = c.req.valid("param");
 
     const asset = await getAssetMetadata(metadata, id);
     if (!asset || !await canAccessAsset(asset, accessCtx(c), "extract")) {

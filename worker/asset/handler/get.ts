@@ -1,20 +1,33 @@
 import type { Hono } from "hono";
+import { describeRoute } from "hono-openapi";
+import { resolver, validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata } from "../usecase";
 import { canAccessAsset } from "../access";
 import { accessCtx } from "./shared";
+import { assetResponseSchema, errorResponseSchema, idParamSchema } from "../../../shared/openapi";
 
 export function registerGetRoute(app: Hono<AppEnv>) {
-  // GET /api/v1/assets/:id — get metadata
-  app.get("/:id", async (c) => {
-    const metadata = c.get("metadata");
-    const id = c.req.param("id");
+  app.get("/:id",
+    describeRoute({
+      tags: ["Assets"],
+      summary: "Get asset metadata",
+      responses: {
+        200: { description: "Asset metadata", content: { "application/json": { schema: resolver(assetResponseSchema) } } },
+        404: { description: "Asset not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      },
+    }),
+    zValidator("param", idParamSchema),
+    async (c) => {
+      const metadata = c.get("metadata");
+      const { id } = c.req.valid("param");
 
-    const asset = await getAssetMetadata(metadata, id);
-    if (!asset || !await canAccessAsset(asset, accessCtx(c))) {
-      return c.json({ error: "Asset not found" }, 404);
-    }
+      const asset = await getAssetMetadata(metadata, id);
+      if (!asset || !await canAccessAsset(asset, accessCtx(c))) {
+        return c.json({ error: "Asset not found" }, 404);
+      }
 
-    return c.json({ asset });
-  });
+      return c.json({ asset });
+    },
+  );
 }

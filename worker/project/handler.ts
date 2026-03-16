@@ -1,67 +1,112 @@
 import { Hono } from "hono";
+import { describeRoute } from "hono-openapi";
+import { resolver, validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../types";
 import { createProject, getProject, listProjects, deleteProject } from "./usecase";
+import {
+  projectResponseSchema, projectListResponseSchema, errorResponseSchema,
+  idParamSchema, projectListQuerySchema, createProjectBodySchema,
+} from "../../shared/openapi";
 
 export const projectRoutes = new Hono<AppEnv>();
 
-// GET /api/v1/projects — list projects for current user
-projectRoutes.get("/", async (c) => {
-  const user = c.get("user");
-  if (!user) {
-    return c.json({ error: "Authentication required. Run `login` to access project commands." }, 401);
-  }
+projectRoutes.get("/",
+  describeRoute({
+    tags: ["Projects"],
+    summary: "List projects",
+    responses: {
+      200: { description: "Project list", content: { "application/json": { schema: resolver(projectListResponseSchema) } } },
+      401: { description: "Authentication required", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+    },
+  }),
+  zValidator("query", projectListQuerySchema),
+  async (c) => {
+    const user = c.get("user");
+    if (!user) {
+      return c.json({ error: "Authentication required. Run `login` to access project commands." }, 401);
+    }
 
-  const projects = c.get("projects");
-  const workspaceId = c.req.query("workspaceId");
-  const list = await listProjects(projects, workspaceId ? { workspaceId } : { ownerId: user.sub });
-  return c.json({ projects: list });
-});
+    const projects = c.get("projects");
+    const { workspaceId } = c.req.valid("query");
+    const list = await listProjects(projects, workspaceId ? { workspaceId } : { ownerId: user.sub });
+    return c.json({ projects: list });
+  },
+);
 
-// POST /api/v1/projects — create a project
-projectRoutes.post("/", async (c) => {
-  const user = c.get("user");
-  if (!user) {
-    return c.json({ error: "Authentication required" }, 401);
-  }
+projectRoutes.post("/",
+  describeRoute({
+    tags: ["Projects"],
+    summary: "Create a project",
+    responses: {
+      201: { description: "Project created", content: { "application/json": { schema: resolver(projectResponseSchema) } } },
+      400: { description: "Bad request", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      401: { description: "Authentication required", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+    },
+  }),
+  zValidator("json", createProjectBodySchema),
+  async (c) => {
+    const user = c.get("user");
+    if (!user) {
+      return c.json({ error: "Authentication required" }, 401);
+    }
 
-  const body = await c.req.json<{ name?: string; workspaceId?: string }>();
-  if (!body.name) {
-    return c.json({ error: "Missing required field: name" }, 400);
-  }
+    const body = c.req.valid("json");
+    const projects = c.get("projects");
+    const project = await createProject(projects, body.name, user.sub, body.workspaceId);
+    return c.json({ project }, 201);
+  },
+);
 
-  const projects = c.get("projects");
-  const project = await createProject(projects, body.name, user.sub, body.workspaceId);
-  return c.json({ project }, 201);
-});
+projectRoutes.get("/:id",
+  describeRoute({
+    tags: ["Projects"],
+    summary: "Get project",
+    responses: {
+      200: { description: "Project details", content: { "application/json": { schema: resolver(projectResponseSchema) } } },
+      401: { description: "Authentication required", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      404: { description: "Project not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+    },
+  }),
+  zValidator("param", idParamSchema),
+  async (c) => {
+    const user = c.get("user");
+    if (!user) {
+      return c.json({ error: "Authentication required" }, 401);
+    }
 
-// GET /api/v1/projects/:id — get project
-projectRoutes.get("/:id", async (c) => {
-  const user = c.get("user");
-  if (!user) {
-    return c.json({ error: "Authentication required" }, 401);
-  }
+    const projects = c.get("projects");
+    const project = await getProject(projects, c.req.valid("param").id);
+    if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
 
-  const projects = c.get("projects");
-  const project = await getProject(projects, c.req.param("id"));
-  if (!project) {
-    return c.json({ error: "Project not found" }, 404);
-  }
+    return c.json({ project });
+  },
+);
 
-  return c.json({ project });
-});
+projectRoutes.delete("/:id",
+  describeRoute({
+    tags: ["Projects"],
+    summary: "Delete project",
+    responses: {
+      204: { description: "Project deleted" },
+      401: { description: "Authentication required", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      404: { description: "Project not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+    },
+  }),
+  zValidator("param", idParamSchema),
+  async (c) => {
+    const user = c.get("user");
+    if (!user) {
+      return c.json({ error: "Authentication required" }, 401);
+    }
 
-// DELETE /api/v1/projects/:id — delete project (owner only)
-projectRoutes.delete("/:id", async (c) => {
-  const user = c.get("user");
-  if (!user) {
-    return c.json({ error: "Authentication required" }, 401);
-  }
+    const projects = c.get("projects");
+    const deleted = await deleteProject(projects, c.req.valid("param").id, user.sub);
+    if (!deleted) {
+      return c.json({ error: "Project not found or not authorized" }, 404);
+    }
 
-  const projects = c.get("projects");
-  const deleted = await deleteProject(projects, c.req.param("id"), user.sub);
-  if (!deleted) {
-    return c.json({ error: "Project not found or not authorized" }, 404);
-  }
-
-  return c.body(null, 204);
-});
+    return c.body(null, 204);
+  },
+);

@@ -1,17 +1,30 @@
 import type { Hono } from "hono";
+import { describeRoute } from "hono-openapi";
+import { resolver, validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { completeUploadSession } from "../usecase";
+import { uploadResultResponseSchema, errorResponseSchema, idParamSchema, completeUploadBodySchema } from "../../../shared/openapi";
 
 export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
-  // POST /api/v1/assets/uploads/:id/complete — confirm upload and create asset
-  app.post("/uploads/:id/complete", async (c) => {
+  app.post("/uploads/:id/complete",
+    describeRoute({
+      tags: ["Assets"],
+      summary: "Complete upload session",
+      description: "Confirm upload and create asset. For multipart uploads, send parts with ETags in JSON body.",
+      responses: {
+        201: { description: "Upload completed", content: { "application/json": { schema: resolver(uploadResultResponseSchema) } } },
+        404: { description: "Upload session not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      },
+    }),
+    zValidator("param", idParamSchema),
+    async (c) => {
     const sessions = c.get("uploadSessions");
     const metadata = c.get("metadata");
     const storage = c.get("storage");
     const presignedUrls = c.get("presignedUrls");
     const ttlSeconds = c.get("ttlSeconds");
     const baseUrl = c.get("baseUrl");
-    const id = c.req.param("id");
+    const { id } = c.req.valid("param");
 
     // For multipart uploads, client sends parts with ETags
     let parts: { partNumber: number; etag: string }[] | undefined;
