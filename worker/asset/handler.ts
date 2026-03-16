@@ -1,6 +1,18 @@
 import { Hono } from "hono";
 import type { AppEnv } from "../types";
 import { uploadAsset, getAssetMetadata, deleteAsset, createUploadSession, completeUploadSession } from "./usecase";
+import { canAccessAsset, type AccessContext } from "./access";
+import type { Context } from "hono";
+
+function accessCtx(c: Context<AppEnv>): AccessContext {
+  return {
+    sessionId: c.get("sessionId"),
+    user: c.get("user"),
+    authorizer: c.get("authorizer"),
+    members: c.get("members"),
+    projects: c.get("projects"),
+  };
+}
 
 export const assetRoutes = new Hono<AppEnv>();
 
@@ -18,13 +30,14 @@ assetRoutes.post("/uploads", async (c) => {
 
   const sessions = c.get("uploadSessions");
   const ttlSeconds = c.get("ttlSeconds");
+  const sessionId = c.get("sessionId");
 
   const result = await createUploadSession(sessions, presignedUrls, {
     filename: body.filename,
     contentType: body.contentType || "application/octet-stream",
     size: body.size,
     partCount: body.partCount,
-  }, ttlSeconds);
+  }, ttlSeconds, { sessionId });
 
   return c.json(result, 201);
 });
@@ -121,7 +134,7 @@ assetRoutes.get("/:id/files", async (c) => {
   const prefix = c.req.query("prefix") || "";
 
   const asset = await getAssetMetadata(metadata, id);
-  if (!asset) {
+  if (!asset || !await canAccessAsset(asset, accessCtx(c))) {
     return c.json({ error: "Asset not found" }, 404);
   }
 
@@ -212,10 +225,16 @@ function filterNdjsonByPrefix(prefix: string): TransformStream<string, string> {
 // Query params: ?limit=20&cursor=xxx
 assetRoutes.get("/", async (c) => {
   const metadata = c.get("metadata");
+  const sessionId = c.get("sessionId");
+  const user = c.get("user");
   const limit = parseInt(c.req.query("limit") || "20", 10);
   const cursor = c.req.query("cursor") || undefined;
 
-  const result = await metadata.list({ limit: Math.min(limit, 100), cursor });
+  const result = await metadata.list({
+    limit: Math.min(limit, 100),
+    cursor,
+    ...(!user && sessionId ? { sessionId } : {}),
+  });
   return c.json({ assets: result.items, cursor: result.cursor });
 });
 
@@ -225,7 +244,7 @@ assetRoutes.get("/:id", async (c) => {
   const id = c.req.param("id");
 
   const asset = await getAssetMetadata(metadata, id);
-  if (!asset) {
+  if (!asset || !await canAccessAsset(asset, accessCtx(c))) {
     return c.json({ error: "Asset not found" }, 404);
   }
 
@@ -237,6 +256,12 @@ assetRoutes.delete("/:id", async (c) => {
   const metadata = c.get("metadata");
   const storage = c.get("storage");
   const id = c.req.param("id");
+
+  // Check access before deleting
+  const asset = await getAssetMetadata(metadata, id);
+  if (!asset || !await canAccessAsset(asset, accessCtx(c), "delete")) {
+    return c.json({ error: "Asset not found" }, 404);
+  }
 
   const deleted = await deleteAsset(metadata, storage, id);
   if (!deleted) {

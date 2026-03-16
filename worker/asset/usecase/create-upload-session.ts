@@ -8,6 +8,7 @@ export async function createUploadSession(
   presignedUrls: PresignedUrlGenerator,
   params: { filename: string; contentType: string; size: number; partCount?: number },
   ttlSeconds: number,
+  options?: { sessionId?: string | null },
 ): Promise<PresignedUploadResult | MultipartUploadResult> {
   const id = generateId();
   const now = Date.now();
@@ -38,6 +39,7 @@ export async function createUploadSession(
       s3UploadId,
       partCount: params.partCount,
       ...(compress && { contentEncoding: "gzip" }),
+      ...(options?.sessionId && { sessionId: options.sessionId }),
     };
 
     await sessions.save(session, urlExpirySeconds);
@@ -61,6 +63,7 @@ export async function createUploadSession(
     createdAt: now,
     expiresAt: now + urlExpirySeconds * 1000,
     ...(compress && { contentEncoding: "gzip" }),
+    ...(options?.sessionId && { sessionId: options.sessionId }),
   };
 
   await sessions.save(session, urlExpirySeconds);

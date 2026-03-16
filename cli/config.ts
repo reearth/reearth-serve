@@ -1,3 +1,4 @@
+import { randomBytes } from "node:crypto";
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
@@ -5,6 +6,7 @@ import { homedir } from "node:os";
 const CONFIG_DIR = join(homedir(), ".config", "reearth-serve");
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
 const CREDENTIALS_FILE = join(CONFIG_DIR, "credentials.json");
+const SESSION_FILE = join(CONFIG_DIR, "session.json");
 
 export interface Config {
   endpoint?: string;
@@ -56,3 +58,28 @@ export function clearCredentials(): void {
     writeFileSync(CREDENTIALS_FILE, "");
   }
 }
+
+export function loadSessionId(): string | null {
+  if (!existsSync(SESSION_FILE)) return null;
+  try {
+    const data = JSON.parse(readFileSync(SESSION_FILE, "utf-8")) as { sessionId?: string };
+    return data.sessionId ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function saveSessionId(sessionId: string): void {
+  ensureDir();
+  writeFileSync(SESSION_FILE, JSON.stringify({ sessionId }) + "\n");
+}
+
+/** Load existing session ID, or generate and persist a new one. */
+export function loadOrCreateSessionId(): string {
+  const existing = loadSessionId();
+  if (existing) return existing;
+  const id = randomBytes(8).toString("hex");
+  saveSessionId(id);
+  return id;
+}
+

@@ -9,7 +9,7 @@ export interface MetadataStore {
   save(asset: AssetMetadata, ttlSeconds: number): Promise<void>;
   find(id: string): Promise<AssetMetadata | null>;
   delete(id: string): Promise<void>;
-  list(options?: { limit?: number; cursor?: string }): Promise<ListResult<AssetMetadata>>;
+  list(options?: { limit?: number; cursor?: string; sessionId?: string; projectId?: string }): Promise<ListResult<AssetMetadata>>;
 }
 
 export interface FileStorage {

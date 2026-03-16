@@ -3,7 +3,8 @@ import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync } f
 import { dirname, join, relative } from "node:path";
 import { Writable } from "node:stream";
 import type { AssetMetadata, FileEntry, Job } from "../shared/api";
-import { loadCredentials } from "./config";
+import { loadCredentials, loadOrCreateSessionId } from "./config";
+import { refreshAccessToken } from "./auth";
 
 // --- Output helpers ---
 
@@ -60,16 +61,33 @@ export function formatBytes(bytes: number): string {
 
 // --- HTTP helpers ---
 
-function authHeaders(): Record<string, string> {
-  const creds = loadCredentials();
-  if (!creds) return {};
-  return { Authorization: `Bearer ${creds.accessToken}` };
+const TOKEN_REFRESH_BUFFER_MS = 60 * 1000; // refresh 60s before expiry
+
+export async function commonHeaders(): Promise<Record<string, string>> {
+  const headers: Record<string, string> = {};
+  let creds = loadCredentials();
+
+  // Auto-refresh if token is expired or about to expire
+  if (creds?.expiresAt && creds.expiresAt - Date.now() < TOKEN_REFRESH_BUFFER_MS) {
+    const newToken = await refreshAccessToken();
+    if (newToken) creds = loadCredentials();
+  }
+
+  if (creds) {
+    headers["Authorization"] = `Bearer ${creds.accessToken}`;
+  }
+  if (!creds) {
+    // Demo mode: always send session ID
+    headers["X-Session-Id"] = loadOrCreateSessionId();
+  }
+  return headers;
 }
 
 export async function apiGet<T>(endpoint: string, path: string): Promise<T> {
   const res = await fetch(`${endpoint}${path}`, {
-    headers: { ...authHeaders() },
+    headers: { ...(await commonHeaders()) },
   });
+
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`${res.status}: ${body}`);
@@ -78,7 +96,7 @@ export async function apiGet<T>(endpoint: string, path: string): Promise<T> {
 }
 
 export async function apiPost<T>(endpoint: string, path: string, body?: unknown): Promise<T> {
-  const headers: Record<string, string> = { ...authHeaders() };
+  const headers: Record<string, string> = { ...(await commonHeaders()) };
   if (body) headers["Content-Type"] = "application/json";
 
   const res = await fetch(`${endpoint}${path}`, {
@@ -86,6 +104,7 @@ export async function apiPost<T>(endpoint: string, path: string, body?: unknown)
     headers,
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
+
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`${res.status}: ${text}`);
@@ -94,7 +113,7 @@ export async function apiPost<T>(endpoint: string, path: string, body?: unknown)
 }
 
 export async function apiPatch<T>(endpoint: string, path: string, body?: unknown): Promise<T> {
-  const headers: Record<string, string> = { ...authHeaders() };
+  const headers: Record<string, string> = { ...(await commonHeaders()) };
   if (body) headers["Content-Type"] = "application/json";
 
   const res = await fetch(`${endpoint}${path}`, {
@@ -102,6 +121,7 @@ export async function apiPatch<T>(endpoint: string, path: string, body?: unknown
     headers,
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
+
   if (!res.ok) {
     const text = await res.text();
     throw new Error(`${res.status}: ${text}`);
@@ -112,8 +132,9 @@ export async function apiPatch<T>(endpoint: string, path: string, body?: unknown
 export async function apiDelete(endpoint: string, path: string): Promise<void> {
   const res = await fetch(`${endpoint}${path}`, {
     method: "DELETE",
-    headers: { ...authHeaders() },
+    headers: { ...(await commonHeaders()) },
   });
+
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`${res.status}: ${body}`);
@@ -172,7 +193,7 @@ export function listLocalFiles(dir: string): string[] {
 
 export async function* streamNdjson(endpoint: string, path: string): AsyncGenerator<FileEntry> {
   const res = await fetch(`${endpoint}${path}`, {
-    headers: { ...authHeaders() },
+    headers: { ...(await commonHeaders()) },
   });
   if (!res.ok) {
     const text = await res.text();

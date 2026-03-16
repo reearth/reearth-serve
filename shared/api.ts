@@ -126,6 +126,7 @@ export const jobSchema = z.object({
   fileCount: z.number().optional(),
   extractedSize: z.number().optional(),
   retryCount: z.number().optional(),
+  sessionId: z.string().optional(),
   projectId: z.string().optional(),
 });
 

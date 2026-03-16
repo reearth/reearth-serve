@@ -59,6 +59,7 @@ export async function uploadAsset(
       status: "pending",
       createdAt: now,
       updatedAt: now,
+      ...(options?.sessionId && { sessionId: options.sessionId }),
       ...(options?.projectId && { projectId: options.projectId }),
     };
     await jobs.save(job);

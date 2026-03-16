@@ -20,6 +20,9 @@ export async function completeUploadSession(
   const session = await sessions.find(id);
   if (!session) return null;
 
+  // Verify session ownership
+  if (session.sessionId && options?.sessionId && session.sessionId !== options.sessionId) return null;
+
   const key = storageKey(id, session.filename);
 
   // Complete multipart upload first if needed
@@ -62,6 +65,7 @@ export async function completeUploadSession(
       status: "pending",
       createdAt: now,
       updatedAt: now,
+      ...(options?.sessionId && { sessionId: options.sessionId }),
       ...(options?.projectId && { projectId: options.projectId }),
     };
     await jobs.save(job);

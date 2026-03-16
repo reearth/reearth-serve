@@ -29,15 +29,28 @@ export class KVMetadataStore implements MetadataStore {
     await this.kv.delete(`asset:${id}`);
   }
 
-  async list(options?: { limit?: number; cursor?: string }): Promise<{ items: AssetMetadata[]; cursor?: string }> {
+  async list(options?: { limit?: number; cursor?: string; sessionId?: string; projectId?: string }): Promise<{ items: AssetMetadata[]; cursor?: string }> {
     const limit = options?.limit ?? 20;
-    const result = await this.kv.list({ prefix: "asset:", limit, cursor: options?.cursor });
+    const { sessionId, projectId } = options ?? {};
+    const hasFilter = !!(sessionId || projectId);
     const items: AssetMetadata[] = [];
-    for (const key of result.keys) {
-      const raw = await this.kv.get(key.name);
-      if (raw) items.push(JSON.parse(raw) as AssetMetadata);
-    }
-    return { items, cursor: result.list_complete ? undefined : result.cursor };
+    let cursor = options?.cursor;
+
+    do {
+      const result = await this.kv.list({ prefix: "asset:", limit: hasFilter ? 100 : limit, cursor });
+      for (const key of result.keys) {
+        if (items.length >= limit) break;
+        const raw = await this.kv.get(key.name);
+        if (!raw) continue;
+        const asset = JSON.parse(raw) as AssetMetadata;
+        if (sessionId && asset.sessionId !== sessionId) continue;
+        if (projectId && asset.projectId !== projectId) continue;
+        items.push(asset);
+      }
+      cursor = result.list_complete ? undefined : result.cursor;
+    } while (hasFilter && items.length < limit && cursor);
+
+    return { items, cursor };
   }
 }
 
@@ -78,15 +91,28 @@ export class KVJobStore implements JobStore {
     await this.kv.delete(`job:${id}`);
   }
 
-  async list(options?: { limit?: number; cursor?: string }): Promise<{ items: Job[]; cursor?: string }> {
+  async list(options?: { limit?: number; cursor?: string; sessionId?: string; projectId?: string }): Promise<{ items: Job[]; cursor?: string }> {
     const limit = options?.limit ?? 20;
-    const result = await this.kv.list({ prefix: "job:", limit, cursor: options?.cursor });
+    const { sessionId, projectId } = options ?? {};
+    const hasFilter = !!(sessionId || projectId);
     const items: Job[] = [];
-    for (const key of result.keys) {
-      const raw = await this.kv.get(key.name);
-      if (raw) items.push(JSON.parse(raw) as Job);
-    }
-    return { items, cursor: result.list_complete ? undefined : result.cursor };
+    let cursor = options?.cursor;
+
+    do {
+      const result = await this.kv.list({ prefix: "job:", limit: hasFilter ? 100 : limit, cursor });
+      for (const key of result.keys) {
+        if (items.length >= limit) break;
+        const raw = await this.kv.get(key.name);
+        if (!raw) continue;
+        const job = JSON.parse(raw) as Job;
+        if (sessionId && job.sessionId !== sessionId) continue;
+        if (projectId && job.projectId !== projectId) continue;
+        items.push(job);
+      }
+      cursor = result.list_complete ? undefined : result.cursor;
+    } while (hasFilter && items.length < limit && cursor);
+
+    return { items, cursor };
   }
 }
 

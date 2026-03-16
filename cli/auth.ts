@@ -34,7 +34,7 @@ function generatePkce(): { codeVerifier: string; codeChallenge: string } {
 /**
  * Discover OIDC endpoints from the issuer's well-known configuration.
  */
-async function discoverOidc(issuer: string): Promise<{ authorizationEndpoint: string; tokenEndpoint: string }> {
+export async function discoverOidc(issuer: string): Promise<{ authorizationEndpoint: string; tokenEndpoint: string }> {
   const url = new URL(".well-known/openid-configuration", issuer.endsWith("/") ? issuer : `${issuer}/`);
   const res = await fetch(url.toString());
   if (!res.ok) {
@@ -114,6 +114,49 @@ async function exchangeCode(
     refreshToken: data.refresh_token,
     expiresIn: data.expires_in,
   };
+}
+
+/**
+ * Refresh the access token using the stored refresh token.
+ * Returns the new access token, or null if refresh is not possible.
+ */
+export async function refreshAccessToken(): Promise<string | null> {
+  const creds = loadCredentials();
+  if (!creds?.refreshToken) return null;
+
+  const config = loadConfig();
+  if (!config.oidcIssuer || !config.clientId) return null;
+
+  try {
+    const endpoints = await discoverOidc(config.oidcIssuer);
+    const res = await fetch(endpoints.tokenEndpoint, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({
+        grant_type: "refresh_token",
+        refresh_token: creds.refreshToken,
+        client_id: config.clientId,
+      }),
+    });
+
+    if (!res.ok) return null;
+
+    const data = await res.json() as {
+      access_token: string;
+      refresh_token?: string;
+      expires_in?: number;
+    };
+
+    saveCredentials({
+      accessToken: data.access_token,
+      refreshToken: data.refresh_token ?? creds.refreshToken,
+      expiresAt: data.expires_in ? Date.now() + data.expires_in * 1000 : undefined,
+    });
+
+    return data.access_token;
+  } catch {
+    return null;
+  }
 }
 
 /**

@@ -3,6 +3,7 @@ import { basename } from "node:path";
 import { gzipSync } from "node:zlib";
 import { lookup } from "./mime";
 import { PATHS } from "../shared/paths";
+import { commonHeaders } from "./helpers";
 import type { AssetUploadResult, PresignedUploadResult, MultipartUploadResult } from "../shared/api";
 import { output } from "./helpers";
 
@@ -50,9 +51,10 @@ async function uploadViaPresigned(
 
   const initRes = await fetch(`${endpoint}${PATHS.uploads}`, {
     method: "POST",
-    headers: { "Content-Type": "application/json" },
+    headers: { "Content-Type": "application/json", ...(await commonHeaders()) },
     body: JSON.stringify({ filename: fileName, contentType, size: fileData.byteLength, partCount }),
   });
+
 
   if (initRes.status === 501) return null;
   if (!initRes.ok) {
@@ -86,7 +88,7 @@ async function uploadViaPresigned(
 
     const completeRes = await fetch(`${endpoint}${PATHS.completeUpload(session.uploadId)}`, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: { "Content-Type": "application/json", ...(await commonHeaders()) },
       body: JSON.stringify({ parts: etags }),
     });
     if (!completeRes.ok) {
@@ -110,6 +112,7 @@ async function uploadViaPresigned(
 
   const completeRes = await fetch(`${endpoint}${PATHS.completeUpload(singleSession.uploadId)}`, {
     method: "POST",
+    headers: { ...(await commonHeaders()) },
   });
   if (!completeRes.ok) {
     const body = await completeRes.text();
@@ -131,6 +134,7 @@ async function uploadDirect(
     "Content-Type": contentType,
     "Content-Length": String(uploadData.byteLength),
     "X-Filename": fileName,
+    ...(await commonHeaders()),
   };
   if (compress) {
     headers["Content-Encoding"] = "gzip";
@@ -142,6 +146,7 @@ async function uploadDirect(
     headers,
     body: uploadData as BodyInit,
   });
+
   if (!res.ok) {
     const body = await res.text();
     throw new Error(`Upload failed (${res.status}): ${body}`);

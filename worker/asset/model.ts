@@ -49,4 +49,5 @@ export interface UploadSession {
   s3UploadId?: string;
   partCount?: number;
   contentEncoding?: string;
+  sessionId?: string;
 }
