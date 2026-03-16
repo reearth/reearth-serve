@@ -293,7 +293,7 @@ func (w *ExtractionWorker) extractAndUpload(ctx context.Context, extractor Archi
 
 	// Compute MD5 while streaming the uncompressed data
 	hash := md5.New()
-	var body io.Reader = io.TeeReader(rc, hash)
+	body := io.Reader(io.TeeReader(rc, hash))
 	var opts *PutOptions
 	var contentLength int64
 
