@@ -45,8 +45,14 @@ export function formatJob(job: Job): string {
     `Status:    ${job.status}`,
     `Updated:   ${new Date(job.updatedAt).toISOString()}`,
   ];
+  if (job.startedAt) lines.push(`Started:   ${new Date(job.startedAt).toISOString()}`);
   if (job.completedAt) lines.push(`Completed: ${new Date(job.completedAt).toISOString()}`);
-  if (job.fileCount) lines.push(`Files:     ${job.fileCount}`);
+  if (job.totalFiles) {
+    const pct = job.fileCount ? Math.round((job.fileCount / job.totalFiles) * 100) : 0;
+    lines.push(`Progress:  ${job.fileCount ?? 0}/${job.totalFiles} files (${pct}%)`);
+  } else if (job.fileCount) {
+    lines.push(`Files:     ${job.fileCount}`);
+  }
   if (job.extractedSize) lines.push(`Extracted: ${formatBytes(job.extractedSize)}`);
   if (job.error) lines.push(`Error:     ${job.error}`);
   return lines.join("\n");

@@ -75,7 +75,7 @@ func main() {
 		if len(logSummary) > 500 {
 			logSummary = logSummary[len(logSummary)-500:]
 		}
-		_ = worker.updateJobStatus(ctx, "failed", 0, 0, err.Error()+"\n---LOG---\n"+logSummary)
+		_ = worker.updateJobStatus(ctx, "failed", 0, 0, withError(err.Error()+"\n---LOG---\n"+logSummary))
 		os.Exit(1)
 	}
 

@@ -79,6 +79,12 @@ export function createApp(env: Env) {
   // Internal API (no versioning, no compatibility guarantee)
   app.route("/api/internal/jobs", jobInternalRoutes);
 
+  // Internal asset existence check (for container TTL checks, no auth)
+  app.get("/api/internal/assets/:id/exists", async (c) => {
+    const asset = await metadata.find(c.req.param("id"));
+    return asset ? c.json({ exists: true }) : c.json({ exists: false }, 404);
+  });
+
   // File delivery (not behind /api — permalink URLs)
   app.route("/files", fileRoutes);
 

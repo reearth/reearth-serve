@@ -91,6 +91,7 @@ jobInternalRoutes.post("/:id/status", async (c) => {
 
   const body = await c.req.json<{
     status: "running" | "completed" | "failed";
+    totalFiles?: number;
     fileCount?: number;
     extractedSize?: number;
     error?: string;
@@ -99,8 +100,14 @@ jobInternalRoutes.post("/:id/status", async (c) => {
   job.status = body.status;
   job.updatedAt = Date.now();
 
+  if (body.status === "running" && !job.startedAt) {
+    job.startedAt = Date.now();
+  }
   if (body.status === "completed" || body.status === "failed") {
     job.completedAt = Date.now();
+  }
+  if (body.totalFiles !== undefined) {
+    job.totalFiles = body.totalFiles;
   }
   if (body.fileCount !== undefined) {
     job.fileCount = body.fileCount;

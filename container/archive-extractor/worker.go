@@ -67,7 +67,7 @@ func (w *ExtractionWorker) Run(ctx context.Context) error {
 	log.Printf("starting extraction: assetId=%s format=%s phase=%s lastIndex=%d",
 		w.cfg.AssetID, w.cfg.ArchiveFormat, cp.Phase, cp.LastProcessedIndex)
 
-	// Report running status
+	// Report running status (totalFiles will be set after phaseA)
 	_ = w.updateJobStatus(ctx, "running", 0, 0)
 
 	if cp.Phase == "entries_listing" || cp.Phase == "" {
@@ -75,6 +75,7 @@ func (w *ExtractionWorker) Run(ctx context.Context) error {
 			return fmt.Errorf("phase A (list entries): %w", err)
 		}
 		log.Printf("phase A complete: totalEntries=%d rootPrefix=%q", cp.TotalEntries, cp.RootPrefix)
+		_ = w.updateJobStatus(ctx, "running", 0, 0, withTotalFiles(cp.TotalEntries))
 	}
 
 	if cp.Phase == "entries_listed" || cp.Phase == "extracting" {
@@ -225,6 +226,15 @@ func (w *ExtractionWorker) phaseB(ctx context.Context, cp *JobCheckpoint) error 
 					log.Printf("failed to save checkpoint: %v", err)
 				}
 				log.Printf("checkpoint: %d/%d files processed", cp.ProcessedCount, cp.TotalEntries)
+
+				// Report progress
+				_ = w.updateJobStatus(ctx, "running", cp.ProcessedCount, cp.ProcessedBytes)
+
+				// Check if asset still exists (TTL may have expired)
+				if !w.checkAssetExists(ctx) {
+					log.Printf("asset %s no longer exists (TTL expired), aborting extraction", w.cfg.AssetID)
+					extractErr.Store(fmt.Errorf("asset expired during extraction"))
+				}
 			}
 			mu.Unlock()
 		}(entry)
@@ -341,22 +351,64 @@ func (w *ExtractionWorker) createExtractor(ctx context.Context) (ArchiveExtracto
 	}
 }
 
-func (w *ExtractionWorker) updateJobStatus(ctx context.Context, status string, fileCount int, extractedBytes int64, errMsgs ...string) error {
+// checkAssetExists checks if the asset still exists via the Worker API.
+// Returns false if the asset's TTL has expired (404 from API).
+func (w *ExtractionWorker) checkAssetExists(ctx context.Context) bool {
+	if w.cfg.WorkerAPIURL == "" {
+		return true
+	}
+
+	url := strings.TrimRight(w.cfg.WorkerAPIURL, "/") + fmt.Sprintf("/api/internal/assets/%s/exists", w.cfg.AssetID)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	if err != nil {
+		return true // assume exists on error
+	}
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return true // assume exists on network error
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	return resp.StatusCode != http.StatusNotFound
+}
+
+type jobStatusPayload struct {
+	Status        string `json:"status"`
+	TotalFiles    int    `json:"totalFiles,omitempty"`
+	FileCount     int    `json:"fileCount"`
+	ExtractedSize int64  `json:"extractedSize"`
+	Error         string `json:"error,omitempty"`
+}
+
+type jobStatusOption func(*jobStatusPayload)
+
+func withTotalFiles(n int) jobStatusOption {
+	return func(p *jobStatusPayload) { p.TotalFiles = n }
+}
+
+func withError(msg string) jobStatusOption {
+	return func(p *jobStatusPayload) { p.Error = msg }
+}
+
+func (w *ExtractionWorker) updateJobStatus(ctx context.Context, status string, fileCount int, extractedBytes int64, opts ...jobStatusOption) error {
 	if w.cfg.WorkerAPIURL == "" {
 		return nil
 	}
 
-	errField := ""
-	if len(errMsgs) > 0 && errMsgs[0] != "" {
-		b, _ := json.Marshal(errMsgs[0])
-		errField = fmt.Sprintf(`,"error":%s`, string(b))
+	p := jobStatusPayload{
+		Status:        status,
+		FileCount:     fileCount,
+		ExtractedSize: extractedBytes,
+	}
+	for _, opt := range opts {
+		opt(&p)
 	}
 
-	payload := fmt.Sprintf(`{"status":%q,"fileCount":%d,"extractedSize":%d%s}`,
-		status, fileCount, extractedBytes, errField)
+	payload, _ := json.Marshal(p)
 
 	url := strings.TrimRight(w.cfg.WorkerAPIURL, "/") + fmt.Sprintf("/api/internal/jobs/%s/status", w.cfg.AssetID)
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(payload))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return err
 	}
