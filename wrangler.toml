@@ -39,5 +39,17 @@ class_name = "ArchiveExtractorContainer"
 tag = "v1"
 new_sqlite_classes = ["ArchiveExtractorContainer"]
 
+[[queues.producers]]
+binding = "EXTRACTION_QUEUE"
+queue = "reearth-serve-extraction"
+
+[[queues.consumers]]
+queue = "reearth-serve-extraction"
+max_batch_size = 1
+max_batch_timeout = 5
+max_retries = 3
+dead_letter_queue = "reearth-serve-extraction-dlq"
+max_concurrency = 5
+
 [triggers]
 crons = ["*/10 * * * *"]

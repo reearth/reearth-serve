@@ -265,6 +265,10 @@ npx wrangler kv namespace create reearth-serve
 
 # Enable Cloudflare Containers on the account (Dashboard → Workers & Pages → Containers)
 
+# Create extraction queues
+npx wrangler queues create reearth-serve-extraction
+npx wrangler queues create reearth-serve-extraction-dlq
+
 # Deploy
 npm run deploy
 ```

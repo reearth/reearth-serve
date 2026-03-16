@@ -3,7 +3,6 @@ import { detectArchiveFormat } from "../model";
 import type { FileStorage, MetadataStore } from "../repository";
 import type { JobStore } from "../../job/repository";
 import type { Job } from "../../job/model";
-import type { ContainerLauncher } from "../../infra/container";
 import { generateId, storageKey } from "./shared";
 
 export async function uploadAsset(
@@ -20,7 +19,7 @@ export async function uploadAsset(
   },
   ttlSeconds: number,
   baseUrl: string,
-  options?: { sessionId?: string | null; projectId?: string | null; containerLauncher?: ContainerLauncher | null },
+  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: Queue | null },
 ): Promise<AssetUploadResult> {
   const id = generateId();
   const now = Date.now();
@@ -65,17 +64,17 @@ export async function uploadAsset(
     await jobs.save(job);
     asset.jobId = id;
 
-    // Trigger container extraction
-    if (options?.containerLauncher) {
+    // Enqueue extraction job
+    if (options?.extractionQueue) {
       try {
-        await options.containerLauncher.launchArchiveExtractor({
+        await options.extractionQueue.send({
           assetId: id,
           archiveKey: key,
           archiveFilename: file.name,
           archiveFormat,
         });
       } catch (e) {
-        console.error("Failed to launch archive extractor:", e);
+        console.error("Failed to enqueue extraction:", e);
       }
     }
   }

@@ -16,6 +16,10 @@ interface Env {
   JWKS_CACHE_TTL_SECONDS?: string;
   // Authorization
   CERBOS_ENDPOINT?: string;
+  // Extraction settings
+  EXTRACTION_STUCK_THRESHOLD_SECONDS?: string;
   // Cloudflare Containers
   ARCHIVE_EXTRACTOR?: DurableObjectNamespace;
+  // Cloudflare Queues
+  EXTRACTION_QUEUE?: Queue;
 }

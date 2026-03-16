@@ -201,11 +201,25 @@ The extraction container runs on Cloudflare Containers (Durable Object-based). K
 - `sleepAfter = "5m"` — container sleeps after 5 minutes of inactivity
 - `image_build_context` in `wrangler.toml` is required so Docker receives the full source directory, not just the Dockerfile
 
-### Container trigger flow
+### Extraction queue (Cloudflare Queues)
 
-1. Archive uploaded → Worker creates job (pending) → calls `stub.startExtraction(envVars)` via JSRPC
-2. Container starts → Go binary runs extraction → reports `running` and `completed`/`failed` via `POST /api/internal/jobs/:id/status`
-3. Cron (every 10 min) re-triggers pending/failed jobs as a safety net
+Extraction is decoupled from the upload request via Cloudflare Queues (`reearth-serve-extraction`):
+
+1. Archive uploaded → Worker creates job (pending) → enqueues extraction message to `EXTRACTION_QUEUE`
+2. Queue consumer (`worker/extraction/handler.ts`) receives message → calls `containerLauncher.launchArchiveExtractor()` via JSRPC
+3. Container starts → Go binary runs extraction → reports `running` and `completed`/`failed` via `POST /api/internal/jobs/:id/status`
+4. Cron (every 10 min) re-enqueues pending/failed jobs as a safety net
+
+Queue configuration:
+
+| Setting | Value | Rationale |
+|---|---|---|
+| `max_concurrency` | 5 | Controls parallel extractions within `max_instances: 10` |
+| `max_batch_size` | 1 | Each extraction is independent |
+| `max_retries` | 3 | Retry on transient container start failures |
+| `dead_letter_queue` | `reearth-serve-extraction-dlq` | Captures messages that fail after all retries |
+
+This ensures that even with many simultaneous uploads, container starts are throttled and won't exceed capacity.
 
 ### R2 S3 API compatibility (Go)
 

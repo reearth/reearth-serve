@@ -3,7 +3,6 @@ import { detectArchiveFormat } from "../model";
 import type { FileStorage, MetadataStore, PresignedUrlGenerator, UploadSessionStore } from "../repository";
 import type { JobStore } from "../../job/repository";
 import type { Job } from "../../job/model";
-import type { ContainerLauncher } from "../../infra/container";
 import { storageKey } from "./shared";
 
 export async function completeUploadSession(
@@ -16,7 +15,7 @@ export async function completeUploadSession(
   ttlSeconds: number,
   baseUrl: string,
   parts?: UploadPart[],
-  options?: { sessionId?: string | null; projectId?: string | null; containerLauncher?: ContainerLauncher | null },
+  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: Queue | null },
 ): Promise<AssetUploadResult | null> {
   const session = await sessions.find(id);
   if (!session) return null;
@@ -68,17 +67,17 @@ export async function completeUploadSession(
     await jobs.save(job);
     asset.jobId = id;
 
-    // Trigger container extraction
-    if (options?.containerLauncher) {
+    // Enqueue extraction job
+    if (options?.extractionQueue) {
       try {
-        await options.containerLauncher.launchArchiveExtractor({
+        await options.extractionQueue.send({
           assetId: id,
           archiveKey: key,
           archiveFilename: session.filename,
           archiveFormat,
         });
       } catch (e) {
-        console.error("Failed to launch archive extractor:", e);
+        console.error("Failed to enqueue extraction:", e);
       }
     }
   }

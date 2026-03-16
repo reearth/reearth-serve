@@ -1,6 +1,7 @@
 import { createRequestHandler } from "react-router";
 import { createApp } from "./app";
 import { handleScheduled } from "./cleanup/handler";
+import { handleQueue } from "./extraction/handler";
 
 export { ArchiveExtractorContainer } from "./infra/container";
 
@@ -39,5 +40,9 @@ export default {
 
   async scheduled(_event, env, _ctx) {
     await handleScheduled(env);
+  },
+
+  async queue(batch: MessageBatch, env: Env, _ctx: ExecutionContext) {
+    await handleQueue(batch as MessageBatch<import("./extraction/handler").ExtractionMessage>, env);
   },
 } satisfies ExportedHandler<Env>;
