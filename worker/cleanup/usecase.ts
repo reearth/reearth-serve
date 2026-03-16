@@ -101,6 +101,7 @@ if (import.meta.vitest) {
       save: vi.fn(),
       find: vi.fn(async (id: string) => existing.has(id) ? { id } as any : null),
       delete: vi.fn(),
+      list: vi.fn(async () => ({ items: [], cursor: undefined })),
     };
   }
 
@@ -123,6 +124,7 @@ if (import.meta.vitest) {
       save: vi.fn(),
       find: vi.fn(async (id: string) => existing.has(id) ? { id } as any : null),
       delete: vi.fn(async (id: string) => { existing.delete(id); }),
+      list: vi.fn(async () => ({ items: [], cursor: undefined })),
     };
   }
 

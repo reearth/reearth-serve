@@ -100,6 +100,7 @@ if (import.meta.vitest) {
       save: vi.fn(async (asset: AssetMetadata, _ttl: number) => { store.set(asset.id, asset); }),
       find: vi.fn(async (id: string) => store.get(id) ?? null),
       delete: vi.fn(async (id: string) => { store.delete(id); }),
+      list: vi.fn(async () => ({ items: [], cursor: undefined })),
     };
   }
 
@@ -138,6 +139,7 @@ if (import.meta.vitest) {
       save: vi.fn(async (job: Job) => { store.set(job.id, job); }),
       find: vi.fn(async (id: string) => store.get(id) ?? null),
       delete: vi.fn(async (id: string) => { store.delete(id); }),
+      list: vi.fn(async () => ({ items: [], cursor: undefined })),
     };
   }
 

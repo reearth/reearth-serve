@@ -1,14 +1,14 @@
 import { Command } from "commander";
 import { PATHS } from "../shared/paths";
 import type { AssetMetadata, Job } from "../shared/api";
-import { apiGet, apiPost, apiDelete, output, formatAsset, formatJob } from "./helpers";
+import { apiGet, apiPost, apiDelete, output, formatAsset, formatJob, formatBytes } from "./helpers";
 import { doUpload } from "./upload";
 import { registerFileCommands } from "./file";
 import { login, logout, whoami } from "./auth";
 import { registerProjectCommands } from "./project";
 import { registerWorkspaceCommands } from "./workspace";
 
-const DEFAULT_ENDPOINT = "http://localhost:8787";
+const DEFAULT_ENDPOINT = process.env.REEARTH_SERVE_ENDPOINT || "http://localhost:8787";
 
 // --- Program ---
 
@@ -46,6 +46,34 @@ asset
   });
 
 asset
+  .command("list")
+  .description("List assets")
+  .option("--limit <n>", "Max items per page", "20")
+  .option("--cursor <cursor>", "Pagination cursor")
+  .action(async (cmdOpts: { limit: string; cursor?: string }) => {
+    const opts = program.opts<{ endpoint: string; json: boolean }>();
+    const params = new URLSearchParams();
+    params.set("limit", cmdOpts.limit);
+    if (cmdOpts.cursor) params.set("cursor", cmdOpts.cursor);
+    const data = await apiGet<{ assets: AssetMetadata[]; cursor?: string }>(opts.endpoint, `${PATHS.assets}?${params}`);
+    if (opts.json) {
+      output(data, true);
+    } else {
+      if (data.assets.length === 0) {
+        console.log("No assets");
+        return;
+      }
+      for (const a of data.assets) {
+        const status = a.status ? ` [${a.status}]` : "";
+        console.log(`${a.id}  ${a.filename}  ${formatBytes(a.size)}${status}`);
+      }
+      if (data.cursor) {
+        console.log(`\nNext page: --cursor ${data.cursor}`);
+      }
+    }
+  });
+
+asset
   .command("show")
   .description("Show asset metadata")
   .argument("<id>", "Asset ID")
@@ -77,6 +105,34 @@ asset
 const job = program
   .command("job")
   .description("Manage jobs");
+
+job
+  .command("list")
+  .description("List jobs")
+  .option("--limit <n>", "Max items per page", "20")
+  .option("--cursor <cursor>", "Pagination cursor")
+  .action(async (cmdOpts: { limit: string; cursor?: string }) => {
+    const opts = program.opts<{ endpoint: string; json: boolean }>();
+    const params = new URLSearchParams();
+    params.set("limit", cmdOpts.limit);
+    if (cmdOpts.cursor) params.set("cursor", cmdOpts.cursor);
+    const data = await apiGet<{ jobs: Job[]; cursor?: string }>(opts.endpoint, `${PATHS.jobs}?${params}`);
+    if (opts.json) {
+      output(data, true);
+    } else {
+      if (data.jobs.length === 0) {
+        console.log("No jobs");
+        return;
+      }
+      for (const j of data.jobs) {
+        const updated = new Date(j.updatedAt).toISOString().replace("T", " ").slice(0, 19);
+        console.log(`${j.id}  ${j.status.padEnd(10)}  ${j.type}  ${updated}`);
+      }
+      if (data.cursor) {
+        console.log(`\nNext page: --cursor ${data.cursor}`);
+      }
+    }
+  });
 
 job
   .command("show")

@@ -57,11 +57,13 @@ curl -X POST http://localhost:5173/api/v1/assets \
 |--------|------|-------------|
 | `GET` | `/api/v1/health` | Health check |
 | `POST` | `/api/v1/assets` | Upload a file (streaming) |
+| `GET` | `/api/v1/assets` | List assets (`?limit=&cursor=`) |
 | `GET` | `/api/v1/assets/:id` | Get asset metadata |
 | `GET` | `/api/v1/assets/:id/files` | List files (NDJSON stream, `?prefix=` filter) |
 | `DELETE` | `/api/v1/assets/:id` | Delete an asset |
 | `POST` | `/api/v1/assets/uploads` | Create presigned upload session |
 | `POST` | `/api/v1/assets/uploads/:id/complete` | Complete upload session |
+| `GET` | `/api/v1/jobs` | List jobs (`?limit=&cursor=`) |
 | `GET` | `/api/v1/jobs/:id` | Get extraction job status |
 | `POST` | `/api/v1/jobs/:id/retry` | Retry a failed extraction job |
 | `GET` | `/api/v1/me` | Get current user info + workspace list |
@@ -120,7 +122,7 @@ Compression is the **uploader's responsibility** — the server never buffers or
 
 ### CLI
 
-The CLI (`npm run cli --`) provides subcommands for managing assets and files.
+The CLI (`npm run cli --`) provides subcommands for managing assets and files. Set `REEARTH_SERVE_ENDPOINT` to change the target server (default: `http://localhost:8787`).
 
 ```bash
 # Upload
@@ -128,6 +130,8 @@ npm run cli -- upload myfile.geojson
 npm run cli -- upload --direct myfile.geojson   # skip presigned URLs
 
 # Asset management
+npm run cli -- asset list
+npm run cli -- asset list --limit 50 --cursor <cursor>
 npm run cli -- asset show <id>
 npm run cli -- asset delete <id>
 
@@ -141,6 +145,7 @@ npm run cli -- file sync <id> ./local           # hash-based diff sync
 npm run cli -- file sync --delete <id> ./local  # sync + remove extra local files
 
 # Job management
+npm run cli -- job list
 npm run cli -- job show <id>
 npm run cli -- job retry <id>
 

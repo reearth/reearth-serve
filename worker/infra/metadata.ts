@@ -28,6 +28,17 @@ export class KVMetadataStore implements MetadataStore {
   async delete(id: string): Promise<void> {
     await this.kv.delete(`asset:${id}`);
   }
+
+  async list(options?: { limit?: number; cursor?: string }): Promise<{ items: AssetMetadata[]; cursor?: string }> {
+    const limit = options?.limit ?? 20;
+    const result = await this.kv.list({ prefix: "asset:", limit, cursor: options?.cursor });
+    const items: AssetMetadata[] = [];
+    for (const key of result.keys) {
+      const raw = await this.kv.get(key.name);
+      if (raw) items.push(JSON.parse(raw) as AssetMetadata);
+    }
+    return { items, cursor: result.list_complete ? undefined : result.cursor };
+  }
 }
 
 export class KVUploadSessionStore implements UploadSessionStore {
@@ -65,6 +76,17 @@ export class KVJobStore implements JobStore {
 
   async delete(id: string): Promise<void> {
     await this.kv.delete(`job:${id}`);
+  }
+
+  async list(options?: { limit?: number; cursor?: string }): Promise<{ items: Job[]; cursor?: string }> {
+    const limit = options?.limit ?? 20;
+    const result = await this.kv.list({ prefix: "job:", limit, cursor: options?.cursor });
+    const items: Job[] = [];
+    for (const key of result.keys) {
+      const raw = await this.kv.get(key.name);
+      if (raw) items.push(JSON.parse(raw) as Job);
+    }
+    return { items, cursor: result.list_complete ? undefined : result.cursor };
   }
 }
 

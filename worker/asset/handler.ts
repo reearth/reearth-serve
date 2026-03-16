@@ -208,6 +208,17 @@ function filterNdjsonByPrefix(prefix: string): TransformStream<string, string> {
   });
 }
 
+// GET /api/v1/assets — list assets
+// Query params: ?limit=20&cursor=xxx
+assetRoutes.get("/", async (c) => {
+  const metadata = c.get("metadata");
+  const limit = parseInt(c.req.query("limit") || "20", 10);
+  const cursor = c.req.query("cursor") || undefined;
+
+  const result = await metadata.list({ limit: Math.min(limit, 100), cursor });
+  return c.json({ assets: result.items, cursor: result.cursor });
+});
+
 // GET /api/v1/assets/:id — get metadata
 assetRoutes.get("/:id", async (c) => {
   const metadata = c.get("metadata");

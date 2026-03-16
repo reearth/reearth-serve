@@ -3,6 +3,9 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "reearth-serve": "./bin/reearth-serve.mjs"
+  },
   "scripts": {
     "build": "react-router build",
     "dev": "react-router dev",

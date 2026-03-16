@@ -5,6 +5,16 @@ import type { AppEnv } from "../types";
 
 export const jobRoutes = new Hono<AppEnv>();
 
+// GET /api/v1/jobs — List jobs
+jobRoutes.get("/", async (c) => {
+  const jobs = c.get("jobs");
+  const limit = parseInt(c.req.query("limit") || "20", 10);
+  const cursor = c.req.query("cursor") || undefined;
+
+  const result = await jobs.list({ limit: Math.min(limit, 100), cursor });
+  return c.json({ jobs: result.items, cursor: result.cursor });
+});
+
 // GET /api/v1/jobs/:id — Get job progress
 jobRoutes.get("/:id", async (c) => {
   const jobs = c.get("jobs");

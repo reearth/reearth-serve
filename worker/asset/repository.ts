@@ -1,9 +1,15 @@
 import type { AssetMetadata, StoredFile, UploadSession, UploadPart } from "./model";
 
+export interface ListResult<T> {
+  items: T[];
+  cursor?: string;
+}
+
 export interface MetadataStore {
   save(asset: AssetMetadata, ttlSeconds: number): Promise<void>;
   find(id: string): Promise<AssetMetadata | null>;
   delete(id: string): Promise<void>;
+  list(options?: { limit?: number; cursor?: string }): Promise<ListResult<AssetMetadata>>;
 }
 
 export interface FileStorage {
