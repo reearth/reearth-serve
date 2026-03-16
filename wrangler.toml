@@ -1,8 +1,12 @@
+# NOTE: [build] command is intentionally omitted.
+# react-router build generates build/server/wrangler.json from this file.
+# KV_NAMESPACE_ID is a placeholder that must be replaced before build,
+# so deploy scripts (scripts/deploy.sh, CI) run `npm run build` explicitly
+# after injecting secrets via sed, then run `wrangler deploy`.
+
 name = "reearth-serve"
 main = "./worker/index.ts"
 
-[build]
-command = "npm run build"
 compatibility_date = "2025-03-10"
 compatibility_flags = ["nodejs_compat"]
 
@@ -20,6 +24,20 @@ bucket_name = "reearth-serve"
 [[kv_namespaces]]
 binding = "KV"
 id = "KV_NAMESPACE_ID"
+
+[[containers]]
+class_name = "ArchiveExtractorContainer"
+image = "./container/archive-extractor/Dockerfile"
+image_build_context = "./container/archive-extractor"
+max_instances = 10
+
+[[durable_objects.bindings]]
+name = "ARCHIVE_EXTRACTOR"
+class_name = "ArchiveExtractorContainer"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["ArchiveExtractorContainer"]
 
 [triggers]
 crons = ["*/10 * * * *"]

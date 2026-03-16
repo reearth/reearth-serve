@@ -2,6 +2,8 @@ import { createRequestHandler } from "react-router";
 import { createApp } from "./app";
 import { handleScheduled } from "./cleanup/handler";
 
+export { ArchiveExtractorContainer } from "./infra/container";
+
 declare module "react-router" {
   export interface AppLoadContext {
     cloudflare: {

@@ -63,7 +63,7 @@ func (m *MemoryStorage) HeadObject(_ context.Context, key string) (int64, error)
 	return int64(len(obj.data)), nil
 }
 
-func (m *MemoryStorage) PutObject(_ context.Context, key string, body io.Reader, contentType string, _ *PutOptions) error {
+func (m *MemoryStorage) PutObject(_ context.Context, key string, body io.Reader, _ int64, contentType string, _ *PutOptions) error {
 	data, err := io.ReadAll(body)
 	if err != nil {
 		return fmt.Errorf("failed to read body: %w", err)

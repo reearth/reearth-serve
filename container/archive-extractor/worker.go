@@ -67,16 +67,21 @@ func (w *ExtractionWorker) Run(ctx context.Context) error {
 	log.Printf("starting extraction: assetId=%s format=%s phase=%s lastIndex=%d",
 		w.cfg.AssetID, w.cfg.ArchiveFormat, cp.Phase, cp.LastProcessedIndex)
 
+	// Report running status
+	_ = w.updateJobStatus(ctx, "running", 0, 0)
+
 	if cp.Phase == "entries_listing" || cp.Phase == "" {
 		if err := w.phaseA(ctx, cp); err != nil {
 			return fmt.Errorf("phase A (list entries): %w", err)
 		}
+		log.Printf("phase A complete: totalEntries=%d rootPrefix=%q", cp.TotalEntries, cp.RootPrefix)
 	}
 
 	if cp.Phase == "entries_listed" || cp.Phase == "extracting" {
 		if err := w.phaseB(ctx, cp); err != nil {
 			return fmt.Errorf("phase B (extract): %w", err)
 		}
+		log.Printf("phase B complete: processedCount=%d processedBytes=%d errors=%d", cp.ProcessedCount, cp.ProcessedBytes, len(cp.Errors))
 	}
 
 	if cp.Phase == "completing" {
@@ -127,7 +132,7 @@ func (w *ExtractionWorker) phaseA(ctx context.Context, cp *JobCheckpoint) error 
 		}
 	}
 
-	if err := w.storage.PutObject(ctx, entryListKey, bytes.NewReader(buf.Bytes()), "application/x-ndjson", nil); err != nil {
+	if err := w.storage.PutObject(ctx, entryListKey, bytes.NewReader(buf.Bytes()), int64(buf.Len()), "application/x-ndjson", nil); err != nil {
 		return fmt.Errorf("failed to write entry list: %w", err)
 	}
 
@@ -280,13 +285,19 @@ func (w *ExtractionWorker) extractAndUpload(ctx context.Context, extractor Archi
 	hash := md5.New()
 	var body io.Reader = io.TeeReader(rc, hash)
 	var opts *PutOptions
+	var contentLength int64
 
 	if ShouldCompress(entry.NormalizedPath, entry.Size) {
+		// Gzip compressed: size unknown upfront, use -1 to trigger multipart upload
 		body = GzipReader(body)
 		opts = &PutOptions{ContentEncoding: "gzip"}
+		contentLength = -1
+	} else {
+		// Uncompressed: use size from ZIP central directory
+		contentLength = entry.Size
 	}
 
-	if err := w.storage.PutObject(ctx, r2Key, body, contentType, opts); err != nil {
+	if err := w.storage.PutObject(ctx, r2Key, body, contentLength, contentType, opts); err != nil {
 		return "", fmt.Errorf("upload: %w", err)
 	}
 
@@ -330,13 +341,19 @@ func (w *ExtractionWorker) createExtractor(ctx context.Context) (ArchiveExtracto
 	}
 }
 
-func (w *ExtractionWorker) updateJobStatus(ctx context.Context, status string, fileCount int, extractedBytes int64) error {
+func (w *ExtractionWorker) updateJobStatus(ctx context.Context, status string, fileCount int, extractedBytes int64, errMsgs ...string) error {
 	if w.cfg.WorkerAPIURL == "" {
 		return nil
 	}
 
-	payload := fmt.Sprintf(`{"status":%q,"fileCount":%d,"extractedSize":%d}`,
-		status, fileCount, extractedBytes)
+	errField := ""
+	if len(errMsgs) > 0 && errMsgs[0] != "" {
+		b, _ := json.Marshal(errMsgs[0])
+		errField = fmt.Sprintf(`,"error":%s`, string(b))
+	}
+
+	payload := fmt.Sprintf(`{"status":%q,"fileCount":%d,"extractedSize":%d%s}`,
+		status, fileCount, extractedBytes, errField)
 
 	url := strings.TrimRight(w.cfg.WorkerAPIURL, "/") + fmt.Sprintf("/api/internal/jobs/%s/status", w.cfg.AssetID)
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, strings.NewReader(payload))

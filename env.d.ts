@@ -16,4 +16,6 @@ interface Env {
   JWKS_CACHE_TTL_SECONDS?: string;
   // Authorization
   CERBOS_ENDPOINT?: string;
+  // Cloudflare Containers
+  ARCHIVE_EXTRACTOR?: DurableObjectNamespace;
 }

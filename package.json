@@ -6,7 +6,7 @@
   "scripts": {
     "build": "react-router build",
     "dev": "react-router dev",
-    "deploy": "npm run build && wrangler deploy",
+    "deploy": "bash scripts/deploy.sh",
     "typegen": "wrangler types && react-router typegen",
     "check": "npm run typecheck && npm run test",
     "typecheck": "tsc -b",
@@ -17,6 +17,7 @@
     "cli": "tsx cli/index.ts --"
   },
   "dependencies": {
+    "@cloudflare/containers": "^0.1.1",
     "aws4fetch": "^1.0.20",
     "commander": "^14.0.3",
     "hono": "^4.7.0",
@@ -42,6 +43,6 @@
     "vite": "^7.3.1",
     "vite-tsconfig-paths": "^6.1.1",
     "vitest": "^3.0.0",
-    "wrangler": "^4.0.0"
+    "wrangler": "^4.73.0"
   }
 }

@@ -210,7 +210,15 @@ E2E_ENDPOINT=http://localhost:5173 npm run test:e2e
 
 ## Deployment
 
-CI runs on every push/PR to `main`: TypeScript type check + unit tests, production build, and Go lint + tests for containers. Deployment is handled via GitHub Actions on push to `main`.
+CI runs on every push/PR to `main`: TypeScript type check + unit tests, production build, and Go lint + tests for containers. Deployment to Cloudflare is triggered on push to `main` via `scripts/deploy.sh`.
+
+### Local deploy
+
+```bash
+cp .env.example .env
+# Fill in the values
+npm run deploy
+```
 
 ### Prerequisites
 
@@ -218,35 +226,47 @@ Add the following secrets to your GitHub repository:
 
 | Secret | Description |
 |--------|-------------|
-| `CLOUDFLARE_API_TOKEN` | Cloudflare API token with Workers + R2 + KV permissions |
+| `CLOUDFLARE_API_TOKEN` | Cloudflare API token with Workers + Containers + R2 + KV permissions |
 | `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare account ID |
+| `CLOUDFLARE_KV_NAMESPACE_ID` | KV namespace ID |
+| `CLOUDFLARE_R2_BUCKET_NAME` | R2 bucket name |
 
-### Environment Variables
+### Worker Secrets (wrangler)
+
+Set these via `npx wrangler secret put <NAME>`:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `ASSET_TTL_SECONDS` | Yes | Asset expiry time in seconds (default: 3600) |
-| `BASE_URL` | Yes | Public base URL for file download links |
-| `R2_S3_ENDPOINT` | No | R2 S3-compatible endpoint for presigned URLs |
-| `R2_ACCESS_KEY_ID` | No | R2 API token access key ID |
-| `R2_SECRET_ACCESS_KEY` | No | R2 API token secret access key |
-| `R2_BUCKET_NAME` | No | R2 bucket name for presigned URLs |
+| `ASSET_TTL_SECONDS` | Yes | Asset expiry time in seconds (default: 3600, set in wrangler.toml) |
+| `BASE_URL` | Yes | Public base URL for file download links (set in wrangler.toml) |
+| `R2_S3_ENDPOINT` | Yes* | R2 S3-compatible endpoint (`https://<account-id>.r2.cloudflarestorage.com`) |
+| `R2_ACCESS_KEY_ID` | Yes* | R2 API token access key ID |
+| `R2_SECRET_ACCESS_KEY` | Yes* | R2 API token secret access key |
+| `R2_BUCKET_NAME` | Yes* | R2 bucket name |
 | `OIDC_ISSUER_URL` | No | OIDC Issuer URL for JWT authentication |
 | `OIDC_AUDIENCE` | No | JWT audience claim for token validation |
 | `OIDC_CLIENT_ID` | No | OAuth2 Client ID |
 | `CERBOS_ENDPOINT` | No | Cerbos PDP endpoint URL for authorization |
 
-When `R2_S3_ENDPOINT`, `R2_ACCESS_KEY_ID`, `R2_SECRET_ACCESS_KEY`, and `R2_BUCKET_NAME` are all set, presigned URL uploads and S3 multipart uploads are enabled.
+\* Required for presigned URL uploads and archive extraction containers.
 
 ### Initial Setup
 
 ```bash
 # Create R2 bucket
-wrangler r2 bucket create reearth-serve-assets
+npx wrangler r2 bucket create reearth-serve
 
 # Create KV namespace
-wrangler kv namespace create KV
-# → Update the KV namespace ID in wrangler.jsonc
+npx wrangler kv namespace create reearth-serve
+# → Set the returned ID as CLOUDFLARE_KV_NAMESPACE_ID in .env and GitHub Secrets
+
+# Create R2 S3 API token (Cloudflare Dashboard → R2 → Manage R2 API Tokens)
+# → Set R2_S3_ENDPOINT, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY via wrangler secret put
+
+# Enable Cloudflare Containers on the account (Dashboard → Workers & Pages → Containers)
+
+# Deploy
+npm run deploy
 ```
 
 ## Roadmap

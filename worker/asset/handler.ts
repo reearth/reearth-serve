@@ -49,7 +49,8 @@ assetRoutes.post("/uploads/:id/complete", async (c) => {
 
   const jobs = c.get("jobs");
   const sessionId = c.get("sessionId");
-  const result = await completeUploadSession(sessions, metadata, storage, presignedUrls, jobs, id, ttlSeconds, baseUrl, parts, { sessionId });
+  const containerLauncher = c.get("containerLauncher");
+  const result = await completeUploadSession(sessions, metadata, storage, presignedUrls, jobs, id, ttlSeconds, baseUrl, parts, { sessionId, containerLauncher });
   if (!result) {
     return c.json({ error: "Upload session not found or file not yet uploaded" }, 404);
   }
@@ -89,6 +90,7 @@ assetRoutes.post("/", async (c) => {
 
   const jobs = c.get("jobs");
   const sessionId = c.get("sessionId");
+  const containerLauncher = c.get("containerLauncher");
 
   try {
     const result = await uploadAsset(
@@ -98,7 +100,7 @@ assetRoutes.post("/", async (c) => {
       { name: filename, type: contentType, body, size, contentEncoding, originalSize },
       ttlSeconds,
       baseUrl,
-      { sessionId },
+      { sessionId, containerLauncher },
     );
     return c.json(result, 201);
   } catch (e) {

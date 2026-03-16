@@ -118,7 +118,7 @@ func TestExtractionWorker_ZipBasic(t *testing.T) {
 	}
 	archiveData := buildZipArchive(files)
 	archiveKey := "assets/test-asset/archive.zip"
-	if err := storage.PutObject(ctx, archiveKey, bytes.NewReader(archiveData), "application/zip", nil); err != nil {
+	if err := storage.PutObject(ctx, archiveKey, bytes.NewReader(archiveData), int64(len(archiveData)), "application/zip", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -197,7 +197,7 @@ func TestExtractionWorker_ZipRootPrefixStripping(t *testing.T) {
 	}
 	archiveData := buildZipArchive(files)
 	archiveKey := "assets/strip-test/upload.zip"
-	if err := storage.PutObject(ctx, archiveKey, bytes.NewReader(archiveData), "application/zip", nil); err != nil {
+	if err := storage.PutObject(ctx, archiveKey, bytes.NewReader(archiveData), int64(len(archiveData)), "application/zip", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -241,7 +241,7 @@ func TestExtractionWorker_TarGz(t *testing.T) {
 	}
 	archiveData := buildTarGzArchive(files)
 	archiveKey := "assets/tgz-test/archive.tar.gz"
-	if err := storage.PutObject(ctx, archiveKey, bytes.NewReader(archiveData), "application/gzip", nil); err != nil {
+	if err := storage.PutObject(ctx, archiveKey, bytes.NewReader(archiveData), int64(len(archiveData)), "application/gzip", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -286,7 +286,7 @@ func TestExtractionWorker_Tar(t *testing.T) {
 	}
 	archiveData := buildTarArchive(files)
 	archiveKey := "assets/tar-test/archive.tar"
-	if err := storage.PutObject(ctx, archiveKey, bytes.NewReader(archiveData), "application/x-tar", nil); err != nil {
+	if err := storage.PutObject(ctx, archiveKey, bytes.NewReader(archiveData), int64(len(archiveData)), "application/x-tar", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -328,7 +328,7 @@ func TestExtractionWorker_ZipCompression(t *testing.T) {
 	}
 	archiveData := buildZipArchive(files)
 	archiveKey := "assets/compress-test/archive.zip"
-	if err := storage.PutObject(ctx, archiveKey, bytes.NewReader(archiveData), "application/zip", nil); err != nil {
+	if err := storage.PutObject(ctx, archiveKey, bytes.NewReader(archiveData), int64(len(archiveData)), "application/zip", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -396,7 +396,7 @@ func TestExtractionWorker_ZipManyFiles(t *testing.T) {
 	}
 	archiveData := buildZipArchive(files)
 	archiveKey := "assets/many-test/archive.zip"
-	if err := storage.PutObject(ctx, archiveKey, bytes.NewReader(archiveData), "application/zip", nil); err != nil {
+	if err := storage.PutObject(ctx, archiveKey, bytes.NewReader(archiveData), int64(len(archiveData)), "application/zip", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -443,7 +443,7 @@ func TestExtractionWorker_WindowsPaths(t *testing.T) {
 	}
 	archiveData := buildZipArchive(files)
 	archiveKey := "assets/winpath-test/archive.zip"
-	if err := storage.PutObject(ctx, archiveKey, bytes.NewReader(archiveData), "application/zip", nil); err != nil {
+	if err := storage.PutObject(ctx, archiveKey, bytes.NewReader(archiveData), int64(len(archiveData)), "application/zip", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -484,7 +484,7 @@ func TestExtractionWorker_EmptyArchive(t *testing.T) {
 	}
 
 	archiveKey := "assets/empty-test/archive.zip"
-	if err := storage.PutObject(ctx, archiveKey, bytes.NewReader(buf.Bytes()), "application/zip", nil); err != nil {
+	if err := storage.PutObject(ctx, archiveKey, bytes.NewReader(buf.Bytes()), int64(buf.Len()), "application/zip", nil); err != nil {
 		t.Fatal(err)
 	}
 
@@ -519,7 +519,7 @@ func TestExtractionWorker_ManifestContentTypes(t *testing.T) {
 	}
 	archiveData := buildZipArchive(files)
 	archiveKey := "assets/ctype-test/archive.zip"
-	if err := storage.PutObject(ctx, archiveKey, bytes.NewReader(archiveData), "application/zip", nil); err != nil {
+	if err := storage.PutObject(ctx, archiveKey, bytes.NewReader(archiveData), int64(len(archiveData)), "application/zip", nil); err != nil {
 		t.Fatal(err)
 	}
 

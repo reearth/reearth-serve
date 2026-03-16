@@ -3,6 +3,7 @@ import { detectArchiveFormat } from "../model";
 import type { FileStorage, MetadataStore, PresignedUrlGenerator, UploadSessionStore } from "../repository";
 import type { JobStore } from "../../job/repository";
 import type { Job } from "../../job/model";
+import type { ContainerLauncher } from "../../infra/container";
 import { storageKey } from "./shared";
 
 export async function completeUploadSession(
@@ -15,7 +16,7 @@ export async function completeUploadSession(
   ttlSeconds: number,
   baseUrl: string,
   parts?: UploadPart[],
-  options?: { sessionId?: string | null; projectId?: string | null },
+  options?: { sessionId?: string | null; projectId?: string | null; containerLauncher?: ContainerLauncher | null },
 ): Promise<AssetUploadResult | null> {
   const session = await sessions.find(id);
   if (!session) return null;
@@ -66,6 +67,20 @@ export async function completeUploadSession(
     };
     await jobs.save(job);
     asset.jobId = id;
+
+    // Trigger container extraction
+    if (options?.containerLauncher) {
+      try {
+        await options.containerLauncher.launchArchiveExtractor({
+          assetId: id,
+          archiveKey: key,
+          archiveFilename: session.filename,
+          archiveFormat,
+        });
+      } catch (e) {
+        console.error("Failed to launch archive extractor:", e);
+      }
+    }
   }
 
   await metadata.save(asset, ttlSeconds);

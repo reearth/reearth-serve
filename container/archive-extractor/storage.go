@@ -15,7 +15,7 @@ type ObjectStorage interface {
 	GetObject(ctx context.Context, key string) (io.ReadCloser, error)
 	GetObjectRange(ctx context.Context, key string, offset, length int64) (io.ReadCloser, error)
 	HeadObject(ctx context.Context, key string) (int64, error)
-	PutObject(ctx context.Context, key string, body io.Reader, contentType string, opts *PutOptions) error
+	PutObject(ctx context.Context, key string, body io.Reader, contentLength int64, contentType string, opts *PutOptions) error
 	DeleteObject(ctx context.Context, key string) error
 }
 

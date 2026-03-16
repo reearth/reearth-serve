@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 )
 
 // ZipExtractor implements ArchiveExtractor for ZIP files using random access reads.
@@ -19,6 +20,8 @@ func NewZipExtractor(ctx context.Context, storage ObjectStorage, key string) (*Z
 	if err != nil {
 		return nil, fmt.Errorf("failed to get archive size: %w", err)
 	}
+
+	log.Printf("zip: archive key=%s size=%d", key, size)
 
 	var readerAt io.ReaderAt
 	if ras, ok := storage.(ReaderAtStorage); ok {
@@ -43,6 +46,13 @@ func NewZipExtractor(ctx context.Context, storage ObjectStorage, key string) (*Z
 	zr, err := zip.NewReader(readerAt, size)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read zip central directory: %w", err)
+	}
+
+	log.Printf("zip: central directory has %d files", len(zr.File))
+	for i, f := range zr.File {
+		if i < 10 {
+			log.Printf("zip: file[%d] name=%q size=%d isDir=%v", i, f.Name, f.UncompressedSize64, f.FileInfo().IsDir())
+		}
 	}
 
 	return &ZipExtractor{reader: zr}, nil

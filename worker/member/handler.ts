@@ -13,7 +13,7 @@ memberRoutes.get("/", async (c) => {
   }
 
   const members = c.get("members");
-  const workspaceId = c.req.param("workspaceId");
+  const workspaceId = c.req.param("workspaceId")!;
 
   // Check membership
   const self = await members.find(workspaceId, user.sub);
@@ -34,7 +34,7 @@ memberRoutes.post("/", async (c) => {
 
   const members = c.get("members");
   const authorizer = c.get("authorizer");
-  const workspaceId = c.req.param("workspaceId");
+  const workspaceId = c.req.param("workspaceId")!;
 
   // Check membership and authorization
   const self = await members.find(workspaceId, user.sub);
@@ -73,8 +73,8 @@ memberRoutes.patch("/:userId", async (c) => {
 
   const members = c.get("members");
   const authorizer = c.get("authorizer");
-  const workspaceId = c.req.param("workspaceId");
-  const targetUserId = c.req.param("userId");
+  const workspaceId = c.req.param("workspaceId")!;
+  const targetUserId = c.req.param("userId")!;
 
   // Check membership and authorization
   const self = await members.find(workspaceId, user.sub);
@@ -116,8 +116,8 @@ memberRoutes.delete("/:userId", async (c) => {
 
   const members = c.get("members");
   const authorizer = c.get("authorizer");
-  const workspaceId = c.req.param("workspaceId");
-  const targetUserId = c.req.param("userId");
+  const workspaceId = c.req.param("workspaceId")!;
+  const targetUserId = c.req.param("userId")!;
 
   // Check membership and authorization
   const self = await members.find(workspaceId, user.sub);

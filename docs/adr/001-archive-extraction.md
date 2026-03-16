@@ -189,10 +189,53 @@ Rejected because: using R2 keeps the container self-contained (S3 API only, no W
 ### Full-file download for ZIP
 Rejected because: Range request adapter enables Central Directory reading with minimal bandwidth. For a 10GB ZIP, only a few KB are read to list all entries.
 
+## Cloudflare Containers integration
+
+The extraction container runs on Cloudflare Containers (Durable Object-based). Key implementation details:
+
+### Container class (Worker side)
+
+`ArchiveExtractorContainer` extends `Container` from `@cloudflare/containers`. Environment variables (R2 credentials, asset info) are passed via JSRPC method `startExtraction()`, which sets `this.envVars` before calling `this.start()`.
+
+- `enableInternet = true` — required for the container to access R2 S3 API and Worker API
+- `sleepAfter = "5m"` — container sleeps after 5 minutes of inactivity
+- `image_build_context` in `wrangler.toml` is required so Docker receives the full source directory, not just the Dockerfile
+
+### Container trigger flow
+
+1. Archive uploaded → Worker creates job (pending) → calls `stub.startExtraction(envVars)` via JSRPC
+2. Container starts → Go binary runs extraction → reports `running` and `completed`/`failed` via `POST /api/internal/jobs/:id/status`
+3. Cron (every 10 min) re-triggers pending/failed jobs as a safety net
+
+### R2 S3 API compatibility (Go)
+
+AWS SDK Go v2 has compatibility issues with R2's S3 API:
+
+| Issue | Solution |
+|---|---|
+| CRC32 checksum validation | Set `RequestChecksumCalculation` and `ResponseChecksumValidation` to `WhenRequired` |
+| Content-Length required on PUT | Pass explicit `contentLength` parameter; use S3 multipart upload for gzip-compressed files where size is unknown upfront |
+
+For gzip-compressed files, the container uses S3 multipart upload (10MB parts) to stream data without buffering the entire file in memory. Uncompressed files use the size from the ZIP Central Directory directly.
+
+### Container logs
+
+The Go binary writes logs to `assets/{assetId}/_archive/_log.txt` in R2 via `log.SetOutput(io.MultiWriter(os.Stderr, logBuf))`. Logs are flushed on both success and failure. Retrieve with:
+
+```bash
+npx wrangler r2 object get reearth-serve/assets/{assetId}/_archive/_log.txt --pipe
+```
+
+### Container deployment
+
+- `wrangler deploy --containers-rollout immediate` deploys both Worker and container image
+- Container rollout takes ~60-90 seconds; `scripts/deploy.sh` polls for completion
+- Docker build cache: `image_build_context` must point to the source directory for Docker to detect file changes
+
 ## Consequences
 
 - Archives up to ~50GB / ~500K files can be processed with resume support
 - The extraction container is independently testable via `MemoryStorage` mock
 - Path normalization handles Windows-created archives transparently
 - Compressible files (JSON, GeoJSON, CSV, etc.) are gzip-compressed before upload, saving storage and transfer costs
-- Container restart detection requires a Cron Trigger or manual retry via `/api/v1/jobs/:id/retry` (not yet implemented)
+- Cron trigger re-starts failed/stalled jobs every 10 minutes

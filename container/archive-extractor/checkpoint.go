@@ -68,7 +68,7 @@ func (cm *CheckpointManager) Save(ctx context.Context, cp *JobCheckpoint) error 
 		return fmt.Errorf("failed to marshal checkpoint: %w", err)
 	}
 
-	if err := cm.storage.PutObject(ctx, cm.key, bytes.NewReader(data), "application/json", nil); err != nil {
+	if err := cm.storage.PutObject(ctx, cm.key, bytes.NewReader(data), int64(len(data)), "application/json", nil); err != nil {
 		return fmt.Errorf("failed to save checkpoint: %w", err)
 	}
 	return nil

@@ -13,5 +13,6 @@
 
 ## After Implementation
 
+- Always run `npm run check` (typecheck + unit tests) before considering the task done.
 - Update `README.md` and existing ADRs as needed to reflect changes.
 - Create a new ADR in `docs/adr/` when making significant design decisions.

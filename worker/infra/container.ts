@@ -1,3 +1,4 @@
+import { Container } from "@cloudflare/containers";
 import type { ArchiveFormat } from "../asset/model";
 
 export interface ContainerLauncher {
@@ -11,12 +12,28 @@ export interface ArchiveExtractorParams {
   archiveFormat: ArchiveFormat;
 }
 
-// TODO: Implement CF Container launch via Cloudflare Containers API.
-// For now, this is a placeholder that logs the params.
-// The actual implementation will use the Cloudflare Containers binding
-// to start the archive-extractor container with the appropriate env vars.
+export class ArchiveExtractorContainer extends Container {
+  defaultPort = 8080;
+  sleepAfter = "5m";
+  enableInternet = true;
+
+  // Called via JSRPC from CloudflareContainerLauncher
+  async startExtraction(envVars: Record<string, string>): Promise<string> {
+    this.envVars = envVars;
+    try {
+      await this.start();
+      return "started";
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      console.error("Container start failed:", msg);
+      return `error: ${msg}`;
+    }
+  }
+}
+
 export class CloudflareContainerLauncher implements ContainerLauncher {
   constructor(
+    private readonly binding: DurableObjectNamespace,
     private readonly baseUrl: string,
     private readonly r2Config: {
       endpoint: string;
@@ -27,8 +44,10 @@ export class CloudflareContainerLauncher implements ContainerLauncher {
   ) {}
 
   async launchArchiveExtractor(params: ArchiveExtractorParams): Promise<void> {
-    // The container will be launched with these environment variables:
-    const _env = {
+    const id = this.binding.idFromName(params.assetId);
+    const stub = this.binding.get(id) as DurableObjectStub & ArchiveExtractorContainer;
+
+    const envVars = {
       R2_ENDPOINT: this.r2Config.endpoint,
       R2_ACCESS_KEY_ID: this.r2Config.accessKeyId,
       R2_SECRET_ACCESS_KEY: this.r2Config.secretAccessKey,
@@ -40,9 +59,6 @@ export class CloudflareContainerLauncher implements ContainerLauncher {
       WORKER_API_URL: this.baseUrl,
     };
 
-    // TODO: Use Cloudflare Containers API to start the container.
-    // The Containers API is still in beta; the binding interface may look like:
-    //   await this.container.start({ image: "archive-extractor", env: _env });
-    console.log("Container launch requested:", JSON.stringify(params));
+    await stub.startExtraction(envVars);
   }
 }

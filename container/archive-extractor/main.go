@@ -1,14 +1,28 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"log"
+	"net/http"
 	"os"
 	"strconv"
+	"strings"
+	"sync"
 )
 
 func main() {
+	// Start health check server for Cloudflare Containers readiness detection
+	go func() {
+		mux := http.NewServeMux()
+		mux.HandleFunc("/health", func(w http.ResponseWriter, _ *http.Request) {
+			w.WriteHeader(http.StatusOK)
+		})
+		log.Fatal(http.ListenAndServe(":8080", mux))
+	}()
+
 	cfg, err := loadConfigFromEnv()
 	if err != nil {
 		log.Fatalf("configuration error: %v", err)
@@ -26,6 +40,23 @@ func main() {
 		log.Fatalf("failed to create R2 client: %v", err)
 	}
 
+	// Set up log writer that captures output for R2
+	logBuf := &logBuffer{}
+	log.SetOutput(io.MultiWriter(os.Stderr, logBuf))
+	flushLogs := func() {
+		logKey := fmt.Sprintf("assets/%s/_archive/_log.txt", cfg.AssetID)
+		logStr := logBuf.String()
+		if err := r2.PutObject(ctx, logKey, strings.NewReader(logStr), int64(len(logStr)), "text/plain", nil); err != nil {
+			log.Printf("WARNING: failed to write log to R2: %v", err)
+		} else {
+			log.Printf("Log written to R2: %s", logKey)
+		}
+	}
+
+	log.Printf("config: endpoint=%s bucket=%s assetId=%s archiveKey=%s format=%s workerAPI=%s accessKeyId=%s...",
+		cfg.R2Endpoint, cfg.R2Bucket, cfg.AssetID, cfg.ArchiveKey, cfg.ArchiveFormat, cfg.WorkerAPIURL,
+		maskString(cfg.R2AccessKeyID))
+
 	worker := NewExtractionWorker(r2, ExtractionConfig{
 		AssetID:         cfg.AssetID,
 		ArchiveKey:      cfg.ArchiveKey,
@@ -37,10 +68,18 @@ func main() {
 	})
 
 	if err := worker.Run(ctx); err != nil {
-		// Update job status to failed
-		_ = worker.updateJobStatus(ctx, "failed", 0, 0)
-		log.Fatalf("extraction failed: %v", err)
+		log.Printf("extraction failed: %v", err)
+		flushLogs()
+		// Send error with truncated log for debugging
+		logSummary := logBuf.String()
+		if len(logSummary) > 500 {
+			logSummary = logSummary[len(logSummary)-500:]
+		}
+		_ = worker.updateJobStatus(ctx, "failed", 0, 0, err.Error()+"\n---LOG---\n"+logSummary)
+		os.Exit(1)
 	}
+
+	flushLogs()
 }
 
 type envConfig struct {
@@ -112,4 +151,29 @@ func loadConfigFromEnv() (*envConfig, error) {
 	}
 
 	return cfg, nil
+}
+
+// logBuffer is a thread-safe buffer that captures log output for writing to R2.
+type logBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *logBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *logBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+func maskString(s string) string {
+	if len(s) <= 4 {
+		return "***"
+	}
+	return s[:4] + "***"
 }

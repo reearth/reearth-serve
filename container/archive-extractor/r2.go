@@ -1,13 +1,16 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/aws-sdk-go-v2/service/s3/types"
 )
 
 // Verify R2Client implements both ObjectStorage and ReaderAtStorage.
@@ -46,6 +49,9 @@ func NewR2Client(ctx context.Context, cfg R2Config) (*R2Client, error) {
 	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 		o.BaseEndpoint = &endpoint
 		o.UsePathStyle = true
+		// Disable CRC32 checksum — R2 does not support AWS SDK v2's default checksum validation
+		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
+		o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired
 	})
 
 	return &R2Client{client: client, bucket: cfg.Bucket}, nil
@@ -89,12 +95,17 @@ func (r *R2Client) HeadObject(ctx context.Context, key string) (int64, error) {
 	return *out.ContentLength, nil
 }
 
-func (r *R2Client) PutObject(ctx context.Context, key string, body io.Reader, contentType string, opts *PutOptions) error {
+func (r *R2Client) PutObject(ctx context.Context, key string, body io.Reader, contentLength int64, contentType string, opts *PutOptions) error {
+	if contentLength < 0 {
+		return r.putObjectMultipart(ctx, key, body, contentType, opts)
+	}
+
 	input := &s3.PutObjectInput{
-		Bucket:      &r.bucket,
-		Key:         &key,
-		Body:        body,
-		ContentType: &contentType,
+		Bucket:        &r.bucket,
+		Key:           &key,
+		Body:          body,
+		ContentType:   &contentType,
+		ContentLength: &contentLength,
 	}
 	if opts != nil && opts.ContentEncoding != "" {
 		input.ContentEncoding = &opts.ContentEncoding
@@ -103,6 +114,95 @@ func (r *R2Client) PutObject(ctx context.Context, key string, body io.Reader, co
 		return fmt.Errorf("failed to put object %s: %w", key, err)
 	}
 	return nil
+}
+
+const multipartPartSize = 10 * 1024 * 1024 // 10MB per part
+
+func (r *R2Client) putObjectMultipart(ctx context.Context, key string, body io.Reader, contentType string, opts *PutOptions) error {
+	createInput := &s3.CreateMultipartUploadInput{
+		Bucket:      &r.bucket,
+		Key:         &key,
+		ContentType: &contentType,
+	}
+	if opts != nil && opts.ContentEncoding != "" {
+		createInput.ContentEncoding = &opts.ContentEncoding
+	}
+	createOut, err := r.client.CreateMultipartUpload(ctx, createInput)
+	if err != nil {
+		return fmt.Errorf("failed to create multipart upload for %s: %w", key, err)
+	}
+	uploadID := createOut.UploadId
+
+	var completedParts []types.CompletedPart
+	partNumber := int32(1)
+	buf := make([]byte, multipartPartSize)
+
+	for {
+		n, readErr := io.ReadFull(body, buf)
+		if n > 0 {
+			partLen := int64(n)
+			uploadOut, err := r.client.UploadPart(ctx, &s3.UploadPartInput{
+				Bucket:        &r.bucket,
+				Key:           &key,
+				UploadId:      uploadID,
+				PartNumber:    &partNumber,
+				Body:          bytes.NewReader(buf[:n]),
+				ContentLength: &partLen,
+			})
+			if err != nil {
+				_ = r.abortMultipartUpload(ctx, key, uploadID)
+				return fmt.Errorf("failed to upload part %d for %s: %w", partNumber, key, err)
+			}
+			completedParts = append(completedParts, types.CompletedPart{
+				PartNumber: &partNumber,
+				ETag:       uploadOut.ETag,
+			})
+			partNumber++
+		}
+		if readErr == io.EOF || readErr == io.ErrUnexpectedEOF {
+			break
+		}
+		if readErr != nil {
+			_ = r.abortMultipartUpload(ctx, key, uploadID)
+			return fmt.Errorf("failed to read body for %s: %w", key, readErr)
+		}
+	}
+
+	if len(completedParts) == 0 {
+		// Empty body — abort multipart and do a regular zero-length PUT
+		_ = r.abortMultipartUpload(ctx, key, uploadID)
+		zero := int64(0)
+		_, err := r.client.PutObject(ctx, &s3.PutObjectInput{
+			Bucket:        &r.bucket,
+			Key:           &key,
+			Body:          bytes.NewReader(nil),
+			ContentType:   &contentType,
+			ContentLength: &zero,
+		})
+		return err
+	}
+
+	_, err = r.client.CompleteMultipartUpload(ctx, &s3.CompleteMultipartUploadInput{
+		Bucket:   &r.bucket,
+		Key:      &key,
+		UploadId: uploadID,
+		MultipartUpload: &types.CompletedMultipartUpload{
+			Parts: completedParts,
+		},
+	})
+	if err != nil {
+		return fmt.Errorf("failed to complete multipart upload for %s: %w", key, err)
+	}
+	return nil
+}
+
+func (r *R2Client) abortMultipartUpload(ctx context.Context, key string, uploadID *string) error {
+	_, err := r.client.AbortMultipartUpload(ctx, &s3.AbortMultipartUploadInput{
+		Bucket:   &r.bucket,
+		Key:      &key,
+		UploadId: uploadID,
+	})
+	return err
 }
 
 func (r *R2Client) DeleteObject(ctx context.Context, key string) error {

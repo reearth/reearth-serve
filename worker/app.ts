@@ -15,6 +15,7 @@ import { authMiddleware } from "./auth/middleware";
 import { CerbosAuthorizer } from "./auth/authorizer";
 import { sessionMiddleware } from "./session/middleware";
 import { SimpleAuthorizer } from "./infra/authorizer";
+import { CloudflareContainerLauncher } from "./infra/container";
 import type { AppEnv } from "./types";
 
 export function createApp(env: Env) {
@@ -34,6 +35,15 @@ export function createApp(env: Env) {
 
   const presignedUrls = (env.R2_S3_ENDPOINT && env.R2_ACCESS_KEY_ID && env.R2_SECRET_ACCESS_KEY)
     ? new R2PresignedUrlGenerator({
+        endpoint: env.R2_S3_ENDPOINT,
+        accessKeyId: env.R2_ACCESS_KEY_ID,
+        secretAccessKey: env.R2_SECRET_ACCESS_KEY,
+        bucket: env.R2_BUCKET_NAME || "reearth-serve",
+      })
+    : null;
+
+  const containerLauncher = (env.ARCHIVE_EXTRACTOR && env.R2_S3_ENDPOINT && env.R2_ACCESS_KEY_ID && env.R2_SECRET_ACCESS_KEY)
+    ? new CloudflareContainerLauncher(env.ARCHIVE_EXTRACTOR, baseUrl, {
         endpoint: env.R2_S3_ENDPOINT,
         accessKeyId: env.R2_ACCESS_KEY_ID,
         secretAccessKey: env.R2_SECRET_ACCESS_KEY,
@@ -62,6 +72,7 @@ export function createApp(env: Env) {
     c.set("projects", projects);
     c.set("workspaces", workspaces);
     c.set("members", memberStore);
+    c.set("containerLauncher", containerLauncher);
     await next();
   });
 

@@ -53,7 +53,7 @@ func (mw *ManifestWriter) FlushChunk(ctx context.Context, chunkIndex *int) error
 	key := fmt.Sprintf("assets/%s/_archive/_manifest_chunks/%06d.jsonl", mw.assetID, *chunkIndex)
 	data := encodeJSONL(mw.chunk)
 
-	if err := mw.storage.PutObject(ctx, key, bytes.NewReader(data), "application/x-ndjson", nil); err != nil {
+	if err := mw.storage.PutObject(ctx, key, bytes.NewReader(data), int64(len(data)), "application/x-ndjson", nil); err != nil {
 		return fmt.Errorf("failed to write manifest chunk %d: %w", *chunkIndex, err)
 	}
 
@@ -81,7 +81,7 @@ func (mw *ManifestWriter) Finalize(ctx context.Context, totalChunks int) error {
 	}
 
 	finalKey := fmt.Sprintf("assets/%s/_archive/_manifest.jsonl", mw.assetID)
-	if err := mw.storage.PutObject(ctx, finalKey, bytes.NewReader(all.Bytes()), "application/x-ndjson", nil); err != nil {
+	if err := mw.storage.PutObject(ctx, finalKey, bytes.NewReader(all.Bytes()), int64(all.Len()), "application/x-ndjson", nil); err != nil {
 		return fmt.Errorf("failed to write final manifest: %w", err)
 	}
 

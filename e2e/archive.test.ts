@@ -112,6 +112,61 @@ describe("Archive & Job", () => {
       expect(assetAfter.asset.fileCount).toBe(1);
       expect(assetAfter.asset.extractedSize).toBe(5);
     });
+
+    test("Container extraction: upload ZIP, wait for extraction, verify files", { timeout: 120_000 }, async () => {
+      const files = {
+        "tileset.json": '{"root":"test"}',
+        "tiles/0.json": '{"tile":0}',
+        "tiles/1.json": '{"tile":1}',
+      };
+      const zipBytes = buildMiniZip(files);
+      const { status, body: uploadBody } = await uploadFile(zipBytes, "extract-test.zip", "application/zip");
+      expect(status).toBe(201);
+
+      const assetId = uploadBody.asset.id;
+      expect(uploadBody.asset.status).toBe("pending");
+
+      // Poll job until completed or failed (max 90s)
+      let jobStatus = "pending";
+      let lastJob: any;
+      for (let i = 0; i < 30; i++) {
+        await new Promise((r) => setTimeout(r, 3000));
+        const res = await fetch(`${BASE}/api/v1/jobs/${assetId}`);
+        lastJob = await res.json() as any;
+        jobStatus = lastJob.status;
+        if (jobStatus === "completed" || jobStatus === "failed") break;
+      }
+      if (jobStatus !== "completed") {
+        console.error(`Job did not complete. assetId=${assetId}, lastJob=`, JSON.stringify(lastJob));
+      }
+      expect(jobStatus).toBe("completed");
+
+      // Verify asset status is ready (poll to allow for KV eventual consistency)
+      let assetStatus = "pending";
+      let assetRes: any;
+      for (let i = 0; i < 10; i++) {
+        assetRes = await (await fetch(`${BASE}/api/v1/assets/${assetId}`)).json() as any;
+        assetStatus = assetRes.asset.status;
+        if (assetStatus === "ready" || assetStatus === "failed") break;
+        await new Promise((r) => setTimeout(r, 2000));
+      }
+      expect(assetStatus).toBe("ready");
+      expect(assetRes.asset.fileCount).toBe(Object.keys(files).length);
+
+      // Verify file list via NDJSON API
+      const filesRes = await fetch(`${BASE}/api/v1/assets/${assetId}/files`);
+      expect(filesRes.status).toBe(200);
+      const fileEntries = parseNdjson(await filesRes.text());
+      expect(fileEntries).toHaveLength(Object.keys(files).length);
+
+      // Verify each extracted file's content
+      for (const [path, expectedContent] of Object.entries(files)) {
+        const fileUrl = `${BASE}/files/${assetId}/${path}`;
+        const res = await fetch(fileUrl);
+        expect(res.status).toBe(200);
+        expect(await res.text()).toBe(expectedContent);
+      }
+    });
   });
 
   // --- File list API (NDJSON) ---
