@@ -3,7 +3,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
 
-const CONFIG_DIR = join(homedir(), ".config", "reearth-serve");
+const CONFIG_DIR = process.env.REEARTH_SERVE_CONFIG_DIR ?? join(homedir(), ".config", "reearth-serve");
 const CONFIG_FILE = join(CONFIG_DIR, "config.json");
 const CREDENTIALS_FILE = join(CONFIG_DIR, "credentials.json");
 const SESSION_FILE = join(CONFIG_DIR, "session.json");

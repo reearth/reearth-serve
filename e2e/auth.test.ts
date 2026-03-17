@@ -1,7 +1,18 @@
 import { describe, test, expect } from "vitest";
-import { BASE, signToken, uploadFileWithAuth } from "./helpers";
+import { BASE, MOCK_OIDC, signToken, uploadFileWithAuth } from "./helpers";
 
-describe("authentication", () => {
+// Auto-detect if mock OIDC server is reachable (only available in local dev via e2e.sh).
+// Auth tests that require token signing are skipped when mock OIDC is unavailable,
+// since production uses a real IdP and mock-signed tokens would be rejected.
+let mockOidcAvailable = false;
+try {
+  const res = await fetch(`${MOCK_OIDC}/.well-known/openid-configuration`);
+  mockOidcAvailable = res.ok;
+} catch {
+  // not reachable
+}
+
+describe("authentication", { skip: !mockOidcAvailable }, () => {
   test("health endpoint works without auth", async () => {
     const res = await fetch(`${BASE}/api/v1/health`);
     expect(res.status).toBe(200);
@@ -86,7 +97,7 @@ describe("authentication", () => {
   });
 });
 
-describe("project API (requires auth)", () => {
+describe("project API (requires auth)", { skip: !mockOidcAvailable }, () => {
   test("list projects without auth → 401", async () => {
     const res = await fetch(`${BASE}/api/v1/projects`);
     expect(res.status).toBe(401);

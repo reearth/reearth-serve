@@ -19,7 +19,7 @@ else
 fi
 
 # Validate required variables
-for var in CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_KV_NAMESPACE_ID CLOUDFLARE_R2_BUCKET_NAME; do
+for var in CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_KV_NAMESPACE_ID CLOUDFLARE_D1_DATABASE_ID CLOUDFLARE_R2_BUCKET_NAME; do
   if [ -z "${!var:-}" ]; then
     echo "Error: ${var} is not set"
     exit 1
@@ -45,7 +45,14 @@ else
 fi
 
 eval "$SED_I 's|id = \"KV_NAMESPACE_ID\"|id = \"${CLOUDFLARE_KV_NAMESPACE_ID}\"|' '${WRANGLER_CONFIG}'"
+eval "$SED_I 's|database_id = \"D1_DATABASE_ID\"|database_id = \"${CLOUDFLARE_D1_DATABASE_ID}\"|' '${WRANGLER_CONFIG}'"
 eval "$SED_I 's|bucket_name = \"reearth-serve\"|bucket_name = \"${CLOUDFLARE_R2_BUCKET_NAME}\"|' '${WRANGLER_CONFIG}'"
+
+# Apply D1 migrations before deploying code
+echo "Applying D1 migrations..."
+CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID}" \
+  CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}" \
+  npx wrangler d1 migrations apply reearth-serve --remote
 
 echo "Building..."
 rm -rf "${PROJECT_DIR}/build"

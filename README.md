@@ -1,8 +1,17 @@
 # Re:Earth Serve
 
-Spatial Data Delivery — an asset hosting and tile delivery service built on Cloudflare Workers + R2.
+Spatial Data Delivery — an asset hosting and tile delivery service built on Cloudflare Workers + R2 + D1.
 
 ![demo](./docs/demo.gif)
+
+## ✨ Features
+
+- ⚡ **CLI First** — Run `upload myfile.geojson` and instantly get a public URL. No authentication required in demo mode. Both CLI and API are available, making it easy to integrate with CI/CD pipelines and AI agents.
+- 📦 **Archive Extraction** — ZIP/tar/tar.gz uploads are automatically extracted and served as individual files. Supports multi-GB archives, checkpoint-based resume, and root folder auto-stripping.
+- 📡 **HTTP Range Requests** — Full support for `Range` headers (HTTP 206), enabling partial file reads. Works with PMTiles, Cloud-Optimized GeoTIFF (COG), and other formats that rely on byte-range access — no full download needed.
+- 🚀 **Presigned URL Uploads** — Large files (>100MB) bypass the Worker body size limit via presigned URLs for direct-to-R2 uploads with automatic multipart splitting.
+- 🗜️ **Gzip Compression** — The CLI compresses compressible files (JSON, GeoJSON, CSV, etc.) locally before upload. On download, gzip-stored files are decompressed on-the-fly. Range requests on compressed files are also supported.
+- 🔐 **Authentication & RBAC** — JWT-based authentication via any OIDC-compliant IdP, with workspace-scoped role-based access control (owner/admin/editor/viewer). Optional Cerbos PDP integration for policy-based authorization.
 
 ## Quick Start
 
@@ -34,7 +43,8 @@ curl -X POST http://localhost:5173/api/v1/assets \
 |-----------|-----------|
 | Runtime | Cloudflare Workers |
 | Storage | Cloudflare R2 (zero egress) |
-| Metadata | Cloudflare KV |
+| Metadata | Cloudflare D1 (SQLite) |
+| Sessions | Cloudflare KV (TTL auto-expiry) |
 | Containers | Cloudflare Containers (Go) |
 | API | Hono |
 | UI | React Router (SSR) + Tailwind CSS |
@@ -45,11 +55,24 @@ curl -X POST http://localhost:5173/api/v1/assets \
 | Directory | Description |
 |-----------|-------------|
 | `worker/` | Cloudflare Worker (Hono routes, domain logic, infra adapters) |
+| `worker/infra/` | Infrastructure layer (D1, KV, R2, container adapters) |
+| `worker/infra/migrations/` | D1 schema migrations |
 | `shared/` | Shared types (Zod schemas) and API path constants |
 | `app/` | React Router frontend |
 | `cli/` | CLI client (Commander.js) |
 | `container/archive-extractor/` | Archive extraction container (Go) — ZIP/tar/tar.gz → R2 |
 | `e2e/` | E2E tests |
+| `docs/adr/` | Architecture Decision Records |
+
+### Storage Design
+
+| Store | Backend | Entities | Rationale |
+|-------|---------|----------|-----------|
+| D1 | SQLite | Assets, Jobs, Projects, Workspaces, Members, Storage Usage | Strong consistency, atomic operations, relational queries |
+| KV | Key-Value | Sessions, Upload Sessions | TTL auto-expiration for ephemeral data |
+| R2 | Object Storage | File content | Zero egress cost, Range request support |
+
+See [ADR-003](./docs/adr/003-kv-to-d1-migration.md) for the D1 migration rationale.
 
 ## API
 
@@ -98,35 +121,9 @@ curl -X POST http://localhost:5173/api/v1/assets \
 | `GET` | `/files/:id/:filename` | Download file (CORS `*`, Range support) |
 | `GET` | `/files/:id/:filename/*` | Download extracted archive file |
 
-Assets are **immutable** (upload or delete, no overwrite) and **ephemeral** (auto-expire after 1 hour).
+Assets are **immutable** (upload or delete, no overwrite). Demo mode assets (no project) auto-expire after 1 hour. Project assets are permanent.
 
-### Archive Extraction
-
-When an archive file (ZIP, tar, tar.gz) is uploaded, it is automatically extracted in a Cloudflare Container. Individual files are stored in R2 and served via `/files/:id/:filename/*`.
-
-- Supports ZIP (random access via Range requests), tar, and tar.gz formats
-- Handles multi-GB archives with hundreds of thousands of files
-- Resume support via checkpoints — survives container restarts
-- Windows path separators (`\`) are normalized to `/`
-- Root folder auto-stripping (e.g., `data.zip/data/...` → strips `data/`)
-- Compressible files (JSON, GeoJSON, CSV, etc.) are gzip-compressed on upload
-
-### Presigned URL Uploads
-
-For large files (>100MB or multi-GB), presigned URL uploads bypass the Worker body size limit. When S3 credentials are configured, the server generates presigned URLs for direct-to-R2 uploads. Files >100MB are automatically split into multipart uploads.
-
-The CLI automatically uses presigned URLs when available, falling back to direct upload.
-
-### Gzip Compression
-
-Compression is the **uploader's responsibility** — the server never buffers or compresses on the upload path.
-
-- **Presigned URL upload**: For compressible files (JSON, GeoJSON, CSV, XML, KML, GML, SVG, etc.) over 1KB, the server returns `contentEncoding: "gzip"` in the session response. The CLI compresses locally before uploading
-- **Direct upload** (`POST /api/v1/assets`): Files are stored as-is without server-side compression
-- **Download**: If the file is stored with gzip encoding and the client sends `Accept-Encoding: gzip`, the compressed data is passed through directly. Otherwise, the server decompresses on the fly via streaming
-- **Range requests**: Supported on gzip-stored files — the server decompresses, seeks to the requested byte offset, and streams the range
-
-### CLI
+## CLI
 
 The CLI (`npm run cli --`) provides subcommands for managing assets and files. Set `REEARTH_SERVE_ENDPOINT` to change the target server (default: `http://localhost:8787`).
 
@@ -185,105 +182,10 @@ npm run cli -- --json asset show <id>           # JSON output
 
 `file sync` uses MD5 hash comparison (matching R2 ETags) to skip unchanged files. When no hash is available, it falls back to size comparison.
 
-## Scripts
-
-| Command | Description |
-|---------|-------------|
-| `npm run dev` | Start dev server with HMR |
-| `npm run build` | Production build |
-| `npm run deploy` | Build + deploy to Cloudflare |
-| `npm run check` | Type check + unit tests |
-| `npm run test` | Unit tests only |
-| `npm run test:e2e` | E2E tests (requires running dev server) |
-| `npm run test:e2e:dev` | Start dev server, run E2E tests, and shut down |
-| `cd container/archive-extractor && go test ./...` | Container unit tests |
-| `npm run typecheck` | TypeScript type check |
-| `npm run typegen` | Generate Wrangler + React Router types |
-| `npm run cli -- upload <file>` | Upload a file via CLI |
-| `npm run cli -- file ls <id>` | List files in an asset |
-| `npm run cli -- file cp <id> <dest>` | Download a file |
-| `npm run cli -- file sync <id> <dir>` | Sync asset files to local directory |
-| `npm run cli -- --help` | Show all commands |
-
-### Running E2E Tests
-
-```bash
-# One-liner: starts dev server, runs tests, shuts down
-npm run test:e2e:dev
-
-# Or manually in two terminals:
-# Terminal 1
-npm run dev
-
-# Terminal 2
-E2E_ENDPOINT=http://localhost:5173 npm run test:e2e
-```
-
-## Deployment
-
-CI runs on every push/PR to `main`: TypeScript type check + unit tests, production build, and Go lint + tests for containers. Deployment to Cloudflare is triggered on push to `main` via `scripts/deploy.sh`.
-
-### Local deploy
-
-```bash
-cp .env.example .env
-# Fill in the values
-npm run deploy
-```
-
-### Prerequisites
-
-Add the following secrets to your GitHub repository:
-
-| Secret | Description |
-|--------|-------------|
-| `CLOUDFLARE_API_TOKEN` | Cloudflare API token with Workers + Containers + R2 + KV permissions |
-| `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare account ID |
-| `CLOUDFLARE_KV_NAMESPACE_ID` | KV namespace ID |
-| `CLOUDFLARE_R2_BUCKET_NAME` | R2 bucket name |
-
-### Worker Secrets (wrangler)
-
-Set these via `npx wrangler secret put <NAME>`:
-
-| Variable | Required | Description |
-|----------|----------|-------------|
-| `ASSET_TTL_SECONDS` | Yes | Asset expiry time in seconds (default: 3600, set in wrangler.toml) |
-| `BASE_URL` | Yes | Public base URL for file download links (set in wrangler.toml) |
-| `R2_S3_ENDPOINT` | Yes* | R2 S3-compatible endpoint (`https://<account-id>.r2.cloudflarestorage.com`) |
-| `R2_ACCESS_KEY_ID` | Yes* | R2 API token access key ID |
-| `R2_SECRET_ACCESS_KEY` | Yes* | R2 API token secret access key |
-| `R2_BUCKET_NAME` | Yes* | R2 bucket name |
-| `OIDC_ISSUER_URL` | No | OIDC Issuer URL for JWT authentication |
-| `OIDC_AUDIENCE` | No | JWT audience claim for token validation |
-| `OIDC_CLIENT_ID` | No | OAuth2 Client ID |
-| `CERBOS_ENDPOINT` | No | Cerbos PDP endpoint URL for authorization |
-
-\* Required for presigned URL uploads and archive extraction containers.
-
-### Initial Setup
-
-```bash
-# Create R2 bucket
-npx wrangler r2 bucket create reearth-serve
-
-# Create KV namespace
-npx wrangler kv namespace create reearth-serve
-# → Set the returned ID as CLOUDFLARE_KV_NAMESPACE_ID in .env and GitHub Secrets
-
-# Create R2 S3 API token (Cloudflare Dashboard → R2 → Manage R2 API Tokens)
-# → Set R2_S3_ENDPOINT, R2_ACCESS_KEY_ID, R2_SECRET_ACCESS_KEY via wrangler secret put
-
-# Enable Cloudflare Containers on the account (Dashboard → Workers & Pages → Containers)
-
-# Create extraction queues
-npx wrangler queues create reearth-serve-extraction
-npx wrangler queues create reearth-serve-extraction-dlq
-
-# Deploy
-npm run deploy
-```
-
 ## Roadmap
 
 See [ROADMAP.md](./ROADMAP.md) for the full development roadmap.
+
+## Contributing
+
+See [CONTRIBUTING.md](./CONTRIBUTING.md) for development setup, scripts, deployment, testing, and database migrations.

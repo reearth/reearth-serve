@@ -13,17 +13,24 @@ export async function uploadFile(
   content: Uint8Array,
   filename: string,
   contentType: string,
-): Promise<{ status: number; body: any }> {
+  sessionId?: string,
+): Promise<{ status: number; body: any; sessionId: string | null }> {
+  const headers: Record<string, string> = {
+    "Content-Type": contentType,
+    "Content-Length": String(content.byteLength),
+    "X-Filename": filename,
+  };
+  if (sessionId) headers["X-Session-Id"] = sessionId;
   const res = await fetch(`${BASE}/api/v1/assets`, {
     method: "POST",
-    headers: {
-      "Content-Type": contentType,
-      "Content-Length": String(content.byteLength),
-      "X-Filename": filename,
-    },
+    headers,
     body: content as BodyInit,
   });
-  return { status: res.status, body: await res.json() };
+  return {
+    status: res.status,
+    body: await res.json(),
+    sessionId: res.headers.get("X-Session-Id"),
+  };
 }
 
 /**

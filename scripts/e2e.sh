@@ -51,6 +51,10 @@ OIDC_ISSUER="http://localhost:${MOCK_OIDC_PORT}/"
 echo "Clearing miniflare state..."
 rm -rf .wrangler/state
 
+# Apply D1 migrations to local database
+echo "Applying D1 migrations..."
+npx wrangler d1 migrations apply reearth-serve --local
+
 # Inject OIDC vars into wrangler.toml (backup original)
 WRANGLER_BACKUP="${WRANGLER_CONFIG}.bak.$$"
 cp "${WRANGLER_CONFIG}" "${WRANGLER_BACKUP}"

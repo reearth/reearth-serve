@@ -6,9 +6,12 @@ import { fileRoutes } from "./file/handler";
 import { jobRoutes, jobInternalRoutes } from "./job/handler";
 import { R2FileStorage } from "./infra/storage";
 import {
-  KVMetadataStore, KVUploadSessionStore, KVJobStore, KVProjectStore,
-  KVWorkspaceStore, KVMemberStore, KVSessionStore,
+  KVUploadSessionStore, KVSessionStore,
 } from "./infra/metadata";
+import {
+  D1MetadataStore, D1JobStore, D1ProjectStore,
+  D1WorkspaceStore, D1MemberStore, D1StorageUsageStore,
+} from "./infra/d1";
 import { projectRoutes } from "./project/handler";
 import { workspaceRoutes } from "./workspace/handler";
 import { meRoutes } from "./me/handler";
@@ -20,14 +23,15 @@ import { SimpleAuthorizer } from "./infra/authorizer";
 import type { AppEnv } from "./types";
 
 export function createApp(env: Env) {
-  const metadata = new KVMetadataStore(env.KV);
+  const metadata = new D1MetadataStore(env.DB);
   const storage = new R2FileStorage(env.STORAGE);
   const uploadSessions = new KVUploadSessionStore(env.KV);
-  const jobs = new KVJobStore(env.KV);
-  const projects = new KVProjectStore(env.KV);
-  const workspaces = new KVWorkspaceStore(env.KV);
-  const memberStore = new KVMemberStore(env.KV);
+  const jobs = new D1JobStore(env.DB);
+  const projects = new D1ProjectStore(env.DB);
+  const workspaces = new D1WorkspaceStore(env.DB);
+  const memberStore = new D1MemberStore(env.DB);
   const sessions = new KVSessionStore(env.KV);
+  const storageUsage = new D1StorageUsageStore(env.DB);
   const authorizer = env.CERBOS_ENDPOINT
     ? new CerbosAuthorizer(env.CERBOS_ENDPOINT)
     : new SimpleAuthorizer();
@@ -67,6 +71,7 @@ export function createApp(env: Env) {
     c.set("workspaces", workspaces);
     c.set("members", memberStore);
     c.set("extractionQueue", extractionQueue);
+    c.set("storageUsage", storageUsage);
     await next();
   });
 

@@ -4,6 +4,7 @@ import { BASE, rewriteUrl, uploadFile } from "./helpers";
 describe("Basic flow", () => {
   let assetId: string;
   let fileUrl: string;
+  let sessionId: string;
   const fileContent = "hello, reearth-serve!";
 
   beforeAll(async () => {
@@ -12,26 +13,29 @@ describe("Basic flow", () => {
   });
 
   test("Upload returns 201 with asset metadata and URL", async () => {
-    const { status, body } = await uploadFile(
+    const result = await uploadFile(
       new TextEncoder().encode(fileContent),
       "greeting.txt",
       "text/plain",
     );
-    expect(status).toBe(201);
-    expect(body.asset).toBeDefined();
-    expect(body.asset.id).toBeTypeOf("string");
-    expect(body.asset.filename).toBe("greeting.txt");
-    expect(body.asset.contentType).toBe("text/plain");
-    expect(body.asset.size).toBe(new TextEncoder().encode(fileContent).byteLength);
-    expect(body.asset.expiresAt).toBeGreaterThan(Date.now());
-    expect(body.url).toContain("/files/");
+    expect(result.status).toBe(201);
+    expect(result.body.asset).toBeDefined();
+    expect(result.body.asset.id).toBeTypeOf("string");
+    expect(result.body.asset.filename).toBe("greeting.txt");
+    expect(result.body.asset.contentType).toBe("text/plain");
+    expect(result.body.asset.size).toBe(new TextEncoder().encode(fileContent).byteLength);
+    expect(result.body.asset.expiresAt).toBeGreaterThan(Date.now());
+    expect(result.body.url).toContain("/files/");
 
-    assetId = body.asset.id;
-    fileUrl = rewriteUrl(body.url);
+    assetId = result.body.asset.id;
+    fileUrl = rewriteUrl(result.body.url);
+    sessionId = result.sessionId!;
   });
 
   test("GET /api/v1/assets/:id returns correct metadata", async () => {
-    const res = await fetch(`${BASE}/api/v1/assets/${assetId}`);
+    const res = await fetch(`${BASE}/api/v1/assets/${assetId}`, {
+      headers: { "X-Session-Id": sessionId },
+    });
     expect(res.status).toBe(200);
     const body = await res.json() as any;
     expect(body.asset.id).toBe(assetId);
@@ -80,12 +84,17 @@ describe("Basic flow", () => {
   });
 
   test("DELETE returns 204", async () => {
-    const res = await fetch(`${BASE}/api/v1/assets/${assetId}`, { method: "DELETE" });
+    const res = await fetch(`${BASE}/api/v1/assets/${assetId}`, {
+      method: "DELETE",
+      headers: { "X-Session-Id": sessionId },
+    });
     expect(res.status).toBe(204);
   });
 
   test("After deletion, metadata and file return 404", async () => {
-    const metaRes = await fetch(`${BASE}/api/v1/assets/${assetId}`);
+    const metaRes = await fetch(`${BASE}/api/v1/assets/${assetId}`, {
+      headers: { "X-Session-Id": sessionId },
+    });
     expect(metaRes.status).toBe(404);
 
     const fileRes = await fetch(fileUrl);

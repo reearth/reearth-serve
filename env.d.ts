@@ -1,6 +1,7 @@
 interface Env {
   STORAGE: R2Bucket;
   KV: KVNamespace;
+  DB: D1Database;
   ASSET_TTL_SECONDS: string;
   BASE_URL: string;
   // Presigned URL upload (production only — not available in local dev)

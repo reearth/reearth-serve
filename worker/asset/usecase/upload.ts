@@ -38,7 +38,7 @@ export async function uploadAsset(
     contentType,
     size: file.size,
     createdAt: now,
-    expiresAt: now + ttlSeconds * 1000,
+    expiresAt: options?.projectId ? 0 : now + ttlSeconds * 1000,
     ...(file.contentEncoding && { contentEncoding: file.contentEncoding }),
     ...(file.contentEncoding && file.originalSize && { originalSize: file.originalSize }),
     ...(archiveFormat && {
@@ -80,7 +80,7 @@ export async function uploadAsset(
     }
   }
 
-  await metadata.save(asset, ttlSeconds);
+  await metadata.save(asset, options?.projectId ? 0 : ttlSeconds);
 
   return {
     asset,

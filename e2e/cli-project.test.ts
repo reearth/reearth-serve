@@ -3,7 +3,16 @@ import { execSync } from "node:child_process";
 import { writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { BASE, signToken } from "./helpers";
+import { BASE, MOCK_OIDC, signToken } from "./helpers";
+
+// Auto-detect if mock OIDC server is reachable
+let mockOidcAvailable = false;
+try {
+  const res = await fetch(`${MOCK_OIDC}/.well-known/openid-configuration`);
+  mockOidcAvailable = res.ok;
+} catch {
+  // not reachable
+}
 
 const CONFIG_DIR = join(homedir(), ".config", "reearth-serve");
 const CREDENTIALS_FILE = join(CONFIG_DIR, "credentials.json");
@@ -20,7 +29,7 @@ function cliJson(args: string): unknown {
   return JSON.parse(cli(`--json ${args}`));
 }
 
-describe("CLI project commands", () => {
+describe("CLI project commands", { skip: !mockOidcAvailable }, () => {
   let token: string;
   let savedCredentials: string | null = null;
   let savedConfig: string | null = null;

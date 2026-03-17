@@ -5,6 +5,7 @@ import type { Authorizer } from "./auth/authorizer";
 import type { ProjectStore } from "./project/repository";
 import type { WorkspaceStore } from "./workspace/repository";
 import type { MemberStore } from "./member/repository";
+import type { StorageUsageStore } from "./infra/d1";
 export type AppEnv = {
   Variables: {
     metadata: MetadataStore;
@@ -21,5 +22,6 @@ export type AppEnv = {
     workspaces: WorkspaceStore;
     members: MemberStore;
     extractionQueue: Queue | null;
+    storageUsage: StorageUsageStore;
   };
 };

@@ -25,6 +25,12 @@ bucket_name = "reearth-serve"
 binding = "KV"
 id = "KV_NAMESPACE_ID"
 
+[[d1_databases]]
+binding = "DB"
+database_name = "reearth-serve"
+database_id = "D1_DATABASE_ID"
+migrations_dir = "worker/infra/migrations"
+
 [[containers]]
 class_name = "ArchiveExtractorContainer"
 image = "./container/archive-extractor/Dockerfile"

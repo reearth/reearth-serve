@@ -1,40 +1,77 @@
 import { describe, test, expect, beforeAll } from "vitest";
 import { BASE, rewriteUrl } from "./helpers";
 
-const presignedAvailable = process.env.E2E_PRESIGNED === "true";
+// Auto-detect if presigned uploads are available by probing the endpoint.
+// Can also be forced via E2E_PRESIGNED=true/false.
+let presignedAvailable = process.env.E2E_PRESIGNED === "true";
+if (!process.env.E2E_PRESIGNED) {
+  const probeBase = process.env.E2E_ENDPOINT ?? "http://localhost:8787";
+  try {
+    const res = await fetch(`${probeBase}/api/v1/assets/uploads`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: "probe.txt", contentType: "text/plain", size: 1 }),
+    });
+    presignedAvailable = res.status !== 501;
+  } catch {
+    // server unreachable — will fail in beforeAll anyway
+  }
+}
+
+/** Helper: POST JSON with session */
+async function postJson(path: string, body: unknown, sessionId?: string) {
+  const headers: Record<string, string> = { "Content-Type": "application/json" };
+  if (sessionId) headers["X-Session-Id"] = sessionId;
+  return fetch(`${BASE}${path}`, { method: "POST", headers, body: JSON.stringify(body) });
+}
+
+/** Helper: POST with session (no body) */
+async function post(path: string, sessionId?: string) {
+  const headers: Record<string, string> = {};
+  if (sessionId) headers["X-Session-Id"] = sessionId;
+  return fetch(`${BASE}${path}`, { method: "POST", headers });
+}
+
+/** Helper: GET with session */
+async function get(path: string, sessionId?: string) {
+  const headers: Record<string, string> = {};
+  if (sessionId) headers["X-Session-Id"] = sessionId;
+  return fetch(`${BASE}${path}`, { headers });
+}
+
+/** Helper: DELETE with session */
+async function del(path: string, sessionId?: string) {
+  const headers: Record<string, string> = {};
+  if (sessionId) headers["X-Session-Id"] = sessionId;
+  return fetch(`${BASE}${path}`, { method: "DELETE", headers });
+}
 
 describe("Presigned URL upload", () => {
+  let sessionId: string;
+
   beforeAll(async () => {
     const res = await fetch(`${BASE}/api/v1/health`);
     if (!res.ok) throw new Error(`Server not reachable at ${BASE}`);
+    // Get a session ID for all presigned tests
+    sessionId = res.headers.get("X-Session-Id") ?? "";
   });
 
   // ---- Local-only tests (no S3 creds) ----
 
   test("POST /api/v1/assets/uploads returns 501 when S3 credentials not configured", { skip: presignedAvailable }, async () => {
-    const res = await fetch(`${BASE}/api/v1/assets/uploads`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ filename: "test.txt", contentType: "text/plain", size: 5 }),
-    });
+    const res = await postJson("/api/v1/assets/uploads", { filename: "test.txt", contentType: "text/plain", size: 5 }, sessionId);
     expect(res.status).toBe(501);
     const body = await res.json() as any;
     expect(body.error).toBeDefined();
   });
 
   test("POST /api/v1/assets/uploads validates required fields", async () => {
-    const res = await fetch(`${BASE}/api/v1/assets/uploads`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({}),
-    });
+    const res = await postJson("/api/v1/assets/uploads", {}, sessionId);
     expect([400, 501]).toContain(res.status);
   });
 
   test("POST /api/v1/assets/uploads/:id/complete returns 404 for nonexistent session", async () => {
-    const res = await fetch(`${BASE}/api/v1/assets/uploads/nonexistent/complete`, {
-      method: "POST",
-    });
+    const res = await post("/api/v1/assets/uploads/nonexistent/complete", sessionId);
     expect(res.status).toBe(404);
   });
 
@@ -46,11 +83,10 @@ describe("Presigned URL upload", () => {
     let fileUrl: string;
 
     test("Create upload session returns presigned URL", async () => {
-      const res = await fetch(`${BASE}/api/v1/assets/uploads`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ filename: "single.txt", contentType: "text/plain", size: fileContent.length }),
-      });
+      const res = await postJson("/api/v1/assets/uploads",
+        { filename: "single.txt", contentType: "text/plain", size: fileContent.length },
+        sessionId,
+      );
       expect(res.status).toBe(201);
 
       const body = await res.json() as any;
@@ -70,9 +106,7 @@ describe("Presigned URL upload", () => {
     });
 
     test("Complete upload session returns asset", async () => {
-      const res = await fetch(`${BASE}/api/v1/assets/uploads/${uploadId}/complete`, {
-        method: "POST",
-      });
+      const res = await post(`/api/v1/assets/uploads/${uploadId}/complete`, sessionId);
       expect(res.status).toBe(201);
 
       const body = await res.json() as any;
@@ -93,14 +127,14 @@ describe("Presigned URL upload", () => {
     });
 
     test("Asset metadata is correct", async () => {
-      const res = await fetch(`${BASE}/api/v1/assets/${uploadId}`);
+      const res = await get(`/api/v1/assets/${uploadId}`, sessionId);
       expect(res.status).toBe(200);
       const body = await res.json() as any;
       expect(body.asset.contentType).toBe("text/plain");
     });
 
     test("Cleanup: delete uploaded asset", async () => {
-      const res = await fetch(`${BASE}/api/v1/assets/${uploadId}`, { method: "DELETE" });
+      const res = await del(`/api/v1/assets/${uploadId}`, sessionId);
       expect(res.status).toBe(204);
     });
   });
@@ -126,16 +160,12 @@ describe("Presigned URL upload", () => {
     });
 
     test("Create multipart upload session returns part URLs", async () => {
-      const res = await fetch(`${BASE}/api/v1/assets/uploads`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filename: "multipart.bin",
-          contentType: "application/octet-stream",
-          size: totalSize,
-          partCount: PART_COUNT,
-        }),
-      });
+      const res = await postJson("/api/v1/assets/uploads", {
+        filename: "multipart.bin",
+        contentType: "application/octet-stream",
+        size: totalSize,
+        partCount: PART_COUNT,
+      }, sessionId);
       expect(res.status).toBe(201);
 
       const body = await res.json() as any;
@@ -176,11 +206,7 @@ describe("Presigned URL upload", () => {
       etags.push(...results);
 
       // Complete multipart upload with ETags
-      const completeRes = await fetch(`${BASE}/api/v1/assets/uploads/${uploadId}/complete`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ parts: etags }),
-      });
+      const completeRes = await postJson(`/api/v1/assets/uploads/${uploadId}/complete`, { parts: etags }, sessionId);
       expect(completeRes.status).toBe(201);
 
       const body = await completeRes.json() as any;
@@ -222,7 +248,7 @@ describe("Presigned URL upload", () => {
     });
 
     test("Cleanup: delete multipart-uploaded asset", async () => {
-      const res = await fetch(`${BASE}/api/v1/assets/${uploadId}`, { method: "DELETE" });
+      const res = await del(`/api/v1/assets/${uploadId}`, sessionId);
       expect(res.status).toBe(204);
     });
   });
@@ -231,48 +257,34 @@ describe("Presigned URL upload", () => {
 
   describe("Multipart error handling", { skip: !presignedAvailable }, () => {
     test("Complete without uploading parts returns 404", async () => {
-      const initRes = await fetch(`${BASE}/api/v1/assets/uploads`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filename: "ghost.bin",
-          contentType: "application/octet-stream",
-          size: 10_000_000,
-          partCount: 2,
-        }),
-      });
+      const initRes = await postJson("/api/v1/assets/uploads", {
+        filename: "ghost.bin",
+        contentType: "application/octet-stream",
+        size: 10_000_000,
+        partCount: 2,
+      }, sessionId);
       expect(initRes.status).toBe(201);
 
       const { uploadId } = await initRes.json() as any;
 
       // Try to complete without uploading any parts — should fail
-      const res = await fetch(`${BASE}/api/v1/assets/uploads/${uploadId}/complete`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ parts: [] }),
-      });
+      const res = await postJson(`/api/v1/assets/uploads/${uploadId}/complete`, { parts: [] }, sessionId);
       expect(res.status).toBe(404);
     });
 
     test("Complete multipart without parts body returns 404", async () => {
-      const initRes = await fetch(`${BASE}/api/v1/assets/uploads`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          filename: "noparts.bin",
-          contentType: "application/octet-stream",
-          size: 10_000_000,
-          partCount: 2,
-        }),
-      });
+      const initRes = await postJson("/api/v1/assets/uploads", {
+        filename: "noparts.bin",
+        contentType: "application/octet-stream",
+        size: 10_000_000,
+        partCount: 2,
+      }, sessionId);
       expect(initRes.status).toBe(201);
 
       const { uploadId } = await initRes.json() as any;
 
       // Complete without providing parts at all
-      const res = await fetch(`${BASE}/api/v1/assets/uploads/${uploadId}/complete`, {
-        method: "POST",
-      });
+      const res = await post(`/api/v1/assets/uploads/${uploadId}/complete`, sessionId);
       expect(res.status).toBe(404);
     });
   });

@@ -1,6 +1,8 @@
 import { describe, test, expect, beforeAll } from "vitest";
 import { BASE, rewriteUrl, uploadFile } from "./helpers";
 
+const containerAvailable = process.env.E2E_CONTAINER === "true";
+
 describe("Archive & Job", () => {
   beforeAll(async () => {
     const res = await fetch(`${BASE}/api/v1/health`);
@@ -73,8 +75,10 @@ describe("Archive & Job", () => {
     test("Job lifecycle: upload creates job, status transitions through pending → extracting → ready", async () => {
       // Upload a ZIP — job should be auto-created
       const zipBytes = buildMiniZip({ "a.txt": "hello" });
-      const { body: uploadBody } = await uploadFile(zipBytes, "lifecycle.zip", "application/zip");
+      const { body: uploadBody, sessionId } = await uploadFile(zipBytes, "lifecycle.zip", "application/zip");
       const assetId = uploadBody.asset.id;
+      const headers: Record<string, string> = {};
+      if (sessionId) headers["X-Session-Id"] = sessionId;
 
       // Asset should have pending status
       expect(uploadBody.asset.type).toBe("archive");
@@ -83,7 +87,7 @@ describe("Archive & Job", () => {
       expect(uploadBody.asset.jobId).toBe(assetId);
 
       // Job should exist and be pending
-      const jobRes = await fetch(`${BASE}/api/v1/jobs/${assetId}`);
+      const jobRes = await fetch(`${BASE}/api/v1/jobs/${assetId}`, { headers });
       expect(jobRes.status).toBe(200);
       const job = await jobRes.json() as any;
       expect(job.status).toBe("pending");
@@ -96,7 +100,7 @@ describe("Archive & Job", () => {
       });
       expect(runRes.status).toBe(200);
 
-      const assetDuring = await (await fetch(`${BASE}/api/v1/assets/${assetId}`)).json() as any;
+      const assetDuring = await (await fetch(`${BASE}/api/v1/assets/${assetId}`, { headers })).json() as any;
       expect(assetDuring.asset.status).toBe("extracting");
 
       // Container reports completed → asset becomes ready
@@ -107,31 +111,33 @@ describe("Archive & Job", () => {
       });
       expect(completeRes.status).toBe(200);
 
-      const assetAfter = await (await fetch(`${BASE}/api/v1/assets/${assetId}`)).json() as any;
+      const assetAfter = await (await fetch(`${BASE}/api/v1/assets/${assetId}`, { headers })).json() as any;
       expect(assetAfter.asset.status).toBe("ready");
       expect(assetAfter.asset.fileCount).toBe(1);
       expect(assetAfter.asset.extractedSize).toBe(5);
     });
 
-    test("Container extraction: upload ZIP, wait for extraction, verify files", { timeout: 120_000 }, async () => {
+    test("Container extraction: upload ZIP, wait for extraction, verify files", { timeout: 120_000, skip: !containerAvailable }, async () => {
       const files = {
         "tileset.json": '{"root":"test"}',
         "tiles/0.json": '{"tile":0}',
         "tiles/1.json": '{"tile":1}',
       };
       const zipBytes = buildMiniZip(files);
-      const { status, body: uploadBody } = await uploadFile(zipBytes, "extract-test.zip", "application/zip");
+      const { status, body: uploadBody, sessionId } = await uploadFile(zipBytes, "extract-test.zip", "application/zip");
       expect(status).toBe(201);
 
       const assetId = uploadBody.asset.id;
       expect(uploadBody.asset.status).toBe("pending");
+      const headers: Record<string, string> = {};
+      if (sessionId) headers["X-Session-Id"] = sessionId;
 
       // Poll job until completed or failed (max 90s)
       let jobStatus = "pending";
       let lastJob: any;
       for (let i = 0; i < 30; i++) {
         await new Promise((r) => setTimeout(r, 3000));
-        const res = await fetch(`${BASE}/api/v1/jobs/${assetId}`);
+        const res = await fetch(`${BASE}/api/v1/jobs/${assetId}`, { headers });
         lastJob = await res.json() as any;
         jobStatus = lastJob.status;
         if (jobStatus === "completed" || jobStatus === "failed") break;
@@ -141,11 +147,11 @@ describe("Archive & Job", () => {
       }
       expect(jobStatus).toBe("completed");
 
-      // Verify asset status is ready (poll to allow for KV eventual consistency)
+      // Verify asset status is ready
       let assetStatus = "pending";
       let assetRes: any;
       for (let i = 0; i < 10; i++) {
-        assetRes = await (await fetch(`${BASE}/api/v1/assets/${assetId}`)).json() as any;
+        assetRes = await (await fetch(`${BASE}/api/v1/assets/${assetId}`, { headers })).json() as any;
         assetStatus = assetRes.asset.status;
         if (assetStatus === "ready" || assetStatus === "failed") break;
         await new Promise((r) => setTimeout(r, 2000));
@@ -154,7 +160,7 @@ describe("Archive & Job", () => {
       expect(assetRes.asset.fileCount).toBe(Object.keys(files).length);
 
       // Verify file list via NDJSON API
-      const filesRes = await fetch(`${BASE}/api/v1/assets/${assetId}/files`);
+      const filesRes = await fetch(`${BASE}/api/v1/assets/${assetId}/files`, { headers });
       expect(filesRes.status).toBe(200);
       const fileEntries = parseNdjson(await filesRes.text());
       expect(fileEntries).toHaveLength(Object.keys(files).length);
@@ -174,10 +180,12 @@ describe("Archive & Job", () => {
   describe("File list API", () => {
     test("GET /api/v1/assets/:id/files streams single entry for non-archive asset", async () => {
       const content = new TextEncoder().encode("hello");
-      const { body } = await uploadFile(content, "simple.txt", "text/plain");
+      const { body, sessionId } = await uploadFile(content, "simple.txt", "text/plain");
       const assetId = body.asset.id;
+      const headers: Record<string, string> = {};
+      if (sessionId) headers["X-Session-Id"] = sessionId;
 
-      const res = await fetch(`${BASE}/api/v1/assets/${assetId}/files`);
+      const res = await fetch(`${BASE}/api/v1/assets/${assetId}/files`, { headers });
       expect(res.status).toBe(200);
       expect(res.headers.get("Content-Type")).toContain("application/x-ndjson");
       const entries = parseNdjson(await res.text());
@@ -188,10 +196,12 @@ describe("Archive & Job", () => {
 
     test("GET /api/v1/assets/:id/files returns empty for pending archive", async () => {
       const zipBytes = buildMiniZip({ "a.txt": "data" });
-      const { body } = await uploadFile(zipBytes, "pending.zip", "application/zip");
+      const { body, sessionId } = await uploadFile(zipBytes, "pending.zip", "application/zip");
       const assetId = body.asset.id;
+      const headers: Record<string, string> = {};
+      if (sessionId) headers["X-Session-Id"] = sessionId;
 
-      const res = await fetch(`${BASE}/api/v1/assets/${assetId}/files`);
+      const res = await fetch(`${BASE}/api/v1/assets/${assetId}/files`, { headers });
       expect(res.status).toBe(200);
       const entries = parseNdjson(await res.text());
       expect(entries).toHaveLength(0);
@@ -199,17 +209,19 @@ describe("Archive & Job", () => {
 
     test("GET /api/v1/assets/:id/files supports prefix filter", async () => {
       const content = new TextEncoder().encode("hello");
-      const { body } = await uploadFile(content, "data.txt", "text/plain");
+      const { body, sessionId } = await uploadFile(content, "data.txt", "text/plain");
       const assetId = body.asset.id;
+      const headers: Record<string, string> = {};
+      if (sessionId) headers["X-Session-Id"] = sessionId;
 
       // Matching prefix
-      const res1 = await fetch(`${BASE}/api/v1/assets/${assetId}/files?prefix=data`);
+      const res1 = await fetch(`${BASE}/api/v1/assets/${assetId}/files?prefix=data`, { headers });
       expect(res1.status).toBe(200);
       const entries1 = parseNdjson(await res1.text());
       expect(entries1).toHaveLength(1);
 
       // Non-matching prefix
-      const res2 = await fetch(`${BASE}/api/v1/assets/${assetId}/files?prefix=other`);
+      const res2 = await fetch(`${BASE}/api/v1/assets/${assetId}/files?prefix=other`, { headers });
       expect(res2.status).toBe(200);
       const entries2 = parseNdjson(await res2.text());
       expect(entries2).toHaveLength(0);

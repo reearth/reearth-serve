@@ -44,7 +44,7 @@ export async function completeUploadSession(
     contentType: session.contentType,
     size: head.size,
     createdAt: session.createdAt,
-    expiresAt: now + ttlSeconds * 1000,
+    expiresAt: options?.projectId ? 0 : now + ttlSeconds * 1000,
     ...(head.contentEncoding && { contentEncoding: head.contentEncoding }),
     ...(head.contentEncoding && session.size && { originalSize: session.size }),
     ...(archiveFormat && {
@@ -86,7 +86,7 @@ export async function completeUploadSession(
     }
   }
 
-  await metadata.save(asset, ttlSeconds);
+  await metadata.save(asset, options?.projectId ? 0 : ttlSeconds);
   await sessions.delete(id);
 
   return {

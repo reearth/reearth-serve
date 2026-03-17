@@ -42,6 +42,17 @@ export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
       return c.json({ error: "Upload session not found or file not yet uploaded" }, 404);
     }
 
+    // Update storage usage counters for project assets
+    if (result.asset.projectId) {
+      const storageUsage = c.get("storageUsage");
+      const projects = c.get("projects");
+      await storageUsage.increment(`project:${result.asset.projectId}`, result.asset.size);
+      const project = await projects.find(result.asset.projectId);
+      if (project?.workspaceId) {
+        await storageUsage.increment(`workspace:${project.workspaceId}`, result.asset.size);
+      }
+    }
+
     return c.json(result, 201);
   });
 }

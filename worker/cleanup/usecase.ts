@@ -4,66 +4,77 @@ import type { JobStore } from "../job/repository";
 export interface CleanupResult {
   deletedAssets: string[];
   deletedJobs: string[];
-  nextCursor?: string;
 }
 
 /**
- * Scan R2 for orphaned assets whose KV metadata has expired (TTL),
- * and delete all R2 objects + associated jobs.
+ * Find expired assets via D1 query and delete their R2 objects + metadata + jobs.
+ *
+ * With D1, expired asset discovery is a simple SQL query instead of an R2 prefix scan.
+ * No cursor is needed — the query is stateless and uses LIMIT for batching.
  */
 export async function cleanupExpiredAssets(
-  metadata: MetadataStore,
+  metadata: MetadataStore & { listExpired?: (now: number, limit: number) => Promise<import("../asset/model").AssetMetadata[]> },
   storage: FileStorage,
   jobs: JobStore,
-  options?: { cursor?: string; maxAssets?: number },
+  options?: { maxAssets?: number },
 ): Promise<CleanupResult> {
   const maxAssets = options?.maxAssets ?? 100;
-
-  // List R2 objects under assets/ to discover asset IDs
-  const assetIds = new Set<string>();
-  let cursor = options?.cursor;
-  let scanned = 0;
-
-  // Scan R2 keys, extracting unique asset IDs from paths like "assets/{id}/..."
-  while (scanned < maxAssets) {
-    const batch = await storage.list("assets/", {
-      limit: 1000,
-      cursor,
-    });
-
-    for (const key of batch.keys) {
-      const id = extractAssetId(key);
-      if (id) assetIds.add(id);
-      if (assetIds.size >= maxAssets) break;
-    }
-
-    cursor = batch.cursor;
-    scanned = assetIds.size;
-
-    if (!batch.cursor || assetIds.size >= maxAssets) break;
-  }
-
   const deletedAssets: string[] = [];
   const deletedJobs: string[] = [];
 
-  for (const assetId of assetIds) {
-    // Check if KV metadata still exists
-    const asset = await metadata.find(assetId);
-    if (asset) continue; // Still alive — skip
+  // Use D1-based expiry query if available, otherwise fall back to R2 scan
+  if (metadata.listExpired) {
+    const expired = await metadata.listExpired(Date.now(), maxAssets);
 
-    // Asset metadata expired — clean up R2 objects
-    await deleteAllR2Objects(storage, `assets/${assetId}/`);
-    deletedAssets.push(assetId);
+    for (const asset of expired) {
+      // Delete R2 objects
+      await deleteAllR2Objects(storage, `assets/${asset.id}/`);
 
-    // Clean up associated job (job ID = asset ID for archive-extraction)
-    const job = await jobs.find(assetId);
-    if (job) {
-      await jobs.delete(assetId);
-      deletedJobs.push(assetId);
+      // Delete metadata from D1
+      await metadata.delete(asset.id);
+      deletedAssets.push(asset.id);
+
+      // Clean up associated job
+      const job = await jobs.find(asset.id);
+      if (job) {
+        await jobs.delete(asset.id);
+        deletedJobs.push(asset.id);
+      }
+    }
+  } else {
+    // Legacy R2-scan fallback (for backward compatibility during migration)
+    const assetIds = new Set<string>();
+    let cursor: string | undefined;
+
+    while (assetIds.size < maxAssets) {
+      const batch = await storage.list("assets/", { limit: 1000, cursor });
+
+      for (const key of batch.keys) {
+        const id = extractAssetId(key);
+        if (id) assetIds.add(id);
+        if (assetIds.size >= maxAssets) break;
+      }
+
+      cursor = batch.cursor;
+      if (!batch.cursor || assetIds.size >= maxAssets) break;
+    }
+
+    for (const assetId of assetIds) {
+      const asset = await metadata.find(assetId);
+      if (asset) continue; // Still alive — skip
+
+      await deleteAllR2Objects(storage, `assets/${assetId}/`);
+      deletedAssets.push(assetId);
+
+      const job = await jobs.find(assetId);
+      if (job) {
+        await jobs.delete(assetId);
+        deletedJobs.push(assetId);
+      }
     }
   }
 
-  return { deletedAssets, deletedJobs, nextCursor: cursor };
+  return { deletedAssets, deletedJobs };
 }
 
 /** Extract asset ID from R2 key like "assets/{id}/filename" */
@@ -96,13 +107,27 @@ async function deleteAllR2Objects(
 if (import.meta.vitest) {
   const { test, expect, vi } = import.meta.vitest;
 
-  function mockMetadata(existing: Set<string>): MetadataStore {
+  function mockMetadata(existing: Set<string>): MetadataStore & { listExpired: (now: number, limit: number) => Promise<import("../asset/model").AssetMetadata[]> } {
+    const assets = new Map<string, import("../asset/model").AssetMetadata>();
+    for (const id of existing) {
+      assets.set(id, { id, filename: `${id}.bin`, contentType: "application/octet-stream", size: 100, createdAt: Date.now(), expiresAt: Date.now() + 3600000 } as import("../asset/model").AssetMetadata);
+    }
     return {
       save: vi.fn(),
-      find: vi.fn(async (id: string) => existing.has(id) ? { id } as any : null),
-      delete: vi.fn(),
+      find: vi.fn(async (id: string) => assets.get(id) ?? null),
+      delete: vi.fn(async (id: string) => { assets.delete(id); }),
       list: vi.fn(async () => ({ items: [], cursor: undefined })),
+      listExpired: vi.fn(async (_now: number, _limit: number) => []),
     };
+  }
+
+  function mockMetadataWithExpired(
+    existing: Set<string>,
+    expired: import("../asset/model").AssetMetadata[],
+  ): MetadataStore & { listExpired: (now: number, limit: number) => Promise<import("../asset/model").AssetMetadata[]> } {
+    const base = mockMetadata(existing);
+    base.listExpired = vi.fn(async () => expired);
+    return base;
   }
 
   function mockStorage(keys: string[]): FileStorage {
@@ -119,7 +144,7 @@ if (import.meta.vitest) {
     };
   }
 
-  function mockJobs(existing: Set<string>): JobStore {
+  function mockJobs(existing: Set<string>): import("../job/repository").JobStore {
     return {
       save: vi.fn(),
       find: vi.fn(async (id: string) => existing.has(id) ? { id } as any : null),
@@ -128,12 +153,15 @@ if (import.meta.vitest) {
     };
   }
 
-  test("cleanupExpiredAssets deletes orphaned R2 objects and jobs", async () => {
-    const md = mockMetadata(new Set(["alive-id"]));
+  test("cleanupExpiredAssets deletes expired assets via D1 listExpired", async () => {
+    const expiredAsset = {
+      id: "expired-id", filename: "file.zip", contentType: "application/zip",
+      size: 100, createdAt: 1000, expiresAt: 500,
+    } as import("../asset/model").AssetMetadata;
+
+    const md = mockMetadataWithExpired(new Set(["alive-id"]), [expiredAsset]);
     const st = mockStorage([
-      "assets/alive-id/file.txt",
       "assets/expired-id/file.zip",
-      "assets/expired-id/_archive/_manifest.jsonl",
       "assets/expired-id/files/data.json",
     ]);
     const jb = mockJobs(new Set(["expired-id"]));
@@ -142,16 +170,13 @@ if (import.meta.vitest) {
 
     expect(result.deletedAssets).toEqual(["expired-id"]);
     expect(result.deletedJobs).toEqual(["expired-id"]);
-    // alive-id objects should not be deleted
-    expect(st.delete).not.toHaveBeenCalledWith("assets/alive-id/file.txt");
-    // expired-id objects should be deleted
+    expect(md.delete).toHaveBeenCalledWith("expired-id");
     expect(st.delete).toHaveBeenCalledWith("assets/expired-id/file.zip");
-    expect(st.delete).toHaveBeenCalledWith("assets/expired-id/_archive/_manifest.jsonl");
     expect(st.delete).toHaveBeenCalledWith("assets/expired-id/files/data.json");
   });
 
-  test("cleanupExpiredAssets skips assets with existing metadata", async () => {
-    const md = mockMetadata(new Set(["alive-id"]));
+  test("cleanupExpiredAssets returns empty when nothing expired", async () => {
+    const md = mockMetadataWithExpired(new Set(["alive-id"]), []);
     const st = mockStorage(["assets/alive-id/file.txt"]);
     const jb = mockJobs(new Set());
 
@@ -159,20 +184,6 @@ if (import.meta.vitest) {
 
     expect(result.deletedAssets).toEqual([]);
     expect(st.delete).not.toHaveBeenCalled();
-  });
-
-  test("cleanupExpiredAssets respects maxAssets limit", async () => {
-    const md = mockMetadata(new Set());
-    const st = mockStorage([
-      "assets/id1/file.txt",
-      "assets/id2/file.txt",
-      "assets/id3/file.txt",
-    ]);
-    const jb = mockJobs(new Set());
-
-    const result = await cleanupExpiredAssets(md, st, jb, { maxAssets: 2 });
-
-    expect(result.deletedAssets.length).toBeLessThanOrEqual(2);
   });
 
   test("extractAssetId extracts ID from R2 key", () => {

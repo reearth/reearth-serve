@@ -33,6 +33,17 @@ export function registerDeleteRoute(app: Hono<AppEnv>) {
         return c.json({ error: "Asset not found" }, 404);
       }
 
+      // Update storage usage counters for project assets
+      if (asset.projectId) {
+        const storageUsage = c.get("storageUsage");
+        const projects = c.get("projects");
+        await storageUsage.decrement(`project:${asset.projectId}`, asset.size);
+        const project = await projects.find(asset.projectId);
+        if (project?.workspaceId) {
+          await storageUsage.decrement(`workspace:${project.workspaceId}`, asset.size);
+        }
+      }
+
       return c.body(null, 204);
     },
   );

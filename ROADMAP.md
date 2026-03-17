@@ -89,24 +89,27 @@ TTL:   3600s (auto-expire)
 
 ---
 
-## Phase 1 — Zip Upload & Static Site Hosting
+## Phase 1 — Zip Upload & Static Site Hosting ✅
 
 Upload a `.zip` archive; the server extracts it and serves the contents as a directory.
 
-- Zip extraction via Cloudflare Containers or in-worker decompression
-- Directory listing or index file resolution (`index.html`)
-- Enables uploading pre-built tile packages (XYZ directory structure, 3D Tiles tileset, etc.)
+- [x] Zip extraction via Cloudflare Containers or in-worker decompression
+- [x] Directory listing or index file resolution (`index.html`)
+- [x] Enables uploading pre-built tile packages (XYZ directory structure, 3D Tiles tileset, etc.)
 
 ---
 
-## Phase 2 — Authentication, Projects & Asset Management
+## Phase 2 — Authentication, Projects & Asset Management ✅
 
 Introduce user identity, project scoping, and persistent assets.
 
-- **Auth**: API key or OAuth (Re:Earth Dashboard integration)
-- **Projects**: logical grouping of assets with per-project settings
-- **Asset settings**: public/private toggle, custom metadata, configurable TTL or permanent storage
-- **Access control**: file-layer access control (URL visibility) — distinct from service-layer (Phase 3+)
+- [x] **Auth**: API key or OAuth (Re:Earth Dashboard integration)
+- [x] **Projects**: logical grouping of assets with per-project settings
+- [x] **Asset settings**: public/private toggle, custom metadata, configurable TTL or permanent storage
+- [x] **Access control**: file-layer access control (URL visibility) — distinct from service-layer (Phase 3+)
+- [ ] **OIDC server integration**: connection to external OIDC server for authentication (not yet implemented)
+- [ ] **Account server integration**: connection to Re:Earth account platform (not yet implemented)
+- [ ] **Cerbos integration**: policy-based authorization via Cerbos (not yet implemented)
 
 ---
 
@@ -238,7 +241,7 @@ Upload 3D model and city model data; the system converts them into streamable 3D
 
 Production hardening and monetization infrastructure:
 
-- **Asset versioning**: full Version support — upload new content as a new Version, rollback to previous Versions, version diffing
+- **Asset versioning & management**: full Version support — upload new content as a new Version, rollback to previous Versions, version diffing. Users can "overwrite" an asset by uploading a new file, which internally creates a new asset version. File paths (`/files/:id/:filename`) accept both asset IDs and asset version IDs as `:id`, and support tags such as `latest` for convenient access to the most recent version.
 - **Access & audit logs**: per-asset, per-tile request logging
 - **Usage metering**: storage size, transfer volume, request counts — for billing integration
 - **Data residency**: paid plan option to pin R2 storage to a specific country/region

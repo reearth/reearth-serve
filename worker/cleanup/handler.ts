@@ -1,31 +1,19 @@
 import { R2FileStorage } from "../infra/storage";
-import { KVMetadataStore, KVJobStore } from "../infra/metadata";
+import { D1MetadataStore, D1JobStore } from "../infra/d1";
 import { cleanupExpiredAssets } from "./usecase";
 import type { Job } from "../job/model";
 
-const CURSOR_KEY = "cleanup:cursor";
 const DEFAULT_STUCK_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MAX_RETRIES = 5;
 
 export async function handleScheduled(env: Env): Promise<void> {
-  const metadata = new KVMetadataStore(env.KV);
+  const metadata = new D1MetadataStore(env.DB);
   const storage = new R2FileStorage(env.STORAGE);
-  const jobs = new KVJobStore(env.KV);
-
-  // Resume from last cursor
-  const cursor = await env.KV.get(CURSOR_KEY) ?? undefined;
+  const jobs = new D1JobStore(env.DB);
 
   const result = await cleanupExpiredAssets(metadata, storage, jobs, {
     maxAssets: 100,
-    cursor,
   });
-
-  // Persist cursor for next invocation; delete if scan is complete
-  if (result.nextCursor) {
-    await env.KV.put(CURSOR_KEY, result.nextCursor);
-  } else {
-    await env.KV.delete(CURSOR_KEY);
-  }
 
   if (result.deletedAssets.length > 0) {
     console.log(
@@ -36,38 +24,30 @@ export async function handleScheduled(env: Env): Promise<void> {
   // Re-trigger pending/failed/stuck extraction jobs via queue
   if (env.EXTRACTION_QUEUE) {
     const stuckThresholdMs = parseInt(env.EXTRACTION_STUCK_THRESHOLD_SECONDS || "", 10) * 1000 || DEFAULT_STUCK_THRESHOLD_MS;
-    await retriggerPendingJobs(env.KV, metadata, env.EXTRACTION_QUEUE, stuckThresholdMs);
+    await retriggerPendingJobs(metadata, jobs, env.EXTRACTION_QUEUE, stuckThresholdMs);
   }
 }
 
 async function retriggerPendingJobs(
-  kv: KVNamespace,
-  metadata: KVMetadataStore,
+  metadata: D1MetadataStore,
+  jobs: D1JobStore,
   queue: Queue,
   stuckThresholdMs: number,
 ): Promise<void> {
-  const raw = await kv.get("job_list:all");
-  if (!raw) return;
-  const jobIds: string[] = JSON.parse(raw);
+  const retriableJobs = await jobs.listRetriable(stuckThresholdMs, MAX_RETRIES);
 
-  for (const id of jobIds) {
-    const jobRaw = await kv.get(`job:${id}`);
-    if (!jobRaw) continue;
-
-    const job = JSON.parse(jobRaw) as Job;
-    if (job.type !== "archive-extraction") continue;
-
-    const isStuck = job.status === "running" && (Date.now() - job.updatedAt > stuckThresholdMs);
-    if (job.status !== "pending" && job.status !== "failed" && !isStuck) continue;
-
+  for (const job of retriableJobs) {
     // Mark as permanently failed if max retries exceeded
     if ((job.retryCount ?? 0) >= MAX_RETRIES) {
       if (job.status !== "failed") {
-        job.status = "failed";
-        job.error = `Max retries (${MAX_RETRIES}) exceeded`;
-        job.updatedAt = Date.now();
-        job.completedAt = Date.now();
-        await kv.put(`job:${id}`, JSON.stringify(job));
+        const updatedJob: Job = {
+          ...job,
+          status: "failed",
+          error: `Max retries (${MAX_RETRIES}) exceeded`,
+          updatedAt: Date.now(),
+          completedAt: Date.now(),
+        };
+        await jobs.save(updatedJob);
 
         const asset = await metadata.find(job.assetId);
         if (asset) {
@@ -84,10 +64,13 @@ async function retriggerPendingJobs(
 
     try {
       // Increment retry count and reset to pending
-      job.retryCount = (job.retryCount ?? 0) + 1;
-      job.status = "pending";
-      job.updatedAt = Date.now();
-      await kv.put(`job:${id}`, JSON.stringify(job));
+      const updatedJob: Job = {
+        ...job,
+        retryCount: (job.retryCount ?? 0) + 1,
+        status: "pending",
+        updatedAt: Date.now(),
+      };
+      await jobs.save(updatedJob);
 
       await queue.send({
         assetId: job.assetId,
@@ -95,7 +78,7 @@ async function retriggerPendingJobs(
         archiveFilename: asset.filename,
         archiveFormat: asset.archiveFormat,
       });
-      console.log(`Re-enqueued extraction for asset ${job.assetId} (retry ${job.retryCount}/${MAX_RETRIES})`);
+      console.log(`Re-enqueued extraction for asset ${job.assetId} (retry ${updatedJob.retryCount}/${MAX_RETRIES})`);
     } catch (e) {
       console.error(`Failed to re-enqueue extraction for asset ${job.assetId}:`, e);
     }
