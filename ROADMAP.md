@@ -32,12 +32,99 @@ Both interfaces share the same underlying API. The Web UI is built on React Rout
 
 ---
 
+## System Architecture: serve + untiled
+
+Re:Earth's spatial data delivery is split into two independent systems with a clear responsibility boundary:
+
+### Re:Earth Serve — Asset Lifecycle & Delivery
+
+Serve is the **storage, versioning, and delivery** layer. It manages assets, their versions, dependency graphs, access control, webhooks, and event logging. It serves files directly to end users.
+
+**Serve owns:**
+- Asset CRUD, versioning, and file storage (R2)
+- Dependency graph (Asset Edges) and dirty propagation
+- Status state machine (dirty → pending → ready/failed)
+- Access control (authentication, authorization, project/workspace scoping)
+- Webhook subscriptions, event log, and event delivery
+- Archive extraction (zip/tar → files within the same asset version)
+- Storage usage tracking
+- File serving (`/files/:id/:filename`) with version resolution
+
+**Serve does NOT do:**
+- Format conversion (GeoJSON → FGB, GeoTIFF → COG, etc.)
+- Tile rendering or generation
+- Tile caching
+- Any GDAL / tippecanoe / py3dtiles processing
+
+### Re:Earth Untiled — Tile Processing & Rendering
+
+untiled is the **transformation and tile serving** engine. It subscribes to serve's webhook events, performs format conversions and tile generation, uploads results back to serve, and serves tile requests with its own caching layer.
+
+**untiled owns:**
+- On-demand tile rendering (COG, pre-tiled sources, terrain, compositing)
+- Format conversion (GeoJSON → FGB, GeoTIFF → COG, CityGML → 3D Tiles, etc.)
+- Vector tile generation (tippecanoe)
+- 3D Tiles generation (py3dtiles, citygml-tools)
+- Tile response caching (KV/CDN, managed independently of serve)
+- MapLibre Style JSON rendering
+- External tile service proxy & cache
+- Terrain tile composition (geoid–ellipsoid height)
+
+**Integration pattern:**
+1. User uploads source data to serve → serve emits `asset.version.created` webhook
+2. untiled receives webhook → picks up transformation job via serve's status API
+3. untiled transitions status: `dirty → pending` (optimistic lock)
+4. untiled processes data (GDAL, tippecanoe, etc.)
+5. untiled uploads result to serve as a new DerivedAsset version
+6. untiled transitions status: `pending → ready`
+7. untiled purges its tile cache if needed
+8. serve emits `asset.version.ready` webhook → downstream consumers notified
+
+```
+┌─────────────────────────────────────────────────┐
+│                  Re:Earth Serve                  │
+│                                                  │
+│  Assets ─→ Versions ─→ Files (R2)               │
+│    │                                             │
+│    ├── Asset Edges (DAG)                         │
+│    ├── Status State Machine                      │
+│    ├── Webhooks & Event Log                      │
+│    ├── Access Control                            │
+│    └── File Serving (/files/:id/:filename)       │
+│                                                  │
+│  webhook ↓ events          ↑ upload results      │
+└──────────┬─────────────────┴─────────────────────┘
+           │                 │
+┌──────────▼─────────────────┴─────────────────────┐
+│                 Re:Earth Untiled                  │
+│                                                  │
+│  Format Conversion (GDAL, tippecanoe, ...)       │
+│  On-Demand Tile Rendering                        │
+│  Tile Cache (KV/CDN — serve is unaware)          │
+│  Tile Serving (/{z}/{x}/{y}.{format})            │
+└──────────────────────────────────────────────────┘
+```
+
+### Why Separate?
+
+| Concern | Benefit of Separation |
+|---------|----------------------|
+| **Scaling** | Serve scales at the edge (Workers, 300+ locations). untiled scales compute (Containers, GPU). Different resource profiles. |
+| **Deployment** | Serve can deploy independently of untiled. Tile rendering changes don't affect file delivery. |
+| **Failure isolation** | A GDAL crash in untiled doesn't affect file serving in serve. |
+| **Evolution** | Tile formats and processing tools change rapidly. Storage and access control are stable. Separate repos evolve at different speeds. |
+| **Testing** | Serve can be fully tested without GDAL/tippecanoe. untiled can be tested with mock assets. |
+
+---
+
 ## Architecture Overview
 
 - **Runtime**: Cloudflare Workers
 - **Object Storage**: Cloudflare R2 (egress-free)
-- **Metadata Store**: Cloudflare KV
-- **Containers** (future): Cloudflare Containers for GDAL / tippecanoe processing
+- **Metadata Store**: Cloudflare D1 (SQLite)
+- **Session/Cache Store**: Cloudflare KV
+- **Queues**: Cloudflare Queues (webhook delivery, archive extraction)
+- **Containers**: Cloudflare Containers (archive extraction via Go)
 - **Framework**: Hono (lightweight HTTP framework for Workers)
 
 ### Why Cloudflare?
@@ -47,15 +134,17 @@ Both interfaces share the same underlying API. The Web UI is built on React Rout
 | **Zero egress cost** | R2 has no bandwidth charges — potentially 100× cheaper than traditional cloud for tile delivery |
 | **Edge computing** | Workers run in 300+ locations worldwide, minimizing latency |
 | **Region hints** | R2 and Workers can be pinned to specific jurisdictions (data sovereignty) |
-| **Integrated stack** | R2 + KV + Containers + Cron Triggers cover all infrastructure needs |
+| **Integrated stack** | R2 + KV + D1 + Queues + Containers + Cron Triggers cover all infrastructure needs |
 
 ---
 
-## Phase 0 — MVP: Ephemeral Asset Hosting (API + CLI)
+## Serve Phases
+
+### Phase 0 — MVP: Ephemeral Asset Hosting (API + CLI) ✅
 
 Minimal viable file delivery service. No UI, no auth, no tile processing.
 
-### Capabilities
+#### Capabilities
 
 - [x] **Upload**: `POST /api/v1/assets` — upload a file (raw body streaming), receive a public URL
 - [x] **Download**: `GET /files/:id/:filename` — serve the file with correct `Content-Type`, `Content-Encoding`, and `Range` request support (HTTP 206)
@@ -67,7 +156,7 @@ Minimal viable file delivery service. No UI, no auth, no tile processing.
 - [x] **Presigned URL upload**: `POST /api/v1/assets/uploads` creates a presigned upload session; supports S3 multipart for large files (>100MB)
 - [x] **Gzip compression**: compression is the uploader's responsibility — CLI compresses compressible files locally; server stores as-is and decompresses on download when needed
 
-### Data Model (KV)
+#### Data Model (KV)
 
 ```
 Key:   asset:{id}
@@ -75,7 +164,7 @@ Value: { id, filename, contentType, size, createdAt, expiresAt }
 TTL:   3600s (auto-expire)
 ```
 
-### API Summary
+#### API Summary
 
 | Method | Path | Description |
 |--------|------|-------------|
@@ -89,7 +178,7 @@ TTL:   3600s (auto-expire)
 
 ---
 
-## Phase 1 — Zip Upload & Static Site Hosting ✅
+### Phase 1 — Zip Upload & Static Site Hosting ✅
 
 Upload a `.zip` archive; the server extracts it and serves the contents as a directory.
 
@@ -99,171 +188,173 @@ Upload a `.zip` archive; the server extracts it and serves the contents as a dir
 
 ---
 
-## Phase 2 — Authentication, Projects & Asset Management ✅
+### Phase 2 — Authentication, Projects & Asset Management ✅
 
 Introduce user identity, project scoping, and persistent assets.
 
 - [x] **Auth**: API key or OAuth (Re:Earth Dashboard integration)
 - [x] **Projects**: logical grouping of assets with per-project settings
 - [x] **Asset settings**: public/private toggle, custom metadata, configurable TTL or permanent storage
-- [x] **Access control**: file-layer access control (URL visibility) — distinct from service-layer (Phase 3+)
+- [x] **Access control**: file-layer access control (URL visibility) — distinct from service-layer
 - [ ] **OIDC server integration**: connection to external OIDC server for authentication (not yet implemented)
 - [ ] **Account server integration**: connection to Re:Earth account platform (not yet implemented)
 - [ ] **Cerbos integration**: policy-based authorization via Cerbos (not yet implemented)
 
 ---
 
-## Phase 3 — On-Demand Tile Service
+### Phase 3 — Asset Versioning
+
+Full version management — upload new content as a new Version, rollback to previous Versions, set an active version. File URLs remain stable across version updates.
+
+- [ ] **Version entity**: files belong to Versions, not directly to Assets (ADR-005)
+- [ ] **Overwrite upload**: `POST /api/v1/assets/:id` creates a new version under an existing asset
+- [ ] **Active version**: per-asset configurable; defaults to latest
+- [ ] **Version resolution**: `/files/:id/:filename` resolves asset ID → active/latest version → file
+- [ ] **Presigned upload for overwrite**: presigned sessions scoped to existing assets
+- [ ] **Description field**: human-readable description per asset for UI display
+- [ ] **System/user metadata split**: `meta` (system, read-only) and `user_meta` (caller, read-write) on assets and versions
+- [ ] **AssetStore rename**: `MetadataStore` → `AssetStore` with `update(id, patch)` pattern
+- [ ] **Migration**: existing assets migrated to version=1 in `asset_versions` table
+
+**ADR**: [005 — Asset Versioning](./docs/adr/005-asset-versioning.md)
+
+---
+
+### Phase 4 — Derived Assets & Dependency Graph
+
+Introduce asset subtypes (uploaded, derived, composite, external) and a dependency DAG for tracking transformation lineage and cascading invalidation.
+
+- [ ] **Asset subtypes**: `type` field distinguishes uploaded / derived / composite / external
+- [ ] **Asset Edges**: directed dependency graph (DAG) between assets
+- [ ] **Dirty propagation**: parent update cascades `dirty` status to all descendants
+- [ ] **Status state machine**: `dirty → pending → ready/failed` with optimistic locking
+- [ ] **Source version tracking**: derived/composite versions record which parent versions they were built from
+- [ ] **Edge CRUD API**: register, query, update, delete dependencies
+- [ ] **DAG traversal API**: query dependents (downstream) and dependencies (upstream)
+- [ ] **Cyclic dependency detection**: enforced at edge creation time
+
+**ADR**: [006 — Derived Asset and Asset Edge](./docs/adr/006-derived-asset-and-asset-edge.md)
+
+---
+
+### Phase 5 — Webhooks & Event Log
+
+Webhook subscriptions per project, durable event log for auditability, and scalable delivery via Cloudflare Queues.
+
+- [ ] **Event log**: all state changes persisted to D1 with actor attribution (30-day hot retention)
+- [ ] **Cold archival**: expired events archived to R2 as Parquet files (incremental, hourly cron)
+- [ ] **Webhook subscriptions**: per-project CRUD for HTTP endpoints with event type filters
+- [ ] **Signed delivery**: HMAC-SHA256 signatures on every webhook payload
+- [ ] **Scalable delivery**: two-queue architecture (fan-out + delivery) with auto-scaling consumers
+- [ ] **Retry & DLQ**: exponential backoff, dead letter queue, automatic endpoint disabling
+- [ ] **Delivery log**: every delivery attempt recorded and queryable
+- [ ] **CLI: listen**: forward webhook events to local development server (Stripe CLI-inspired)
+- [ ] **CLI: trigger**: send synthetic test events
+- [ ] **CLI: replay**: re-deliver past events (individual or failed batch)
+
+**ADR**: [007 — Webhooks and Event Log](./docs/adr/007-webhooks-and-event-log.md)
+
+---
+
+### Phase 6 — Enterprise Features
+
+Production hardening and monetization infrastructure.
+
+- [ ] **Usage metering**: storage size, transfer volume, request counts — for billing integration
+- [ ] **Data residency**: paid plan option to pin R2 storage to a specific country/region
+- [ ] **SLA tiers**: uptime guarantees for enterprise customers
+- [ ] **ISMAP consideration**: for Japanese government procurement, a non-Cloudflare deployment path may be required (Workers are not yet ISMAP-listed)
+
+---
+
+### Phase 7 — Web UI
+
+Web-based management interface for non-engineer users.
+
+- [ ] **React Router (SSR)** application
+- [ ] **Asset management**: upload, browse, version history, active version switching
+- [ ] **Dependency graph visualization**: visual DAG of derived/composite asset relationships
+- [ ] **Webhook management**: create, edit, test, delivery log viewer
+- [ ] **Event log viewer**: searchable, filterable event history
+- [ ] **Project/workspace settings**: storage usage dashboard, member management
+- [ ] **Tile preview**: visual preview of tilesets served by untiled
+
+---
+
+## untiled Phases (out of scope for this repo)
+
+The following phases are the responsibility of [reearth-untiled](https://github.com/eukarya-inc/untiled). They are listed here for reference to show how serve and untiled work together across the full product roadmap.
+
+### untiled Phase 1 — On-Demand Tile Service
 
 Create tile configurations that produce tile URLs with **zero conversion wait time** for supported formats.
 
-### Phase 3.1 — Pre-tiled Sources
+- Pre-tiled sources: XYZ raster tiles, MVT, PMTiles
+- COG (Cloud-Optimized GeoTIFF): on-demand raster tile rendering
+- Single image tiling: PNG / WebP / TIFF / GeoTIFF
+- Multi-source compositing: ordered source stack with blend modes
+- MapLibre Style JSON rendering: server-side raster from vector tiles
+- External service proxy & cache: OpenStreetMap, Mapbox, Google Maps, etc.
 
-Serve existing tile data as-is:
-
-- XYZ raster tiles (PNG / WebP / JPEG)
-- MVT (Mapbox Vector Tiles)
-- PMTiles (direct range-request serving)
-
-### Phase 3.2 — COG (Cloud-Optimized GeoTIFF)
-
-On-demand raster tile rendering from COG files:
-
-- Tile-level range reads — no full-file download
-- Automatic overview level selection based on zoom
-- NoData → transparency handling
-
-### Phase 3.3 — Single Image Tiling
-
-On-demand tiling of single raster images:
-
-- PNG / WebP / TIFF / GeoTIFF
-- Geographic extent mapping to tile coordinates
-- COG conversion via Cloudflare Containers (GDAL)
-
-### Phase 3.4 — Multi-Source Compositing
-
-Combine multiple tile sources into a single tileset via JSON configuration:
-
-- Ordered source stack with per-source opacity and blend modes
-- Parallel fetching of source tiles at request time
-- Alpha compositing / blending (e.g., overlay satellite imagery with hillshade)
-- Per-source zoom range and bounding box filters
-
-```jsonc
-{
-  "sources": [
-    { "type": "xyz", "url": "https://example.com/satellite/{z}/{x}/{y}.png", "opacity": 1.0 },
-    { "type": "cog", "asset": "asset:abc123", "opacity": 0.5, "minZoom": 8 },
-    { "type": "xyz", "url": "https://example.com/hillshade/{z}/{x}/{y}.png", "blend": "multiply" }
-  ]
-}
-```
-
-### Phase 3.5 — MapLibre Style JSON Rendering
-
-Server-side raster tile rendering from MapLibre Style JSON definitions:
-
-- Accept a [MapLibre Style Spec](https://maplibre.org/maplibre-style-spec/) JSON as tileset configuration
-- Render vector tile sources into raster tiles on-the-fly
-- Zero conversion wait — style changes take effect immediately
-- Enables serving styled map tiles to clients that only support raster (e.g., CesiumJS, native apps)
-
-### Phase 3.6 — External Service Proxy & Cache
-
-Proxy and cache tiles from external tile services:
-
-- **Proxy targets**: OpenStreetMap, Mapbox, Google Maps (2D/3D tiles), [Matterhorn](https://github.com/niccokunzmann/matterhorn) / other community tile servers, custom XYZ/TMS endpoints
-- Request-level caching in R2 with configurable TTL
-- Rate limiting and request coalescing to protect upstream services
-- ETag / If-None-Match passthrough for efficient cache revalidation
-- **License compliance**: per-proxy attribution metadata and terms-of-use acknowledgment required at configuration time
-
-### Tile Service Data Model
-
-```
-Tileset → has many Sources (ordered, blendable)
-Source  → XYZ URL | R2 COG | R2 GeoTIFF | uploaded asset
-       | external proxy | MapLibre style
-```
-
-Each tileset produces a TileJSON endpoint and `/{z}/{x}/{y}.{format}` URL.
-
----
-
-## Phase 4 — Terrain Tiles (Ellipsoidal Height)
+### untiled Phase 2 — Terrain Tiles
 
 Terrain tile delivery with geoid–ellipsoid height composition:
 
-- Serve Cesium Terrain / Quantized Mesh tiles
-- Combine elevation data with geoid models (e.g., Japan GSI geoid) to produce ellipsoidal height tiles on-the-fly
-- Critical for 3D WebGIS (CesiumJS, deck.gl) — only Cesium ion offers this today
-- Supports Japan-specific geoid data for PLATEAU use cases
+- Cesium Terrain / Quantized Mesh tiles
+- Elevation + geoid model composition (Japan GSI geoid for PLATEAU)
 
----
+### untiled Phase 3 — Format Conversion
 
-## Phase 5 — Vector Tile Generation
+Automated format conversion triggered by serve's webhook events:
 
-Upload raw vector data; the system converts it into MVT tiles:
+- GeoJSON / GeoPackage / Shapefile → FlatGeobuf (FGB)
+- GeoTIFF → Cloud-Optimized GeoTIFF (COG)
+- Results uploaded back to serve as DerivedAsset versions
+- Dirty propagation drives re-conversion on source updates
+
+### untiled Phase 4 — Vector Tile Generation
+
+Upload raw vector data; untiled converts it into MVT tiles:
 
 - Input formats: GeoJSON, GeoPackage, Shapefile, CSV with coordinates
-- Conversion via tippecanoe (Cloudflare Containers)
-- Async processing with status polling
-- Output: MVT tileset with TileJSON metadata
+- Conversion via tippecanoe
+- Results uploaded back to serve as DerivedAsset versions
 
----
-
-## Phase 6 — Vector Tile Partial Updates (Lightning-style)
+### untiled Phase 5 — Vector Tile Partial Updates (Lightning-style)
 
 Incremental vector tile updates without full re-tiling:
 
-- Upload a GeoJSON diff / patch
-- Store diffs separately; merge with base tiles on read
-- Background compaction: periodically re-tile to fold diffs into base tiles
+- GeoJSON diff / patch upload
+- Diff storage and merge-on-read
+- Background compaction
 - Inspired by [Felt Lightning](https://felt.com/blog/lightning-vector-tiles) architecture
 
----
+### untiled Phase 6 — 3D Tiles Generation
 
-## Phase 7 — 3D Tiles Generation
+Upload 3D model and city model data; untiled converts them into streamable 3D Tiles:
 
-Upload 3D model and city model data; the system converts them into streamable 3D Tiles:
-
-- **Input formats**: glTF / GLB, CityGML, IFC, OBJ, FBX, LAS / LAZ (point clouds)
-- Conversion pipeline via Cloudflare Containers (e.g., py3dtiles, citygml-tools, FME bridge)
-- Async processing with progress tracking and status polling
-- Output: 3D Tiles 1.1 tileset (tileset.json + .glb / .b3dm / .pnts)
-- Spatial indexing and LOD (Level of Detail) generation
-- Critical for PLATEAU workflow: CityGML → 3D Tiles end-to-end within Re:Earth ecosystem
-
----
-
-## Phase 8 — Enterprise Features
-
-Production hardening and monetization infrastructure:
-
-- **Asset versioning & management**: full Version support — upload new content as a new Version, rollback to previous Versions, version diffing. Users can "overwrite" an asset by uploading a new file, which internally creates a new asset version. File paths (`/files/:id/:filename`) accept both asset IDs and asset version IDs as `:id`, and support tags such as `latest` for convenient access to the most recent version.
-- **Access & audit logs**: per-asset, per-tile request logging
-- **Usage metering**: storage size, transfer volume, request counts — for billing integration
-- **Data residency**: paid plan option to pin R2 storage to a specific country/region
-- **SLA tiers**: uptime guarantees for enterprise customers
-- **ISMAP consideration**: for Japanese government procurement, a non-Cloudflare deployment path may be required (Workers are not yet ISMAP-listed)
+- Input formats: glTF / GLB, CityGML, IFC, OBJ, FBX, LAS / LAZ (point clouds)
+- Conversion pipeline (py3dtiles, citygml-tools, FME bridge)
+- Output: 3D Tiles 1.1 tileset
+- Critical for PLATEAU workflow: CityGML → 3D Tiles
 
 ---
 
 ## Design Principles
 
 1. **Two-layer security model**: file-layer (URL/storage permissions) and service-layer (token-based authorization) are architecturally separated — never conflated.
-2. **Cloudflare-native**: leverage R2, KV, Workers, Containers, and Cron Triggers — no external infrastructure dependencies.
-3. **Zero-wait tile delivery**: wherever possible, serve tiles on-demand without pre-processing (COG, pre-tiled archives, height composition).
-4. **Immutable assets**: files are write-once. Updates create new assets; old ones are deleted.
-5. **Re:Earth ecosystem integration**: designed as the delivery layer between Flow (processing) and Visualizer (display).
+2. **Cloudflare-native**: leverage R2, KV, D1, Queues, Workers, Containers, and Cron Triggers — no external infrastructure dependencies.
+3. **Versioned assets**: uploading new content creates a new Version; the asset ID and URL remain stable. Active version is configurable.
+4. **Dependency-aware**: asset relationships are tracked as a DAG. Source updates cascade dirty status to derived assets.
+5. **Separation of concerns**: serve manages storage, versioning, and delivery. untiled manages transformation and tile rendering. They communicate via webhooks and REST APIs.
+6. **Re:Earth ecosystem integration**: designed as the delivery layer between Flow (processing) and Visualizer (display).
 
 ---
 
 ## References
 
 - [Re:Earth Serve Product Proposal](./PLAN.md)
-- [untiled](https://github.com/eukarya-inc/untiled) — tile server prototype (architecture reference)
+- [untiled](https://github.com/eukarya-inc/untiled) — tile processing & rendering engine
 - [stralift](https://github.com/eukarya-inc/stralift) — tile processing library
 - [Felt Lightning](https://felt.com/blog/lightning-vector-tiles) — incremental vector tile architecture
 
@@ -278,22 +369,19 @@ classDiagram
     Member "*" -- "1" Role
 
     Project "1" -- "*" Asset
-    Project "1" -- "*" ProxyAsset
-    Project "1" -- "*" Tileset
     Project "1" -- "*" Job
+    Project "1" -- "*" WebhookEndpoint
+    Project "1" -- "*" Event
 
     Asset "1" -- "*" Version
     Version "1" -- "1..*" File
-    Asset "0..*" -- "0..*" Tileset
-    ProxyAsset "0..*" -- "0..*" Tileset
-
-    Tileset "1" -- "1..*" TileURL
-    Tileset "1" -- "*" Patch
-    Tileset "1" -- "*" Cache
-    ProxyAsset "1" -- "*" Cache
+    Asset "0..*" -- "0..*" AssetEdge
 
     Job "*" -- "0..1" Asset
-    Job "*" -- "0..1" Tileset
+    Job "*" -- "0..1" Version
+
+    WebhookEndpoint "1" -- "*" WebhookDelivery
+    Event "1" -- "*" WebhookDelivery
 ```
 
 ## Glossary
@@ -303,16 +391,15 @@ classDiagram
 | **User** | An authenticated identity. Account management and authentication are handled by external infrastructure (Re:Earth account platform / Cerbos for authorization). In Phase 0 (MVP), a simplified auth workaround is used. |
 | **Member** | The association between a User and a Project, carrying a Role. A User can be a Member of multiple Projects. |
 | **Role** | A permission level assigned to a Member within a Project (e.g., owner, editor, viewer). Follows Re:Earth conventions. |
-| **Project** | A top-level container that groups Assets, Proxy Assets, Tilesets, and their configuration. All resources are scoped to a Project. |
-| **Asset** | The unit of upload. Represents one uploaded object (a single file or a zip archive). Carries metadata such as public/private visibility, content type, and expiration policy. An Asset holds one or more Versions. |
-| **Version** | A point-in-time snapshot of an Asset's content. Each Version is immutable — uploading new content creates a new Version rather than overwriting. The Asset always has a "current" Version that is served by default. Not implemented in MVP, where each Asset implicitly has exactly one Version. |
+| **Project** | A top-level container that groups Assets and their configuration. All resources are scoped to a Project. |
+| **Asset** | A container for versioned content. Has a `type` (uploaded, derived, composite, external), a `description` for UI display, `user_meta` for caller-defined KV data, and system-managed `meta`. An Asset holds one or more Versions. |
+| **Version** | A point-in-time snapshot of an Asset's content. Each Version is immutable — uploading new content creates a new Version rather than overwriting. The Asset has a configurable "active" Version that is served by default (latest if unset). |
 | **File** | An individual file belonging to a Version. A single-file upload produces one File. A zip upload produces many Files (the extracted contents). Files are addressable by path within their Version. |
-| **Proxy Asset** | A virtual asset backed by an external URL (e.g., a third-party tile service). The system proxies requests to the upstream source and caches responses in R2. Behaves like an Asset from the Tileset's perspective, but has no uploaded Files. |
-| **Job** | Tracks the status of an asynchronous background operation (e.g., zip extraction, COG conversion, vector tile generation, 3D Tiles conversion). Automatically created when a triggering event occurs. May be associated with an Asset (e.g., zip extraction) or a Tileset (e.g., vector tile compaction, 3D Tiles generation). Does **not** cover on-demand tile computation — only offline / batch processing. |
-| **Tileset** | A tile delivery configuration that references one or more Assets and/or Proxy Assets, along with rendering parameters (source stack order, blend modes, zoom ranges, style JSON, etc.). Defining a Tileset produces one or more Tile URLs. *Name candidates: Tileset / TileEndpoint / TileRecipe — open for discussion.* |
-| **Tile URL** | A concrete endpoint URL produced by a Tileset (e.g., `/{z}/{x}/{y}.png`, `/{z}/{x}/{y}.mvt`). A single Tileset may expose multiple Tile URLs for different output formats. Each Tile URL also has a corresponding TileJSON metadata endpoint. |
-| **Patch** | An incremental update to a Tileset's vector tile data (Phase 6). Stores a GeoJSON diff that is merged with base tiles at read time. Multiple Patches can accumulate; background compaction Jobs periodically fold them into the base tile data and remove consumed Patches. |
-| **Cache** | Pre-computed tile images stored in R2, keyed by tileset + coordinates + source configuration hash. Associated with a Tileset (computed tiles) or a Proxy Asset (cached upstream responses). Automatically invalidated when the configuration changes. Supports partial purge (by zoom range, bounding box, or individual tile). Also stores merge artifacts for vector tile partial updates (Phase 6). |
+| **Asset Edge** | A directed dependency between two Assets, forming a DAG. Used to track transformation lineage (DerivedAsset → source) and composition (CompositeAsset → multiple sources). Carries `user_meta` for caller-defined semantics. |
+| **Event** | A durable record of a state change (asset created, version uploaded, status changed, etc.). Stored in D1 (30-day hot) and archived to R2 as Parquet (cold). Includes actor attribution for auditability. |
+| **Webhook Endpoint** | A registered HTTP URL that receives event notifications. Scoped to a Project, filtered by event types, signed with HMAC-SHA256. |
+| **Webhook Delivery** | A record of a single delivery attempt of an Event to a Webhook Endpoint. Tracks HTTP status, response, duration, and retry count. |
+| **Job** | Tracks the status of an asynchronous background operation (e.g., zip extraction). Automatically created when a triggering event occurs. Associated with an Asset and/or Version. |
 
 ---
 
@@ -357,36 +444,72 @@ classDiagram
 | `<cli> whoami` | Show current user and default project |
 | `<cli> upload <file>` | Quick upload — shortcut for `asset create` (demo mode if not logged in) |
 
-#### Entity Commands
+#### Asset Commands
 
 | Command | Description |
 |---------|-------------|
-| **project** | |
+| `<cli> asset list` | List assets in current project (filterable by `--type`) |
+| `<cli> asset show <id>` | Show asset metadata, current version, and file list |
+| `<cli> asset create <file\|url>` | Upload a file or zip archive (creates first version) |
+| `<cli> asset create --type derived` | Create a non-uploaded asset (derived, composite, external) |
+| `<cli> asset upload <id> <file>` | Upload a new version to an existing asset |
+| `<cli> asset update <id>` | Update asset fields (`--description`, `--user-meta`) |
+| `<cli> asset delete <id>` | Delete an asset and all versions |
+| `<cli> asset versions <id>` | List versions of an asset |
+| `<cli> asset version show <id> <vid>` | Show version details |
+| `<cli> asset version update <id> <vid>` | Update version `--user-meta` |
+| `<cli> asset version delete <id> <vid>` | Delete a specific version |
+| `<cli> asset set-version <id>` | Set active version (`--version <vid>` or `--latest`) |
+
+#### Edge Commands
+
+| Command | Description |
+|---------|-------------|
+| `<cli> asset link <id> --from <parent>` | Add dependency edges |
+| `<cli> asset unlink <id> --from <parent>` | Remove a dependency edge |
+| `<cli> asset edges <id>` | List edges (parents) of an asset |
+| `<cli> asset dependents <id>` | Show downstream descendants |
+| `<cli> asset dependencies <id>` | Show upstream ancestors |
+| `<cli> asset dirty <id>` | Mark dirty and propagate |
+| `<cli> asset status <id> <vid>` | Transition version status (`--from`, `--to`) |
+
+#### Webhook Commands
+
+| Command | Description |
+|---------|-------------|
+| `<cli> webhook create` | Create a webhook endpoint (`--url`, `--events`) |
+| `<cli> webhook list` | List webhook endpoints |
+| `<cli> webhook update <id>` | Update webhook (`--url`, `--events`, `--enable`, `--disable`) |
+| `<cli> webhook delete <id>` | Delete a webhook endpoint |
+| `<cli> webhook rotate-secret <id>` | Rotate the signing secret |
+| `<cli> webhook listen` | Forward events to local endpoint (`--forward-to`, `--events`) |
+| `<cli> webhook trigger <type>` | Send a synthetic test event |
+| `<cli> webhook replay <event-id>` | Re-deliver a past event (`--to <webhook-id>`, `--failed`) |
+| `<cli> webhook deliveries <id>` | View delivery log (`--status failed`) |
+
+#### Event Commands
+
+| Command | Description |
+|---------|-------------|
+| `<cli> event list` | List events (`--type`, `--asset-id`, `--after`, `--before`) |
+
+#### Project Commands
+
+| Command | Description |
+|---------|-------------|
 | `<cli> project list` | List projects |
-| `<cli> project show [id]` | Show project details |
+| `<cli> project show [id]` | Show project details (includes storage usage) |
 | `<cli> project create <name>` | Create a project |
 | `<cli> project delete <id>` | Delete a project |
 | `<cli> project use <id>` | Set default project for subsequent commands |
-| **asset** | |
-| `<cli> asset list` | List assets in current project |
-| `<cli> asset show <id>` | Show asset metadata and file list |
-| `<cli> asset create <file\|url>` | Upload a file or zip archive |
-| `<cli> asset delete <id>` | Delete an asset |
-| **tileset** | |
-| `<cli> tileset list` | List tilesets |
-| `<cli> tileset show <id>` | Show tileset config and tile URLs |
-| `<cli> tileset create --config <json>` | Create a tileset from JSON config |
-| `<cli> tileset update <id> --config <json>` | Update tileset configuration |
-| `<cli> tileset delete <id>` | Delete a tileset |
-| `<cli> tileset preview <id>` | Open tile preview in browser |
-| **job** | |
+
+#### Job Commands
+
+| Command | Description |
+|---------|-------------|
 | `<cli> job list` | List recent jobs |
 | `<cli> job show <id>` | Show job status and progress |
 | `<cli> job wait <id>` | Block until job completes (useful in scripts) |
-| **cache** | |
-| `<cli> cache purge <tileset-id>` | Purge all cached tiles for a tileset |
-| `<cli> cache purge <tileset-id> --bbox <w,s,e,n>` | Purge by bounding box |
-| `<cli> cache purge <tileset-id> --zoom <min-max>` | Purge by zoom range |
 
 #### File Commands (à la `aws s3` / `gsutil`)
 

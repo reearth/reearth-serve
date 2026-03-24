@@ -45,6 +45,7 @@ curl -X POST http://localhost:5173/api/v1/assets \
 | Storage | Cloudflare R2 (zero egress) |
 | Metadata | Cloudflare D1 (SQLite) |
 | Sessions | Cloudflare KV (TTL auto-expiry) |
+| Queues | Cloudflare Queues (extraction, webhooks) |
 | Containers | Cloudflare Containers (Go) |
 | API | Hono |
 | UI | React Router (SSR) + Tailwind CSS |
@@ -72,7 +73,7 @@ curl -X POST http://localhost:5173/api/v1/assets \
 | KV | Key-Value | Sessions, Upload Sessions | TTL auto-expiration for ephemeral data |
 | R2 | Object Storage | File content | Zero egress cost, Range request support |
 
-See [ADR-003](./docs/adr/003-kv-to-d1-migration.md) for the D1 migration rationale.
+See [ADR-003](./docs/adr/003-kv-to-d1-migration.md) for the D1 migration rationale, [ADR-005](./docs/adr/005-asset-versioning.md) for asset versioning, [ADR-006](./docs/adr/006-derived-asset-and-asset-edge.md) for derived assets and dependency graphs, and [ADR-007](./docs/adr/007-webhooks-and-event-log.md) for webhooks and event logging.
 
 ## API
 
@@ -121,7 +122,7 @@ See [ADR-003](./docs/adr/003-kv-to-d1-migration.md) for the D1 migration rationa
 | `GET` | `/files/:id/:filename` | Download file (CORS `*`, Range support) |
 | `GET` | `/files/:id/:filename/*` | Download extracted archive file |
 
-Assets are **immutable** (upload or delete, no overwrite). Demo mode assets (no project) auto-expire after 1 hour. Project assets are permanent.
+Assets support **versioning** — uploading to an existing asset creates a new version while keeping the asset ID and URL stable. Demo mode assets (no project) auto-expire after 1 hour. Project assets are permanent. See [ADR-005](./docs/adr/005-asset-versioning.md).
 
 ## CLI
 
