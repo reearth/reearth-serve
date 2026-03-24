@@ -349,13 +349,155 @@ See ADR-005 for version CLI commands (list, upload, set-version, delete, update 
 |---------|---------------|-----------------|
 | Asset version history | Owns | Reads |
 | Dependency graph (AssetEdge) | Owns | Reads |
-| Status state machine | Owns | Transitions via API |
-| Derived/Composite file storage | Stores results | Writes via API |
+| Status state machine | Owns | Transitions via internal API |
+| Job lifecycle | Owns (CRUD, progress, visibility) | Creates/updates via internal API |
+| Derived/Composite file storage | Stores results | Uploads via internal API |
 | Transformation execution | Does not execute | Owns (GDAL, tippecanoe, etc.) |
 | Tile response cache | Unaware | Owns (writes to KV/CDN directly) |
 | Dirty event emission | Emits webhook/event | Subscribes and reacts |
 
 Tile caches are written directly to KV/CDN by untiled, bypassing serve. Serve does not know about the cache's existence.
+
+### 9. Internal API for Transformation Engines
+
+Transformation engines (e.g., reearth-untiled) interact with serve through internal APIs. From the user's perspective, transformations appear as **jobs within serve** — they query serve's existing job API (`GET /api/v1/jobs/:id`) to see progress. The engine operates behind the scenes.
+
+#### Authentication
+
+Internal APIs use a shared secret (`INTERNAL_API_SECRET` environment variable), separate from user-facing OIDC authentication. The engine passes this secret as a Bearer token:
+
+```
+Authorization: Bearer <INTERNAL_API_SECRET>
+```
+
+#### Transformation Flow
+
+```
+1. serve: asset marked dirty → event emitted via system queue (ADR-007)
+      ↓
+2. untiled: receives event, decides to process
+      ↓
+3. untiled → serve: claim job (status dirty→pending + create job atomically)
+      ↓
+4. untiled → serve: report progress (10%...50%...90%)
+      ↓
+5. untiled → serve: upload result (new version on the derived asset)
+      ↓
+6. untiled → serve: complete job (status pending→ready + close job atomically)
+```
+
+#### Endpoints
+
+**Claim a transformation job (status transition + job creation)**
+
+```
+PATCH /api/internal/assets/:id/versions/:vid/status
+{
+  "expectedStatus": "dirty",
+  "newStatus": "pending",
+  "job": {
+    "type": "conversion",
+    "meta": { "transformType": "fgb", "engine": "untiled-v2.1" }
+  }
+}
+→ 200 { "version": { ... }, "job": { "id": "job-xyz", ... } }
+→ 409 Conflict (another engine already claimed this)
+```
+
+The status transition and job creation are **atomic** — if the transition fails (status mismatch), no job is created. This prevents orphaned jobs when the engine crashes between two separate API calls.
+
+The `expectedStatus` field provides **optimistic locking** — when multiple engine instances receive the same event, only the first to call `dirty → pending` succeeds. Others get `409` and skip the work.
+
+**Report job progress**
+
+```
+PATCH /api/internal/jobs/:id/progress
+{
+  "progress": 0.6,
+  "message": "Converting features: 12000/20000"
+}
+→ 200 { "id": "job-xyz", "progress": 0.6, ... }
+```
+
+Progress reporting is **best-effort** — it updates UI display but does not affect job correctness. If progress messages are lost, the job still completes or fails normally.
+
+**Upload transformation result**
+
+```
+POST /api/internal/assets/:id
+X-Filename: output.fgb
+X-Job-Id: job-xyz
+
+<binary body>
+→ 201 { "id": "ver-new", "version": 2, ... }
+```
+
+The `X-Job-Id` header links the uploaded version to the job, enabling traceability: "this version was produced by job-xyz." The version's `meta` records the job ID automatically.
+
+**Complete a transformation (status transition + job close)**
+
+```
+PATCH /api/internal/assets/:id/versions/:vid/status
+{
+  "expectedStatus": "pending",
+  "newStatus": "ready",
+  "job": { "id": "job-xyz", "status": "completed" }
+}
+→ 200 { "version": { ... }, "job": { "id": "job-xyz", "status": "completed" } }
+```
+
+**Report a transformation failure**
+
+```
+PATCH /api/internal/assets/:id/versions/:vid/status
+{
+  "expectedStatus": "pending",
+  "newStatus": "failed",
+  "job": {
+    "id": "job-xyz",
+    "status": "failed",
+    "error": "GDAL: unsupported projection EPSG:99999"
+  }
+}
+→ 200 { "version": { ... }, "job": { "id": "job-xyz", "status": "failed", ... } }
+```
+
+The error message is stored in the job record and exposed via `GET /api/v1/jobs/:id`, so users can see why a transformation failed.
+
+#### User-Facing Job Visibility
+
+Users interact with the existing job API — they do not need to know about the internal API:
+
+```
+GET /api/v1/jobs?assetId=derived-1
+→ 200 {
+  "items": [{
+    "id": "job-xyz",
+    "assetId": "derived-1",
+    "type": "conversion",
+    "status": "running",
+    "progress": 0.6,
+    "message": "Converting features: 12000/20000",
+    "createdAt": 1710100000000,
+    "meta": { "transformType": "fgb", "engine": "untiled-v2.1" }
+  }]
+}
+```
+
+Retry is also initiated through the existing API:
+
+```
+POST /api/v1/jobs/:id/retry
+→ resets version status to "dirty", triggering re-processing via the event system
+```
+
+#### Internal API Summary
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `PATCH` | `/api/internal/assets/:id/versions/:vid/status` | Transition status + create/close job atomically |
+| `PATCH` | `/api/internal/jobs/:id/progress` | Report job progress |
+| `POST` | `/api/internal/assets/:id` | Upload transformation result (`X-Job-Id` header) |
 
 ## Alternatives Considered
 
