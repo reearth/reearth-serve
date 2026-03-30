@@ -16,6 +16,7 @@ if (import.meta.vitest) {
     return {
       save: vi.fn(async (asset: AssetMetadata, _ttl: number) => { store.set(asset.id, asset); }),
       find: vi.fn(async (id: string) => store.get(id) ?? null),
+      update: vi.fn(async () => {}),
       delete: vi.fn(async (id: string) => { store.delete(id); }),
       list: vi.fn(async () => ({ items: [], cursor: undefined })),
     };

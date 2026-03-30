@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { Writable } from "node:stream";
-import type { AssetMetadata, FileEntry, Job } from "../shared/api";
+import type { AssetMetadata, AssetVersion, FileEntry, Job } from "../shared/api";
 import { loadCredentials, loadOrCreateSessionId } from "./config";
 import { refreshAccessToken } from "./auth";
 
@@ -34,6 +34,27 @@ export function formatAsset(asset: AssetMetadata): string {
   if (asset.archiveFormat) lines.push(`Archive:      ${asset.archiveFormat}`);
   if (asset.fileCount) lines.push(`Files:        ${asset.fileCount}`);
   if (asset.jobId) lines.push(`Job:          ${asset.jobId}`);
+  return lines.join("\n");
+}
+
+export function formatVersion(v: AssetVersion): string {
+  const lines = [
+    `ID:           ${v.id}`,
+    `Asset:        ${v.assetId}`,
+    `Version:      ${v.version}`,
+    `Filename:     ${v.filename}`,
+    `Content-Type: ${v.contentType}`,
+    `Size:         ${formatBytes(v.size)}`,
+    `Created:      ${new Date(v.createdAt).toISOString()}`,
+  ];
+  if (v.contentEncoding) lines.push(`Encoding:     ${v.contentEncoding}`);
+  if (v.originalSize) lines.push(`Original:     ${formatBytes(v.originalSize)}`);
+  if (v.type) lines.push(`Type:         ${v.type}`);
+  if (v.status) lines.push(`Status:       ${v.status}`);
+  if (v.archiveFormat) lines.push(`Archive:      ${v.archiveFormat}`);
+  if (v.fileCount) lines.push(`Files:        ${v.fileCount}`);
+  if (v.jobId) lines.push(`Job:          ${v.jobId}`);
+  if (v.userMeta) lines.push(`User Meta:    ${JSON.stringify(v.userMeta)}`);
   return lines.join("\n");
 }
 
@@ -124,6 +145,23 @@ export async function apiPatch<T>(endpoint: string, path: string, body?: unknown
 
   const res = await fetch(`${endpoint}${path}`, {
     method: "PATCH",
+    headers,
+    ...(body ? { body: JSON.stringify(body) } : {}),
+  });
+
+  if (!res.ok) {
+    const text = await res.text();
+    throw new Error(`${res.status}: ${text}`);
+  }
+  return res.json() as Promise<T>;
+}
+
+export async function apiPut<T>(endpoint: string, path: string, body?: unknown): Promise<T> {
+  const headers: Record<string, string> = { ...(await commonHeaders()) };
+  if (body) headers["Content-Type"] = "application/json";
+
+  const res = await fetch(`${endpoint}${path}`, {
+    method: "PUT",
     headers,
     ...(body ? { body: JSON.stringify(body) } : {}),
   });

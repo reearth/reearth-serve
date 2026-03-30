@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { AppEnv } from "../types";
 import { decompressStream } from "../asset/compression";
+import { resolveAssetVersion } from "../asset/usecase";
 import { parseRange, sliceStream } from "./stream";
 
 export const fileRoutes = new Hono<AppEnv>();
@@ -13,6 +14,7 @@ fileRoutes.use("/*", cors({ origin: "*" }));
 // GET /files/:id/path/to/file — serve extracted file from archive asset
 fileRoutes.get("/:id/:path{.+}", async (c) => {
   const metadataStore = c.get("metadata");
+  const versions = c.get("versions");
   const storage = c.get("storage");
   const id = c.req.param("id");
   const filePath = c.req.param("path");
@@ -21,16 +23,61 @@ fileRoutes.get("/:id/:path{.+}", async (c) => {
   const clientAcceptsGzip = acceptEncoding.includes("gzip");
   const range = parseRange(rangeHeader);
 
-  const asset = await metadataStore.find(id);
-  if (!asset) {
+  // Resolve asset + version
+  const resolved = await resolveAssetVersion(metadataStore, versions, id);
+  if (!resolved) {
     return c.json({ error: "File not found" }, 404);
   }
 
-  // Determine storage key and content info based on asset type
+  const { asset, version } = resolved;
+
+  // Determine storage key based on whether we have a version
+  let storageKeyPath: string;
+  let contentType: string;
+  let contentEncoding: string | undefined;
+  let displayName: string;
+  let originalSize: number | undefined;
+
+  if (version) {
+    // Versioned layout
+    const isArchiveSubpath = version.type === "archive" && filePath !== version.filename;
+    if (isArchiveSubpath) {
+      storageKeyPath = `assets/${asset.id}/v/${version.id}/files/${filePath}`;
+    } else {
+      storageKeyPath = `assets/${asset.id}/v/${version.id}/${version.filename}`;
+    }
+
+    const file = await storage.get(storageKeyPath, undefined);
+    if (!file) {
+      // Legacy fallback: try old layout
+      return serveLegacy(c, storage, asset, filePath, range, clientAcceptsGzip, rangeHeader);
+    }
+
+    contentType = isArchiveSubpath ? file.contentType : version.contentType;
+    contentEncoding = isArchiveSubpath ? file.contentEncoding : version.contentEncoding;
+    displayName = isArchiveSubpath ? filePath.split("/").pop() || filePath : version.filename;
+    originalSize = version.originalSize;
+
+    return serveFile(file, contentType, contentEncoding, displayName, originalSize, range, clientAcceptsGzip, rangeHeader, storage, storageKeyPath);
+  }
+
+  // Legacy (no versions) — use the old layout
+  return serveLegacy(c, storage, asset, filePath, range, clientAcceptsGzip, rangeHeader);
+});
+
+async function serveLegacy(
+  c: any,
+  storage: any,
+  asset: any,
+  filePath: string,
+  range: { offset: number; length: number } | null,
+  clientAcceptsGzip: boolean,
+  rangeHeader: string | undefined,
+) {
   const isArchiveSubpath = asset.type === "archive" && filePath !== asset.filename;
   const storageKeyPath = isArchiveSubpath
-    ? `assets/${id}/files/${filePath}`
-    : `assets/${id}/${asset.filename}`;
+    ? `assets/${asset.id}/files/${filePath}`
+    : `assets/${asset.id}/${asset.filename}`;
 
   const file = await storage.get(storageKeyPath, undefined);
   if (!file) {
@@ -40,27 +87,47 @@ fileRoutes.get("/:id/:path{.+}", async (c) => {
   const contentType = isArchiveSubpath ? file.contentType : asset.contentType;
   const contentEncoding = isArchiveSubpath ? file.contentEncoding : asset.contentEncoding;
   const displayName = isArchiveSubpath ? filePath.split("/").pop() || filePath : asset.filename;
+  const originalSize = asset.originalSize;
+
+  return serveFile(file, contentType, contentEncoding, displayName, originalSize, range, clientAcceptsGzip, rangeHeader, storage, storageKeyPath);
+}
+
+function serveFile(
+  file: { body: ReadableStream; size: number; contentType: string; contentEncoding?: string },
+  contentType: string,
+  contentEncoding: string | undefined,
+  displayName: string,
+  originalSize: number | undefined,
+  range: { offset: number; length: number } | null,
+  clientAcceptsGzip: boolean,
+  rangeHeader: string | undefined,
+  storage: any,
+  storageKeyPath: string,
+) {
   const isGzipStored = contentEncoding === "gzip";
 
   // --- Non-gzip file ---
   if (!isGzipStored) {
     if (range) {
-      const rangedFile = await storage.get(storageKeyPath, range);
-      if (!rangedFile) return c.json({ error: "File not found" }, 404);
+      return (async () => {
+        const rangedFile = await storage.get(storageKeyPath, range);
+        if (!rangedFile) return new Response(JSON.stringify({ error: "File not found" }), { status: 404, headers: { "Content-Type": "application/json" } });
 
-      const headers: Record<string, string> = {
-        "Content-Type": contentType,
-        "Accept-Ranges": "bytes",
-        "Cache-Control": "public, max-age=3600, immutable",
-        "Content-Disposition": `inline; filename="${encodeURIComponent(displayName)}"`,
-      };
+        const headers: Record<string, string> = {
+          "Content-Type": contentType,
+          "Accept-Ranges": "bytes",
+          "Cache-Control": "public, max-age=3600, immutable",
+          "Content-Disposition": `inline; filename="${encodeURIComponent(displayName)}"`,
+        };
 
-      if (rangedFile.range) {
-        const { offset, length, totalSize } = rangedFile.range;
-        headers["Content-Range"] = `bytes ${offset}-${offset + length - 1}/${totalSize}`;
-        headers["Content-Length"] = String(length);
-        return new Response(rangedFile.body, { status: 206, headers });
-      }
+        if (rangedFile.range) {
+          const { offset, length, totalSize } = rangedFile.range;
+          headers["Content-Range"] = `bytes ${offset}-${offset + length - 1}/${totalSize}`;
+          headers["Content-Length"] = String(length);
+          return new Response(rangedFile.body, { status: 206, headers });
+        }
+        return new Response(rangedFile.body, { status: 200, headers });
+      })();
     }
 
     const headers: Record<string, string> = {
@@ -87,7 +154,6 @@ fileRoutes.get("/:id/:path{.+}", async (c) => {
 
   // --- Gzip-stored: decompress ---
   const decompressed = decompressStream(file.body);
-  const originalSize = asset.originalSize;
 
   if (!range) {
     const headers: Record<string, string> = {
@@ -117,4 +183,4 @@ fileRoutes.get("/:id/:path{.+}", async (c) => {
   }
 
   return new Response(sliced, { status: 206, headers });
-});
+}

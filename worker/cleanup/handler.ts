@@ -1,5 +1,5 @@
 import { R2FileStorage } from "../infra/storage";
-import { D1MetadataStore, D1JobStore } from "../infra/d1";
+import { D1MetadataStore, D1JobStore, D1VersionStore } from "../infra/d1";
 import { cleanupExpiredAssets } from "./usecase";
 import type { Job } from "../job/model";
 
@@ -10,9 +10,11 @@ export async function handleScheduled(env: Env): Promise<void> {
   const metadata = new D1MetadataStore(env.DB);
   const storage = new R2FileStorage(env.STORAGE);
   const jobs = new D1JobStore(env.DB);
+  const versions = new D1VersionStore(env.DB);
 
   const result = await cleanupExpiredAssets(metadata, storage, jobs, {
     maxAssets: 100,
+    versions,
   });
 
   if (result.deletedAssets.length > 0) {

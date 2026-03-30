@@ -5,3 +5,15 @@ export function generateId(): string {
 export function storageKey(id: string, filename: string): string {
   return `assets/${id}/${filename}`;
 }
+
+export function versionStorageKey(assetId: string, versionId: string, filename: string): string {
+  return `assets/${assetId}/v/${versionId}/${filename}`;
+}
+
+export function versionFilesPrefix(assetId: string, versionId: string): string {
+  return `assets/${assetId}/v/${versionId}/files/`;
+}
+
+export function versionArchivePrefix(assetId: string, versionId: string): string {
+  return `assets/${assetId}/v/${versionId}/_archive/`;
+}

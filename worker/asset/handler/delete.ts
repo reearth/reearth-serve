@@ -21,6 +21,7 @@ export function registerDeleteRoute(app: Hono<AppEnv>) {
     async (c) => {
       const metadata = c.get("metadata");
       const storage = c.get("storage");
+      const versions = c.get("versions");
       const { id } = c.req.valid("param");
 
       const asset = await getAssetMetadata(metadata, id);
@@ -28,19 +29,23 @@ export function registerDeleteRoute(app: Hono<AppEnv>) {
         return c.json({ error: "Asset not found" }, 404);
       }
 
+      // Delete all versions (and get total size for storage accounting)
+      const { totalSize: versionsTotalSize } = await versions.deleteByAssetId(id);
+
       const deleted = await deleteAsset(metadata, storage, id);
       if (!deleted) {
         return c.json({ error: "Asset not found" }, 404);
       }
 
-      // Update storage usage counters for project assets
+      // Update storage usage counters
       if (asset.projectId) {
         const storageUsage = c.get("storageUsage");
         const projects = c.get("projects");
-        await storageUsage.decrement(`project:${asset.projectId}`, asset.size);
+        const totalSize = asset.size + versionsTotalSize;
+        await storageUsage.decrement(`project:${asset.projectId}`, totalSize);
         const project = await projects.find(asset.projectId);
         if (project?.workspaceId) {
-          await storageUsage.decrement(`workspace:${project.workspaceId}`, asset.size);
+          await storageUsage.decrement(`workspace:${project.workspaceId}`, totalSize);
         }
       }
 

@@ -1,4 +1,4 @@
-import type { AssetMetadata, StoredFile, UploadSession, UploadPart } from "./model";
+import type { AssetMetadata, AssetVersion, StoredFile, UploadSession, UploadPart } from "./model";
 
 export interface ListResult<T> {
   items: T[];
@@ -8,8 +8,21 @@ export interface ListResult<T> {
 export interface MetadataStore {
   save(asset: AssetMetadata, ttlSeconds: number): Promise<void>;
   find(id: string): Promise<AssetMetadata | null>;
+  update(id: string, patch: { activeVersionId?: string | null; expiresAt?: number; description?: string; userMeta?: Record<string, unknown> }): Promise<void>;
   delete(id: string): Promise<void>;
   list(options?: { limit?: number; cursor?: string; sessionId?: string; projectId?: string }): Promise<ListResult<AssetMetadata>>;
+}
+
+export interface VersionStore {
+  save(version: AssetVersion): Promise<void>;
+  find(id: string): Promise<AssetVersion | null>;
+  findByAssetId(assetId: string, options?: { limit?: number; cursor?: string }): Promise<ListResult<AssetVersion>>;
+  findLatest(assetId: string): Promise<AssetVersion | null>;
+  nextVersion(assetId: string): Promise<number>;
+  update(id: string, patch: Partial<Pick<AssetVersion, 'status' | 'userMeta'>>): Promise<void>;
+  delete(id: string): Promise<void>;
+  deleteByAssetId(assetId: string): Promise<{ totalSize: number; count: number }>;
+  count(assetId: string): Promise<number>;
 }
 
 export interface FileStorage {

@@ -4,6 +4,7 @@ export type {
   AssetStatus,
   ArchiveFormat,
   AssetMetadata,
+  AssetVersion,
   AssetUploadResult,
   PresignedUploadResult,
   MultipartUploadResult,

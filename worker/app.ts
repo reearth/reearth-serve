@@ -10,7 +10,7 @@ import {
 } from "./infra/metadata";
 import {
   D1MetadataStore, D1JobStore, D1ProjectStore,
-  D1WorkspaceStore, D1MemberStore, D1StorageUsageStore,
+  D1WorkspaceStore, D1MemberStore, D1StorageUsageStore, D1VersionStore,
 } from "./infra/d1";
 import { projectRoutes } from "./project/handler";
 import { workspaceRoutes } from "./workspace/handler";
@@ -24,6 +24,7 @@ import type { AppEnv } from "./types";
 
 export function createApp(env: Env) {
   const metadata = new D1MetadataStore(env.DB);
+  const versions = new D1VersionStore(env.DB);
   const storage = new R2FileStorage(env.STORAGE);
   const uploadSessions = new KVUploadSessionStore(env.KV);
   const jobs = new D1JobStore(env.DB);
@@ -60,6 +61,7 @@ export function createApp(env: Env) {
   // Inject dependencies into all routes
   app.use("*", async (c, next) => {
     c.set("metadata", metadata);
+    c.set("versions", versions);
     c.set("storage", storage);
     c.set("uploadSessions", uploadSessions);
     c.set("presignedUrls", presignedUrls);

@@ -8,6 +8,11 @@ export const PATHS = {
   uploads: `${API_V1}/assets/uploads`,
   completeUpload: (id: string) => `${API_V1}/assets/uploads/${id}/complete`,
   assetExtract: (id: string) => `${API_V1}/assets/${id}/extract`,
+  assetUpload: (id: string) => `${API_V1}/assets/${id}`,
+  assetVersionUploads: (id: string) => `${API_V1}/assets/${id}/uploads`,
+  assetVersions: (id: string) => `${API_V1}/assets/${id}/versions`,
+  assetVersion: (id: string, versionId: string) => `${API_V1}/assets/${id}/versions/${versionId}`,
+  assetActiveVersion: (id: string) => `${API_V1}/assets/${id}/active-version`,
   assetFiles: (id: string, prefix?: string) =>
     `${API_V1}/assets/${id}/files${prefix ? `?prefix=${encodeURIComponent(prefix)}` : ""}`,
   jobs: `${API_V1}/jobs`,

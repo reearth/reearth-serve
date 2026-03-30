@@ -1,6 +1,6 @@
 # ADR-005: Asset Versioning
 
-- **Status:** Proposed
+- **Status:** Accepted (partially implemented — presigned overwrite and data migration pending)
 - **Date:** 2026-03-25
 - **Deciders:** @rot1024
 

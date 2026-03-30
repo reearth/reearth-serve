@@ -86,6 +86,13 @@ export class KVMetadataStore implements MetadataStore {
     return JSON.parse(raw) as AssetMetadata;
   }
 
+  async update(id: string, patch: { activeVersionId?: string | null; expiresAt?: number; description?: string; userMeta?: Record<string, unknown> }): Promise<void> {
+    const asset = await this.find(id);
+    if (!asset) return;
+    const updated = { ...asset, ...patch };
+    await this.kv.put(`asset:${id}`, JSON.stringify(updated));
+  }
+
   async delete(id: string): Promise<void> {
     // Read before delete to discover index keys
     const asset = await this.find(id);

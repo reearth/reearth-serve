@@ -1,4 +1,4 @@
-import type { FileStorage, MetadataStore } from "../asset/repository";
+import type { FileStorage, MetadataStore, VersionStore } from "../asset/repository";
 import type { JobStore } from "../job/repository";
 
 export interface CleanupResult {
@@ -16,7 +16,7 @@ export async function cleanupExpiredAssets(
   metadata: MetadataStore & { listExpired?: (now: number, limit: number) => Promise<import("../asset/model").AssetMetadata[]> },
   storage: FileStorage,
   jobs: JobStore,
-  options?: { maxAssets?: number },
+  options?: { maxAssets?: number; versions?: VersionStore },
 ): Promise<CleanupResult> {
   const maxAssets = options?.maxAssets ?? 100;
   const deletedAssets: string[] = [];
@@ -27,7 +27,12 @@ export async function cleanupExpiredAssets(
     const expired = await metadata.listExpired(Date.now(), maxAssets);
 
     for (const asset of expired) {
-      // Delete R2 objects
+      // Delete all versions from D1
+      if (options?.versions) {
+        await options.versions.deleteByAssetId(asset.id);
+      }
+
+      // Delete R2 objects (covers both legacy and versioned layouts)
       await deleteAllR2Objects(storage, `assets/${asset.id}/`);
 
       // Delete metadata from D1
@@ -62,6 +67,11 @@ export async function cleanupExpiredAssets(
     for (const assetId of assetIds) {
       const asset = await metadata.find(assetId);
       if (asset) continue; // Still alive — skip
+
+      // Delete orphaned versions from D1
+      if (options?.versions) {
+        await options.versions.deleteByAssetId(assetId);
+      }
 
       await deleteAllR2Objects(storage, `assets/${assetId}/`);
       deletedAssets.push(assetId);
@@ -115,6 +125,7 @@ if (import.meta.vitest) {
     return {
       save: vi.fn(),
       find: vi.fn(async (id: string) => assets.get(id) ?? null),
+      update: vi.fn(async () => {}),
       delete: vi.fn(async (id: string) => { assets.delete(id); }),
       list: vi.fn(async () => ({ items: [], cursor: undefined })),
       listExpired: vi.fn(async (_now: number, _limit: number) => []),

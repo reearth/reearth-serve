@@ -202,18 +202,20 @@ Introduce user identity, project scoping, and persistent assets.
 
 ---
 
-### Phase 3 — Asset Versioning
+### Phase 3 — Asset Versioning ✅
 
 Full version management — upload new content as a new Version, rollback to previous Versions, set an active version. File URLs remain stable across version updates.
 
-- [ ] **Version entity**: files belong to Versions, not directly to Assets (ADR-005)
-- [ ] **Overwrite upload**: `POST /api/v1/assets/:id` creates a new version under an existing asset
-- [ ] **Active version**: per-asset configurable; defaults to latest
-- [ ] **Version resolution**: `/files/:id/:filename` resolves asset ID → active/latest version → file
+- [x] **Version entity**: files belong to Versions, not directly to Assets (ADR-005)
+- [x] **Overwrite upload**: `POST /api/v1/assets/:id` creates a new version under an existing asset
+- [x] **Active version**: per-asset configurable; defaults to latest
+- [x] **Version resolution**: `/files/:id/:filename` resolves asset ID → active/latest version → file
+- [x] **Description field**: human-readable description per asset for UI display
+- [x] **System/user metadata split**: `meta` (system, read-only) and `user_meta` (caller, read-write) on assets and versions
+- [x] **MetadataStore update method**: `update(id, patch)` pattern for mutable asset fields
+- [x] **Version CRUD API**: list, get, update, delete versions; set active version
+- [x] **CLI version commands**: `asset upload`, `asset update`, `asset versions`, `asset version list/show/update/delete`, `asset set-version`
 - [ ] **Presigned upload for overwrite**: presigned sessions scoped to existing assets
-- [ ] **Description field**: human-readable description per asset for UI display
-- [ ] **System/user metadata split**: `meta` (system, read-only) and `user_meta` (caller, read-write) on assets and versions
-- [ ] **AssetStore rename**: `MetadataStore` → `AssetStore` with `update(id, patch)` pattern
 - [ ] **Migration**: existing assets migrated to version=1 in `asset_versions` table
 
 **ADR**: [005 — Asset Versioning](./docs/adr/005-asset-versioning.md)

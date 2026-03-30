@@ -1,5 +1,5 @@
-import type { AssetMetadata } from "../asset/model";
-import type { MetadataStore } from "../asset/repository";
+import type { AssetMetadata, AssetVersion } from "../asset/model";
+import type { MetadataStore, VersionStore } from "../asset/repository";
 import type { ListResult } from "../asset/repository";
 import type { Job } from "../job/model";
 import type { JobStore } from "../job/repository";
@@ -13,6 +13,7 @@ import { rowToModel, modelToRow, encodeCursor, decodeCursor } from "./d1-helpers
 
 // Meta keys: fields stored in the JSON `meta` column instead of dedicated columns.
 const ASSET_META_KEYS = ["contentEncoding", "originalSize", "archiveFormat", "fileCount", "extractedSize", "jobId"];
+const VERSION_META_KEYS = ["contentEncoding", "originalSize", "archiveFormat", "fileCount", "extractedSize", "jobId"];
 const JOB_META_KEYS = ["completedAt", "startedAt", "error", "totalFiles", "fileCount", "extractedSize"];
 
 // ---------------------------------------------------------------------------
@@ -155,13 +156,13 @@ export class D1JobStore implements JobStore {
     await this.db
       .prepare(
         `INSERT OR REPLACE INTO jobs
-         (id, asset_id, type, status, created_at, updated_at, retry_count, session_id, project_id, meta)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
+         (id, asset_id, type, status, created_at, updated_at, retry_count, session_id, project_id, version_id, meta)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)`,
       )
       .bind(
         row.id, row.asset_id, row.type, row.status,
         row.created_at, row.updated_at, row.retry_count ?? 0,
-        row.session_id ?? null, row.project_id ?? null, row.meta ?? null,
+        row.session_id ?? null, row.project_id ?? null, row.version_id ?? null, row.meta ?? null,
       )
       .run();
   }
@@ -245,19 +246,23 @@ export class D1MetadataStore implements MetadataStore {
   constructor(private db: D1Database) {}
 
   async save(asset: AssetMetadata, _ttlSeconds: number): Promise<void> {
-    const row = modelToRow(asset as unknown as Record<string, unknown>, ASSET_META_KEYS);
+    const { userMeta, currentVersion, versionCount, ...rest } = asset as AssetMetadata & Record<string, unknown>;
+    const row = modelToRow(rest as Record<string, unknown>, ASSET_META_KEYS);
     await this.db
       .prepare(
         `INSERT OR REPLACE INTO assets
          (id, filename, content_type, size, created_at, expires_at,
-          type, status, session_id, project_id, meta)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)`,
+          type, status, session_id, project_id, meta,
+          active_version_id, description, user_meta)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)`,
       )
       .bind(
         row.id, row.filename, row.content_type, row.size,
         row.created_at, row.expires_at,
         row.type ?? null, row.status ?? null,
         row.session_id ?? null, row.project_id ?? null, row.meta ?? null,
+        row.active_version_id ?? null, row.description ?? null,
+        userMeta ? JSON.stringify(userMeta) : null,
       )
       .run();
   }
@@ -267,7 +272,37 @@ export class D1MetadataStore implements MetadataStore {
       .prepare("SELECT * FROM assets WHERE id = ?1")
       .bind(id)
       .first();
-    return row ? rowToModel<AssetMetadata>(row as Record<string, unknown>, ASSET_META_KEYS) : null;
+    if (!row) return null;
+    return parseAssetRow(row as Record<string, unknown>);
+  }
+
+  async update(id: string, patch: { activeVersionId?: string | null; expiresAt?: number; description?: string; userMeta?: Record<string, unknown> }): Promise<void> {
+    const sets: string[] = [];
+    const binds: unknown[] = [];
+    let idx = 1;
+
+    if (patch.activeVersionId !== undefined) {
+      sets.push(`active_version_id = ?${idx++}`);
+      binds.push(patch.activeVersionId ?? null);
+    }
+    if (patch.expiresAt !== undefined) {
+      sets.push(`expires_at = ?${idx++}`);
+      binds.push(patch.expiresAt);
+    }
+    if (patch.description !== undefined) {
+      sets.push(`description = ?${idx++}`);
+      binds.push(patch.description);
+    }
+    if (patch.userMeta !== undefined) {
+      sets.push(`user_meta = ?${idx++}`);
+      binds.push(patch.userMeta ? JSON.stringify(patch.userMeta) : null);
+    }
+
+    if (sets.length === 0) return;
+
+    const sql = `UPDATE assets SET ${sets.join(", ")} WHERE id = ?${idx}`;
+    binds.push(id);
+    await this.db.prepare(sql).bind(...binds).run();
   }
 
   async delete(id: string): Promise<void> {
@@ -309,7 +344,7 @@ export class D1MetadataStore implements MetadataStore {
 
     const { results } = await this.db.prepare(sql).bind(...binds).all();
     const hasMore = results.length > limit;
-    const items = results.slice(0, limit).map((r) => rowToModel<AssetMetadata>(r as Record<string, unknown>, ASSET_META_KEYS));
+    const items = results.slice(0, limit).map((r) => parseAssetRow(r as Record<string, unknown>));
     const cursor = hasMore && items.length > 0
       ? encodeCursor(items[items.length - 1].createdAt, items[items.length - 1].id)
       : undefined;
@@ -324,8 +359,154 @@ export class D1MetadataStore implements MetadataStore {
       )
       .bind(now, limit)
       .all();
-    return results.map((r) => rowToModel<AssetMetadata>(r as Record<string, unknown>, ASSET_META_KEYS));
+    return results.map((r) => parseAssetRow(r as Record<string, unknown>));
   }
+}
+
+function parseAssetRow(row: Record<string, unknown>): AssetMetadata {
+  const userMetaStr = row.user_meta as string | null;
+  const model = rowToModel<AssetMetadata>(row, ASSET_META_KEYS);
+  if (userMetaStr) {
+    try { model.userMeta = JSON.parse(userMetaStr); } catch { /* ignore */ }
+  }
+  return model;
+}
+
+// ---------------------------------------------------------------------------
+// D1VersionStore (ADR-005)
+// ---------------------------------------------------------------------------
+
+export class D1VersionStore implements VersionStore {
+  constructor(private db: D1Database) {}
+
+  async save(version: AssetVersion): Promise<void> {
+    const { userMeta, ...rest } = version as AssetVersion & Record<string, unknown>;
+    const row = modelToRow(rest as Record<string, unknown>, VERSION_META_KEYS);
+    await this.db
+      .prepare(
+        `INSERT OR REPLACE INTO asset_versions
+         (id, asset_id, version, filename, content_type, size, created_at,
+          type, status, meta, user_meta)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)`,
+      )
+      .bind(
+        row.id, row.asset_id, row.version, row.filename, row.content_type,
+        row.size, row.created_at,
+        row.type ?? null, row.status ?? null, row.meta ?? null,
+        userMeta ? JSON.stringify(userMeta) : null,
+      )
+      .run();
+  }
+
+  async find(id: string): Promise<AssetVersion | null> {
+    const row = await this.db
+      .prepare("SELECT * FROM asset_versions WHERE id = ?1")
+      .bind(id)
+      .first();
+    if (!row) return null;
+    return parseVersionRow(row as Record<string, unknown>);
+  }
+
+  async findByAssetId(assetId: string, options?: { limit?: number; cursor?: string }): Promise<ListResult<AssetVersion>> {
+    const limit = options?.limit ?? 20;
+    const binds: unknown[] = [assetId];
+    let bindIdx = 2;
+    let cursorCondition = "";
+
+    if (options?.cursor) {
+      const decoded = decodeCursor(options.cursor);
+      if (decoded) {
+        cursorCondition = ` AND (created_at < ?${bindIdx} OR (created_at = ?${bindIdx} AND id < ?${bindIdx + 1}))`;
+        binds.push(decoded.createdAt, decoded.id);
+        bindIdx += 2;
+      }
+    }
+
+    const sql = `SELECT * FROM asset_versions WHERE asset_id = ?1${cursorCondition} ORDER BY version DESC LIMIT ?${bindIdx}`;
+    binds.push(limit + 1);
+
+    const { results } = await this.db.prepare(sql).bind(...binds).all();
+    const hasMore = results.length > limit;
+    const items = results.slice(0, limit).map((r) => parseVersionRow(r as Record<string, unknown>));
+    const cursor = hasMore && items.length > 0
+      ? encodeCursor(items[items.length - 1].createdAt, items[items.length - 1].id)
+      : undefined;
+
+    return { items, cursor };
+  }
+
+  async findLatest(assetId: string): Promise<AssetVersion | null> {
+    const row = await this.db
+      .prepare("SELECT * FROM asset_versions WHERE asset_id = ?1 ORDER BY version DESC LIMIT 1")
+      .bind(assetId)
+      .first();
+    if (!row) return null;
+    return parseVersionRow(row as Record<string, unknown>);
+  }
+
+  async nextVersion(assetId: string): Promise<number> {
+    const row = await this.db
+      .prepare("SELECT MAX(version) as max_ver FROM asset_versions WHERE asset_id = ?1")
+      .bind(assetId)
+      .first();
+    const maxVer = (row as Record<string, unknown> | null)?.max_ver;
+    return typeof maxVer === "number" ? maxVer + 1 : 1;
+  }
+
+  async update(id: string, patch: Partial<Pick<AssetVersion, 'status' | 'userMeta'>>): Promise<void> {
+    const sets: string[] = [];
+    const binds: unknown[] = [];
+    let idx = 1;
+
+    if (patch.status !== undefined) {
+      sets.push(`status = ?${idx++}`);
+      binds.push(patch.status);
+    }
+    if (patch.userMeta !== undefined) {
+      sets.push(`user_meta = ?${idx++}`);
+      binds.push(patch.userMeta ? JSON.stringify(patch.userMeta) : null);
+    }
+
+    if (sets.length === 0) return;
+
+    const sql = `UPDATE asset_versions SET ${sets.join(", ")} WHERE id = ?${idx}`;
+    binds.push(id);
+    await this.db.prepare(sql).bind(...binds).run();
+  }
+
+  async delete(id: string): Promise<void> {
+    await this.db.prepare("DELETE FROM asset_versions WHERE id = ?1").bind(id).run();
+  }
+
+  async deleteByAssetId(assetId: string): Promise<{ totalSize: number; count: number }> {
+    // First sum up sizes for storage accounting
+    const row = await this.db
+      .prepare("SELECT COALESCE(SUM(size), 0) as total_size, COUNT(*) as count FROM asset_versions WHERE asset_id = ?1")
+      .bind(assetId)
+      .first();
+    const totalSize = (row as Record<string, unknown> | null)?.total_size as number ?? 0;
+    const count = (row as Record<string, unknown> | null)?.count as number ?? 0;
+
+    await this.db.prepare("DELETE FROM asset_versions WHERE asset_id = ?1").bind(assetId).run();
+    return { totalSize, count };
+  }
+
+  async count(assetId: string): Promise<number> {
+    const row = await this.db
+      .prepare("SELECT COUNT(*) as cnt FROM asset_versions WHERE asset_id = ?1")
+      .bind(assetId)
+      .first();
+    return (row as Record<string, unknown> | null)?.cnt as number ?? 0;
+  }
+}
+
+function parseVersionRow(row: Record<string, unknown>): AssetVersion {
+  const userMetaStr = row.user_meta as string | null;
+  const model = rowToModel<AssetVersion>(row, VERSION_META_KEYS);
+  if (userMetaStr) {
+    try { model.userMeta = JSON.parse(userMetaStr); } catch { /* ignore */ }
+  }
+  return model;
 }
 
 // ---------------------------------------------------------------------------

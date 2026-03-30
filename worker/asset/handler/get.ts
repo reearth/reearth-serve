@@ -2,7 +2,7 @@ import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
 import { resolver, validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
-import { getAssetMetadata } from "../usecase";
+import { enrichAssetWithVersion } from "../usecase";
 import { canAccessAsset } from "../access";
 import { accessCtx } from "./shared";
 import { assetResponseSchema, errorResponseSchema, idParamSchema } from "../../../shared/openapi";
@@ -20,9 +20,10 @@ export function registerGetRoute(app: Hono<AppEnv>) {
     zValidator("param", idParamSchema),
     async (c) => {
       const metadata = c.get("metadata");
+      const versions = c.get("versions");
       const { id } = c.req.valid("param");
 
-      const asset = await getAssetMetadata(metadata, id);
+      const asset = await enrichAssetWithVersion(metadata, versions, id);
       if (!asset || !await canAccessAsset(asset, accessCtx(c))) {
         return c.json({ error: "Asset not found" }, 404);
       }

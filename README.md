@@ -7,6 +7,7 @@ Spatial Data Delivery — an asset hosting and tile delivery service built on Cl
 ## ✨ Features
 
 - ⚡ **CLI First** — Run `upload myfile.geojson` and instantly get a public URL. No authentication required in demo mode. Both CLI and API are available, making it easy to integrate with CI/CD pipelines and AI agents.
+- 🔄 **Asset Versioning** — Upload new content to an existing asset without changing its ID or URL. Each version is immutable; set an active version or default to the latest. Rollback by switching the active version.
 - 📦 **Archive Extraction** — ZIP/tar/tar.gz uploads are automatically extracted and served as individual files. Supports multi-GB archives, checkpoint-based resume, and root folder auto-stripping.
 - 📡 **HTTP Range Requests** — Full support for `Range` headers (HTTP 206), enabling partial file reads. Works with PMTiles, Cloud-Optimized GeoTIFF (COG), and other formats that rely on byte-range access — no full download needed.
 - 🚀 **Presigned URL Uploads** — Large files (>100MB) bypass the Worker body size limit via presigned URLs for direct-to-R2 uploads with automatic multipart splitting.
@@ -84,9 +85,16 @@ See [ADR-003](./docs/adr/003-kv-to-d1-migration.md) for the D1 migration rationa
 | `GET` | `/api/v1/health` | Health check |
 | `POST` | `/api/v1/assets` | Upload a file (streaming) |
 | `GET` | `/api/v1/assets` | List assets (`?limit=&cursor=`) |
-| `GET` | `/api/v1/assets/:id` | Get asset metadata |
+| `GET` | `/api/v1/assets/:id` | Get asset metadata (includes `currentVersion`, `versionCount`) |
+| `PATCH` | `/api/v1/assets/:id` | Update asset (`description`, `userMeta`, `activeVersionId`) |
+| `POST` | `/api/v1/assets/:id` | Upload new version to existing asset |
+| `GET` | `/api/v1/assets/:id/versions` | List versions (newest first, paginated) |
+| `GET` | `/api/v1/assets/:id/versions/:vid` | Get version metadata |
+| `PATCH` | `/api/v1/assets/:id/versions/:vid` | Update version (`userMeta`) |
+| `DELETE` | `/api/v1/assets/:id/versions/:vid` | Delete a specific version |
+| `PUT` | `/api/v1/assets/:id/active-version` | Set active version (`{ versionId }` or `null` for latest) |
 | `GET` | `/api/v1/assets/:id/files` | List files (NDJSON stream, `?prefix=` filter) |
-| `DELETE` | `/api/v1/assets/:id` | Delete an asset |
+| `DELETE` | `/api/v1/assets/:id` | Delete asset and all versions |
 | `POST` | `/api/v1/assets/uploads` | Create presigned upload session |
 | `POST` | `/api/v1/assets/uploads/:id/complete` | Complete upload session |
 | `POST` | `/api/v1/assets/:id/extract` | Start archive extraction |
@@ -122,7 +130,7 @@ See [ADR-003](./docs/adr/003-kv-to-d1-migration.md) for the D1 migration rationa
 | `GET` | `/files/:id/:filename` | Download file (CORS `*`, Range support) |
 | `GET` | `/files/:id/:filename/*` | Download extracted archive file |
 
-Assets support **versioning** — uploading to an existing asset creates a new version while keeping the asset ID and URL stable. Demo mode assets (no project) auto-expire after 1 hour. Project assets are permanent. See [ADR-005](./docs/adr/005-asset-versioning.md).
+Assets support **versioning** — uploading to an existing asset (`POST /api/v1/assets/:id`) creates a new version while keeping the asset ID and URL stable. Each asset can have an explicit active version; if unset, the latest version is served. File URLs (`/files/:id/:filename`) resolve the active/latest version automatically. Version IDs can also be used directly in file URLs. Demo mode assets (no project) auto-expire after 1 hour. Project assets are permanent. See [ADR-005](./docs/adr/005-asset-versioning.md).
 
 ## CLI
 
@@ -137,7 +145,18 @@ npm run cli -- upload --direct myfile.geojson   # skip presigned URLs
 npm run cli -- asset list
 npm run cli -- asset list --limit 50 --cursor <cursor>
 npm run cli -- asset show <id>
+npm run cli -- asset update <id> --description "My dataset" --user-meta '{"tag":"v1"}'
 npm run cli -- asset delete <id>
+
+# Versioning
+npm run cli -- asset upload <id> ./updated-data.geojson   # upload new version
+npm run cli -- asset versions <id>                        # list versions
+npm run cli -- asset version list <id>                    # alias for above
+npm run cli -- asset version show <id> <vid>              # version details
+npm run cli -- asset version update <id> <vid> --user-meta '{"note":"fixed"}'
+npm run cli -- asset version delete <id> <vid>            # delete specific version
+npm run cli -- asset set-version <id> --vid <vid>         # set active version
+npm run cli -- asset set-version <id> --latest            # reset to latest
 
 # File operations
 npm run cli -- file ls <id>                     # list files

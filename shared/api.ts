@@ -62,6 +62,25 @@ export const createProjectBodySchema = z.object({
 
 // --- Asset ---
 
+export const assetVersionSchema = z.object({
+  id: z.string(),
+  assetId: z.string(),
+  version: z.number(),
+  filename: z.string(),
+  contentType: z.string(),
+  size: z.number(),
+  createdAt: z.number(),
+  contentEncoding: z.string().optional(),
+  originalSize: z.number().optional(),
+  type: assetTypeSchema.optional(),
+  status: assetStatusSchema.optional(),
+  archiveFormat: archiveFormatSchema.optional(),
+  fileCount: z.number().optional(),
+  extractedSize: z.number().optional(),
+  jobId: z.string().optional(),
+  userMeta: z.record(z.string(), z.unknown()).optional(),
+});
+
 export const assetMetadataSchema = z.object({
   id: z.string(),
   filename: z.string(),
@@ -79,6 +98,11 @@ export const assetMetadataSchema = z.object({
   jobId: z.string().optional(),
   sessionId: z.string().optional(),
   projectId: z.string().optional(),
+  activeVersionId: z.string().optional(),
+  description: z.string().optional(),
+  userMeta: z.record(z.string(), z.unknown()).optional(),
+  currentVersion: assetVersionSchema.optional(),
+  versionCount: z.number().optional(),
 });
 
 export const assetUploadResultSchema = z.object({
@@ -130,6 +154,7 @@ export const jobSchema = z.object({
   retryCount: z.number().optional(),
   sessionId: z.string().optional(),
   projectId: z.string().optional(),
+  versionId: z.string().optional(),
 });
 
 // --- File entry (archive manifest) ---
@@ -162,6 +187,27 @@ export const updateJobStatusBodySchema = z.object({
   error: z.string().optional(),
 });
 
+// --- Asset update ---
+
+export const updateAssetBodySchema = z.object({
+  description: z.string().optional(),
+  userMeta: z.record(z.string(), z.unknown()).optional(),
+  activeVersionId: z.string().nullable().optional(),
+  expiresAt: z.number().optional(),
+});
+
+// --- Version update ---
+
+export const updateVersionBodySchema = z.object({
+  userMeta: z.record(z.string(), z.unknown()).optional(),
+});
+
+// --- Set active version ---
+
+export const setActiveVersionBodySchema = z.object({
+  versionId: z.string().nullable(),
+});
+
 // --- Error response ---
 
 export const errorResponseSchema = z.object({
@@ -181,6 +227,7 @@ export type CreateProjectBody = z.infer<typeof createProjectBodySchema>;
 export type AssetType = z.infer<typeof assetTypeSchema>;
 export type AssetStatus = z.infer<typeof assetStatusSchema>;
 export type ArchiveFormat = z.infer<typeof archiveFormatSchema>;
+export type AssetVersion = z.infer<typeof assetVersionSchema>;
 export type AssetMetadata = z.infer<typeof assetMetadataSchema>;
 export type AssetUploadResult = z.infer<typeof assetUploadResultSchema>;
 export type PresignedUploadResult = z.infer<typeof presignedUploadResultSchema>;
@@ -192,3 +239,6 @@ export type CompleteUploadBody = z.infer<typeof completeUploadBodySchema>;
 export type UpdateJobStatusBody = z.infer<typeof updateJobStatusBodySchema>;
 export type ErrorResponse = z.infer<typeof errorResponseSchema>;
 export type FileEntry = z.infer<typeof fileEntrySchema>;
+export type UpdateAssetBody = z.infer<typeof updateAssetBodySchema>;
+export type UpdateVersionBody = z.infer<typeof updateVersionBodySchema>;
+export type SetActiveVersionBody = z.infer<typeof setActiveVersionBodySchema>;

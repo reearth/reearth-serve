@@ -1,4 +1,4 @@
-import type { FileStorage, MetadataStore, UploadSessionStore, PresignedUrlGenerator } from "./asset/repository";
+import type { FileStorage, MetadataStore, VersionStore, UploadSessionStore, PresignedUrlGenerator } from "./asset/repository";
 import type { JobStore } from "./job/repository";
 import type { AuthUser } from "./auth/types";
 import type { Authorizer } from "./auth/authorizer";
@@ -9,6 +9,7 @@ import type { StorageUsageStore } from "./infra/d1";
 export type AppEnv = {
   Variables: {
     metadata: MetadataStore;
+    versions: VersionStore;
     storage: FileStorage;
     uploadSessions: UploadSessionStore;
     presignedUrls: PresignedUrlGenerator | null;

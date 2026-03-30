@@ -1,12 +1,13 @@
 import { z } from "zod";
 import {
-  assetMetadataSchema, assetUploadResultSchema, jobSchema,
+  assetMetadataSchema, assetUploadResultSchema, assetVersionSchema, jobSchema,
   projectSchema, workspaceSchema, memberSchema, roleSchema,
   errorResponseSchema, fileEntrySchema,
   presignedUploadResultSchema, multipartUploadResultSchema,
   createUploadSessionBodySchema, completeUploadBodySchema,
   createProjectBodySchema, createWorkspaceBodySchema,
   addMemberBodySchema, updateMemberBodySchema,
+  updateAssetBodySchema, updateVersionBodySchema, setActiveVersionBodySchema,
 } from "./api";
 
 // --- Response envelopes ---
@@ -36,6 +37,12 @@ export const meResponseSchema = z.object({
   workspaces: z.array(workspaceSchema.extend({ role: roleSchema })),
 });
 
+export const versionResponseSchema = z.object({ version: assetVersionSchema });
+export const versionListResponseSchema = z.object({
+  versions: z.array(assetVersionSchema),
+  cursor: z.string().optional(),
+});
+
 export const healthResponseSchema = z.object({ ok: z.boolean() });
 
 export const uploadResultResponseSchema = assetUploadResultSchema;
@@ -49,6 +56,7 @@ export const uploadSessionResponseSchema = z.union([
 // --- Param schemas ---
 
 export const idParamSchema = z.object({ id: z.string() });
+export const versionParamSchema = z.object({ id: z.string(), versionId: z.string() });
 export const workspaceMemberParamSchema = z.object({
   workspaceId: z.string(),
   userId: z.string(),
@@ -78,6 +86,9 @@ export {
   createWorkspaceBodySchema,
   addMemberBodySchema,
   updateMemberBodySchema,
+  updateAssetBodySchema,
+  updateVersionBodySchema,
+  setActiveVersionBodySchema,
   errorResponseSchema,
   fileEntrySchema,
 };
