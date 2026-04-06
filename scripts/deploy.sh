@@ -61,7 +61,11 @@ npm run build --prefix "${PROJECT_DIR}"
 echo "Deploying..."
 DEPLOY_OUTPUT=$(CLOUDFLARE_ACCOUNT_ID="${CLOUDFLARE_ACCOUNT_ID}" \
   CLOUDFLARE_API_TOKEN="${CLOUDFLARE_API_TOKEN:-}" \
-  npx wrangler deploy --containers-rollout immediate 2>&1)
+  npx wrangler deploy --containers-rollout immediate 2>&1) || {
+  echo "$DEPLOY_OUTPUT"
+  echo "❌ wrangler deploy failed"
+  exit 1
+}
 echo "$DEPLOY_OUTPUT"
 
 # Wait for container rollout if image was changed
