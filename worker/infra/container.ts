@@ -41,6 +41,7 @@ export class CloudflareContainerLauncher implements ContainerLauncher {
       secretAccessKey: string;
       bucket: string;
     },
+    private readonly internalApiSecret: string,
   ) {}
 
   async launchArchiveExtractor(params: ArchiveExtractorParams): Promise<void> {
@@ -57,6 +58,7 @@ export class CloudflareContainerLauncher implements ContainerLauncher {
       ARCHIVE_FILENAME: params.archiveFilename,
       ARCHIVE_FORMAT: params.archiveFormat,
       WORKER_API_URL: this.baseUrl,
+      INTERNAL_API_SECRET: this.internalApiSecret,
     };
 
     await stub.startExtraction(envVars);

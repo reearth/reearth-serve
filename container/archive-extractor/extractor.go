@@ -25,3 +25,18 @@ type ArchiveExtractor interface {
 	// ExtractEntry returns a reader for the given entry's uncompressed data.
 	ExtractEntry(ctx context.Context, entry ArchiveEntry) (io.ReadCloser, error)
 }
+
+// SequentialExtractor is implemented by archive formats that have no
+// usable random-access primitive (e.g. tar, tar.gz). For those formats,
+// per-entry ExtractEntry calls re-open and re-scan the archive each time,
+// which is O(N²) — for a 10k-entry tar.gz that means 10k full gzip
+// decompressions. Implementations of this interface let phaseB iterate
+// the archive once and visit every entry in order.
+//
+// fn is called for each non-directory entry, in archive order. The reader
+// is only valid for the duration of the call; consumers must read it to
+// EOF (or discard it) before fn returns. Returning a non-nil error from
+// fn aborts iteration and propagates the error out of ExtractAllSequential.
+type SequentialExtractor interface {
+	ExtractAllSequential(ctx context.Context, fn func(entry ArchiveEntry, r io.Reader) error) error
+}

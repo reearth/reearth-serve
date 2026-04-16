@@ -58,13 +58,14 @@ func main() {
 		maskString(cfg.R2AccessKeyID))
 
 	worker := NewExtractionWorker(r2, ExtractionConfig{
-		AssetID:         cfg.AssetID,
-		ArchiveKey:      cfg.ArchiveKey,
-		ArchiveFilename: cfg.ArchiveFilename,
-		ArchiveFormat:   cfg.ArchiveFormat,
-		WorkerAPIURL:    cfg.WorkerAPIURL,
-		MaxConcurrency:  cfg.MaxConcurrency,
-		CheckpointEvery: cfg.CheckpointEvery,
+		AssetID:           cfg.AssetID,
+		ArchiveKey:        cfg.ArchiveKey,
+		ArchiveFilename:   cfg.ArchiveFilename,
+		ArchiveFormat:     cfg.ArchiveFormat,
+		WorkerAPIURL:      cfg.WorkerAPIURL,
+		InternalAPISecret: cfg.InternalAPISecret,
+		MaxConcurrency:    cfg.MaxConcurrency,
+		CheckpointEvery:   cfg.CheckpointEvery,
 	})
 
 	if err := worker.Run(ctx); err != nil {
@@ -96,7 +97,8 @@ type envConfig struct {
 	ArchiveFormat   string
 
 	// Worker API
-	WorkerAPIURL string
+	WorkerAPIURL      string
+	InternalAPISecret string
 
 	// Tuning
 	MaxConcurrency  int
@@ -114,6 +116,7 @@ func loadConfigFromEnv() (*envConfig, error) {
 		ArchiveFilename:   os.Getenv("ARCHIVE_FILENAME"),
 		ArchiveFormat:     os.Getenv("ARCHIVE_FORMAT"),
 		WorkerAPIURL:      os.Getenv("WORKER_API_URL"),
+		InternalAPISecret: os.Getenv("INTERNAL_API_SECRET"),
 		MaxConcurrency:    48,
 		CheckpointEvery:   100,
 	}

@@ -16,6 +16,12 @@ const ASSET_META_KEYS = ["contentEncoding", "originalSize", "archiveFormat", "fi
 const VERSION_META_KEYS = ["contentEncoding", "originalSize", "archiveFormat", "fileCount", "extractedSize", "jobId"];
 const JOB_META_KEYS = ["completedAt", "startedAt", "error", "totalFiles", "fileCount", "extractedSize"];
 
+// Cap unbounded list results so a runaway workspace/project doesn't ship the
+// whole table on every request. Real pagination on these endpoints is tracked
+// for a future change; for now we hard-cap to keep the API safe.
+const MEMBER_LIST_LIMIT = 200;
+const PROJECT_LIST_LIMIT = 200;
+
 // ---------------------------------------------------------------------------
 // D1WorkspaceStore
 // ---------------------------------------------------------------------------
@@ -75,16 +81,16 @@ export class D1MemberStore implements MemberStore {
 
   async list(workspaceId: string): Promise<Member[]> {
     const { results } = await this.db
-      .prepare("SELECT * FROM members WHERE workspace_id = ?1 ORDER BY created_at")
-      .bind(workspaceId)
+      .prepare("SELECT * FROM members WHERE workspace_id = ?1 ORDER BY created_at LIMIT ?2")
+      .bind(workspaceId, MEMBER_LIST_LIMIT)
       .all();
     return results.map((r) => rowToModel<Member>(r as Record<string, unknown>));
   }
 
   async listByUser(userId: string): Promise<Member[]> {
     const { results } = await this.db
-      .prepare("SELECT * FROM members WHERE user_id = ?1 ORDER BY created_at")
-      .bind(userId)
+      .prepare("SELECT * FROM members WHERE user_id = ?1 ORDER BY created_at LIMIT ?2")
+      .bind(userId, MEMBER_LIST_LIMIT)
       .all();
     return results.map((r) => rowToModel<Member>(r as Record<string, unknown>));
   }
@@ -127,15 +133,15 @@ export class D1ProjectStore implements ProjectStore {
     let query: string;
     let bindValue: string;
     if (params.workspaceId) {
-      query = "SELECT * FROM projects WHERE workspace_id = ?1 ORDER BY created_at DESC";
+      query = "SELECT * FROM projects WHERE workspace_id = ?1 ORDER BY created_at DESC LIMIT ?2";
       bindValue = params.workspaceId;
     } else if (params.ownerId) {
-      query = "SELECT * FROM projects WHERE owner_id = ?1 ORDER BY created_at DESC";
+      query = "SELECT * FROM projects WHERE owner_id = ?1 ORDER BY created_at DESC LIMIT ?2";
       bindValue = params.ownerId;
     } else {
       return [];
     }
-    const { results } = await this.db.prepare(query).bind(bindValue).all();
+    const { results } = await this.db.prepare(query).bind(bindValue, PROJECT_LIST_LIMIT).all();
     return results.map((r) => rowToModel<Project>(r as Record<string, unknown>));
   }
 
@@ -222,7 +228,7 @@ export class D1JobStore implements JobStore {
     return { items, cursor };
   }
 
-  async listRetriable(stuckThresholdMs: number, maxRetries: number): Promise<Job[]> {
+  async listRetriable(stuckThresholdMs: number, maxRetries: number, limit: number = 50): Promise<Job[]> {
     const stuckBefore = Date.now() - stuckThresholdMs;
     const { results } = await this.db
       .prepare(
@@ -230,9 +236,11 @@ export class D1JobStore implements JobStore {
          WHERE type = 'archive-extraction'
            AND retry_count < ?1
            AND (status IN ('pending', 'failed')
-                OR (status = 'running' AND updated_at < ?2))`,
+                OR (status = 'running' AND updated_at < ?2))
+         ORDER BY updated_at ASC
+         LIMIT ?3`,
       )
-      .bind(maxRetries, stuckBefore)
+      .bind(maxRetries, stuckBefore, limit)
       .all();
     return results.map((r) => rowToModel<Job>(r as Record<string, unknown>, JOB_META_KEYS));
   }

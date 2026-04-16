@@ -10,6 +10,7 @@
     "build": "react-router build",
     "dev": "react-router dev",
     "deploy": "bash scripts/deploy.sh",
+    "init:dev-secrets": "bash scripts/init-dev-secrets.sh",
     "typegen": "wrangler types && react-router typegen",
     "check": "npm run typecheck && npm run test",
     "typecheck": "tsc -b",

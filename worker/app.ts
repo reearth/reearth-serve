@@ -1,4 +1,4 @@
-import { Hono } from "hono";
+import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { openAPIRouteHandler } from "hono-openapi";
 import { Scalar } from "@scalar/hono-api-reference";
 import { assetRoutes } from "./asset/handler";
@@ -85,10 +85,16 @@ export function createApp(env: Env) {
   app.route("/api/v1/projects", projectRoutes);
   app.route("/api/v1/workspaces", workspaceRoutes);
 
-  // Internal API (no versioning, no compatibility guarantee)
+  // Internal API (no versioning, no compatibility guarantee).
+  // Requires shared secret — these routes mutate job/asset state from the
+  // extraction container, so they must never be reachable from public callers.
+  // Asset IDs are embedded in public file URLs, so without auth an attacker
+  // who sees a permalink could mark the victim's job failed or "complete"
+  // with bogus metadata.
+  app.use("/api/internal/*", internalApiAuth(env.INTERNAL_API_SECRET));
   app.route("/api/internal/jobs", jobInternalRoutes);
 
-  // Internal asset existence check (for container TTL checks, no auth)
+  // Internal asset existence check (for container TTL checks)
   app.get("/api/internal/assets/:id/exists", async (c) => {
     const asset = await metadata.find(c.req.param("id"));
     return asset ? c.json({ exists: true }) : c.json({ exists: false }, 404);
@@ -119,4 +125,34 @@ export function createApp(env: Env) {
   app.get("/api/v1/docs", Scalar({ url: "/api/v1/doc" }));
 
   return app;
+}
+
+/**
+ * Constant-time comparison so secret validation doesn't leak length/contents
+ * via timing differences. Returns false on any length mismatch.
+ */
+function timingSafeEqual(a: string, b: string): boolean {
+  if (a.length !== b.length) return false;
+  let mismatch = 0;
+  for (let i = 0; i < a.length; i++) {
+    mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
+  }
+  return mismatch === 0;
+}
+
+function internalApiAuth(expected: string | undefined): MiddlewareHandler {
+  return async (c: Context, next) => {
+    if (!expected) {
+      // Fail closed: without a configured secret the internal API is unsafe
+      // to expose at all, so refuse every request rather than authenticate
+      // nothing.
+      return c.json({ error: "Internal API not configured" }, 503);
+    }
+    const header = c.req.header("Authorization") ?? "";
+    const m = header.match(/^Bearer\s+(.+)$/);
+    if (!m || !timingSafeEqual(m[1], expected)) {
+      return c.json({ error: "Unauthorized" }, 401);
+    }
+    await next();
+  };
 }

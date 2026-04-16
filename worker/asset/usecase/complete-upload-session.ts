@@ -56,37 +56,49 @@ export async function completeUploadSession(
     ...(options?.projectId && { projectId: options.projectId }),
   };
 
-  // Create extraction job for archives (unless skipped)
-  if (archiveFormat && !session.skipExtraction) {
-    const job: Job = {
-      id,
-      assetId: id,
-      type: "archive-extraction",
-      status: "pending",
-      createdAt: now,
-      updatedAt: now,
-      ...(options?.sessionId && { sessionId: options.sessionId }),
-      ...(options?.projectId && { projectId: options.projectId }),
-    };
-    await jobs.save(job);
-    asset.jobId = id;
+  try {
+    // Create extraction job for archives (unless skipped)
+    if (archiveFormat && !session.skipExtraction) {
+      const job: Job = {
+        id,
+        assetId: id,
+        type: "archive-extraction",
+        status: "pending",
+        createdAt: now,
+        updatedAt: now,
+        ...(options?.sessionId && { sessionId: options.sessionId }),
+        ...(options?.projectId && { projectId: options.projectId }),
+      };
+      await jobs.save(job);
+      asset.jobId = id;
 
-    // Enqueue extraction job
-    if (options?.extractionQueue) {
-      try {
-        await options.extractionQueue.send({
-          assetId: id,
-          archiveKey: key,
-          archiveFilename: session.filename,
-          archiveFormat,
-        });
-      } catch (e) {
-        console.error("Failed to enqueue extraction:", e);
+      // Enqueue extraction job
+      if (options?.extractionQueue) {
+        try {
+          await options.extractionQueue.send({
+            assetId: id,
+            archiveKey: key,
+            archiveFilename: session.filename,
+            archiveFormat,
+          });
+        } catch (e) {
+          console.error("Failed to enqueue extraction:", e);
+        }
       }
     }
-  }
 
-  await metadata.save(asset, options?.projectId ? 0 : ttlSeconds);
+    await metadata.save(asset, options?.projectId ? 0 : ttlSeconds);
+  } catch (e) {
+    // R2 already holds the uploaded body but the D1 metadata row failed to
+    // persist. Cleanup is driven off D1, so without compensation the R2
+    // object would never be reclaimed.
+    try {
+      await storage.delete(key);
+    } catch (delErr) {
+      console.error("Failed to clean up R2 object after metadata save failure:", delErr);
+    }
+    throw e;
+  }
   await sessions.delete(id);
 
   return {

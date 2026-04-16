@@ -123,6 +123,8 @@ See [ADR-003](./docs/adr/003-kv-to-d1-migration.md) for the D1 migration rationa
 | `POST` | `/api/internal/jobs/:id/status` | Container → Worker job status update |
 | `GET` | `/api/internal/assets/:id/exists` | Container → Worker asset existence check |
 
+These endpoints require `Authorization: Bearer $INTERNAL_API_SECRET` — set it via `wrangler secret put INTERNAL_API_SECRET` in production. Without the secret configured the Worker rejects every internal-API request and the extraction container will not be launched.
+
 ### File Delivery
 
 | Method | Path | Description |

@@ -59,39 +59,50 @@ export async function uploadVersion(
     }),
   };
 
-  // Create extraction job for archives
-  if (archiveFormat && !options?.skipExtraction) {
-    const jobId = generateId();
-    const job: Job = {
-      id: jobId,
-      assetId,
-      type: "archive-extraction",
-      status: "pending",
-      createdAt: now,
-      updatedAt: now,
-      versionId,
-      ...(asset.sessionId && { sessionId: asset.sessionId }),
-      ...(asset.projectId && { projectId: asset.projectId }),
-    };
-    await jobs.save(job);
-    version.jobId = jobId;
+  try {
+    // Create extraction job for archives
+    if (archiveFormat && !options?.skipExtraction) {
+      const jobId = generateId();
+      const job: Job = {
+        id: jobId,
+        assetId,
+        type: "archive-extraction",
+        status: "pending",
+        createdAt: now,
+        updatedAt: now,
+        versionId,
+        ...(asset.sessionId && { sessionId: asset.sessionId }),
+        ...(asset.projectId && { projectId: asset.projectId }),
+      };
+      await jobs.save(job);
+      version.jobId = jobId;
 
-    if (options?.extractionQueue) {
-      try {
-        await options.extractionQueue.send({
-          assetId,
-          versionId,
-          archiveKey: key,
-          archiveFilename: file.name,
-          archiveFormat,
-        });
-      } catch (e) {
-        console.error("Failed to enqueue extraction:", e);
+      if (options?.extractionQueue) {
+        try {
+          await options.extractionQueue.send({
+            assetId,
+            versionId,
+            archiveKey: key,
+            archiveFilename: file.name,
+            archiveFormat,
+          });
+        } catch (e) {
+          console.error("Failed to enqueue extraction:", e);
+        }
       }
     }
-  }
 
-  await versions.save(version);
+    await versions.save(version);
+  } catch (e) {
+    // Compensation: drop the orphaned R2 object so it doesn't leak forever
+    // if the D1 version row failed to persist.
+    try {
+      await storage.delete(key);
+    } catch (delErr) {
+      console.error("Failed to clean up R2 object after version save failure:", delErr);
+    }
+    throw e;
+  }
 
   return {
     version,

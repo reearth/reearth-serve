@@ -5,6 +5,9 @@ import type { Job } from "../job/model";
 
 const DEFAULT_STUCK_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MAX_RETRIES = 5;
+// Cap per-tick re-enqueue work so a backlog of failed jobs cannot blow the
+// Workers subrequest budget and break the recovery loop itself.
+const MAX_RETRIABLE_PER_TICK = 50;
 
 export async function handleScheduled(env: Env): Promise<void> {
   const metadata = new D1MetadataStore(env.DB);
@@ -36,7 +39,7 @@ async function retriggerPendingJobs(
   queue: Queue,
   stuckThresholdMs: number,
 ): Promise<void> {
-  const retriableJobs = await jobs.listRetriable(stuckThresholdMs, MAX_RETRIES);
+  const retriableJobs = await jobs.listRetriable(stuckThresholdMs, MAX_RETRIES, MAX_RETRIABLE_PER_TICK);
 
   for (const job of retriableJobs) {
     // Mark as permanently failed if max retries exceeded
@@ -64,25 +67,34 @@ async function retriggerPendingJobs(
     const asset = await metadata.find(job.assetId);
     if (!asset || !asset.archiveFormat) continue;
 
+    // Send to queue FIRST. If it fails, the job stays pending with the same
+    // retry_count and the next cron tick will try again — without burning a
+    // retry on a transient queue/network failure.
     try {
-      // Increment retry count and reset to pending
-      const updatedJob: Job = {
-        ...job,
-        retryCount: (job.retryCount ?? 0) + 1,
-        status: "pending",
-        updatedAt: Date.now(),
-      };
-      await jobs.save(updatedJob);
-
       await queue.send({
         assetId: job.assetId,
         archiveKey: `assets/${job.assetId}/${asset.filename}`,
         archiveFilename: asset.filename,
         archiveFormat: asset.archiveFormat,
       });
-      console.log(`Re-enqueued extraction for asset ${job.assetId} (retry ${updatedJob.retryCount}/${MAX_RETRIES})`);
     } catch (e) {
-      console.error(`Failed to re-enqueue extraction for asset ${job.assetId}:`, e);
+      console.error(`Failed to enqueue extraction for asset ${job.assetId} (retry budget preserved):`, e);
+      continue;
     }
+
+    // Only after successful enqueue, persist the incremented retry count.
+    const updatedJob: Job = {
+      ...job,
+      retryCount: (job.retryCount ?? 0) + 1,
+      status: "pending",
+      updatedAt: Date.now(),
+    };
+    try {
+      await jobs.save(updatedJob);
+    } catch (e) {
+      console.error(`Failed to persist retry count for asset ${job.assetId} (job already enqueued):`, e);
+      continue;
+    }
+    console.log(`Re-enqueued extraction for asset ${job.assetId} (retry ${updatedJob.retryCount}/${MAX_RETRIES})`);
   }
 }

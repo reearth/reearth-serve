@@ -51,6 +51,15 @@ export class R2FileStorage implements FileStorage {
     await this.bucket.delete(key);
   }
 
+  async deleteMany(keys: string[]): Promise<void> {
+    if (keys.length === 0) return;
+    // R2Bucket.delete accepts up to 1000 keys per call; chunk to be safe.
+    const CHUNK = 1000;
+    for (let i = 0; i < keys.length; i += CHUNK) {
+      await this.bucket.delete(keys.slice(i, i + CHUNK));
+    }
+  }
+
   async list(prefix: string, options?: { limit?: number; cursor?: string }): Promise<{ keys: string[]; cursor?: string }> {
     const result = await this.bucket.list({
       prefix,

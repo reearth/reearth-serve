@@ -96,7 +96,14 @@ function extractAssetId(key: string): string | null {
   return rest.slice(0, slashIdx);
 }
 
-/** Delete all R2 objects under a prefix */
+/**
+ * Delete all R2 objects under a prefix.
+ *
+ * Uses batch delete (up to 1000 keys per call) when supported. Without
+ * batching, an asset with thousands of extracted files (e.g. tile pyramids)
+ * would single-handedly exhaust the Worker subrequest cap and abort cleanup
+ * mid-flight, leaking storage indefinitely.
+ */
 async function deleteAllR2Objects(
   storage: FileStorage,
   prefix: string,
@@ -106,8 +113,14 @@ async function deleteAllR2Objects(
   do {
     const batch = await storage.list(prefix, { limit: 1000, cursor });
 
-    for (const key of batch.keys) {
-      await storage.delete(key);
+    if (batch.keys.length > 0) {
+      if (storage.deleteMany) {
+        await storage.deleteMany(batch.keys);
+      } else {
+        for (const key of batch.keys) {
+          await storage.delete(key);
+        }
+      }
     }
 
     cursor = batch.cursor;

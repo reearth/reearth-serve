@@ -8,11 +8,16 @@ export interface Authorizer {
   check(req: AuthzRequest): Promise<boolean>;
 }
 
+// Cerbos PDP runs in the request hot path. A short timeout makes us fail fast
+// when the PDP is degraded instead of stalling every authenticated request to
+// the 30s Worker subrequest cap.
+const CERBOS_TIMEOUT_MS = 3000;
+
 /**
  * CerbosAuthorizer sends authorization requests to an external Cerbos PDP.
  */
 export class CerbosAuthorizer implements Authorizer {
-  constructor(private endpoint: string) {}
+  constructor(private endpoint: string, private timeoutMs: number = CERBOS_TIMEOUT_MS) {}
 
   async check(req: AuthzRequest): Promise<boolean> {
     const body = {
@@ -40,6 +45,7 @@ export class CerbosAuthorizer implements Authorizer {
           },
         ],
       }),
+      signal: AbortSignal.timeout(this.timeoutMs),
     });
 
     if (!res.ok) {

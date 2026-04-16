@@ -169,11 +169,15 @@ export const fileEntrySchema = z.object({
 
 // --- Request bodies ---
 
+// S3 multipart upload allows at most 10000 parts; bound partCount to prevent
+// client-side abuse (each part triggers an HMAC-SHA256 signature on the Worker).
+export const MAX_UPLOAD_PARTS = 10000;
+
 export const createUploadSessionBodySchema = z.object({
   filename: z.string(),
   contentType: z.string().optional(),
   size: z.number(),
-  partCount: z.number().optional(),
+  partCount: z.number().int().positive().max(MAX_UPLOAD_PARTS).optional(),
 });
 
 export const completeUploadBodySchema = z.object({

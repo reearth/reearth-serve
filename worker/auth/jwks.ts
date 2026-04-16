@@ -1,6 +1,8 @@
 import { createLocalJWKSet, type JWTVerifyGetKey, type JSONWebKeySet } from "jose";
 
 const DEFAULT_JWKS_CACHE_TTL = 3600;
+// Cap remote JWKS lookup so cold-start auth doesn't block on a slow OIDC provider.
+const JWKS_FETCH_TIMEOUT_MS = 3000;
 
 // In-memory cache (per isolate)
 let memoryCache: { issuer: string; jwks: JWTVerifyGetKey; fetchedAt: number } | null = null;
@@ -40,7 +42,9 @@ export async function resolveJWKS(
   }
 
   // 3. Fetch from remote
-  const res = await fetch(jwksUrl(issuer).toString());
+  const res = await fetch(jwksUrl(issuer).toString(), {
+    signal: AbortSignal.timeout(JWKS_FETCH_TIMEOUT_MS),
+  });
   if (!res.ok) {
     throw new Error(`Failed to fetch JWKS: ${res.status}`);
   }

@@ -61,6 +61,10 @@ func (t *TarExtractor) ListEntries(ctx context.Context) ([]ArchiveEntry, error) 
 
 // ExtractEntry opens the tar archive, seeks to the given entry, and returns
 // a reader for its content.
+//
+// NOTE: This is O(N) per call (full re-scan of the archive). Prefer
+// ExtractAllSequential for batch extraction; this method exists to satisfy
+// the ArchiveExtractor interface and as a fallback for single-entry needs.
 func (t *TarExtractor) ExtractEntry(ctx context.Context, entry ArchiveEntry) (io.ReadCloser, error) {
 	tr, cleanup, err := t.openTarReader(ctx)
 	if err != nil {
@@ -89,6 +93,51 @@ func (t *TarExtractor) ExtractEntry(ctx context.Context, entry ArchiveEntry) (io
 
 	cleanup()
 	return nil, fmt.Errorf("entry index %d not found", entry.Index)
+}
+
+// ExtractAllSequential opens the tar archive once and invokes fn for every
+// non-directory entry in archive order. This avoids the O(N²) re-scan that
+// per-entry ExtractEntry would incur for tar/tar.gz.
+func (t *TarExtractor) ExtractAllSequential(ctx context.Context, fn func(entry ArchiveEntry, r io.Reader) error) error {
+	tr, cleanup, err := t.openTarReader(ctx)
+	if err != nil {
+		return err
+	}
+	defer cleanup()
+
+	index := 0
+	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		hdr, err := tr.Next()
+		if err == io.EOF {
+			return nil
+		}
+		if err != nil {
+			return fmt.Errorf("failed to read tar header at index %d: %w", index, err)
+		}
+
+		entry := ArchiveEntry{
+			Index:          index,
+			Path:           hdr.Name,
+			NormalizedPath: hdr.Name,
+			Size:           hdr.Size,
+			CompressedSize: hdr.Size,
+			IsDirectory:    hdr.Typeflag == tar.TypeDir,
+		}
+		index++
+
+		if entry.IsDirectory {
+			continue
+		}
+
+		// io.LimitReader keeps fn from over-reading into the next header.
+		if err := fn(entry, io.LimitReader(tr, hdr.Size)); err != nil {
+			return err
+		}
+	}
 }
 
 func (t *TarExtractor) openTarReader(ctx context.Context) (*tar.Reader, func(), error) {

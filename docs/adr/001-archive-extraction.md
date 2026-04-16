@@ -88,6 +88,8 @@ The container cannot access Worker bindings (`env.STORAGE`, `env.KV`), so:
 | Checkpoint persistence | JSON file in R2 (no KV dependency) |
 | Job status updates | HTTP POST to Worker API (`/api/internal/jobs/:id/status`) |
 
+The internal API endpoints are reachable from the public internet (asset IDs double as job IDs and are embedded in `/files/:id/*` permalinks), so every callback must carry `Authorization: Bearer $INTERNAL_API_SECRET`. The Worker rejects unauthenticated calls and the launcher refuses to start a container if the secret is not configured.
+
 ### Path normalization
 
 - Backslash separators are converted to forward slashes
@@ -102,7 +104,11 @@ Detection runs at the end of Phase A. The logic checks that all entries share th
 
 ### Disk consumption control
 
-A semaphore limits concurrent uploads (default: 48). Files are streamed from the archive directly to R2 — no intermediate disk writes. For ZIP, `archive/zip` reads via Range requests; for tar/tar.gz, the stream is read sequentially.
+Files are streamed from the archive directly to R2 — no intermediate disk writes.
+
+ZIP uses random access via Range requests (Central Directory + per-entry seeks), so phase B fans out up to 48 concurrent uploads.
+
+tar / tar.gz have no usable random-access primitive: per-entry extraction would require re-opening and re-scanning the archive every time, which is O(N²) reads (and, for tar.gz, O(N²) full gzip decompressions). To avoid this, tar formats implement `SequentialExtractor` and phase B switches to a single-pass loop that opens the archive once, walks every entry in order, and uploads each one synchronously before reading the next header. Resume support remains intact: indices already covered by the checkpoint are read and discarded so the underlying tar reader stays in sync.
 
 ## R2 storage layout
 

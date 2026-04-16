@@ -34,10 +34,21 @@ function createLauncher(env: Env): CloudflareContainerLauncher | null {
   if (!env.ARCHIVE_EXTRACTOR || !env.R2_S3_ENDPOINT || !env.R2_ACCESS_KEY_ID || !env.R2_SECRET_ACCESS_KEY) {
     return null;
   }
-  return new CloudflareContainerLauncher(env.ARCHIVE_EXTRACTOR, env.BASE_URL, {
-    endpoint: env.R2_S3_ENDPOINT,
-    accessKeyId: env.R2_ACCESS_KEY_ID,
-    secretAccessKey: env.R2_SECRET_ACCESS_KEY,
-    bucket: env.R2_BUCKET_NAME || "reearth-serve",
-  });
+  if (!env.INTERNAL_API_SECRET) {
+    // Without the shared secret the container cannot authenticate its
+    // status callbacks, so launching it would just produce 401s.
+    console.error("Cannot launch extractor: INTERNAL_API_SECRET is not configured");
+    return null;
+  }
+  return new CloudflareContainerLauncher(
+    env.ARCHIVE_EXTRACTOR,
+    env.BASE_URL,
+    {
+      endpoint: env.R2_S3_ENDPOINT,
+      accessKeyId: env.R2_ACCESS_KEY_ID,
+      secretAccessKey: env.R2_SECRET_ACCESS_KEY,
+      bucket: env.R2_BUCKET_NAME || "reearth-serve",
+    },
+    env.INTERNAL_API_SECRET,
+  );
 }

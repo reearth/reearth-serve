@@ -13,17 +13,25 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 )
+
+// workerAPITimeout caps every callback to the Worker API. http.DefaultClient
+// has no timeout, which previously let a slow/hung Worker freeze the in-flight
+// extraction (the call was made under the progress mutex, blocking every
+// upload goroutine).
+const workerAPITimeout = 30 * time.Second
 
 // ExtractionConfig holds configuration for the extraction worker.
 type ExtractionConfig struct {
-	AssetID         string
-	ArchiveKey      string // storage key for the archive file
-	ArchiveFilename string // original filename (for root prefix detection)
-	ArchiveFormat   string // "zip", "tar", "tar.gz"
-	WorkerAPIURL    string // Worker API base URL for status updates
-	MaxConcurrency  int    // max parallel uploads (default: 48)
-	CheckpointEvery int    // checkpoint interval in entries (default: 100)
+	AssetID           string
+	ArchiveKey        string // storage key for the archive file
+	ArchiveFilename   string // original filename (for root prefix detection)
+	ArchiveFormat     string // "zip", "tar", "tar.gz"
+	WorkerAPIURL      string // Worker API base URL for status updates
+	InternalAPISecret string // shared bearer secret for /api/internal/* callbacks
+	MaxConcurrency    int    // max parallel uploads (default: 48)
+	CheckpointEvery   int    // checkpoint interval in entries (default: 100)
 }
 
 // ExtractionWorker orchestrates the extraction of an archive to object storage.
@@ -32,6 +40,7 @@ type ExtractionWorker struct {
 	storage    ObjectStorage
 	checkpoint *CheckpointManager
 	manifest   *ManifestWriter
+	httpClient *http.Client
 }
 
 // NewExtractionWorker creates a new ExtractionWorker.
@@ -48,6 +57,7 @@ func NewExtractionWorker(storage ObjectStorage, cfg ExtractionConfig) *Extractio
 		storage:    storage,
 		checkpoint: NewCheckpointManager(storage, cfg.AssetID),
 		manifest:   NewManifestWriter(storage, cfg.AssetID),
+		httpClient: &http.Client{Timeout: workerAPITimeout},
 	}
 }
 
@@ -160,6 +170,12 @@ func (w *ExtractionWorker) phaseB(ctx context.Context, cp *JobCheckpoint) error 
 		return err
 	}
 
+	// Formats without random access (tar, tar.gz) take a sequential path so
+	// we open and decompress the archive once instead of N times.
+	if seq, ok := extractor.(SequentialExtractor); ok {
+		return w.phaseBSequential(ctx, cp, seq, entries)
+	}
+
 	sem := make(chan struct{}, w.cfg.MaxConcurrency)
 	var mu sync.Mutex
 	var wg sync.WaitGroup
@@ -220,15 +236,28 @@ func (w *ExtractionWorker) phaseB(ctx context.Context, cp *JobCheckpoint) error 
 				log.Printf("failed to add manifest entry: %v", err)
 			}
 
-			if cp.ProcessedCount%w.cfg.CheckpointEvery == 0 {
+			// Snapshot the values needed for the checkpoint/callback so we
+			// can release the lock before doing slow R2/HTTP I/O. Holding
+			// the mutex across those calls previously froze every other
+			// upload goroutine when the Worker API hung.
+			doCheckpoint := cp.ProcessedCount%w.cfg.CheckpointEvery == 0
+			processedCount := cp.ProcessedCount
+			processedBytes := cp.ProcessedBytes
+			totalEntries := cp.TotalEntries
+			if doCheckpoint {
 				cp.ManifestChunksWritten = chunkIndex
-				if err := w.checkpoint.Save(ctx, cp); err != nil {
+			}
+			cpSnapshot := *cp
+			mu.Unlock()
+
+			if doCheckpoint {
+				if err := w.checkpoint.Save(ctx, &cpSnapshot); err != nil {
 					log.Printf("failed to save checkpoint: %v", err)
 				}
-				log.Printf("checkpoint: %d/%d files processed", cp.ProcessedCount, cp.TotalEntries)
+				log.Printf("checkpoint: %d/%d files processed", processedCount, totalEntries)
 
 				// Report progress
-				_ = w.updateJobStatus(ctx, "running", cp.ProcessedCount, cp.ProcessedBytes)
+				_ = w.updateJobStatus(ctx, "running", processedCount, processedBytes)
 
 				// Check if asset still exists (TTL may have expired)
 				if !w.checkAssetExists(ctx) {
@@ -236,7 +265,6 @@ func (w *ExtractionWorker) phaseB(ctx context.Context, cp *JobCheckpoint) error 
 					extractErr.Store(fmt.Errorf("asset expired during extraction"))
 				}
 			}
-			mu.Unlock()
 		}(entry)
 	}
 
@@ -257,6 +285,96 @@ func (w *ExtractionWorker) phaseB(ctx context.Context, cp *JobCheckpoint) error 
 	}
 
 	log.Printf("phase B: extracted %d files, %d errors", cp.ProcessedCount, len(cp.Errors))
+	return nil
+}
+
+// phaseBSequential extracts a single-pass archive (tar/tar.gz) in order.
+// The archive is opened once; uploads happen synchronously per entry.
+// This is slower than the parallel path but avoids the O(N²) re-scan that
+// the random-access ExtractEntry path would force on tar formats.
+func (w *ExtractionWorker) phaseBSequential(ctx context.Context, cp *JobCheckpoint, ext SequentialExtractor, entries []ArchiveEntry) error {
+	byIndex := make(map[int]ArchiveEntry, len(entries))
+	for _, e := range entries {
+		byIndex[e.Index] = e
+	}
+
+	chunkIndex := cp.ManifestChunksWritten
+	resumeAfter := cp.LastProcessedIndex
+
+	err := ext.ExtractAllSequential(ctx, func(rawEntry ArchiveEntry, r io.Reader) error {
+		// Use the pre-normalized entry from phase A (paths already stripped
+		// of root prefix and normalized to forward slashes).
+		e, ok := byIndex[rawEntry.Index]
+		if !ok || e.IsDirectory {
+			_, _ = io.Copy(io.Discard, r)
+			return nil
+		}
+		// Skip already-processed entries on resume. We still need to drain
+		// their bytes so the underlying tar reader advances to the next header.
+		if e.Index <= resumeAfter {
+			_, _ = io.Copy(io.Discard, r)
+			return nil
+		}
+		if err := ctx.Err(); err != nil {
+			return err
+		}
+
+		fileHash, err := w.uploadFromReader(ctx, e, r)
+		if err != nil {
+			log.Printf("error extracting %q: %v", e.NormalizedPath, err)
+			cp.Errors = append(cp.Errors, EntryError{
+				Index: e.Index,
+				Path:  e.NormalizedPath,
+				Error: err.Error(),
+			})
+			return nil // continue with the next entry
+		}
+
+		fe := FileEntry{
+			Path:        e.NormalizedPath,
+			Size:        e.Size,
+			ContentType: DetectContentType(e.NormalizedPath),
+			Hash:        fileHash,
+		}
+		if ShouldCompress(e.NormalizedPath, e.Size) {
+			fe.ContentEncoding = "gzip"
+		}
+
+		cp.ProcessedCount++
+		cp.ProcessedBytes += e.Size
+		cp.LastProcessedIndex = e.Index
+		if err := w.manifest.Add(ctx, fe, &chunkIndex); err != nil {
+			log.Printf("failed to add manifest entry: %v", err)
+		}
+
+		if cp.ProcessedCount%w.cfg.CheckpointEvery == 0 {
+			cp.ManifestChunksWritten = chunkIndex
+			if err := w.checkpoint.Save(ctx, cp); err != nil {
+				log.Printf("failed to save checkpoint: %v", err)
+			}
+			log.Printf("checkpoint: %d/%d files processed", cp.ProcessedCount, cp.TotalEntries)
+			_ = w.updateJobStatus(ctx, "running", cp.ProcessedCount, cp.ProcessedBytes)
+			if !w.checkAssetExists(ctx) {
+				return fmt.Errorf("asset expired during extraction")
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	if err := w.manifest.FlushChunk(ctx, &chunkIndex); err != nil {
+		return fmt.Errorf("failed to flush final manifest chunk: %w", err)
+	}
+
+	cp.Phase = "completing"
+	cp.ManifestChunksWritten = chunkIndex
+	if err := w.checkpoint.Save(ctx, cp); err != nil {
+		return fmt.Errorf("failed to save checkpoint: %w", err)
+	}
+
+	log.Printf("phase B (sequential): extracted %d files, %d errors", cp.ProcessedCount, len(cp.Errors))
 	return nil
 }
 
@@ -287,7 +405,13 @@ func (w *ExtractionWorker) extractAndUpload(ctx context.Context, extractor Archi
 		return "", fmt.Errorf("extract: %w", err)
 	}
 	defer func() { _ = rc.Close() }()
+	return w.uploadFromReader(ctx, entry, rc)
+}
 
+// uploadFromReader uploads a single entry's bytes to storage. Caller owns
+// the reader's lifetime; this function only consumes from it. Used by both
+// the parallel ExtractEntry path and the sequential ExtractAllSequential path.
+func (w *ExtractionWorker) uploadFromReader(ctx context.Context, entry ArchiveEntry, rc io.Reader) (string, error) {
 	r2Key := fmt.Sprintf("assets/%s/files/%s", w.cfg.AssetID, entry.NormalizedPath)
 	contentType := DetectContentType(entry.NormalizedPath)
 
@@ -303,7 +427,7 @@ func (w *ExtractionWorker) extractAndUpload(ctx context.Context, extractor Archi
 		opts = &PutOptions{ContentEncoding: "gzip"}
 		contentLength = -1
 	} else {
-		// Uncompressed: use size from ZIP central directory
+		// Uncompressed: use size from archive metadata
 		contentLength = entry.Size
 	}
 
@@ -363,14 +487,22 @@ func (w *ExtractionWorker) checkAssetExists(ctx context.Context) bool {
 	if err != nil {
 		return true // assume exists on error
 	}
+	w.setAuthHeader(req)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := w.httpClient.Do(req)
 	if err != nil {
 		return true // assume exists on network error
 	}
 	defer func() { _ = resp.Body.Close() }()
 
 	return resp.StatusCode != http.StatusNotFound
+}
+
+// setAuthHeader attaches the shared bearer secret expected by /api/internal/*.
+func (w *ExtractionWorker) setAuthHeader(req *http.Request) {
+	if w.cfg.InternalAPISecret != "" {
+		req.Header.Set("Authorization", "Bearer "+w.cfg.InternalAPISecret)
+	}
 }
 
 type jobStatusPayload struct {
@@ -413,8 +545,9 @@ func (w *ExtractionWorker) updateJobStatus(ctx context.Context, status string, f
 		return err
 	}
 	req.Header.Set("Content-Type", "application/json")
+	w.setAuthHeader(req)
 
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := w.httpClient.Do(req)
 	if err != nil {
 		return err
 	}

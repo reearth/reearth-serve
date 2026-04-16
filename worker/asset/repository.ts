@@ -30,6 +30,12 @@ export interface FileStorage {
   get(key: string, range?: { offset: number; length: number }): Promise<StoredFile | null>;
   head(key: string): Promise<{ size: number; contentEncoding?: string; etag?: string } | null>;
   delete(key: string): Promise<void>;
+  /**
+   * Optional batch delete. R2 supports up to 1000 keys per call; cleanup paths
+   * use this to stay under the Worker subrequest cap. Implementations without
+   * batch support can omit this and callers will fall back to per-key delete.
+   */
+  deleteMany?(keys: string[]): Promise<void>;
   list(prefix: string, options?: { limit?: number; cursor?: string }): Promise<{ keys: string[]; cursor?: string }>;
 }
 
