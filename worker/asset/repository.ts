@@ -10,7 +10,17 @@ export interface MetadataStore {
   find(id: string): Promise<AssetMetadata | null>;
   update(id: string, patch: { activeVersionId?: string | null; expiresAt?: number; description?: string; userMeta?: Record<string, unknown> }): Promise<void>;
   delete(id: string): Promise<void>;
-  list(options?: { limit?: number; cursor?: string; sessionId?: string; projectId?: string }): Promise<ListResult<AssetMetadata>>;
+  // scope exactly one of: sessionId, projectId, workspaceId (caller-verified
+  // membership), or accessibleByUser (membership-driven across all workspaces).
+  // Unscoped calls return an empty result — use a scope explicitly.
+  list(options?: {
+    limit?: number;
+    cursor?: string;
+    sessionId?: string;
+    projectId?: string;
+    workspaceId?: string;
+    accessibleByUser?: string;
+  }): Promise<ListResult<AssetMetadata>>;
 }
 
 export interface VersionStore {

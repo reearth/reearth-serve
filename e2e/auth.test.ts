@@ -1,5 +1,5 @@
 import { describe, test, expect } from "vitest";
-import { BASE, MOCK_OIDC, signToken, uploadFileWithAuth } from "./helpers";
+import { BASE, MOCK_OIDC, createProjectForAuth, signToken, uploadFileWithAuth } from "./helpers";
 
 // Auto-detect if mock OIDC server is reachable (only available in local dev via e2e.sh).
 // Auth tests that require token signing are skipped when mock OIDC is unavailable,
@@ -21,10 +21,29 @@ describe("authentication", { skip: !mockOidcAvailable }, () => {
 
   test("valid token → authenticated request succeeds", async () => {
     const token = await signToken({ sub: "user-1", email: "alice@example.com", name: "Alice" });
+    const projectId = await createProjectForAuth(token, "auth-upload-test");
     const content = new TextEncoder().encode('{"hello":"world"}');
-    const { status, body } = await uploadFileWithAuth(content, "test.json", "application/json", token);
+    const { status, body } = await uploadFileWithAuth(content, "test.json", "application/json", token, projectId);
     expect(status).toBe(201);
     expect(body.asset?.id).toBeDefined();
+    expect(body.asset?.projectId).toBe(projectId);
+  });
+
+  test("authenticated upload without X-Project-Id → 400", async () => {
+    const token = await signToken({ sub: "user-1" });
+    const content = new TextEncoder().encode('{"x":1}');
+    const { status } = await uploadFileWithAuth(content, "no-project.json", "application/json", token);
+    expect(status).toBe(400);
+  });
+
+  test("authenticated upload with non-member X-Project-Id → 404", async () => {
+    const ownerToken = await signToken({ sub: "owner-user" });
+    const otherToken = await signToken({ sub: "other-user" });
+    const projectId = await createProjectForAuth(ownerToken, "owner-project");
+
+    const content = new TextEncoder().encode('{"x":1}');
+    const { status } = await uploadFileWithAuth(content, "steal.json", "application/json", otherToken, projectId);
+    expect(status).toBe(404);
   });
 
   test("expired token → 401", async () => {

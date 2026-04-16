@@ -5,6 +5,11 @@ import { decompressStream } from "../asset/compression";
 import { resolveAssetVersion } from "../asset/usecase";
 import { parseRange, sliceStream } from "./stream";
 
+// File delivery uses a URL-as-capability model by design (ROADMAP "file-layer
+// access control (URL visibility) — distinct from service-layer"). Knowing
+// the asset ID grants download; confidentiality relies on ID unguessability
+// and on enumeration endpoints (list APIs) being scoped to the caller, NOT on
+// request-time auth here. Do not add access checks without updating ROADMAP.
 export const fileRoutes = new Hono<AppEnv>();
 
 // CORS only on file delivery routes

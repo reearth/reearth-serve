@@ -22,6 +22,39 @@ const JOB_META_KEYS = ["completedAt", "startedAt", "error", "totalFiles", "fileC
 const MEMBER_LIST_LIMIT = 200;
 const PROJECT_LIST_LIMIT = 200;
 
+// Build the scope clause shared by assets/jobs listing. Returns null when no
+// scope is provided — callers must treat that as an empty result so we never
+// leak cross-tenant rows. Exactly one of the scope fields is honored, checked
+// in priority order (sessionId → projectId → workspaceId → accessibleByUser)
+// to keep behavior deterministic if a caller accidentally passes multiple.
+function buildScopeClause(
+  options: { sessionId?: string; projectId?: string; workspaceId?: string; accessibleByUser?: string } | undefined,
+  startIdx: number,
+): { clause: string; binds: unknown[] } | null {
+  if (!options) return null;
+  if (options.sessionId) {
+    return { clause: `session_id = ?${startIdx}`, binds: [options.sessionId] };
+  }
+  if (options.projectId) {
+    return { clause: `project_id = ?${startIdx}`, binds: [options.projectId] };
+  }
+  if (options.workspaceId) {
+    // Caller is responsible for verifying the user is a member of this workspace.
+    return {
+      clause: `project_id IN (SELECT id FROM projects WHERE workspace_id = ?${startIdx})`,
+      binds: [options.workspaceId],
+    };
+  }
+  if (options.accessibleByUser) {
+    return {
+      clause:
+        `project_id IN (SELECT id FROM projects WHERE workspace_id IN (SELECT workspace_id FROM members WHERE user_id = ?${startIdx}))`,
+      binds: [options.accessibleByUser],
+    };
+  }
+  return null;
+}
+
 // ---------------------------------------------------------------------------
 // D1WorkspaceStore
 // ---------------------------------------------------------------------------
@@ -190,33 +223,28 @@ export class D1JobStore implements JobStore {
     cursor?: string;
     sessionId?: string;
     projectId?: string;
+    workspaceId?: string;
+    accessibleByUser?: string;
   }): Promise<ListResult<Job>> {
     const limit = options?.limit ?? 20;
-    const conditions: string[] = [];
-    const binds: unknown[] = [];
-    let bindIdx = 1;
+    const scope = buildScopeClause(options, 1);
+    if (!scope) return { items: [], cursor: undefined };
 
-    if (options?.sessionId) {
-      conditions.push(`session_id = ?${bindIdx++}`);
-      binds.push(options.sessionId);
-    }
-    if (options?.projectId) {
-      conditions.push(`project_id = ?${bindIdx++}`);
-      binds.push(options.projectId);
-    }
+    const { clause, binds } = scope;
+    let bindIdx = binds.length + 1;
 
+    let cursorClause = "";
     if (options?.cursor) {
       const decoded = decodeCursor(options.cursor);
       if (decoded) {
-        conditions.push(`(created_at < ?${bindIdx} OR (created_at = ?${bindIdx} AND id < ?${bindIdx + 1}))`);
+        cursorClause = ` AND (created_at < ?${bindIdx} OR (created_at = ?${bindIdx} AND id < ?${bindIdx + 1}))`;
         binds.push(decoded.createdAt, decoded.id);
         bindIdx += 2;
       }
     }
 
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-    const sql = `SELECT * FROM jobs ${where} ORDER BY created_at DESC, id DESC LIMIT ?${bindIdx}`;
-    binds.push(limit + 1); // fetch one extra to determine if there's a next page
+    const sql = `SELECT * FROM jobs WHERE ${clause}${cursorClause} ORDER BY created_at DESC, id DESC LIMIT ?${bindIdx}`;
+    binds.push(limit + 1);
 
     const { results } = await this.db.prepare(sql).bind(...binds).all();
     const hasMore = results.length > limit;
@@ -322,32 +350,27 @@ export class D1MetadataStore implements MetadataStore {
     cursor?: string;
     sessionId?: string;
     projectId?: string;
+    workspaceId?: string;
+    accessibleByUser?: string;
   }): Promise<ListResult<AssetMetadata>> {
     const limit = options?.limit ?? 20;
-    const conditions: string[] = [];
-    const binds: unknown[] = [];
-    let bindIdx = 1;
+    const scope = buildScopeClause(options, 1);
+    if (!scope) return { items: [], cursor: undefined };
 
-    if (options?.sessionId) {
-      conditions.push(`session_id = ?${bindIdx++}`);
-      binds.push(options.sessionId);
-    }
-    if (options?.projectId) {
-      conditions.push(`project_id = ?${bindIdx++}`);
-      binds.push(options.projectId);
-    }
+    const { clause, binds } = scope;
+    let bindIdx = binds.length + 1;
 
+    let cursorClause = "";
     if (options?.cursor) {
       const decoded = decodeCursor(options.cursor);
       if (decoded) {
-        conditions.push(`(created_at < ?${bindIdx} OR (created_at = ?${bindIdx} AND id < ?${bindIdx + 1}))`);
+        cursorClause = ` AND (created_at < ?${bindIdx} OR (created_at = ?${bindIdx} AND id < ?${bindIdx + 1}))`;
         binds.push(decoded.createdAt, decoded.id);
         bindIdx += 2;
       }
     }
 
-    const where = conditions.length > 0 ? `WHERE ${conditions.join(" AND ")}` : "";
-    const sql = `SELECT * FROM assets ${where} ORDER BY created_at DESC, id DESC LIMIT ?${bindIdx}`;
+    const sql = `SELECT * FROM assets WHERE ${clause}${cursorClause} ORDER BY created_at DESC, id DESC LIMIT ?${bindIdx}`;
     binds.push(limit + 1);
 
     const { results } = await this.db.prepare(sql).bind(...binds).all();

@@ -70,6 +70,11 @@ export const paginationQuerySchema = z.object({
   cursor: z.string().optional(),
 });
 
+export const scopedListQuerySchema = paginationQuerySchema.extend({
+  workspaceId: z.string().optional(),
+  projectId: z.string().optional(),
+});
+
 export const projectListQuerySchema = z.object({
   workspaceId: z.string().optional(),
 });

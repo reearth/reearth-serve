@@ -38,13 +38,18 @@ export async function completeUploadSession(
   const archiveFormat = detectArchiveFormat(session.filename);
   const now = Date.now();
 
+  // projectId is bound at createUploadSession time (after membership check)
+  // and re-verified by the handler before we get here; use the session's copy
+  // so client headers can't retarget an anon session to a different project.
+  const projectId = session.projectId ?? options?.projectId ?? null;
+
   const asset: AssetMetadata = {
     id,
     filename: session.filename,
     contentType: session.contentType,
     size: head.size,
     createdAt: session.createdAt,
-    expiresAt: options?.projectId ? 0 : now + ttlSeconds * 1000,
+    expiresAt: projectId ? 0 : now + ttlSeconds * 1000,
     ...(head.contentEncoding && { contentEncoding: head.contentEncoding }),
     ...(head.contentEncoding && session.size && { originalSize: session.size }),
     ...(archiveFormat && {
@@ -53,7 +58,7 @@ export async function completeUploadSession(
       archiveFormat,
     }),
     ...(options?.sessionId && { sessionId: options.sessionId }),
-    ...(options?.projectId && { projectId: options.projectId }),
+    ...(projectId && { projectId }),
   };
 
   try {
@@ -67,7 +72,7 @@ export async function completeUploadSession(
         createdAt: now,
         updatedAt: now,
         ...(options?.sessionId && { sessionId: options.sessionId }),
-        ...(options?.projectId && { projectId: options.projectId }),
+        ...(projectId && { projectId }),
       };
       await jobs.save(job);
       asset.jobId = id;

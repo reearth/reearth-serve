@@ -3,6 +3,7 @@ import { describeRoute } from "hono-openapi";
 import { resolver } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { uploadAsset } from "../usecase";
+import { resolveUploadProject } from "./shared";
 import { uploadResultResponseSchema, errorResponseSchema } from "../../../shared/openapi";
 
 export function registerUploadRoute(app: Hono<AppEnv>) {
@@ -58,6 +59,12 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
     const sessionId = c.get("sessionId");
     const extractionQueue = c.get("extractionQueue");
 
+    const projectResult = await resolveUploadProject(c);
+    if (!projectResult.ok) {
+      return c.json({ error: projectResult.error }, projectResult.status);
+    }
+    const projectId = projectResult.projectId;
+
     try {
       const result = await uploadAsset(
         metadata,
@@ -66,7 +73,7 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
         { name: filename, type: contentType, body, size, contentEncoding, originalSize },
         ttlSeconds,
         baseUrl,
-        { sessionId, extractionQueue, skipExtraction },
+        { sessionId, projectId, extractionQueue, skipExtraction },
       );
 
       // Update storage usage counters for project assets

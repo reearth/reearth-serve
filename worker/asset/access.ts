@@ -16,8 +16,11 @@ export interface AccessContext {
 /**
  * Check if the current user/session can access an asset.
  * - Demo mode (no user): sessionId must match
- * - Authenticated + project asset: check workspace membership via project → workspace chain
- * - Authenticated + no project: allowed (e.g. demo assets uploaded while logged in)
+ * - Authenticated: asset MUST be project-scoped and caller must be a member
+ *
+ * Authenticated uploads are required to carry a projectId, so a non-project
+ * asset reaching this check is either a stray anon/legacy row or another
+ * user's demo data; in both cases authenticated callers are denied.
  */
 export async function canAccessAsset(
   asset: AssetMetadata,
@@ -27,10 +30,8 @@ export async function canAccessAsset(
   if (!ctx.user) {
     return !!ctx.sessionId && asset.sessionId === ctx.sessionId;
   }
-  if (asset.projectId) {
-    return checkProjectAccess(ctx, asset.projectId, "asset", asset.id, action);
-  }
-  return true;
+  if (!asset.projectId) return false;
+  return checkProjectAccess(ctx, asset.projectId, "asset", asset.id, action);
 }
 
 /**
@@ -44,10 +45,21 @@ export async function canAccessJob(
   if (!ctx.user) {
     return !!ctx.sessionId && job.sessionId === ctx.sessionId;
   }
-  if (job.projectId) {
-    return checkProjectAccess(ctx, job.projectId, "job", job.id, action);
-  }
-  return true;
+  if (!job.projectId) return false;
+  return checkProjectAccess(ctx, job.projectId, "job", job.id, action);
+}
+
+/**
+ * Check if the current user can act on a project (workspace membership).
+ * Used at upload time to authorize the incoming X-Project-Id binding.
+ */
+export async function canAccessProject(
+  ctx: AccessContext,
+  projectId: string,
+  action: string = "read",
+): Promise<boolean> {
+  if (!ctx.user) return false;
+  return checkProjectAccess(ctx, projectId, "project", projectId, action);
 }
 
 async function checkProjectAccess(
@@ -135,8 +147,8 @@ if (import.meta.vitest) {
 
   // --- canAccessAsset: authenticated, no project ---
 
-  test("auth: no projectId → true", async () => {
-    expect(await canAccessAsset(asset(), ctx({ user: { sub: "u1" } }))).toBe(true);
+  test("auth: no projectId → false (non-project assets are unreachable for authed callers)", async () => {
+    expect(await canAccessAsset(asset(), ctx({ user: { sub: "u1" } }))).toBe(false);
   });
 
   // --- canAccessAsset: authenticated, with project ---
@@ -197,8 +209,29 @@ if (import.meta.vitest) {
     expect(await canAccessJob(job({ sessionId: "sess1" }), ctx({ sessionId: "sess2" }))).toBe(false);
   });
 
-  test("job auth: no projectId → true", async () => {
-    expect(await canAccessJob(job(), ctx({ user: { sub: "u1" } }))).toBe(true);
+  test("job auth: no projectId → false", async () => {
+    expect(await canAccessJob(job(), ctx({ user: { sub: "u1" } }))).toBe(false);
+  });
+
+  // --- canAccessProject ---
+
+  test("canAccessProject: unauthenticated → false", async () => {
+    const { canAccessProject } = await import("./access");
+    expect(await canAccessProject(ctx(), "p1")).toBe(false);
+  });
+
+  test("canAccessProject: member → true", async () => {
+    const { canAccessProject } = await import("./access");
+    const projects = { ...dummyProjects, find: vi.fn(async () => ({ id: "p1", name: "P", createdAt: 0, updatedAt: 0, ownerId: "u2", workspaceId: "ws1" })) };
+    const members = { ...dummyMembers, find: vi.fn(async () => ({ workspaceId: "ws1", userId: "u1", role: "editor" as const, createdAt: 0, updatedAt: 0 })) };
+    const authorizer = { check: vi.fn(async () => true) };
+    expect(await canAccessProject(ctx({ user: { sub: "u1" }, projects, members, authorizer }), "p1", "upload")).toBe(true);
+  });
+
+  test("canAccessProject: non-member → false", async () => {
+    const { canAccessProject } = await import("./access");
+    const projects = { ...dummyProjects, find: vi.fn(async () => ({ id: "p1", name: "P", createdAt: 0, updatedAt: 0, ownerId: "u2", workspaceId: "ws1" })) };
+    expect(await canAccessProject(ctx({ user: { sub: "u1" }, projects }), "p1", "upload")).toBe(false);
   });
 
   test("job auth: project exists, member allowed → true", async () => {

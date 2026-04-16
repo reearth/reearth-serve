@@ -51,5 +51,6 @@ export interface UploadSession {
   partCount?: number;
   contentEncoding?: string;
   sessionId?: string;
+  projectId?: string;
   skipExtraction?: boolean;
 }

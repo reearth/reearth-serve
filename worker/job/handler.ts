@@ -3,10 +3,10 @@ import type { Context } from "hono";
 import { describeRoute } from "hono-openapi";
 import { resolver, validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../types";
-import { canAccessJob, type AccessContext } from "../asset/access";
+import { canAccessJob, canAccessProject, type AccessContext } from "../asset/access";
 import {
   jobResponseSchema, jobListResponseSchema, errorResponseSchema,
-  idParamSchema, paginationQuerySchema,
+  idParamSchema, scopedListQuerySchema,
 } from "../../shared/openapi";
 import { jobSchema } from "../../shared/api";
 
@@ -28,23 +28,43 @@ jobRoutes.get("/",
   describeRoute({
     tags: ["Jobs"],
     summary: "List jobs",
+    description: "Anonymous callers see their own session's jobs. Authenticated callers see jobs in projects they have access to; narrow with ?projectId or ?workspaceId.",
     responses: {
       200: { description: "Job list", content: { "application/json": { schema: resolver(jobListResponseSchema) } } },
+      404: { description: "Scope not accessible", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
     },
   }),
-  zValidator("query", paginationQuerySchema),
+  zValidator("query", scopedListQuerySchema),
   async (c) => {
     const jobs = c.get("jobs");
     const user = c.get("user");
     const sessionId = c.get("sessionId");
-    const { limit: limitStr, cursor } = c.req.valid("query");
-    const limit = parseInt(limitStr || "20", 10);
+    const { limit: limitStr, cursor, workspaceId, projectId } = c.req.valid("query");
+    const limit = Math.min(parseInt(limitStr || "20", 10), 100);
 
-    const result = await jobs.list({
-      limit: Math.min(limit, 100),
-      cursor,
-      ...(!user && sessionId ? { sessionId } : {}),
-    });
+    if (!user) {
+      if (!sessionId) return c.json({ jobs: [], cursor: undefined });
+      const result = await jobs.list({ limit, cursor, sessionId });
+      return c.json({ jobs: result.items, cursor: result.cursor });
+    }
+
+    if (projectId) {
+      if (!await canAccessProject(accessCtx(c), projectId, "read")) {
+        return c.json({ error: "Project not found" }, 404);
+      }
+      const result = await jobs.list({ limit, cursor, projectId });
+      return c.json({ jobs: result.items, cursor: result.cursor });
+    }
+
+    if (workspaceId) {
+      const members = c.get("members");
+      const member = await members.find(workspaceId, user.sub);
+      if (!member) return c.json({ error: "Workspace not found" }, 404);
+      const result = await jobs.list({ limit, cursor, workspaceId });
+      return c.json({ jobs: result.items, cursor: result.cursor });
+    }
+
+    const result = await jobs.list({ limit, cursor, accessibleByUser: user.sub });
     return c.json({ jobs: result.items, cursor: result.cursor });
   },
 );

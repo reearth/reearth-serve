@@ -1,8 +1,37 @@
 # ADR-002: Authentication, Anonymous Sessions & Project Model
 
-- **Status:** Accepted
+- **Status:** Accepted (Revised 2026-04-17)
 - **Date:** 2026-03-12
 - **Deciders:** @rot1024
+
+## Revision 2026-04-17 — Tenant scoping hardening
+
+The original decision made `projectId` on assets/jobs optional for
+authenticated callers. A security scan surfaced that this allowed any
+authenticated user to enumerate every row via `GET /api/v1/assets` and
+`GET /api/v1/jobs`, and that `canAccessAsset`/`canAccessJob` returned `true`
+for any authenticated caller when the resource had no `projectId`.
+
+The hardening makes project scope mandatory for the authenticated track:
+
+- `POST /api/v1/assets`, `POST /api/v1/assets/uploads`, and
+  `POST /api/v1/assets/uploads/:id/complete` require the `X-Project-Id`
+  header when the caller is authenticated; the server verifies workspace
+  membership before accepting the upload. Anonymous callers continue to
+  upload with session-id binding.
+- `canAccessAsset` / `canAccessJob` no longer treat "authenticated + no
+  projectId" as allowed — the resource must be project-scoped and the
+  caller must be a member of the project's workspace.
+- `GET /api/v1/assets` and `GET /api/v1/jobs` scope to the caller:
+  anonymous requests to their own session, authenticated requests to the
+  projects reachable via workspace membership. `?projectId=` and
+  `?workspaceId=` narrow further, with membership re-verified on each
+  call.
+
+File delivery (`/files/:id/:path`) is unchanged by design — see the
+banner in `worker/file/handler.ts`. The file layer is URL-as-capability;
+confidentiality comes from unguessable IDs and from list endpoints being
+scoped, not from per-request auth at the file edge.
 
 ## Context
 

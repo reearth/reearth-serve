@@ -3,7 +3,7 @@ import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync } f
 import { dirname, join, relative } from "node:path";
 import { Writable } from "node:stream";
 import type { AssetMetadata, AssetVersion, FileEntry, Job } from "../shared/api";
-import { loadCredentials, loadOrCreateSessionId } from "./config";
+import { loadConfig, loadCredentials, loadOrCreateSessionId } from "./config";
 import { refreshAccessToken } from "./auth";
 
 // --- Output helpers ---
@@ -102,6 +102,10 @@ export async function commonHeaders(): Promise<Record<string, string>> {
 
   if (creds) {
     headers["Authorization"] = `Bearer ${creds.accessToken}`;
+    // Authenticated calls bind to the configured default project so upload
+    // endpoints can enforce project scope. GET endpoints ignore this header.
+    const defaultProject = loadConfig().defaultProject;
+    if (defaultProject) headers["X-Project-Id"] = defaultProject;
   }
   if (!creds) {
     // Demo mode: always send session ID

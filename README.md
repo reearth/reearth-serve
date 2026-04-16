@@ -38,6 +38,11 @@ curl -X POST http://localhost:5173/api/v1/assets \
   --data-binary @myfile.geojson
 ```
 
+When calling with `Authorization: Bearer <jwt>`, add
+`X-Project-Id: <projectId>` — authenticated uploads must be project-scoped
+and the caller must be a member of the project's workspace. Anonymous
+(demo-mode) uploads omit both headers and are tracked by `X-Session-Id`.
+
 ## Architecture
 
 | Component | Technology |
