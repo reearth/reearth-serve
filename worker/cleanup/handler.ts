@@ -1,6 +1,6 @@
 import { R2FileStorage } from "../infra/storage";
 import { D1MetadataStore, D1JobStore, D1VersionStore } from "../infra/d1";
-import { cleanupExpiredAssets } from "./usecase";
+import { cleanupExpiredAssets, SubrequestBudget } from "./usecase";
 import type { Job } from "../job/model";
 
 const DEFAULT_STUCK_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -8,6 +8,13 @@ const MAX_RETRIES = 5;
 // Cap per-tick re-enqueue work so a backlog of failed jobs cannot blow the
 // Workers subrequest budget and break the recovery loop itself.
 const MAX_RETRIABLE_PER_TICK = 50;
+
+// Subrequest budget split between cleanup and retrigger phases. Workers
+// scheduled invocations cap around 1000 subrequests per run; we partition
+// ~70% to cleanup (the R2 list+deleteMany cycles scale with archive size)
+// and leave enough for the retrigger path (listRetriable + up to
+// MAX_RETRIABLE_PER_TICK jobs × ~4 ops each).
+const CLEANUP_BUDGET = 700;
 
 export async function handleScheduled(env: Env): Promise<void> {
   const metadata = new D1MetadataStore(env.DB);
@@ -18,11 +25,13 @@ export async function handleScheduled(env: Env): Promise<void> {
   const result = await cleanupExpiredAssets(metadata, storage, jobs, {
     maxAssets: 100,
     versions,
+    budget: new SubrequestBudget(CLEANUP_BUDGET),
   });
 
-  if (result.deletedAssets.length > 0) {
+  if (result.deletedAssets.length > 0 || result.budgetExhausted) {
+    const suffix = result.budgetExhausted ? " (budget exhausted — resuming next tick)" : "";
     console.log(
-      `Cleanup: deleted ${result.deletedAssets.length} expired assets, ${result.deletedJobs.length} jobs`,
+      `Cleanup: deleted ${result.deletedAssets.length} expired assets, ${result.deletedJobs.length} jobs${suffix}`,
     );
   }
 
