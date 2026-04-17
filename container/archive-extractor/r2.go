@@ -3,15 +3,48 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"net/http"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/aws/aws-sdk-go-v2/service/s3/types"
+	smithy "github.com/aws/smithy-go"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 )
+
+// isS3NotFound reports whether err represents a missing S3/R2 object.
+// NoSuchKey covers GET on a missing key; NotFound covers HEAD (which
+// doesn't carry a typed error). Anything else — 5xx, throttling, network
+// failures — returns false so the caller can distinguish transient faults.
+func isS3NotFound(err error) bool {
+	if err == nil {
+		return false
+	}
+	var nsk *types.NoSuchKey
+	if errors.As(err, &nsk) {
+		return true
+	}
+	var nf *types.NotFound
+	if errors.As(err, &nf) {
+		return true
+	}
+	var apiErr smithy.APIError
+	if errors.As(err, &apiErr) {
+		if apiErr.ErrorCode() == "NoSuchKey" || apiErr.ErrorCode() == "NotFound" {
+			return true
+		}
+	}
+	var httpErr *smithyhttp.ResponseError
+	if errors.As(err, &httpErr) && httpErr.HTTPStatusCode() == http.StatusNotFound {
+		return true
+	}
+	return false
+}
 
 // Verify R2Client implements both ObjectStorage and ReaderAtStorage.
 var (
@@ -63,6 +96,9 @@ func (r *R2Client) GetObject(ctx context.Context, key string) (io.ReadCloser, er
 		Key:    &key,
 	})
 	if err != nil {
+		if isS3NotFound(err) {
+			return nil, fmt.Errorf("get object %s: %w", key, ErrObjectNotFound)
+		}
 		return nil, fmt.Errorf("failed to get object %s: %w", key, err)
 	}
 	return out.Body, nil
@@ -87,6 +123,9 @@ func (r *R2Client) HeadObject(ctx context.Context, key string) (int64, error) {
 		Key:    &key,
 	})
 	if err != nil {
+		if isS3NotFound(err) {
+			return 0, fmt.Errorf("head object %s: %w", key, ErrObjectNotFound)
+		}
 		return 0, fmt.Errorf("failed to head object %s: %w", key, err)
 	}
 	if out.ContentLength == nil {

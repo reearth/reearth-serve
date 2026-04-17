@@ -31,7 +31,7 @@ func (m *MemoryStorage) GetObject(_ context.Context, key string) (io.ReadCloser,
 	defer m.mu.RUnlock()
 	obj, ok := m.objects[key]
 	if !ok {
-		return nil, fmt.Errorf("object not found: %s", key)
+		return nil, fmt.Errorf("get object %s: %w", key, ErrObjectNotFound)
 	}
 	return io.NopCloser(bytes.NewReader(obj.data)), nil
 }
@@ -41,7 +41,7 @@ func (m *MemoryStorage) GetObjectRange(_ context.Context, key string, offset, le
 	defer m.mu.RUnlock()
 	obj, ok := m.objects[key]
 	if !ok {
-		return nil, fmt.Errorf("object not found: %s", key)
+		return nil, fmt.Errorf("get object range %s: %w", key, ErrObjectNotFound)
 	}
 	if offset >= int64(len(obj.data)) {
 		return io.NopCloser(bytes.NewReader(nil)), nil
@@ -58,7 +58,7 @@ func (m *MemoryStorage) HeadObject(_ context.Context, key string) (int64, error)
 	defer m.mu.RUnlock()
 	obj, ok := m.objects[key]
 	if !ok {
-		return 0, fmt.Errorf("object not found: %s", key)
+		return 0, fmt.Errorf("head object %s: %w", key, ErrObjectNotFound)
 	}
 	return int64(len(obj.data)), nil
 }

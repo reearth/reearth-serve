@@ -2,8 +2,17 @@ package main
 
 import (
 	"context"
+	"errors"
 	"io"
 )
+
+// ErrObjectNotFound is returned by ObjectStorage operations when a key is
+// absent. Callers check this with errors.Is to distinguish "first run"
+// (expected) from transient backend failures (should retry / propagate).
+// Previously the checkpoint loader collapsed every GetObject error into
+// "no checkpoint", which made a brief R2 blip restart extraction from
+// phase A.
+var ErrObjectNotFound = errors.New("object not found")
 
 // PutOptions holds optional parameters for PutObject.
 type PutOptions struct {
@@ -11,6 +20,9 @@ type PutOptions struct {
 }
 
 // ObjectStorage abstracts object storage operations (R2, in-memory mock, etc.)
+// Implementations MUST wrap a not-found result so callers can detect it via
+// errors.Is(err, ErrObjectNotFound). Every other error is treated as
+// transient by the checkpoint path and surfaces to the container orchestrator.
 type ObjectStorage interface {
 	GetObject(ctx context.Context, key string) (io.ReadCloser, error)
 	GetObjectRange(ctx context.Context, key string, offset, length int64) (io.ReadCloser, error)

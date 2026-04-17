@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 )
@@ -41,11 +42,18 @@ func NewCheckpointManager(storage ObjectStorage, assetID string) *CheckpointMana
 	}
 }
 
-// Load reads the checkpoint from storage. Returns nil if not found.
+// Load reads the checkpoint from storage. Returns (nil, nil) only when the
+// checkpoint object is explicitly absent (ErrObjectNotFound — i.e. first
+// run). Any other error (transient R2 5xx, network blip, timeout) is
+// surfaced to the caller so we don't silently discard an in-flight
+// extraction's progress on a momentary backend hiccup.
 func (cm *CheckpointManager) Load(ctx context.Context) (*JobCheckpoint, error) {
 	body, err := cm.storage.GetObject(ctx, cm.key)
 	if err != nil {
-		return nil, nil
+		if errors.Is(err, ErrObjectNotFound) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("failed to load checkpoint: %w", err)
 	}
 	defer func() { _ = body.Close() }()
 
