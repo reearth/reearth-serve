@@ -34,7 +34,6 @@ export async function uploadVersion(
   const now = Date.now();
   const contentType = file.type || "application/octet-stream";
   const key = versionStorageKey(assetId, versionId, file.name);
-  const versionNum = await versions.nextVersion(assetId);
 
   await storage.put(key, file.body, contentType, file.size,
     file.contentEncoding ? { contentEncoding: file.contentEncoding } : undefined,
@@ -42,10 +41,13 @@ export async function uploadVersion(
 
   const archiveFormat = detectArchiveFormat(file.name);
 
-  const version: AssetVersion = {
+  // `version` is assigned by the store inside the INSERT (race-free).
+  // We seed 0 here so the field exists on the model; the stored record
+  // receives its real version number when save() returns.
+  const versionInput: AssetVersion = {
     id: versionId,
     assetId,
-    version: versionNum,
+    version: 0,
     filename: file.name,
     contentType,
     size: file.size,
@@ -59,6 +61,7 @@ export async function uploadVersion(
     }),
   };
 
+  let savedVersion: AssetVersion;
   try {
     // Create extraction job for archives
     if (archiveFormat && !options?.skipExtraction) {
@@ -75,7 +78,7 @@ export async function uploadVersion(
         ...(asset.projectId && { projectId: asset.projectId }),
       };
       await jobs.save(job);
-      version.jobId = jobId;
+      versionInput.jobId = jobId;
 
       if (options?.extractionQueue) {
         try {
@@ -92,7 +95,7 @@ export async function uploadVersion(
       }
     }
 
-    await versions.save(version);
+    savedVersion = await versions.save(versionInput);
   } catch (e) {
     // Compensation: drop the orphaned R2 object so it doesn't leak forever
     // if the D1 version row failed to persist.
@@ -105,7 +108,7 @@ export async function uploadVersion(
   }
 
   return {
-    version,
+    version: savedVersion,
     url: `${baseUrl}/files/${assetId}/${encodeURIComponent(file.name)}`,
   };
 }

@@ -410,23 +410,35 @@ function parseAssetRow(row: Record<string, unknown>): AssetMetadata {
 export class D1VersionStore implements VersionStore {
   constructor(private db: D1Database) {}
 
-  async save(version: AssetVersion): Promise<void> {
+  async save(version: AssetVersion): Promise<AssetVersion> {
     const { userMeta, ...rest } = version as AssetVersion & Record<string, unknown>;
     const row = modelToRow(rest as Record<string, unknown>, VERSION_META_KEYS);
-    await this.db
+    // Assign the per-asset version number inside the INSERT via a subquery.
+    // Two concurrent uploaders would otherwise race between SELECT MAX and
+    // INSERT OR REPLACE, and the late writer would silently delete the
+    // early writer's row while its R2 object lingered as an orphan.
+    const result = await this.db
       .prepare(
-        `INSERT OR REPLACE INTO asset_versions
+        `INSERT INTO asset_versions
          (id, asset_id, version, filename, content_type, size, created_at,
           type, status, meta, user_meta)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)`,
+         VALUES (?1, ?2,
+                 (SELECT COALESCE(MAX(version), 0) + 1 FROM asset_versions WHERE asset_id = ?2),
+                 ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+         RETURNING version`,
       )
       .bind(
-        row.id, row.asset_id, row.version, row.filename, row.content_type,
+        row.id, row.asset_id, row.filename, row.content_type,
         row.size, row.created_at,
         row.type ?? null, row.status ?? null, row.meta ?? null,
         userMeta ? JSON.stringify(userMeta) : null,
       )
-      .run();
+      .first();
+    const assignedVersion = (result as Record<string, unknown> | null)?.version;
+    if (typeof assignedVersion !== "number") {
+      throw new Error("versions.save: no version returned from INSERT RETURNING");
+    }
+    return { ...version, version: assignedVersion };
   }
 
   async find(id: string): Promise<AssetVersion | null> {
@@ -473,15 +485,6 @@ export class D1VersionStore implements VersionStore {
       .first();
     if (!row) return null;
     return parseVersionRow(row as Record<string, unknown>);
-  }
-
-  async nextVersion(assetId: string): Promise<number> {
-    const row = await this.db
-      .prepare("SELECT MAX(version) as max_ver FROM asset_versions WHERE asset_id = ?1")
-      .bind(assetId)
-      .first();
-    const maxVer = (row as Record<string, unknown> | null)?.max_ver;
-    return typeof maxVer === "number" ? maxVer + 1 : 1;
   }
 
   async update(id: string, patch: Partial<Pick<AssetVersion, 'status' | 'userMeta'>>): Promise<void> {

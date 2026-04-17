@@ -24,11 +24,16 @@ export interface MetadataStore {
 }
 
 export interface VersionStore {
-  save(version: AssetVersion): Promise<void>;
+  /**
+   * Insert a new version. The `version` field on the input is ignored —
+   * the store assigns the next per-asset version number atomically inside
+   * the INSERT, returning the saved row. Concurrent uploaders always get
+   * distinct version numbers; no SELECT MAX + INSERT race.
+   */
+  save(version: AssetVersion): Promise<AssetVersion>;
   find(id: string): Promise<AssetVersion | null>;
   findByAssetId(assetId: string, options?: { limit?: number; cursor?: string }): Promise<ListResult<AssetVersion>>;
   findLatest(assetId: string): Promise<AssetVersion | null>;
-  nextVersion(assetId: string): Promise<number>;
   update(id: string, patch: Partial<Pick<AssetVersion, 'status' | 'userMeta'>>): Promise<void>;
   delete(id: string): Promise<void>;
   deleteByAssetId(assetId: string): Promise<{ totalSize: number; count: number }>;
