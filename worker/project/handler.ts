@@ -17,6 +17,7 @@ projectRoutes.get("/",
     responses: {
       200: { description: "Project list", content: { "application/json": { schema: resolver(projectListResponseSchema) } } },
       401: { description: "Authentication required", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      404: { description: "Workspace not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
     },
   }),
   zValidator("query", projectListQuerySchema),
@@ -28,7 +29,17 @@ projectRoutes.get("/",
 
     const projects = c.get("projects");
     const { workspaceId } = c.req.valid("query");
-    const list = await listProjects(projects, workspaceId ? { workspaceId } : { ownerId: user.sub });
+    if (workspaceId) {
+      // Require membership before listing the workspace's projects, otherwise
+      // any authed caller could enumerate every workspace's projects just by
+      // guessing IDs.
+      const members = c.get("members");
+      const member = await members.find(workspaceId, user.sub);
+      if (!member) return c.json({ error: "Workspace not found" }, 404);
+      const list = await listProjects(projects, { workspaceId });
+      return c.json({ projects: list });
+    }
+    const list = await listProjects(projects, { ownerId: user.sub });
     return c.json({ projects: list });
   },
 );
@@ -77,6 +88,18 @@ projectRoutes.get("/:id",
     const projects = c.get("projects");
     const project = await getProject(projects, c.req.valid("param").id);
     if (!project) {
+      return c.json({ error: "Project not found" }, 404);
+    }
+
+    // Enforce visibility: owner, or a member of the project's workspace.
+    // Return 404 (not 403) so we don't confirm existence to non-members.
+    const isOwner = project.ownerId === user.sub;
+    let isMember = false;
+    if (project.workspaceId) {
+      const members = c.get("members");
+      isMember = (await members.find(project.workspaceId, user.sub)) !== null;
+    }
+    if (!isOwner && !isMember) {
       return c.json({ error: "Project not found" }, 404);
     }
 
