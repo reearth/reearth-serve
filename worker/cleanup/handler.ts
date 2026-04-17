@@ -47,10 +47,41 @@ export async function handleScheduled(env: Env): Promise<void> {
     console.log(`Cleanup: drained ${drainResult.drainedPrefixes.length} pending prefixes${suffix}`);
   }
 
+  // Self-heal: the internal status callback writes the job row and the
+  // asset row separately. If the asset write fails after the job commits,
+  // the asset is stuck at "extracting" even though the job is "completed".
+  // The retrigger path only chases pending/failed jobs, so without this
+  // step the drift never resolves on its own.
+  await reconcileStuckAssets(metadata, jobs);
+
   // Re-trigger pending/failed/stuck extraction jobs via queue
   if (env.EXTRACTION_QUEUE) {
     const stuckThresholdMs = parseInt(env.EXTRACTION_STUCK_THRESHOLD_SECONDS || "", 10) * 1000 || DEFAULT_STUCK_THRESHOLD_MS;
     await retriggerPendingJobs(metadata, jobs, env.EXTRACTION_QUEUE, stuckThresholdMs);
+  }
+}
+
+async function reconcileStuckAssets(metadata: D1MetadataStore, jobs: D1JobStore): Promise<void> {
+  if (!jobs.listStuckAssets) return;
+  const stuck = await jobs.listStuckAssets(20);
+  if (stuck.length === 0) return;
+
+  for (const job of stuck) {
+    const asset = await metadata.find(job.assetId);
+    if (!asset) continue;
+    // Re-check the drift — the asset might have been healed by another
+    // tick, or its status might have moved for unrelated reasons.
+    if (asset.status !== "extracting" && asset.status !== "pending") continue;
+
+    asset.status = "ready";
+    if (job.fileCount !== undefined) asset.fileCount = job.fileCount;
+    if (job.extractedSize !== undefined) asset.extractedSize = job.extractedSize;
+
+    const ttlSeconds = asset.expiresAt > 0
+      ? Math.max(0, Math.floor((asset.expiresAt - Date.now()) / 1000))
+      : 0;
+    await metadata.save(asset, ttlSeconds);
+    console.log(`Reconciled stuck asset ${asset.id}: status=extracting → ready (job ${job.id} already completed)`);
   }
 }
 

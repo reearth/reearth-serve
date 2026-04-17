@@ -272,6 +272,23 @@ export class D1JobStore implements JobStore {
       .all();
     return results.map((r) => rowToModel<Job>(r as Record<string, unknown>, JOB_META_KEYS));
   }
+
+  async listStuckAssets(limit: number): Promise<Job[]> {
+    // `extracting` captures the running-phase drift; `pending` catches the
+    // rarer case where the first (running) mirror write was lost too.
+    const { results } = await this.db
+      .prepare(
+        `SELECT j.* FROM jobs j
+         JOIN assets a ON a.id = j.asset_id
+         WHERE j.status = 'completed'
+           AND a.status IN ('pending', 'extracting')
+         ORDER BY j.updated_at ASC
+         LIMIT ?1`,
+      )
+      .bind(limit)
+      .all();
+    return results.map((r) => rowToModel<Job>(r as Record<string, unknown>, JOB_META_KEYS));
+  }
 }
 
 // ---------------------------------------------------------------------------
