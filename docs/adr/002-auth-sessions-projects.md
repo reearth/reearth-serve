@@ -33,6 +33,19 @@ banner in `worker/file/handler.ts`. The file layer is URL-as-capability;
 confidentiality comes from unguessable IDs and from list endpoints being
 scoped, not from per-request auth at the file edge.
 
+Additionally, the session middleware no longer silently accepts any
+client-asserted `X-Session-Id`. The header is now only honored when the
+ID already exists in KV (i.e. the server issued it earlier). Unknown
+well-formed IDs are ignored — a fresh session is minted and returned in
+the response header. This closes the replay path where a leaked session
+ID (from logs, shared URLs, or prior enumeration bugs) let an attacker
+inherit the victim's demo-mode assets and jobs.
+
+Projects also enforce workspace membership on read: `GET /projects/:id`
+and `GET /projects/?workspaceId=X` return 404 to non-members instead of
+leaking project name / owner / timestamps to anyone holding a workspace
+ID.
+
 ## Context
 
 Re:Earth Serve's Phase 0 and Phase 1 provide ephemeral asset hosting with no user identity, no access control, and no project-based organization. All APIs are publicly accessible.

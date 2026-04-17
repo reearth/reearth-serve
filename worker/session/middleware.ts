@@ -9,9 +9,14 @@ const SESSION_ID_PATTERN = /^[0-9a-f]{16}$/;
  * Session middleware for anonymous user tracking.
  *
  * - If user is authenticated (c.get("user") is set), sessionId = null.
- * - If X-Session-Id header is present and valid format, reuse it (create in KV if new).
- * - If X-Session-Id has invalid format, return 401.
- * - Otherwise, generate a new session ID and return it in the response header.
+ * - If X-Session-Id header is present, is well-formed, AND exists in KV,
+ *   reuse it.
+ * - Otherwise (absent, malformed, or unknown ID), mint a fresh one and
+ *   return it in the response header — never silently accept a client-
+ *   asserted ID that the server didn't issue. This closes the spoof
+ *   vector where an attacker who learned a victim's session ID (via
+ *   logs, shared URL, or a list-endpoint leak) could replay it and
+ *   inherit the victim's demo-mode assets and jobs.
  */
 export function sessionMiddleware(sessions: SessionStore, ttlSeconds: number) {
   return createMiddleware<AppEnv>(async (c, next) => {
@@ -25,26 +30,21 @@ export function sessionMiddleware(sessions: SessionStore, ttlSeconds: number) {
     const headerSessionId = c.req.header("X-Session-Id");
 
     if (headerSessionId) {
-      // Validate format
       if (!SESSION_ID_PATTERN.test(headerSessionId)) {
         return c.json({ error: "Invalid session ID format" }, 401);
       }
-
-      // Accept client-generated session IDs; create in KV if not exists
+      // Only accept IDs that the server previously issued (present in KV).
+      // Unknown IDs are treated as "no session" and a new one is minted —
+      // we surface it via the response header so callers that lost their
+      // session recover transparently.
       const existing = await sessions.find(headerSessionId);
-      if (!existing) {
-        const now = Date.now();
-        await sessions.save(
-          { id: headerSessionId, createdAt: now, expiresAt: now + ttlSeconds * 1000 },
-          ttlSeconds,
-        );
+      if (existing) {
+        c.set("sessionId", headerSessionId);
+        return next();
       }
-
-      c.set("sessionId", headerSessionId);
-      return next();
     }
 
-    // Generate new session
+    // Mint a new session.
     const id = crypto.randomUUID().replace(/-/g, "").slice(0, 16);
     const now = Date.now();
     await sessions.save(
@@ -106,12 +106,16 @@ if (import.meta.vitest) {
     expect(sessions.save).not.toHaveBeenCalled();
   });
 
-  test("valid X-Session-Id (not in KV) → creates and accepts", async () => {
+  test("valid X-Session-Id but not in KV → ignores header, mints new session", async () => {
     const sessions = mockSessions();
     const app = createApp(sessions);
     const res = await app.request("/test", { headers: { "X-Session-Id": "1234567890abcdef" } });
     expect(res.status).toBe(200);
-    expect((await res.json() as any).sessionId).toBe("1234567890abcdef");
+    const body = await res.json() as { sessionId: string };
+    // Critical: the client-asserted ID must NOT be adopted. A fresh one is issued.
+    expect(body.sessionId).not.toBe("1234567890abcdef");
+    expect(body.sessionId).toMatch(/^[0-9a-f]{16}$/);
+    expect(res.headers.get("X-Session-Id")).toBe(body.sessionId);
     expect(sessions.save).toHaveBeenCalledOnce();
   });
 
