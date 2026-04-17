@@ -11,6 +11,7 @@ import {
 import {
   D1MetadataStore, D1JobStore, D1ProjectStore,
   D1WorkspaceStore, D1MemberStore, D1StorageUsageStore, D1VersionStore,
+  D1CleanupPendingStore,
 } from "./infra/d1";
 import { projectRoutes } from "./project/handler";
 import { workspaceRoutes } from "./workspace/handler";
@@ -33,6 +34,7 @@ export function createApp(env: Env) {
   const memberStore = new D1MemberStore(env.DB);
   const sessions = new KVSessionStore(env.KV);
   const storageUsage = new D1StorageUsageStore(env.DB);
+  const pendingCleanup = new D1CleanupPendingStore(env.DB);
   const authorizer = env.CERBOS_ENDPOINT
     ? new CerbosAuthorizer(env.CERBOS_ENDPOINT)
     : new SimpleAuthorizer();
@@ -74,6 +76,7 @@ export function createApp(env: Env) {
     c.set("members", memberStore);
     c.set("extractionQueue", extractionQueue);
     c.set("storageUsage", storageUsage);
+    c.set("pendingCleanup", pendingCleanup);
     await next();
   });
 

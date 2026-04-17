@@ -1,5 +1,6 @@
 import type { FileStorage, MetadataStore, VersionStore } from "../asset/repository";
 import type { JobStore } from "../job/repository";
+import type { CleanupPendingStore } from "./repository";
 
 export interface CleanupResult {
   deletedAssets: string[];
@@ -153,6 +154,41 @@ export async function cleanupExpiredAssets(
   return { deletedAssets, deletedJobs, budgetExhausted };
 }
 
+/**
+ * Drain the `cleanup_pending` table — R2 prefixes that DELETE handlers
+ * couldn't finish inline (e.g. archive assets with huge extracted trees).
+ * Runs under the same subrequest budget as the main cleanup loop.
+ */
+export async function drainPendingCleanups(
+  storage: FileStorage,
+  pending: CleanupPendingStore,
+  budget: SubrequestBudget,
+  options?: { maxPrefixes?: number },
+): Promise<{ drainedPrefixes: string[]; budgetExhausted: boolean }> {
+  const maxPrefixes = options?.maxPrefixes ?? 50;
+  const drainedPrefixes: string[] = [];
+
+  if (!budget.canAfford(1)) return { drainedPrefixes, budgetExhausted: true };
+  const entries = await pending.list(maxPrefixes);
+  budget.charge();
+
+  for (const entry of entries) {
+    // Reserve budget for one list cycle + the follow-up pending.remove.
+    if (!budget.canAfford(3)) {
+      return { drainedPrefixes, budgetExhausted: true };
+    }
+    const r2Result = await deleteAllR2Objects(storage, entry.prefix, budget);
+    if (!r2Result.done) {
+      return { drainedPrefixes, budgetExhausted: true };
+    }
+    await pending.remove(entry.prefix);
+    budget.charge();
+    drainedPrefixes.push(entry.prefix);
+  }
+
+  return { drainedPrefixes, budgetExhausted: false };
+}
+
 /** Extract asset ID from R2 key like "assets/{id}/filename" */
 function extractAssetId(key: string): string | null {
   if (!key.startsWith("assets/")) return null;
@@ -171,7 +207,7 @@ function extractAssetId(key: string): string | null {
  * partially-deleted prefixes stay expired in D1 and are picked up again
  * on the next cron tick.
  */
-async function deleteAllR2Objects(
+export async function deleteAllR2Objects(
   storage: FileStorage,
   prefix: string,
   budget: SubrequestBudget,

@@ -541,6 +541,38 @@ function parseVersionRow(row: Record<string, unknown>): AssetVersion {
 }
 
 // ---------------------------------------------------------------------------
+// D1CleanupPendingStore (SCA-02)
+// ---------------------------------------------------------------------------
+
+import type { CleanupPendingStore, PendingCleanup } from "../cleanup/repository";
+
+export class D1CleanupPendingStore implements CleanupPendingStore {
+  constructor(private db: D1Database) {}
+
+  async add(prefix: string): Promise<void> {
+    await this.db
+      .prepare("INSERT OR REPLACE INTO cleanup_pending (prefix, created_at) VALUES (?1, ?2)")
+      .bind(prefix, Date.now())
+      .run();
+  }
+
+  async list(limit: number): Promise<PendingCleanup[]> {
+    const { results } = await this.db
+      .prepare("SELECT prefix, created_at FROM cleanup_pending ORDER BY created_at ASC LIMIT ?1")
+      .bind(limit)
+      .all();
+    return results.map((r) => {
+      const row = r as Record<string, unknown>;
+      return { prefix: row.prefix as string, createdAt: row.created_at as number };
+    });
+  }
+
+  async remove(prefix: string): Promise<void> {
+    await this.db.prepare("DELETE FROM cleanup_pending WHERE prefix = ?1").bind(prefix).run();
+  }
+}
+
+// ---------------------------------------------------------------------------
 // D1StorageUsageStore (ADR-004)
 // ---------------------------------------------------------------------------
 

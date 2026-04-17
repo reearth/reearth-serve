@@ -1,6 +1,6 @@
 import { R2FileStorage } from "../infra/storage";
-import { D1MetadataStore, D1JobStore, D1VersionStore } from "../infra/d1";
-import { cleanupExpiredAssets, SubrequestBudget } from "./usecase";
+import { D1MetadataStore, D1JobStore, D1VersionStore, D1CleanupPendingStore } from "../infra/d1";
+import { cleanupExpiredAssets, drainPendingCleanups, SubrequestBudget } from "./usecase";
 import type { Job } from "../job/model";
 
 const DEFAULT_STUCK_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
@@ -21,11 +21,16 @@ export async function handleScheduled(env: Env): Promise<void> {
   const storage = new R2FileStorage(env.STORAGE);
   const jobs = new D1JobStore(env.DB);
   const versions = new D1VersionStore(env.DB);
+  const pending = new D1CleanupPendingStore(env.DB);
+
+  // Share one budget across both cleanup paths — we don't want drainPending
+  // to steal so much budget that expired assets never get processed.
+  const budget = new SubrequestBudget(CLEANUP_BUDGET);
 
   const result = await cleanupExpiredAssets(metadata, storage, jobs, {
     maxAssets: 100,
     versions,
-    budget: new SubrequestBudget(CLEANUP_BUDGET),
+    budget,
   });
 
   if (result.deletedAssets.length > 0 || result.budgetExhausted) {
@@ -33,6 +38,13 @@ export async function handleScheduled(env: Env): Promise<void> {
     console.log(
       `Cleanup: deleted ${result.deletedAssets.length} expired assets, ${result.deletedJobs.length} jobs${suffix}`,
     );
+  }
+
+  // Drain R2 prefixes that earlier DELETE requests couldn't finish inline.
+  const drainResult = await drainPendingCleanups(storage, pending, budget);
+  if (drainResult.drainedPrefixes.length > 0 || drainResult.budgetExhausted) {
+    const suffix = drainResult.budgetExhausted ? " (budget exhausted — resuming next tick)" : "";
+    console.log(`Cleanup: drained ${drainResult.drainedPrefixes.length} pending prefixes${suffix}`);
   }
 
   // Re-trigger pending/failed/stuck extraction jobs via queue

@@ -28,7 +28,9 @@ export function registerDeleteVersionRoute(app: Hono<AppEnv>) {
         return c.json({ error: "Asset not found" }, 404);
       }
 
-      const deleted = await deleteVersion(versions, metadata, id, versionId);
+      const storage = c.get("storage");
+      const pendingCleanup = c.get("pendingCleanup");
+      const deleted = await deleteVersion(versions, metadata, id, versionId, { storage, pendingCleanup });
       if (!deleted) {
         return c.json({ error: "Version not found" }, 404);
       }

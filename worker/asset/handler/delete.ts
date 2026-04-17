@@ -32,7 +32,8 @@ export function registerDeleteRoute(app: Hono<AppEnv>) {
       // Delete all versions (and get total size for storage accounting)
       const { totalSize: versionsTotalSize } = await versions.deleteByAssetId(id);
 
-      const deleted = await deleteAsset(metadata, storage, id);
+      const pendingCleanup = c.get("pendingCleanup");
+      const deleted = await deleteAsset(metadata, storage, id, { pendingCleanup });
       if (!deleted) {
         return c.json({ error: "Asset not found" }, 404);
       }
