@@ -16,38 +16,45 @@ func NormalizeSeparators(rawPath string) string {
 	return p
 }
 
-// DetectRootPrefix determines if all entries share a single root folder
-// that matches the archive filename (with or without extension).
-// Returns the prefix to strip (e.g. "data/"), or empty string if no stripping needed.
-func DetectRootPrefix(entries []ArchiveEntry, archiveFilename string) string {
-	if len(entries) == 0 {
+// RootPrefixDetector computes the common root folder incrementally. Feeding
+// each entry path in with Observe keeps memory flat (O(1)) compared to
+// buffering the entire entry list just to decide whether to strip a prefix.
+// Call Result once after all paths are observed.
+type RootPrefixDetector struct {
+	commonRoot string
+	conflict   bool
+	seen       bool
+}
+
+// Observe records the first path segment of the given raw entry path.
+func (d *RootPrefixDetector) Observe(rawPath string) {
+	if d.conflict {
+		return
+	}
+	p := NormalizeSeparators(rawPath)
+	if p == "" {
+		return
+	}
+	seg := firstSegment(p)
+	if !d.seen {
+		d.commonRoot = seg
+		d.seen = true
+		return
+	}
+	if seg != d.commonRoot {
+		d.conflict = true
+		d.commonRoot = ""
+	}
+}
+
+// Result returns the prefix to strip (e.g. "data/") if the observed entries
+// all shared a single root that matches the archive filename, or empty.
+func (d *RootPrefixDetector) Result(archiveFilename string) string {
+	if d.conflict || d.commonRoot == "" {
 		return ""
 	}
 
-	// Collect the first path segment of every entry
-	var commonRoot string
-	for _, e := range entries {
-		p := NormalizeSeparators(e.Path)
-		if p == "" {
-			continue
-		}
-
-		seg := firstSegment(p)
-		if commonRoot == "" {
-			commonRoot = seg
-		} else if seg != commonRoot {
-			// Multiple different root segments → no stripping
-			return ""
-		}
-	}
-
-	if commonRoot == "" {
-		return ""
-	}
-
-	// Check if the common root matches the archive name (with or without extension)
 	baseName := archiveFilename
-	// Strip known archive extensions progressively: .tar.gz, .tar.bz2, .zip, .tar
 	for _, ext := range []string{".tar.gz", ".tar.bz2", ".tgz", ".zip", ".tar"} {
 		if strings.HasSuffix(strings.ToLower(baseName), ext) {
 			baseName = baseName[:len(baseName)-len(ext)]
@@ -55,11 +62,21 @@ func DetectRootPrefix(entries []ArchiveEntry, archiveFilename string) string {
 		}
 	}
 
-	if commonRoot == baseName || commonRoot == archiveFilename {
-		return commonRoot + "/"
+	if d.commonRoot == baseName || d.commonRoot == archiveFilename {
+		return d.commonRoot + "/"
 	}
-
 	return ""
+}
+
+// DetectRootPrefix determines if all entries share a single root folder
+// that matches the archive filename (with or without extension).
+// Returns the prefix to strip (e.g. "data/"), or empty string if no stripping needed.
+func DetectRootPrefix(entries []ArchiveEntry, archiveFilename string) string {
+	d := RootPrefixDetector{}
+	for _, e := range entries {
+		d.Observe(e.Path)
+	}
+	return d.Result(archiveFilename)
 }
 
 // StripPrefix removes the root prefix from a normalized path.

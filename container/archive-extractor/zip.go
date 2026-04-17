@@ -58,24 +58,28 @@ func NewZipExtractor(ctx context.Context, storage ObjectStorage, key string) (*Z
 	return &ZipExtractor{reader: zr}, nil
 }
 
-// ListEntries returns all entries from the ZIP Central Directory.
-func (z *ZipExtractor) ListEntries(_ context.Context) ([]ArchiveEntry, error) {
-	entries := make([]ArchiveEntry, 0, len(z.reader.File))
+// ListEntries streams entries from the ZIP Central Directory one at a time.
+func (z *ZipExtractor) ListEntries(ctx context.Context, yield func(entry ArchiveEntry) error) error {
 	for i, f := range z.reader.File {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		offset, err := f.DataOffset()
 		if err != nil {
 			offset = -1
 		}
-		entries = append(entries, ArchiveEntry{
+		if err := yield(ArchiveEntry{
 			Index:          i,
 			Path:           f.Name,
 			Size:           int64(f.UncompressedSize64),
 			CompressedSize: int64(f.CompressedSize64),
 			IsDirectory:    f.FileInfo().IsDir(),
 			Offset:         offset,
-		})
+		}); err != nil {
+			return err
+		}
 	}
-	return entries, nil
+	return nil
 }
 
 // ExtractEntry opens a single entry from the ZIP and returns a reader

@@ -120,50 +120,55 @@ func (w *ExtractionWorker) phaseA(ctx context.Context, cp *JobCheckpoint) error 
 		return err
 	}
 
-	entries, err := extractor.ListEntries(ctx)
-	if err != nil {
-		return fmt.Errorf("failed to list entries: %w", err)
-	}
-
-	rootPrefix := DetectRootPrefix(entries, w.cfg.ArchiveFilename)
-	cp.RootPrefix = rootPrefix
-
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
+	// Stream entries straight into R2 via io.Pipe instead of materializing a
+	// []ArchiveEntry + JSON bytes.Buffer in memory. A 500k-entry archive
+	// previously allocated ~100 MB for each, enough to OOM the default
+	// 256 MiB container. We also skip pre-computing NormalizedPath here —
+	// phaseB/phaseBSequential derive it on the fly from cp.RootPrefix.
+	pr, pw := io.Pipe()
+	detector := &RootPrefixDetector{}
 	fileCount := 0
-	for i := range entries {
-		normalized := NormalizeSeparators(entries[i].Path)
-		normalized = StripPrefix(normalized, rootPrefix)
-		entries[i].NormalizedPath = normalized
-		if err := enc.Encode(entries[i]); err != nil {
-			return fmt.Errorf("failed to encode entry %d: %w", i, err)
-		}
-		if !entries[i].IsDirectory {
-			fileCount++
-		}
-	}
+	listDone := make(chan error, 1)
 
-	if err := w.storage.PutObject(ctx, entryListKey, bytes.NewReader(buf.Bytes()), int64(buf.Len()), "application/x-ndjson", nil); err != nil {
-		return fmt.Errorf("failed to write entry list: %w", err)
+	go func() {
+		enc := json.NewEncoder(pw)
+		err := extractor.ListEntries(ctx, func(entry ArchiveEntry) error {
+			detector.Observe(entry.Path)
+			if !entry.IsDirectory {
+				fileCount++
+			}
+			return enc.Encode(entry)
+		})
+		// Close (with error if any) so the reader side unblocks.
+		_ = pw.CloseWithError(err)
+		listDone <- err
+	}()
+
+	putErr := w.storage.PutObject(ctx, entryListKey, pr, -1, "application/x-ndjson", nil)
+	listErr := <-listDone
+	if listErr != nil {
+		// Abandon any partial object — phaseA re-runs will start clean.
+		_ = w.storage.DeleteObject(ctx, entryListKey)
+		return fmt.Errorf("failed to list entries: %w", listErr)
+	}
+	if putErr != nil {
+		_ = w.storage.DeleteObject(ctx, entryListKey)
+		return fmt.Errorf("failed to write entry list: %w", putErr)
 	}
 
 	cp.Phase = "entries_listed"
 	cp.TotalEntries = fileCount
+	cp.RootPrefix = detector.Result(w.cfg.ArchiveFilename)
 	if err := w.checkpoint.Save(ctx, cp); err != nil {
 		return fmt.Errorf("failed to save checkpoint: %w", err)
 	}
 
-	log.Printf("phase A: listed %d entries (%d files), rootPrefix=%q", len(entries), fileCount, rootPrefix)
+	log.Printf("phase A: listed %d files, rootPrefix=%q", fileCount, cp.RootPrefix)
 	return nil
 }
 
 func (w *ExtractionWorker) phaseB(ctx context.Context, cp *JobCheckpoint) error {
 	cp.Phase = "extracting"
-
-	entries, err := w.loadEntryList(ctx)
-	if err != nil {
-		return err
-	}
 
 	extractor, err := w.createExtractor(ctx)
 	if err != nil {
@@ -171,9 +176,11 @@ func (w *ExtractionWorker) phaseB(ctx context.Context, cp *JobCheckpoint) error 
 	}
 
 	// Formats without random access (tar, tar.gz) take a sequential path so
-	// we open and decompress the archive once instead of N times.
+	// we open and decompress the archive once instead of N times. Both
+	// paths stream the entry list from R2 so we never hold the full
+	// []ArchiveEntry in memory.
 	if seq, ok := extractor.(SequentialExtractor); ok {
-		return w.phaseBSequential(ctx, cp, seq, entries)
+		return w.phaseBSequential(ctx, cp, seq)
 	}
 
 	sem := make(chan struct{}, w.cfg.MaxConcurrency)
@@ -182,20 +189,26 @@ func (w *ExtractionWorker) phaseB(ctx context.Context, cp *JobCheckpoint) error 
 	var extractErr atomic.Value
 	chunkIndex := cp.ManifestChunksWritten
 	resumeAfter := cp.LastProcessedIndex
+	rootPrefix := cp.RootPrefix
 
-	for _, entry := range entries {
+	err = w.streamEntryList(ctx, func(entry ArchiveEntry) error {
 		if entry.IsDirectory {
-			continue
+			return nil
 		}
 		if entry.Index <= resumeAfter {
-			continue
+			return nil
 		}
 		if ctx.Err() != nil {
-			break
+			return ctx.Err()
 		}
 		if extractErr.Load() != nil {
-			break
+			return fmt.Errorf("aborting: prior extraction error")
 		}
+
+		// Compute the normalized path on the fly so the JSONL can stay
+		// raw (smaller, simpler — see phaseA). The goroutine below uses
+		// e.NormalizedPath for storage keys and manifest entries.
+		entry.NormalizedPath = StripPrefix(NormalizeSeparators(entry.Path), rootPrefix)
 
 		sem <- struct{}{}
 		wg.Add(1)
@@ -266,9 +279,14 @@ func (w *ExtractionWorker) phaseB(ctx context.Context, cp *JobCheckpoint) error 
 				}
 			}
 		}(entry)
-	}
+		return nil
+	})
 
+	// Wait for all in-flight uploads before reporting list-time errors.
 	wg.Wait()
+	if err != nil {
+		return fmt.Errorf("failed to stream entry list: %w", err)
+	}
 
 	if err := w.manifest.FlushChunk(ctx, &chunkIndex); err != nil {
 		return fmt.Errorf("failed to flush final manifest chunk: %w", err)
@@ -292,20 +310,19 @@ func (w *ExtractionWorker) phaseB(ctx context.Context, cp *JobCheckpoint) error 
 // The archive is opened once; uploads happen synchronously per entry.
 // This is slower than the parallel path but avoids the O(N²) re-scan that
 // the random-access ExtractEntry path would force on tar formats.
-func (w *ExtractionWorker) phaseBSequential(ctx context.Context, cp *JobCheckpoint, ext SequentialExtractor, entries []ArchiveEntry) error {
-	byIndex := make(map[int]ArchiveEntry, len(entries))
-	for _, e := range entries {
-		byIndex[e.Index] = e
-	}
-
+func (w *ExtractionWorker) phaseBSequential(ctx context.Context, cp *JobCheckpoint, ext SequentialExtractor) error {
 	chunkIndex := cp.ManifestChunksWritten
 	resumeAfter := cp.LastProcessedIndex
+	rootPrefix := cp.RootPrefix
 
 	err := ext.ExtractAllSequential(ctx, func(rawEntry ArchiveEntry, r io.Reader) error {
-		// Use the pre-normalized entry from phase A (paths already stripped
-		// of root prefix and normalized to forward slashes).
-		e, ok := byIndex[rawEntry.Index]
-		if !ok || e.IsDirectory {
+		// Normalize the path from the tar header on the fly instead of
+		// looking it up in a pre-built map (phaseA no longer buffers the
+		// entry list).
+		e := rawEntry
+		e.NormalizedPath = StripPrefix(NormalizeSeparators(rawEntry.Path), rootPrefix)
+
+		if e.IsDirectory {
 			_, _ = io.Copy(io.Discard, r)
 			return nil
 		}
@@ -438,28 +455,38 @@ func (w *ExtractionWorker) uploadFromReader(ctx context.Context, entry ArchiveEn
 	return fmt.Sprintf("md5:%x", hash.Sum(nil)), nil
 }
 
-func (w *ExtractionWorker) loadEntryList(ctx context.Context) ([]ArchiveEntry, error) {
+// streamEntryList reads the JSONL entry list from R2 and yields each entry
+// through the callback. Unlike a slice-returning loader, peak memory stays
+// at one line of JSON, which is what prevents phaseB from doubling the
+// worst-case allocation phaseA already had to trim.
+func (w *ExtractionWorker) streamEntryList(ctx context.Context, yield func(entry ArchiveEntry) error) error {
 	key := fmt.Sprintf("assets/%s/_archive/_entry_list.jsonl", w.cfg.AssetID)
 	body, err := w.storage.GetObject(ctx, key)
 	if err != nil {
-		return nil, fmt.Errorf("failed to get entry list: %w", err)
+		return fmt.Errorf("failed to get entry list: %w", err)
 	}
 	defer func() { _ = body.Close() }()
 
-	var entries []ArchiveEntry
 	scanner := bufio.NewScanner(body)
+	// Individual entries can be large (long Unicode paths); cap matches the
+	// previous loader so we stay bug-compatible on pathological filenames.
 	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
 	for scanner.Scan() {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		var e ArchiveEntry
 		if err := json.Unmarshal(scanner.Bytes(), &e); err != nil {
-			return nil, fmt.Errorf("failed to unmarshal entry: %w", err)
+			return fmt.Errorf("failed to unmarshal entry: %w", err)
 		}
-		entries = append(entries, e)
+		if err := yield(e); err != nil {
+			return err
+		}
 	}
 	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("failed to scan entry list: %w", err)
+		return fmt.Errorf("failed to scan entry list: %w", err)
 	}
-	return entries, nil
+	return nil
 }
 
 func (w *ExtractionWorker) createExtractor(ctx context.Context) (ArchiveExtractor, error) {

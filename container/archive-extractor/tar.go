@@ -22,41 +22,43 @@ func NewTarExtractor(storage ObjectStorage, key string, isGzipped bool) *TarExtr
 	return &TarExtractor{storage: storage, key: key, isGzipped: isGzipped}
 }
 
-// ListEntries reads through the entire tar archive to collect entry metadata.
-func (t *TarExtractor) ListEntries(ctx context.Context) ([]ArchiveEntry, error) {
+// ListEntries streams tar headers through the callback one at a time.
+func (t *TarExtractor) ListEntries(ctx context.Context, yield func(entry ArchiveEntry) error) error {
 	tr, cleanup, err := t.openTarReader(ctx)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	defer cleanup()
 
-	var entries []ArchiveEntry
 	var offset int64
 	index := 0
 
 	for {
+		if err := ctx.Err(); err != nil {
+			return err
+		}
 		hdr, err := tr.Next()
 		if err == io.EOF {
-			break
+			return nil
 		}
 		if err != nil {
-			return nil, fmt.Errorf("failed to read tar header at index %d: %w", index, err)
+			return fmt.Errorf("failed to read tar header at index %d: %w", index, err)
 		}
 
-		entries = append(entries, ArchiveEntry{
+		if err := yield(ArchiveEntry{
 			Index:          index,
 			Path:           hdr.Name,
 			Size:           hdr.Size,
 			CompressedSize: hdr.Size,
 			IsDirectory:    hdr.Typeflag == tar.TypeDir,
 			Offset:         offset,
-		})
+		}); err != nil {
+			return err
+		}
 
 		offset += hdr.Size
 		index++
 	}
-
-	return entries, nil
 }
 
 // ExtractEntry opens the tar archive, seeks to the given entry, and returns

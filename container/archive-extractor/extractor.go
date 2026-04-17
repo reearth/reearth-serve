@@ -19,8 +19,12 @@ type ArchiveEntry struct {
 // ArchiveExtractor provides access to entries in an archive without
 // extracting the entire archive to disk.
 type ArchiveExtractor interface {
-	// ListEntries returns all entries in the archive.
-	ListEntries(ctx context.Context) ([]ArchiveEntry, error)
+	// ListEntries invokes yield once per entry in the archive, in archive
+	// order. The callback is streaming — implementations must not buffer
+	// the full entry set (a 500k-entry archive otherwise costs ~100MB just
+	// to hold metadata). Returning a non-nil error from yield aborts
+	// enumeration and propagates out.
+	ListEntries(ctx context.Context, yield func(entry ArchiveEntry) error) error
 
 	// ExtractEntry returns a reader for the given entry's uncompressed data.
 	ExtractEntry(ctx context.Context, entry ArchiveEntry) (io.ReadCloser, error)
