@@ -63,28 +63,48 @@ func (mw *ManifestWriter) FlushChunk(ctx context.Context, chunkIndex *int) error
 }
 
 // Finalize combines all manifest chunks into the final _manifest.jsonl.
+//
+// Chunks are streamed sequentially through an io.Pipe into a single
+// PutObject with an unknown content length (size=-1 → multipart). The
+// previous implementation io.ReadAll'd every chunk into one bytes.Buffer
+// before uploading, which defeated the chunked write entirely: a 500k-file
+// archive produces a ~100 MB manifest, and holding it all in RAM on top of
+// any other phase-C state OOM'd the default 256 MiB container — on the
+// exact workload the chunking was designed to support.
 func (mw *ManifestWriter) Finalize(ctx context.Context, totalChunks int) error {
-	var all bytes.Buffer
-
-	for i := range totalChunks {
-		key := fmt.Sprintf("assets/%s/_archive/_manifest_chunks/%06d.jsonl", mw.assetID, i)
-		body, err := mw.storage.GetObject(ctx, key)
-		if err != nil {
-			return fmt.Errorf("failed to read manifest chunk %d: %w", i, err)
-		}
-		data, err := io.ReadAll(body)
-		_ = body.Close()
-		if err != nil {
-			return fmt.Errorf("failed to read manifest chunk %d data: %w", i, err)
-		}
-		all.Write(data)
-	}
-
 	finalKey := fmt.Sprintf("assets/%s/_archive/_manifest.jsonl", mw.assetID)
-	if err := mw.storage.PutObject(ctx, finalKey, bytes.NewReader(all.Bytes()), int64(all.Len()), "application/x-ndjson", nil); err != nil {
+
+	pr, pw := io.Pipe()
+	go func() {
+		for i := range totalChunks {
+			if err := ctx.Err(); err != nil {
+				_ = pw.CloseWithError(err)
+				return
+			}
+			key := fmt.Sprintf("assets/%s/_archive/_manifest_chunks/%06d.jsonl", mw.assetID, i)
+			body, err := mw.storage.GetObject(ctx, key)
+			if err != nil {
+				_ = pw.CloseWithError(fmt.Errorf("failed to read manifest chunk %d: %w", i, err))
+				return
+			}
+			_, copyErr := io.Copy(pw, body)
+			_ = body.Close()
+			if copyErr != nil {
+				_ = pw.CloseWithError(fmt.Errorf("failed to copy manifest chunk %d: %w", i, copyErr))
+				return
+			}
+		}
+		_ = pw.Close()
+	}()
+
+	if err := mw.storage.PutObject(ctx, finalKey, pr, -1, "application/x-ndjson", nil); err != nil {
+		// Drain the pipe so the producer goroutine unblocks before we return.
+		_ = pr.CloseWithError(err)
 		return fmt.Errorf("failed to write final manifest: %w", err)
 	}
 
+	// Only drop the chunk objects after the final manifest upload succeeded
+	// — keeping them lets Finalize be safely retried on upload failure.
 	for i := range totalChunks {
 		key := fmt.Sprintf("assets/%s/_archive/_manifest_chunks/%06d.jsonl", mw.assetID, i)
 		_ = mw.storage.DeleteObject(ctx, key)
