@@ -1,11 +1,10 @@
-import { COMPRESSIBLE_EXTENSIONS } from "../../shared/compressible-extensions.generated";
+import { isCompressiblePath } from "@reearth/compressible";
 
 const MIN_SIZE = 1024; // 1KB
 
 export function shouldCompress(filename: string, size: number): boolean {
   if (size < MIN_SIZE) return false;
-  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
-  return COMPRESSIBLE_EXTENSIONS.has(ext);
+  return isCompressiblePath(filename);
 }
 
 export function decompressStream(stream: ReadableStream<Uint8Array>): ReadableStream<Uint8Array> {

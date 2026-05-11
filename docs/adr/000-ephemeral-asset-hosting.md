@@ -61,7 +61,7 @@ This approach was chosen over server-side compression because:
 - The CLI has no CPU constraints
 - Presigned uploads bypass the Worker entirely, so server-side compression is impossible for that path
 
-The compressible-extension list is generated from [`jshttp/mime-db`](https://github.com/jshttp/mime-db) (`compressible: true` entries) augmented with `scripts/compressible-extras.json` for formats mime-db does not cover (3D Tiles `.b3dm`/`.i3dm`/`.pnts`/`.cmpt`/`.subtree`, Cesium `.terrain`, `.ndjson`/`.jsonl`, `.wkt`, `.mvt`, `.bin`). `application/octet-stream` is excluded wholesale (its mime-db `extensions` include `.exe`/`.dll`/`.iso`); `.tar` is also excluded because tar archives are inputs to the archive-extractor (see ADR 001) and must remain identity-encoded. Run `npm run gen:compressible` to regenerate `shared/compressible-extensions.generated.ts` and `container/archive-extractor/compressible_generated.go` after editing the extras file.
+The compressible-extension list is provided by [`@reearth/compressible`](https://github.com/reearth/compressible), a small library curated from `jshttp/mime-db` with geospatial/3D extras (3D Tiles `.b3dm`/`.i3dm`/`.pnts`/`.cmpt`/`.subtree`, Cesium `.terrain`, `.mvt`, `.ndjson`/`.jsonl`, `.wkt`, etc.) and exclusions for already-compressed or archive formats (`.tar`, `.svgz`, `.psd`, VM disk images, etc.). The TypeScript side uses `isCompressiblePath()` from the `@reearth/compressible` npm package; the archive-extractor container uses `compressible.Path()` from `github.com/reearth/compressible/go`. To change which extensions are gzipped, contribute to the upstream library rather than diverging here.
 
 ### Immutable assets
 

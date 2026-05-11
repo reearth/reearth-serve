@@ -1,9 +1,9 @@
 import { readFileSync, statSync } from "node:fs";
 import { basename } from "node:path";
 import { gzipSync } from "node:zlib";
+import { isCompressiblePath } from "@reearth/compressible";
 import { lookup } from "./mime";
 import { PATHS } from "../shared/paths";
-import { COMPRESSIBLE_EXTENSIONS } from "../shared/compressible-extensions.generated";
 import { commonHeaders } from "./helpers";
 import type { AssetUploadResult, PresignedUploadResult, MultipartUploadResult } from "../shared/api";
 import { output } from "./helpers";
@@ -15,8 +15,7 @@ const MIN_COMPRESS_SIZE = 1024;
 
 function shouldCompress(filename: string, size: number): boolean {
   if (size < MIN_COMPRESS_SIZE) return false;
-  const ext = filename.split(".").pop()?.toLowerCase() ?? "";
-  return COMPRESSIBLE_EXTENSIONS.has(ext);
+  return isCompressiblePath(filename);
 }
 
 async function uploadPartWithRetry(url: string, data: Uint8Array, retries = 2): Promise<string> {

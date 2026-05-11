@@ -129,7 +129,7 @@ asset
     const { gzipSync } = await import("node:zlib");
     const { lookup } = await import("./mime");
     const { commonHeaders } = await import("./helpers");
-    const { COMPRESSIBLE_EXTENSIONS } = await import("../shared/compressible-extensions.generated");
+    const { isCompressiblePath } = await import("@reearth/compressible");
 
     const opts = program.opts<{ endpoint: string; json: boolean }>();
 
@@ -139,8 +139,7 @@ asset
     const fileData = new Uint8Array(readFileSync(file));
     const contentType = lookup(fileName);
 
-    const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
-    const compress = fileData.byteLength >= 1024 && COMPRESSIBLE_EXTENSIONS.has(ext);
+    const compress = fileData.byteLength >= 1024 && isCompressiblePath(fileName);
     const uploadData = compress ? new Uint8Array(gzipSync(fileData)) : fileData;
 
     const headers: Record<string, string> = {

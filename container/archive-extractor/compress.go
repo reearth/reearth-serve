@@ -3,20 +3,18 @@ package main
 import (
 	"compress/gzip"
 	"io"
-	"path/filepath"
-	"strings"
+
+	compressible "github.com/reearth/compressible/go"
 )
 
 const minCompressSize = 1024 // 1KB
-// compressibleExtensions is defined in compressible_generated.go
 
 // ShouldCompress returns true if the file should be gzip-compressed before uploading.
 func ShouldCompress(filename string, size int64) bool {
 	if size < minCompressSize {
 		return false
 	}
-	ext := strings.ToLower(filepath.Ext(filename))
-	return compressibleExtensions[ext]
+	return compressible.Path(filename)
 }
 
 // GzipReader wraps a reader with gzip compression.
