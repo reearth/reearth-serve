@@ -1,9 +1,4 @@
-const COMPRESSIBLE_EXTENSIONS = new Set([
-  "json", "geojson", "topojson", "csv", "tsv",
-  "xml", "kml", "gml", "czml",
-  "html", "htm", "js", "mjs", "css",
-  "svg", "txt", "md", "yaml", "yml",
-]);
+import { COMPRESSIBLE_EXTENSIONS } from "../../shared/compressible-extensions.generated";
 
 const MIN_SIZE = 1024; // 1KB
 
@@ -36,6 +31,22 @@ if (import.meta.vitest) {
     expect(shouldCompress("data.csv", 10000)).toBe(true);
   });
 
+  test("shouldCompress returns true for MVT", () => {
+    expect(shouldCompress("tile.mvt", 5000)).toBe(true);
+  });
+
+  test("shouldCompress returns true for glTF binary", () => {
+    expect(shouldCompress("model.glb", 50000)).toBe(true);
+  });
+
+  test("shouldCompress returns true for 3D Tiles b3dm", () => {
+    expect(shouldCompress("0.b3dm", 50000)).toBe(true);
+  });
+
+  test("shouldCompress returns true for Cesium terrain", () => {
+    expect(shouldCompress("0.terrain", 50000)).toBe(true);
+  });
+
   test("shouldCompress returns false for small file", () => {
     expect(shouldCompress("tiny.json", 100)).toBe(false);
   });
@@ -55,7 +66,6 @@ if (import.meta.vitest) {
   test("decompressStream decompresses gzip data", async () => {
     const original = new TextEncoder().encode("hello ".repeat(200));
 
-    // Compress with CompressionStream, then decompress with decompressStream
     const compressedStream = new ReadableStream<Uint8Array>({
       start(c) { c.enqueue(original); c.close(); },
     }).pipeThrough(new CompressionStream("gzip") as unknown as TransformStream<Uint8Array, Uint8Array>);

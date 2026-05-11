@@ -51,7 +51,7 @@ This avoids Worker CPU time limits for large uploads. The S3-compatible API requ
 
 Compression is the **uploader's responsibility**, not the server's:
 
-- The CLI detects compressible content types (JSON, GeoJSON, CSV, XML, etc.) and files above a size threshold (1 KB), compresses with gzip locally, and uploads with `Content-Encoding: gzip` and `X-Original-Size` headers
+- The CLI detects compressible content types (JSON, GeoJSON, CSV, XML, 3D Tiles, glTF, MVT, etc.) and files above a size threshold (1 KB), compresses with gzip locally, and uploads with `Content-Encoding: gzip` and `X-Original-Size` headers
 - The server stores the compressed bytes as-is in R2
 - On download, if the client sends `Accept-Encoding: gzip`, the server passes through the compressed bytes with `Content-Encoding: gzip`
 - If the client does not accept gzip, the server decompresses on-the-fly via `DecompressionStream`
@@ -60,6 +60,8 @@ This approach was chosen over server-side compression because:
 - Worker CPU time is limited and expensive for compression
 - The CLI has no CPU constraints
 - Presigned uploads bypass the Worker entirely, so server-side compression is impossible for that path
+
+The compressible-extension list is generated from [`jshttp/mime-db`](https://github.com/jshttp/mime-db) (`compressible: true` entries) augmented with `scripts/compressible-extras.json` for formats mime-db does not cover (3D Tiles `.b3dm`/`.i3dm`/`.pnts`/`.cmpt`/`.subtree`, Cesium `.terrain`, `.ndjson`/`.jsonl`, `.wkt`, `.mvt`, `.bin`). `application/octet-stream` is excluded wholesale (its mime-db `extensions` include `.exe`/`.dll`/`.iso`); `.tar` is also excluded because tar archives are inputs to the archive-extractor (see ADR 001) and must remain identity-encoded. Run `npm run gen:compressible` to regenerate `shared/compressible-extensions.generated.ts` and `container/archive-extractor/compressible_generated.go` after editing the extras file.
 
 ### Immutable assets
 

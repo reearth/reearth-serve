@@ -129,6 +129,7 @@ asset
     const { gzipSync } = await import("node:zlib");
     const { lookup } = await import("./mime");
     const { commonHeaders } = await import("./helpers");
+    const { COMPRESSIBLE_EXTENSIONS } = await import("../shared/compressible-extensions.generated");
 
     const opts = program.opts<{ endpoint: string; json: boolean }>();
 
@@ -138,10 +139,8 @@ asset
     const fileData = new Uint8Array(readFileSync(file));
     const contentType = lookup(fileName);
 
-    // Simple compression check
-    const COMPRESSIBLE = new Set(["json", "geojson", "topojson", "csv", "tsv", "xml", "kml", "gml", "czml", "html", "htm", "js", "mjs", "css", "svg", "txt", "md", "yaml", "yml"]);
     const ext = fileName.split(".").pop()?.toLowerCase() ?? "";
-    const compress = fileData.byteLength >= 1024 && COMPRESSIBLE.has(ext);
+    const compress = fileData.byteLength >= 1024 && COMPRESSIBLE_EXTENSIONS.has(ext);
     const uploadData = compress ? new Uint8Array(gzipSync(fileData)) : fileData;
 
     const headers: Record<string, string> = {

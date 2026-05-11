@@ -18,7 +18,8 @@
     "test:watch": "vitest --project unit",
     "test:e2e": "vitest run --project e2e",
     "test:e2e:dev": "bash scripts/e2e.sh",
-    "cli": "tsx cli/index.ts --"
+    "cli": "tsx cli/index.ts --",
+    "gen:compressible": "tsx scripts/gen-compressible.ts"
   },
   "dependencies": {
     "@cloudflare/containers": "^0.1.1",
@@ -45,9 +46,11 @@
     "@cloudflare/workers-types": "^4.20250310.0",
     "@react-router/dev": "^7.13.1",
     "@tailwindcss/vite": "^4.2.1",
+    "@types/mime-db": "^1.43.6",
     "@types/node": "^25.4.0",
     "@types/react": "^19.2.14",
     "@types/react-dom": "^19.2.3",
+    "mime-db": "^1.54.0",
     "tailwindcss": "^4.2.1",
     "tsx": "^4.19.0",
     "typescript": "^5.7.0",

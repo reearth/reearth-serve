@@ -3,6 +3,7 @@ import { basename } from "node:path";
 import { gzipSync } from "node:zlib";
 import { lookup } from "./mime";
 import { PATHS } from "../shared/paths";
+import { COMPRESSIBLE_EXTENSIONS } from "../shared/compressible-extensions.generated";
 import { commonHeaders } from "./helpers";
 import type { AssetUploadResult, PresignedUploadResult, MultipartUploadResult } from "../shared/api";
 import { output } from "./helpers";
@@ -10,12 +11,6 @@ import { output } from "./helpers";
 const MULTIPART_THRESHOLD = 100 * 1024 * 1024; // 100MB
 const PART_SIZE = 100 * 1024 * 1024; // 100MB per part
 const MAX_CONCURRENCY = 4;
-const COMPRESSIBLE_EXTENSIONS = new Set([
-  "json", "geojson", "topojson", "csv", "tsv",
-  "xml", "kml", "gml", "czml",
-  "html", "htm", "js", "mjs", "css",
-  "svg", "txt", "md", "yaml", "yml",
-]);
 const MIN_COMPRESS_SIZE = 1024;
 
 function shouldCompress(filename: string, size: number): boolean {

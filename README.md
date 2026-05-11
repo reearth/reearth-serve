@@ -11,7 +11,7 @@ Spatial Data Delivery — an asset hosting and tile delivery service built on Cl
 - 📦 **Archive Extraction** — ZIP/tar/tar.gz uploads are automatically extracted and served as individual files. Supports multi-GB archives, checkpoint-based resume, and root folder auto-stripping.
 - 📡 **HTTP Range Requests** — Full support for `Range` headers (HTTP 206), enabling partial file reads. Works with PMTiles, Cloud-Optimized GeoTIFF (COG), and other formats that rely on byte-range access — no full download needed.
 - 🚀 **Presigned URL Uploads** — Large files (>100MB) bypass the Worker body size limit via presigned URLs for direct-to-R2 uploads with automatic multipart splitting.
-- 🗜️ **Gzip Compression** — The CLI compresses compressible files (JSON, GeoJSON, CSV, etc.) locally before upload. On download, gzip-stored files are decompressed on-the-fly. Range requests on compressed files are also supported.
+- 🗜️ **Gzip Compression** — The CLI compresses compressible files (JSON, GeoJSON, CSV, 3D Tiles, glTF, MVT, etc.) locally before upload. The extension list is generated from [`jshttp/mime-db`](https://github.com/jshttp/mime-db) plus domain extras in `scripts/compressible-extras.json` (run `npm run gen:compressible` to regenerate). On download, gzip-stored files are decompressed on-the-fly. Range requests on compressed files are also supported.
 - 🔐 **Authentication & RBAC** — JWT-based authentication via any OIDC-compliant IdP, with workspace-scoped role-based access control (owner/admin/editor/viewer). Optional Cerbos PDP integration for policy-based authorization.
 
 ## Quick Start

@@ -1,0 +1,39 @@
+{
+  "_comment": "Domain-specific extensions not covered by mime-db. Each section documents WHY the extension is here. The `_exclude` key lists extensions to drop from the mime-db-derived set.",
+  "_exclude": {
+    "_note": "Extensions mime-db marks compressible but we deliberately skip. Archive formats (.tar) are inputs to archive-extractor and must remain identity-encoded.",
+    "extensions": ["tar"]
+  },
+  "3d_tiles": {
+    "_note": "Cesium 3D Tiles formats (not registered with IANA but standard practice to gzip).",
+    "extensions": ["b3dm", "i3dm", "pnts", "cmpt", "subtree"]
+  },
+  "cesium_terrain": {
+    "_note": "Cesium quantized-mesh terrain tiles. Compress only if served raw (not pre-gzipped by Cesium ion).",
+    "extensions": ["terrain"]
+  },
+  "json_streams": {
+    "_note": "Newline-delimited JSON variants. Not in mime-db.",
+    "extensions": ["ndjson", "jsonl"]
+  },
+  "geospatial_text": {
+    "_note": "Text-form geospatial formats not in mime-db.",
+    "extensions": ["czml", "topojson", "wkt"]
+  },
+  "protobuf_misc": {
+    "_note": "Protobuf encodings; application/protobuf in mime-db has no compressible flag set.",
+    "extensions": ["pb", "pbf", "proto"]
+  },
+  "mvt": {
+    "_note": "application/vnd.mapbox-vector-tile is registered in mime-db but has no compressible flag. Mapbox spec assumes Content-Encoding: gzip.",
+    "extensions": ["mvt"]
+  },
+  "octet_stream_safe": {
+    "_note": "application/octet-stream is excluded wholesale because its extensions list includes executables (exe, dll, dmg, iso). Re-add only the safe ones we want to compress.",
+    "extensions": ["bin"]
+  },
+  "tabular": {
+    "_note": "TSV is not always in mime-db extensions.",
+    "extensions": ["tsv"]
+  }
+}
