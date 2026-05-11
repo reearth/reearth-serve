@@ -1,8 +1,8 @@
 {
   "_comment": "Domain-specific extensions not covered by mime-db. Each section documents WHY the extension is here. The `_exclude` key lists extensions to drop from the mime-db-derived set.",
   "_exclude": {
-    "_note": "Extensions mime-db marks compressible but we deliberately skip. Archive formats (.tar) are inputs to archive-extractor and must remain identity-encoded.",
-    "extensions": ["tar"]
+    "_note": "Extensions mime-db marks compressible but we deliberately skip. Reasons: (1) archive-extractor inputs must remain identity-encoded (.tar); (2) already-compressed formats where re-gzip wastes CPU or inflates size (svgz/x3dz pre-gzipped; ova is a tar; psd uses RLE/ZIP internally; dds is DXT/BCn compressed); (3) VM disk images (vdi/vmdk/vhd/hdd) are huge sparse/compressed binaries not meaningful to gzip.",
+    "extensions": ["tar", "svgz", "x3dz", "ova", "vdi", "vmdk", "vhd", "hdd", "dds", "psd"]
   },
   "3d_tiles": {
     "_note": "Cesium 3D Tiles formats (not registered with IANA but standard practice to gzip).",
