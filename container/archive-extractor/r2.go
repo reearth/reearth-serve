@@ -179,12 +179,18 @@ func (r *R2Client) putObjectMultipart(ctx context.Context, key string, body io.R
 	for {
 		n, readErr := io.ReadFull(body, buf)
 		if n > 0 {
+			// Take a fresh address per iteration. Reusing &partNumber across
+			// loop iterations would let `partNumber++` below mutate every
+			// CompletedPart we have already appended, causing R2 to see only
+			// the final value (e.g. "part N+1") on CompleteMultipartUpload
+			// and reject the request with InvalidPart.
+			pn := partNumber
 			partLen := int64(n)
 			uploadOut, err := r.client.UploadPart(ctx, &s3.UploadPartInput{
 				Bucket:        &r.bucket,
 				Key:           &key,
 				UploadId:      uploadID,
-				PartNumber:    &partNumber,
+				PartNumber:    &pn,
 				Body:          bytes.NewReader(buf[:n]),
 				ContentLength: &partLen,
 			})
@@ -193,7 +199,7 @@ func (r *R2Client) putObjectMultipart(ctx context.Context, key string, body io.R
 				return fmt.Errorf("failed to upload part %d for %s: %w", partNumber, key, err)
 			}
 			completedParts = append(completedParts, types.CompletedPart{
-				PartNumber: &partNumber,
+				PartNumber: &pn,
 				ETag:       uploadOut.ETag,
 			})
 			partNumber++
