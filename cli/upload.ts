@@ -5,6 +5,7 @@ import { isCompressiblePath } from "@reearth/compressible";
 import { lookup } from "./mime";
 import { PATHS } from "../shared/paths";
 import { commonHeaders } from "./helpers";
+import { loadCredentials } from "./config";
 import type { AssetUploadResult, PresignedUploadResult, MultipartUploadResult } from "../shared/api";
 import { output } from "./helpers";
 
@@ -153,6 +154,24 @@ async function uploadDirect(
   return res.json() as Promise<AssetUploadResult>;
 }
 
+/**
+ * Probe /health to check whether anonymous upload is enabled on this server.
+ * Returns true if disabled and the user is not logged in — caller should abort.
+ * Failures (network, old server without the field) fall back to "allowed" so
+ * we don't block uploads on a missing flag; the server still enforces the gate.
+ */
+async function shouldBlockAnonymousUpload(endpoint: string): Promise<boolean> {
+  if (loadCredentials()) return false;
+  try {
+    const res = await fetch(`${endpoint}${PATHS.health}`);
+    if (!res.ok) return false;
+    const body = (await res.json()) as { anonymousUploadEnabled?: boolean };
+    return body.anonymousUploadEnabled === false;
+  } catch {
+    return false;
+  }
+}
+
 export async function doUpload(
   filePath: string,
   opts: { endpoint: string; direct: boolean; json: boolean; skipExtraction?: boolean },
@@ -161,6 +180,12 @@ export async function doUpload(
     statSync(filePath);
   } catch {
     console.error(`Error: File not found: ${filePath}`);
+    process.exit(1);
+  }
+
+  if (await shouldBlockAnonymousUpload(opts.endpoint)) {
+    console.error("Error: Anonymous upload is disabled on this server.");
+    console.error("Please log in first: reearth-serve auth login");
     process.exit(1);
   }
 

@@ -4,7 +4,7 @@ import { resolver, validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata, uploadVersion } from "../usecase";
 import { canAccessAsset } from "../access";
-import { accessCtx } from "./shared";
+import { accessCtx, denyAnonymousUpload } from "./shared";
 import { versionResponseSchema, errorResponseSchema, idParamSchema } from "../../../shared/openapi";
 
 export function registerUploadVersionRoute(app: Hono<AppEnv>) {
@@ -31,6 +31,9 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
     }),
     zValidator("param", idParamSchema),
     async (c) => {
+      const denied = denyAnonymousUpload(c);
+      if (denied) return denied;
+
       const metadata = c.get("metadata");
       const versions = c.get("versions");
       const storage = c.get("storage");

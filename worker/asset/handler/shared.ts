@@ -2,6 +2,26 @@ import type { Context } from "hono";
 import type { AppEnv } from "../../types";
 import { canAccessProject, type AccessContext } from "../access";
 
+/**
+ * Block uploads from unauthenticated callers when anonymous uploads are
+ * disabled by the operator. Returns a 401 response or null when the caller
+ * is allowed to proceed.
+ *
+ * Read paths and metadata operations are not gated — only mutation routes
+ * that create or modify assets should call this.
+ */
+export function denyAnonymousUpload(c: Context<AppEnv>): Response | null {
+  if (c.get("user")) return null;
+  if (c.get("anonymousUploadEnabled")) return null;
+  return c.json(
+    {
+      error:
+        "Anonymous upload is disabled on this server. Please log in with `reearth-serve auth login` and try again.",
+    },
+    401,
+  );
+}
+
 export function accessCtx(c: Context<AppEnv>): AccessContext {
   return {
     sessionId: c.get("sessionId"),

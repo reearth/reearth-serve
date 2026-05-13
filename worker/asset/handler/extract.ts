@@ -4,7 +4,7 @@ import { resolver, validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata } from "../usecase";
 import { canAccessAsset } from "../access";
-import { accessCtx } from "./shared";
+import { accessCtx, denyAnonymousUpload } from "./shared";
 import { jobResponseSchema, errorResponseSchema, idParamSchema } from "../../../shared/openapi";
 
 export function registerExtractRoute(app: Hono<AppEnv>) {
@@ -21,6 +21,9 @@ export function registerExtractRoute(app: Hono<AppEnv>) {
     }),
     zValidator("param", idParamSchema),
     async (c) => {
+      const denied = denyAnonymousUpload(c);
+      if (denied) return denied;
+
       const metadata = c.get("metadata");
       const jobs = c.get("jobs");
       const extractionQueue = c.get("extractionQueue");

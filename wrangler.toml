@@ -16,6 +16,7 @@ enabled = true
 [vars]
 ASSET_TTL_SECONDS = "3600"
 BASE_URL = "https://reearth-serve.reearth.workers.dev"
+ANONYMOUS_UPLOAD_ENABLED = "true"
 
 [[r2_buckets]]
 binding = "STORAGE"

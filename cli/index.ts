@@ -439,11 +439,14 @@ program
   .description("Check server health")
   .action(async () => {
     const opts = program.opts<{ endpoint: string; json: boolean }>();
-    const data = await apiGet<{ ok: boolean }>(opts.endpoint, PATHS.health);
+    const data = await apiGet<{ ok: boolean; anonymousUploadEnabled?: boolean }>(opts.endpoint, PATHS.health);
     if (opts.json) {
       output(data, true);
     } else {
       console.log(data.ok ? "OK" : "UNHEALTHY");
+      if (data.anonymousUploadEnabled === false) {
+        console.log("Anonymous upload: disabled (login required)");
+      }
     }
   });
 

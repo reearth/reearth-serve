@@ -26,5 +26,6 @@ export type AppEnv = {
     extractionQueue: Queue | null;
     storageUsage: StorageUsageStore;
     pendingCleanup: CleanupPendingStore;
+    anonymousUploadEnabled: boolean;
   };
 };

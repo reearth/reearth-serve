@@ -22,6 +22,9 @@ interface Env {
   INTERNAL_API_SECRET?: string;
   // Extraction settings
   EXTRACTION_STUCK_THRESHOLD_SECONDS?: string;
+  // Anonymous (demo-mode) upload toggle. Set to "false" to require login for uploads.
+  // Defaults to "true" — read & non-upload operations are not affected.
+  ANONYMOUS_UPLOAD_ENABLED?: string;
   // Cloudflare Containers
   ARCHIVE_EXTRACTOR?: DurableObjectNamespace;
   // Cloudflare Queues

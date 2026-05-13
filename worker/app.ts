@@ -51,6 +51,8 @@ export function createApp(env: Env) {
     : null;
 
   const extractionQueue = env.EXTRACTION_QUEUE ?? null;
+  // Default: anonymous uploads enabled. Only "false" disables — typo-tolerant.
+  const anonymousUploadEnabled = env.ANONYMOUS_UPLOAD_ENABLED !== "false";
 
   const app = new Hono<AppEnv>();
 
@@ -77,11 +79,12 @@ export function createApp(env: Env) {
     c.set("extractionQueue", extractionQueue);
     c.set("storageUsage", storageUsage);
     c.set("pendingCleanup", pendingCleanup);
+    c.set("anonymousUploadEnabled", anonymousUploadEnabled);
     await next();
   });
 
   // Public API (versioned)
-  app.get("/api/v1/health", (c) => c.json({ ok: true }));
+  app.get("/api/v1/health", (c) => c.json({ ok: true, anonymousUploadEnabled }));
   app.route("/api/v1/assets", assetRoutes);
   app.route("/api/v1/jobs", jobRoutes);
   app.route("/api/v1/me", meRoutes);

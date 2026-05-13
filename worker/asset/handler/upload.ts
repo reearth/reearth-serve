@@ -3,7 +3,7 @@ import { describeRoute } from "hono-openapi";
 import { resolver } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { uploadAsset } from "../usecase";
-import { resolveUploadProject } from "./shared";
+import { denyAnonymousUpload, resolveUploadProject } from "./shared";
 import { uploadResultResponseSchema, errorResponseSchema } from "../../../shared/openapi";
 
 export function registerUploadRoute(app: Hono<AppEnv>) {
@@ -28,6 +28,9 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
       },
     }),
     async (c) => {
+    const denied = denyAnonymousUpload(c);
+    if (denied) return denied;
+
     const metadata = c.get("metadata");
     const storage = c.get("storage");
     const ttlSeconds = c.get("ttlSeconds");

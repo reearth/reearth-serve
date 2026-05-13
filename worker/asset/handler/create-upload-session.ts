@@ -3,7 +3,7 @@ import { describeRoute } from "hono-openapi";
 import { resolver, validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { createUploadSession } from "../usecase";
-import { resolveUploadProject } from "./shared";
+import { denyAnonymousUpload, resolveUploadProject } from "./shared";
 import {
   uploadSessionResponseSchema, errorResponseSchema,
   createUploadSessionBodySchema,
@@ -22,6 +22,9 @@ export function registerCreateUploadSessionRoute(app: Hono<AppEnv>) {
     }),
     zValidator("json", createUploadSessionBodySchema),
     async (c) => {
+      const denied = denyAnonymousUpload(c);
+      if (denied) return denied;
+
       const presignedUrls = c.get("presignedUrls");
       if (!presignedUrls) {
         return c.json({ error: "Presigned URL uploads not available. Use POST /api/v1/assets for direct upload." }, 501);
