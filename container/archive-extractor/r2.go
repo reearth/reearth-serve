@@ -174,10 +174,20 @@ func (r *R2Client) putObjectMultipart(ctx context.Context, key string, body io.R
 
 	var completedParts []types.CompletedPart
 	partNumber := int32(1)
-	buf := make([]byte, multipartPartSize)
 
+	// Read the next part into a Buffer that grows with actual content rather
+	// than pre-allocating multipartPartSize per call. Phase B fans out up to
+	// MaxConcurrency goroutines and each previously held a fixed 10 MiB buffer
+	// regardless of payload size, so 48 × 10 MiB > the 256 MiB container limit
+	// and the runtime OOM-killed the extractor before it could log anything —
+	// the job stayed in `extracting` with fileCount=0 forever.
 	for {
-		n, readErr := io.ReadFull(body, buf)
+		var buf bytes.Buffer
+		n, copyErr := io.CopyN(&buf, body, multipartPartSize)
+		if copyErr != nil && copyErr != io.EOF {
+			_ = r.abortMultipartUpload(ctx, key, uploadID)
+			return fmt.Errorf("failed to read body for %s: %w", key, copyErr)
+		}
 		if n > 0 {
 			// Take a fresh address per iteration. Reusing &partNumber across
 			// loop iterations would let `partNumber++` below mutate every
@@ -185,13 +195,13 @@ func (r *R2Client) putObjectMultipart(ctx context.Context, key string, body io.R
 			// the final value (e.g. "part N+1") on CompleteMultipartUpload
 			// and reject the request with InvalidPart.
 			pn := partNumber
-			partLen := int64(n)
+			partLen := n
 			uploadOut, err := r.client.UploadPart(ctx, &s3.UploadPartInput{
 				Bucket:        &r.bucket,
 				Key:           &key,
 				UploadId:      uploadID,
 				PartNumber:    &pn,
-				Body:          bytes.NewReader(buf[:n]),
+				Body:          bytes.NewReader(buf.Bytes()),
 				ContentLength: &partLen,
 			})
 			if err != nil {
@@ -204,12 +214,8 @@ func (r *R2Client) putObjectMultipart(ctx context.Context, key string, body io.R
 			})
 			partNumber++
 		}
-		if readErr == io.EOF || readErr == io.ErrUnexpectedEOF {
+		if copyErr == io.EOF || n < multipartPartSize {
 			break
-		}
-		if readErr != nil {
-			_ = r.abortMultipartUpload(ctx, key, uploadID)
-			return fmt.Errorf("failed to read body for %s: %w", key, readErr)
 		}
 	}
 

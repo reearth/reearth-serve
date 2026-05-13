@@ -117,8 +117,16 @@ func loadConfigFromEnv() (*envConfig, error) {
 		ArchiveFormat:     os.Getenv("ARCHIVE_FORMAT"),
 		WorkerAPIURL:      os.Getenv("WORKER_API_URL"),
 		InternalAPISecret: os.Getenv("INTERNAL_API_SECRET"),
-		MaxConcurrency:    48,
-		CheckpointEvery:   100,
+		// Default sized for the `standard-2` container tier (6 GiB memory)
+		// configured in wrangler.toml. Each in-flight part holds up to
+		// multipartPartSize (10 MiB) in a bytes.Buffer, so 48 concurrent
+		// goroutines × ~10 MiB ≈ 480 MiB peak — comfortably under 6 GiB
+		// with headroom for the gzip pipe, the S3 SDK, and the Go runtime.
+		// If you shrink the container's `instance_type`, drop this
+		// proportionally (e.g. `lite`/256 MiB wants ~12, `basic`/1 GiB ~48)
+		// to avoid OOM kills. See docs/adr/008-extractor-capacity.md.
+		MaxConcurrency:  48,
+		CheckpointEvery: 100,
 	}
 
 	// Required fields

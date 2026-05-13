@@ -35,7 +35,15 @@ migrations_dir = "worker/infra/migrations"
 class_name = "ArchiveExtractorContainer"
 image = "./container/archive-extractor/Dockerfile"
 image_build_context = "./container/archive-extractor"
-max_instances = 10
+max_instances = 20
+# `lite` (256 MiB) was too small for Phase B's parallel multipart uploads of
+# gzip-compressed entries — peak per-goroutine buffer reaches multipartPartSize
+# (10 MiB), so 48 concurrent extractions blew past memory and the container
+# OOM-killed silently (job stuck in `extracting`, fileCount=0). `standard-2`
+# (1 vCPU / 6 GiB / 12 GB disk) leaves ~5 GiB headroom over the worst case so
+# PLATEAU citygml (and larger 3D-Tiles archives) extract reliably without
+# tuning MaxConcurrency down. See docs/adr/008-extractor-capacity.md.
+instance_type = "standard-2"
 
 [[durable_objects.bindings]]
 name = "ARCHIVE_EXTRACTOR"
