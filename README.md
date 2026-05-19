@@ -44,6 +44,8 @@ When calling with `Authorization: Bearer <jwt>`, add
 and the caller must be a member of the project's workspace. Anonymous
 (demo-mode) uploads omit both headers and are tracked by `X-Session-Id`.
 
+The production endpoint is `https://serve.reearth.land`. Point the CLI at it via `REEARTH_SERVE_ENDPOINT=https://serve.reearth.land` (or `--endpoint` per command).
+
 ## Architecture
 
 | Component | Technology |

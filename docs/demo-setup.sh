@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Prepare demo files and upload assets for asciinema recording.
 #
-# Usage: REEARTH_SERVE_ENDPOINT=https://reearth-serve.reearth.workers.dev bash docs/demo-setup.sh
+# Usage: REEARTH_SERVE_ENDPOINT=https://serve.reearth.land bash docs/demo-setup.sh
 set -euo pipefail
 
 : "${REEARTH_SERVE_ENDPOINT:?Set REEARTH_SERVE_ENDPOINT}"

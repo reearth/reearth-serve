@@ -16,10 +16,10 @@ The demo GIF in the project README is generated from an [asciinema](https://asci
 
 ```bash
 # 1. Prepare demo files
-REEARTH_SERVE_ENDPOINT=https://reearth-serve.reearth.workers.dev bash docs/demo-setup.sh
+REEARTH_SERVE_ENDPOINT=https://serve.reearth.land bash docs/demo-setup.sh
 
 # 2. Record a new session
-REEARTH_SERVE_ENDPOINT=https://reearth-serve.reearth.workers.dev asciinema rec docs/demo.cast
+REEARTH_SERVE_ENDPOINT=https://serve.reearth.land asciinema rec docs/demo.cast
 
 # 3. (Optional) Edit docs/demo.cast to adjust timing, remove mistakes, etc.
 #    The file is JSONL — each line is [delay, "o", "text"]

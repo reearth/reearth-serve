@@ -10,12 +10,18 @@ main = "./worker/index.ts"
 compatibility_date = "2025-03-10"
 compatibility_flags = ["nodejs_compat"]
 
+# Custom domain. The reearth.land zone must be on the same Cloudflare account
+# as this Worker; wrangler manages the routing DNS record automatically.
+routes = [
+  { pattern = "serve.reearth.land", custom_domain = true },
+]
+
 [observability]
 enabled = true
 
 [vars]
 ASSET_TTL_SECONDS = "3600"
-BASE_URL = "https://reearth-serve.reearth.workers.dev"
+BASE_URL = "https://serve.reearth.land"
 ANONYMOUS_UPLOAD_ENABLED = "true"
 
 [[r2_buckets]]
