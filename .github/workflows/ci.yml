@@ -60,6 +60,38 @@ jobs:
       - name: Build
         run: go build -o /dev/null .
 
+  container-thumbnail:
+    name: Container / thumbnail
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: container/thumbnail
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: container/thumbnail/go.mod
+          cache-dependency-path: container/thumbnail/go.sum
+      - name: Install libvips
+        # govips needs libvips headers + pkg-config at build time. Matches the
+        # Debian bookworm libvips42 used by the Dockerfile so behavior agrees.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libvips-dev pkg-config
+      - name: Format check
+        run: |
+          if [ -n "$(gofmt -l .)" ]; then
+            echo "Files not formatted:"
+            gofmt -l .
+            exit 1
+          fi
+      - name: Lint
+        uses: golangci/golangci-lint-action@v7
+        with:
+          working-directory: container/thumbnail
+      - name: Build
+        run: go build -o /dev/null .
+
   deploy:
     name: Deploy
     needs: [check, build]
