@@ -101,7 +101,7 @@ func generate(ctx context.Context, req generateRequest) error {
 	if err != nil {
 		return fmt.Errorf("get source: %w", err)
 	}
-	defer src.Body.Close()
+	defer func() { _ = src.Body.Close() }()
 
 	img, err := vips.NewImageFromReader(src.Body)
 	if err != nil {
