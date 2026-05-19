@@ -13,6 +13,7 @@ Spatial Data Delivery — an asset hosting and tile delivery service built on Cl
 - 🚀 **Presigned URL Uploads** — Large files (>100MB) bypass the Worker body size limit via presigned URLs for direct-to-R2 uploads with automatic multipart splitting.
 - 🗜️ **Gzip Compression** — The CLI compresses compressible files (JSON, GeoJSON, CSV, 3D Tiles, glTF, MVT, etc.) locally before upload. The compressible-extension list comes from [`@reearth/compressible`](https://github.com/reearth/compressible) (curated from jshttp/mime-db). On download, gzip-stored files are decompressed on-the-fly. Range requests on compressed files are also supported.
 - 🔐 **Authentication & RBAC** — JWT-based authentication via any OIDC-compliant IdP, with workspace-scoped role-based access control (owner/admin/editor/viewer). Optional Cerbos PDP integration for policy-based authorization.
+- 🖼️ **Image Thumbnails** — Uploaded JPEG/PNG/WebP/GIF images get four WebP thumbnails generated asynchronously (`xs` 64px, `sm` 128px, `md` 512px, `lg` 1280px) and served statically from R2 — zero per-request CPU cost. `xs` is sized to fit comfortably inside CesiumJS's TextureAtlas on mobile (≈800 unique billboards on a 2048 atlas). Small images run through jSquash WASM in the Worker; large sources (≥20 MiB) offload to a libvips container. Accessible via `/files/:id/_thumbs/:size.webp` or `?thumb=:size` on any asset URL. See [ADR-009](./docs/adr/009-image-thumbnail-generation.md).
 
 ## Quick Start
 
@@ -136,8 +137,12 @@ These endpoints require `Authorization: Bearer $INTERNAL_API_SECRET` — set it 
 |--------|------|-------------|
 | `GET` | `/files/:id/:filename` | Download file (CORS `*`, Range support) |
 | `GET` | `/files/:id/:filename/*` | Download extracted archive file |
+| `GET` | `/files/:id/_thumbs/:size.webp` | Image thumbnail (`xs`/`sm`/`md`/`lg`) |
+| `GET` | `/files/:id/:filename?thumb=:size` | Same thumbnail, accessed via query parameter |
 
 Assets support **versioning** — uploading to an existing asset (`POST /api/v1/assets/:id`) creates a new version while keeping the asset ID and URL stable. Each asset can have an explicit active version; if unset, the latest version is served. File URLs (`/files/:id/:filename`) resolve the active/latest version automatically. Version IDs can also be used directly in file URLs. Demo mode assets (no project) auto-expire after 1 hour. Project assets are permanent. See [ADR-005](./docs/adr/005-asset-versioning.md).
+
+Uploaded JPEG/PNG/WebP/GIF images get four WebP thumbnails generated automatically: `xs` (64 px), `sm` (128 px), `md` (512 px), `lg` (1280 px). `xs` is sized to fit comfortably inside Cesium's billboard TextureAtlas on mobile. Generation is asynchronous via a queue and serves static from R2 thereafter — see [ADR-009](./docs/adr/009-image-thumbnail-generation.md).
 
 ## CLI
 
@@ -173,6 +178,8 @@ npm run cli -- file cp -r <id>:tiles/ ./out     # recursive download
 npm run cli -- file cp -rf <id>:tiles/ ./out    # recursive + overwrite
 npm run cli -- file sync <id> ./local           # hash-based diff sync
 npm run cli -- file sync --delete <id> ./local  # sync + remove extra local files
+npm run cli -- file thumb <id> --size xs        # download xs thumbnail (default md)
+npm run cli -- file thumb <id> --size md --url  # print URL without downloading
 
 # Job management
 npm run cli -- job list

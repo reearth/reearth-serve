@@ -4,6 +4,7 @@ dist/
 build/
 .wrangler/
 .react-router/
+worker-configuration.d.ts
 .dev.vars
 .env
 *.log

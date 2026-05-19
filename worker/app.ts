@@ -51,6 +51,7 @@ export function createApp(env: Env) {
     : null;
 
   const extractionQueue = env.EXTRACTION_QUEUE ?? null;
+  const thumbnailQueue = env.THUMBNAIL_QUEUE ?? null;
   // Default: anonymous uploads enabled. Only "false" disables — typo-tolerant.
   const anonymousUploadEnabled = env.ANONYMOUS_UPLOAD_ENABLED !== "false";
 
@@ -77,6 +78,7 @@ export function createApp(env: Env) {
     c.set("workspaces", workspaces);
     c.set("members", memberStore);
     c.set("extractionQueue", extractionQueue);
+    c.set("thumbnailQueue", thumbnailQueue);
     c.set("storageUsage", storageUsage);
     c.set("pendingCleanup", pendingCleanup);
     c.set("anonymousUploadEnabled", anonymousUploadEnabled);

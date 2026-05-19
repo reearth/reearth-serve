@@ -67,12 +67,13 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
       const originalSize = originalSizeHeader ? parseInt(originalSizeHeader, 10) : undefined;
       const skipExtraction = c.req.header("X-Skip-Extraction") === "true";
       const extractionQueue = c.get("extractionQueue");
+      const thumbnailQueue = c.get("thumbnailQueue");
 
       const result = await uploadVersion(
         metadata, versions, storage, jobs, id,
         { name: filename, type: c.req.header("Content-Type") || "application/octet-stream", body, size, contentEncoding, originalSize },
         baseUrl,
-        { extractionQueue, skipExtraction },
+        { extractionQueue, thumbnailQueue, skipExtraction },
       );
 
       if (!result) {

@@ -4,6 +4,7 @@ import type { FileStorage, MetadataStore } from "../repository";
 import type { JobStore } from "../../job/repository";
 import type { Job } from "../../job/model";
 import { generateId, storageKey } from "./shared";
+import { enqueueThumbnail } from "../../thumbnail/queue";
 
 export async function uploadAsset(
   metadata: MetadataStore,
@@ -19,7 +20,7 @@ export async function uploadAsset(
   },
   ttlSeconds: number,
   baseUrl: string,
-  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: Queue | null; skipExtraction?: boolean },
+  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: Queue | null; thumbnailQueue?: Queue | null; skipExtraction?: boolean },
 ): Promise<AssetUploadResult> {
   const id = generateId();
   const now = Date.now();
@@ -82,6 +83,14 @@ export async function uploadAsset(
     }
 
     await metadata.save(asset, options?.projectId ? 0 : ttlSeconds);
+
+    // Best-effort thumbnail enqueue. Skipped for non-image content types.
+    await enqueueThumbnail(options?.thumbnailQueue ?? null, {
+      assetId: id,
+      sourceKey: key,
+      contentType,
+      size: file.size,
+    });
   } catch (e) {
     // R2 put already succeeded but D1 metadata write failed. Without
     // compensation the R2 object is orphaned (cleanup drives off D1 rows),

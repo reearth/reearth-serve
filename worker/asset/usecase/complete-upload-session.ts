@@ -4,6 +4,7 @@ import type { FileStorage, MetadataStore, PresignedUrlGenerator, UploadSessionSt
 import type { JobStore } from "../../job/repository";
 import type { Job } from "../../job/model";
 import { storageKey } from "./shared";
+import { enqueueThumbnail } from "../../thumbnail/queue";
 
 export async function completeUploadSession(
   sessions: UploadSessionStore,
@@ -15,7 +16,7 @@ export async function completeUploadSession(
   ttlSeconds: number,
   baseUrl: string,
   parts?: UploadPart[],
-  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: Queue | null; skipExtraction?: boolean },
+  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: Queue | null; thumbnailQueue?: Queue | null; skipExtraction?: boolean },
 ): Promise<AssetUploadResult | null> {
   const session = await sessions.find(id);
   if (!session) return null;
@@ -93,6 +94,13 @@ export async function completeUploadSession(
     }
 
     await metadata.save(asset, options?.projectId ? 0 : ttlSeconds);
+
+    await enqueueThumbnail(options?.thumbnailQueue ?? null, {
+      assetId: id,
+      sourceKey: key,
+      contentType: asset.contentType,
+      size: asset.size,
+    });
   } catch (e) {
     // R2 already holds the uploaded body but the D1 metadata row failed to
     // persist. Cleanup is driven off D1, so without compensation the R2

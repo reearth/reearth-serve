@@ -4,6 +4,7 @@ import type { FileStorage, VersionStore, MetadataStore } from "../repository";
 import type { JobStore } from "../../job/repository";
 import type { Job } from "../../job/model";
 import { generateId, versionStorageKey } from "./shared";
+import { enqueueThumbnail } from "../../thumbnail/queue";
 
 export interface UploadVersionResult {
   version: AssetVersion;
@@ -25,7 +26,7 @@ export async function uploadVersion(
     originalSize?: number;
   },
   baseUrl: string,
-  options?: { extractionQueue?: Queue | null; skipExtraction?: boolean },
+  options?: { extractionQueue?: Queue | null; thumbnailQueue?: Queue | null; skipExtraction?: boolean },
 ): Promise<UploadVersionResult | null> {
   const asset = await metadata.find(assetId);
   if (!asset) return null;
@@ -96,6 +97,14 @@ export async function uploadVersion(
     }
 
     savedVersion = await versions.save(versionInput);
+
+    await enqueueThumbnail(options?.thumbnailQueue ?? null, {
+      assetId,
+      versionId,
+      sourceKey: key,
+      contentType,
+      size: file.size,
+    });
   } catch (e) {
     // Compensation: drop the orphaned R2 object so it doesn't leak forever
     // if the D1 version row failed to persist.

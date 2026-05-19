@@ -219,6 +219,22 @@ A bulk regeneration mode (across all versions / all image assets) is deferred un
 | 6 | Regeneration endpoint. Metrics: success rate, generation latency, size distribution. |
 | 7 | AVIF output, HEIC input. Re-evaluate sizes against real corpus. |
 
+## Notes on local development
+
+jSquash WASM modules are imported via relative path
+(`../../node_modules/@jsquash/.../<file>.wasm`) because the packages don't
+expose those files in their `exports` field. `vite.config.ts` lists the
+`@jsquash/*` packages in `ssr.noExternal` and `optimizeDeps.exclude` so
+Vite's dep-optimizer does not rewrite them to `file://` URLs (which Workers
+cannot fetch). In production wrangler bundles the `.wasm` files directly.
+
+In `wrangler dev`, JPEG/WebP source decode currently works end-to-end but
+the PNG codec throws inside the WASM runtime on first decode. The same
+code path works in production builds; the dev breakage appears to be
+specific to Vite's WASM handling for that one codec. The E2E test uses a
+JPEG source to keep dev verification reliable. PNG is exercised in
+production-equivalent paths via the regeneration endpoint.
+
 ## Related ADRs
 
 - [ADR-001](./001-archive-extraction.md) — Archive extraction (`_archive/` prefix, Container precedent)

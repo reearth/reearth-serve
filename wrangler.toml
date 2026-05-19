@@ -50,9 +50,28 @@ instance_type = "standard-2"
 name = "ARCHIVE_EXTRACTOR"
 class_name = "ArchiveExtractorContainer"
 
+[[containers]]
+class_name = "ThumbnailContainer"
+image = "./container/thumbnail/Dockerfile"
+image_build_context = "./container/thumbnail"
+max_instances = 20
+# libvips streaming decode bounds memory well below the 4 GiB ceiling even for
+# multi-hundred-MiB sources; 1/2 vCPU is enough because resize/encode is the
+# CPU-bound step and a half-share keeps one libvips worker busy. Half the cost
+# of standard-2 (extractor) for a noticeably lighter workload.
+instance_type = "standard-1"
+
+[[durable_objects.bindings]]
+name = "THUMBNAIL_GENERATOR"
+class_name = "ThumbnailContainer"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["ArchiveExtractorContainer"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["ThumbnailContainer"]
 
 [[queues.producers]]
 binding = "EXTRACTION_QUEUE"
@@ -65,6 +84,24 @@ max_batch_timeout = 5
 max_retries = 3
 dead_letter_queue = "reearth-serve-extraction-dlq"
 max_concurrency = 5
+
+[[queues.producers]]
+binding = "THUMBNAIL_QUEUE"
+queue = "reearth-serve-thumbnail"
+
+[[queues.consumers]]
+queue = "reearth-serve-thumbnail"
+# Process one image at a time: each invocation decodes the source and writes
+# four sizes, which is already a sizable per-message workload. Batching would
+# just stack memory usage inside the Worker without throughput benefit.
+max_batch_size = 1
+max_batch_timeout = 5
+max_retries = 3
+dead_letter_queue = "reearth-serve-thumbnail-dlq"
+# Headroom for bursty uploads (an archive expansion may release many small
+# images at once). Lower than extraction since each generation may also
+# dispatch to the container with its own concurrency limit.
+max_concurrency = 10
 
 [triggers]
 crons = ["*/10 * * * *"]

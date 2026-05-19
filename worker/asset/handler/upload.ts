@@ -61,6 +61,7 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
     const jobs = c.get("jobs");
     const sessionId = c.get("sessionId");
     const extractionQueue = c.get("extractionQueue");
+    const thumbnailQueue = c.get("thumbnailQueue");
 
     const projectResult = await resolveUploadProject(c);
     if (!projectResult.ok) {
@@ -76,7 +77,7 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
         { name: filename, type: contentType, body, size, contentEncoding, originalSize },
         ttlSeconds,
         baseUrl,
-        { sessionId, projectId, extractionQueue, skipExtraction },
+        { sessionId, projectId, extractionQueue, thumbnailQueue, skipExtraction },
       );
 
       // Update storage usage counters for project assets

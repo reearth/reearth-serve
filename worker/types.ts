@@ -24,6 +24,7 @@ export type AppEnv = {
     workspaces: WorkspaceStore;
     members: MemberStore;
     extractionQueue: Queue | null;
+    thumbnailQueue: Queue | null;
     storageUsage: StorageUsageStore;
     pendingCleanup: CleanupPendingStore;
     anonymousUploadEnabled: boolean;

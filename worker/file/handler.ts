@@ -3,7 +3,31 @@ import { cors } from "hono/cors";
 import type { AppEnv } from "../types";
 import { decompressStream } from "../asset/compression";
 import { resolveAssetVersion } from "../asset/usecase";
+import { legacyThumbKey, versionThumbKey } from "../asset/usecase/shared";
 import { parseRange, sliceStream } from "./stream";
+import {
+  isThumbnailSize,
+  thumbnailFilename,
+  THUMBNAIL_CONTENT_TYPE,
+  type ThumbnailSize,
+} from "../thumbnail/sizes";
+
+// Detect a thumbnail request. Returns the requested size on success, "invalid"
+// if the request explicitly named an unknown size (→ 400), or null if not a
+// thumb request.
+function detectThumbRequest(
+  filePath: string,
+  query: string | undefined,
+): ThumbnailSize | "invalid" | null {
+  // Query-parameter form: ?thumb=xs takes precedence.
+  if (query !== undefined) {
+    return isThumbnailSize(query) ? query : "invalid";
+  }
+  // Path form: _thumbs/<size>.webp
+  const match = filePath.match(/^_thumbs\/([^/]+)\.webp$/);
+  if (!match) return null;
+  return isThumbnailSize(match[1]) ? match[1] : "invalid";
+}
 
 // File delivery uses a URL-as-capability model by design (ROADMAP "file-layer
 // access control (URL visibility) — distinct from service-layer"). Knowing
@@ -28,6 +52,12 @@ fileRoutes.get("/:id/:path{.+}", async (c) => {
   const clientAcceptsGzip = acceptEncoding.includes("gzip");
   const range = parseRange(rangeHeader);
 
+  // Thumbnail dispatch (query parameter or _thumbs/ path).
+  const thumb = detectThumbRequest(filePath, c.req.query("thumb"));
+  if (thumb === "invalid") {
+    return c.json({ error: "Invalid thumbnail size" }, 400);
+  }
+
   // Resolve asset + version
   const resolved = await resolveAssetVersion(metadataStore, versions, id);
   if (!resolved) {
@@ -35,6 +65,10 @@ fileRoutes.get("/:id/:path{.+}", async (c) => {
   }
 
   const { asset, version } = resolved;
+
+  if (thumb) {
+    return serveThumbnail(storage, asset, version, thumb);
+  }
 
   // Determine storage key based on whether we have a version
   let storageKeyPath: string;
@@ -69,6 +103,34 @@ fileRoutes.get("/:id/:path{.+}", async (c) => {
   // Legacy (no versions) — use the old layout
   return serveLegacy(c, storage, asset, filePath, range, clientAcceptsGzip, rangeHeader);
 });
+
+async function serveThumbnail(
+  storage: any,
+  asset: { id: string },
+  version: { id: string } | null,
+  size: ThumbnailSize,
+): Promise<Response> {
+  const filename = thumbnailFilename(size);
+  const key = version
+    ? versionThumbKey(asset.id, version.id, filename)
+    : legacyThumbKey(asset.id, filename);
+  const file = await storage.get(key, undefined);
+  if (!file) {
+    return new Response(JSON.stringify({ error: "Thumbnail not available" }), {
+      status: 404,
+      headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=30" },
+    });
+  }
+
+  return new Response(file.body, {
+    status: 200,
+    headers: {
+      "Content-Type": THUMBNAIL_CONTENT_TYPE,
+      "Content-Length": String(file.size),
+      "Cache-Control": "public, max-age=31536000, immutable",
+    },
+  });
+}
 
 async function serveLegacy(
   c: any,

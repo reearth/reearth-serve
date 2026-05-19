@@ -2,8 +2,9 @@ import { createRequestHandler } from "react-router";
 import { createApp } from "./app";
 import { handleScheduled } from "./cleanup/handler";
 import { handleQueue } from "./extraction/handler";
+import { handleThumbnailQueue } from "./thumbnail/handler";
 
-export { ArchiveExtractorContainer } from "./infra/container";
+export { ArchiveExtractorContainer, ThumbnailContainer } from "./infra/container";
 
 declare module "react-router" {
   export interface AppLoadContext {
@@ -43,6 +44,12 @@ export default {
   },
 
   async queue(batch: MessageBatch, env: Env, _ctx: ExecutionContext) {
+    if (batch.queue === "reearth-serve-thumbnail") {
+      await handleThumbnailQueue(batch as MessageBatch<import("./thumbnail/queue").ThumbnailMessage>, env);
+      return;
+    }
+    // Default: extraction queue (covers the original single-queue deployment
+    // where batch.queue may be undefined under older wrangler builds).
     await handleQueue(batch as MessageBatch<import("./extraction/handler").ExtractionMessage>, env);
   },
 } satisfies ExportedHandler<Env>;

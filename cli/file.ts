@@ -144,6 +144,57 @@ export function registerFileCommands(program: Command, file: Command) {
     });
 
   file
+    .command("thumb")
+    .description("Fetch a thumbnail for an image asset")
+    .argument("<asset-id>", "Asset ID (or version ID)")
+    .option("-s, --size <size>", "Thumbnail size: xs | sm | md | lg", "md")
+    .option("-o, --output <path>", "Write to this local path (default: <id>_<size>.webp)")
+    .option("-u, --url", "Print the thumbnail URL instead of downloading")
+    .option("-f, --force", "Overwrite existing local file")
+    .action(async (assetId: string, cmdOpts: { size: string; output?: string; url?: boolean; force?: boolean }) => {
+      const opts = program.opts<{ endpoint: string; json: boolean }>();
+      const validSizes = ["xs", "sm", "md", "lg"];
+      if (!validSizes.includes(cmdOpts.size)) {
+        const msg = `Invalid size: ${cmdOpts.size}. Use one of: ${validSizes.join(", ")}`;
+        if (opts.json) output({ ok: false, error: msg }, true);
+        else console.error(`Error: ${msg}`);
+        process.exit(1);
+      }
+
+      const url = `${opts.endpoint}/files/${encodeURIComponent(assetId)}/_thumbs/${cmdOpts.size}.webp`;
+
+      if (cmdOpts.url) {
+        if (opts.json) output({ ok: true, url }, true);
+        else console.log(url);
+        return;
+      }
+
+      const dest = cmdOpts.output ?? `${assetId}_${cmdOpts.size}.webp`;
+      if (!cmdOpts.force && existsSync(dest)) {
+        const msg = `${dest} already exists (use -f to overwrite)`;
+        if (opts.json) output({ ok: false, error: msg }, true);
+        else console.error(`Error: ${msg}`);
+        process.exit(1);
+      }
+
+      try {
+        await downloadFile(url, dest, true);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        const isNotFound = message.includes("(404)");
+        const msg = isNotFound
+          ? `Thumbnail not available (generation may still be in progress, source may be smaller than ${cmdOpts.size}, or asset is not an image)`
+          : message;
+        if (opts.json) output({ ok: false, error: msg, url }, true);
+        else console.error(`Error: ${msg}\n  ${url}`);
+        process.exit(1);
+      }
+
+      if (opts.json) output({ ok: true, url, dest, size: cmdOpts.size }, true);
+      else console.log(`Downloaded ${cmdOpts.size} thumbnail to ${dest}`);
+    });
+
+  file
     .command("sync")
     .description("Sync asset files to a local directory (hash-based diff)")
     .argument("<asset-id>", "Asset ID")

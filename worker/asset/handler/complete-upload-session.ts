@@ -54,7 +54,8 @@ export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
     const jobs = c.get("jobs");
     const sessionId = c.get("sessionId");
     const extractionQueue = c.get("extractionQueue");
-    const result = await completeUploadSession(sessions, metadata, storage, presignedUrls, jobs, id, ttlSeconds, baseUrl, parts, { sessionId, extractionQueue });
+    const thumbnailQueue = c.get("thumbnailQueue");
+    const result = await completeUploadSession(sessions, metadata, storage, presignedUrls, jobs, id, ttlSeconds, baseUrl, parts, { sessionId, extractionQueue, thumbnailQueue });
     if (!result) {
       return c.json({ error: "Upload session not found or file not yet uploaded" }, 404);
     }
