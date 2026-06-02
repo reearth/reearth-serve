@@ -17,4 +17,4 @@ metadata:
 spec:
   type: service
   lifecycle: production
-  owner: eukarya-inc/sre
+  owner: eukarya-inc/cto
