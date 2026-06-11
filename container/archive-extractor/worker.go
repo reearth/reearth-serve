@@ -405,7 +405,15 @@ func (w *ExtractionWorker) phaseC(ctx context.Context, cp *JobCheckpoint) error 
 	entryListKey := fmt.Sprintf("assets/%s/_archive/_entry_list.jsonl", w.cfg.AssetID)
 	_ = w.storage.DeleteObject(ctx, entryListKey)
 
-	if err := w.updateJobStatus(ctx, "completed", cp.ProcessedCount, cp.ProcessedBytes); err != nil {
+	// Surface partial failures on the otherwise-completed job. Before this,
+	// entries that exhausted their retries were only visible in the R2 log —
+	// the job reported plain "completed" and the missing files went unnoticed.
+	var opts []jobStatusOption
+	if n := len(cp.Errors); n > 0 {
+		first := cp.Errors[0]
+		opts = append(opts, withError(fmt.Sprintf("%d of %d entries failed to extract; first: %s: %s", n, cp.TotalEntries, first.Path, first.Error)))
+	}
+	if err := w.updateJobStatus(ctx, "completed", cp.ProcessedCount, cp.ProcessedBytes, opts...); err != nil {
 		log.Printf("warning: failed to update job status: %v", err)
 	}
 
@@ -416,13 +424,37 @@ func (w *ExtractionWorker) phaseC(ctx context.Context, cp *JobCheckpoint) error 
 	return nil
 }
 
+// extractEntryAttempts bounds per-entry retries. Multi-GB entries hold their
+// archive range-GET open for however long the decompress+reupload pipeline
+// takes; R2 occasionally drops those long-lived connections mid-stream
+// ("unexpected EOF" from flate), and without a retry the entry was recorded
+// as a permanent error and silently missing from the extracted asset.
+const extractEntryAttempts = 3
+
 func (w *ExtractionWorker) extractAndUpload(ctx context.Context, extractor ArchiveExtractor, entry ArchiveEntry) (string, error) {
-	rc, err := extractor.ExtractEntry(ctx, entry)
-	if err != nil {
-		return "", fmt.Errorf("extract: %w", err)
+	var lastErr error
+	for attempt := 1; attempt <= extractEntryAttempts; attempt++ {
+		if err := ctx.Err(); err != nil {
+			return "", err
+		}
+		hash, err := func() (string, error) {
+			rc, err := extractor.ExtractEntry(ctx, entry)
+			if err != nil {
+				return "", fmt.Errorf("extract: %w", err)
+			}
+			defer func() { _ = rc.Close() }()
+			return w.uploadFromReader(ctx, entry, rc)
+		}()
+		if err == nil {
+			return hash, nil
+		}
+		lastErr = err
+		if attempt < extractEntryAttempts {
+			log.Printf("retrying %q (attempt %d/%d) after error: %v", entry.NormalizedPath, attempt+1, extractEntryAttempts, err)
+			time.Sleep(time.Duration(attempt) * 2 * time.Second)
+		}
 	}
-	defer func() { _ = rc.Close() }()
-	return w.uploadFromReader(ctx, entry, rc)
+	return "", lastErr
 }
 
 // uploadFromReader uploads a single entry's bytes to storage. Caller owns
