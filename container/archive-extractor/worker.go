@@ -190,6 +190,7 @@ func (w *ExtractionWorker) phaseB(ctx context.Context, cp *JobCheckpoint) error 
 	chunkIndex := cp.ManifestChunksWritten
 	resumeAfter := cp.LastProcessedIndex
 	rootPrefix := cp.RootPrefix
+	lastStatusAt := time.Now()
 
 	err = w.streamEntryList(ctx, func(entry ArchiveEntry) error {
 		if entry.IsDirectory {
@@ -253,7 +254,11 @@ func (w *ExtractionWorker) phaseB(ctx context.Context, cp *JobCheckpoint) error 
 			// can release the lock before doing slow R2/HTTP I/O. Holding
 			// the mutex across those calls previously froze every other
 			// upload goroutine when the Worker API hung.
-			doCheckpoint := cp.ProcessedCount%w.cfg.CheckpointEvery == 0
+			doCheckpoint := cp.ProcessedCount%w.cfg.CheckpointEvery == 0 ||
+				time.Since(lastStatusAt) >= statusUpdateInterval
+			if doCheckpoint {
+				lastStatusAt = time.Now()
+			}
 			processedCount := cp.ProcessedCount
 			processedBytes := cp.ProcessedBytes
 			totalEntries := cp.TotalEntries
@@ -314,6 +319,7 @@ func (w *ExtractionWorker) phaseBSequential(ctx context.Context, cp *JobCheckpoi
 	chunkIndex := cp.ManifestChunksWritten
 	resumeAfter := cp.LastProcessedIndex
 	rootPrefix := cp.RootPrefix
+	lastStatusAt := time.Now()
 
 	err := ext.ExtractAllSequential(ctx, func(rawEntry ArchiveEntry, r io.Reader) error {
 		// Normalize the path from the tar header on the fly instead of
@@ -364,7 +370,9 @@ func (w *ExtractionWorker) phaseBSequential(ctx context.Context, cp *JobCheckpoi
 			log.Printf("failed to add manifest entry: %v", err)
 		}
 
-		if cp.ProcessedCount%w.cfg.CheckpointEvery == 0 {
+		if cp.ProcessedCount%w.cfg.CheckpointEvery == 0 ||
+			time.Since(lastStatusAt) >= statusUpdateInterval {
+			lastStatusAt = time.Now()
 			cp.ManifestChunksWritten = chunkIndex
 			if err := w.checkpoint.Save(ctx, cp); err != nil {
 				log.Printf("failed to save checkpoint: %v", err)
@@ -423,6 +431,14 @@ func (w *ExtractionWorker) phaseC(ctx context.Context, cp *JobCheckpoint) error 
 	log.Println("phase C: complete")
 	return nil
 }
+
+// statusUpdateInterval forces a checkpoint + status update even when fewer
+// than CheckpointEvery entries completed. Large entries make count-based
+// checkpoints arbitrarily sparse (100 multi-GB files can span an hour), and
+// the cleanup cron uses the job's updated_at to tell a working extraction
+// from one whose container died (e.g. killed by a deploy rollout). Frequent
+// heartbeats let the stuck threshold be minutes instead of a day.
+const statusUpdateInterval = 2 * time.Minute
 
 // extractEntryAttempts bounds per-entry retries. Multi-GB entries hold their
 // archive range-GET open for however long the decompress+reupload pipeline

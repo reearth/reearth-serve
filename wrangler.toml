@@ -23,6 +23,12 @@ enabled = true
 ASSET_TTL_SECONDS = "3600"
 BASE_URL = "https://serve.reearth.land"
 ANONYMOUS_UPLOAD_ENABLED = "true"
+# The extractor heartbeats job status every ~2 minutes (statusUpdateInterval
+# in container/archive-extractor/worker.go), so a running job whose
+# updated_at is older than 30 minutes has lost its container (e.g. stopped
+# by a deploy rollout) and should be re-enqueued to resume from checkpoint.
+# The previous 24h default left orphaned extractions invisible for a day.
+EXTRACTION_STUCK_THRESHOLD_SECONDS = "1800"
 
 [[r2_buckets]]
 binding = "STORAGE"
