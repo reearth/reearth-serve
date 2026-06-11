@@ -12,14 +12,23 @@ export interface ArchiveExtractorParams {
   archiveFormat: ArchiveFormat;
 }
 
+// Hard ceiling on a single extraction run. Activity renewal (below) keeps the
+// container alive while the Go process works, so a hung process would
+// otherwise be renewed forever. 24h matches the cleanup cron's stuck-job
+// threshold (EXTRACTION_STUCK_THRESHOLD_SECONDS default).
+const EXTRACTOR_MAX_LIFETIME_MS = 24 * 60 * 60 * 1000;
+
 export class ArchiveExtractorContainer extends Container {
   defaultPort = 8080;
   sleepAfter = "5m";
   enableInternet = true;
 
+  private extractionStartedAt = 0;
+
   // Called via JSRPC from CloudflareContainerLauncher
   async startExtraction(envVars: Record<string, string>): Promise<string> {
     this.envVars = envVars;
+    this.extractionStartedAt = Date.now();
     try {
       await this.start();
       return "started";
@@ -28,6 +37,34 @@ export class ArchiveExtractorContainer extends Container {
       console.error("Container start failed:", msg);
       return `error: ${msg}`;
     }
+  }
+
+  // Extraction is a background job: after startExtraction() the container
+  // receives no inbound requests, so the activity timeout always expires
+  // mid-work and the default implementation would kill a healthy extraction
+  // after `sleepAfter` (observed as jobs silently stuck in `running`). The Go
+  // process exits on its own when extraction completes or fails, so on expiry
+  // we probe its health endpoint: alive → renew and keep working, gone →
+  // stop the container.
+  override async onActivityExpired(): Promise<void> {
+    if (!this.ctx.container?.running) {
+      return;
+    }
+    const expired =
+      this.extractionStartedAt > 0 &&
+      Date.now() - this.extractionStartedAt > EXTRACTOR_MAX_LIFETIME_MS;
+    if (!expired) {
+      try {
+        const res = await this.containerFetch("http://container/health", { method: "GET" });
+        if (res.ok) {
+          this.renewActivityTimeout();
+          return;
+        }
+      } catch {
+        // Probe failed — the process is gone or wedged; fall through to stop.
+      }
+    }
+    await this.stop();
   }
 }
 

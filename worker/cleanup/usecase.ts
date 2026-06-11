@@ -69,6 +69,19 @@ export async function cleanupExpiredAssets(
         break;
       }
 
+      // Never delete an asset whose extraction is still in flight — the
+      // container would lose its source archive and abort mid-job. The job
+      // status handler keeps pushing the demo expiry forward while progress
+      // is reported, so an expired-but-active asset here just means we won
+      // a race with a status update; skip and let a later tick decide. A
+      // genuinely hung job is eventually failed by retriggerPendingJobs
+      // (stuck threshold), after which this guard no longer applies.
+      const activeJob = await jobs.find(asset.id);
+      budget.charge();
+      if (activeJob && (activeJob.status === "pending" || activeJob.status === "running")) {
+        continue;
+      }
+
       // Delete R2 objects (covers both legacy and versioned layouts). If
       // we run out of budget partway through, we leave the D1 row alone
       // so listExpired returns the asset again next tick.

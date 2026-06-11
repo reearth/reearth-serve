@@ -3,16 +3,32 @@ import type { PresignedUrlGenerator, UploadSessionStore } from "../repository";
 import { shouldCompress } from "../compression";
 import { generateId, storageKey } from "./shared";
 
+// Upload window: scale with declared size so multi-GB archives uploaded over
+// slow links don't have their presigned URLs (and the KV session that the
+// complete call needs) expire mid-transfer. 2 MiB/s is a deliberately
+// conservative floor; the cap keeps capability URLs from living for days.
+// R2 itself allows presigned expiry up to 7 days.
+const MIN_UPLOAD_EXPIRY_SECONDS = 3600; // 1 hour
+const MAX_UPLOAD_EXPIRY_SECONDS = 24 * 3600; // 24 hours
+const ASSUMED_UPLOAD_BYTES_PER_SECOND = 2 * 1024 * 1024;
+
+export function uploadExpirySeconds(size: number): number {
+  return Math.min(
+    MAX_UPLOAD_EXPIRY_SECONDS,
+    Math.max(MIN_UPLOAD_EXPIRY_SECONDS, Math.ceil(size / ASSUMED_UPLOAD_BYTES_PER_SECOND)),
+  );
+}
+
 export async function createUploadSession(
   sessions: UploadSessionStore,
   presignedUrls: PresignedUrlGenerator,
   params: { filename: string; contentType: string; size: number; partCount?: number },
-  ttlSeconds: number,
+  _ttlSeconds: number,
   options?: { sessionId?: string | null; projectId?: string | null; skipExtraction?: boolean },
 ): Promise<PresignedUploadResult | MultipartUploadResult> {
   const id = generateId();
   const now = Date.now();
-  const urlExpirySeconds = Math.min(ttlSeconds, 3600);
+  const urlExpirySeconds = uploadExpirySeconds(params.size);
   const contentType = params.contentType || "application/octet-stream";
   const key = storageKey(id, params.filename);
   const compress = shouldCompress(params.filename, params.size);

@@ -178,6 +178,19 @@ jobInternalRoutes.post("/:id/status", async (c) => {
 
   await jobs.save(job);
 
+  // Demo-mode assets expire `ttlSeconds` after upload, but extraction of a
+  // large archive can outlive that window — the cleanup cron would delete
+  // the asset mid-extraction and the container would abort at its next
+  // existence check. While the job is making progress (the container posts
+  // status every CHECKPOINT_EVERY entries), keep pushing the expiry forward;
+  // completion also restarts the window so the extracted asset is actually
+  // usable for a full TTL.
+  const extendDemoExpiry = (asset: { expiresAt: number }, ttl: number) => {
+    if (asset.expiresAt > 0) {
+      asset.expiresAt = Math.max(asset.expiresAt, Date.now() + ttl * 1000);
+    }
+  };
+
   // Update asset status to reflect job progress
   if (body.status === "running") {
     const metadata = c.get("metadata");
@@ -185,6 +198,7 @@ jobInternalRoutes.post("/:id/status", async (c) => {
     if (asset) {
       asset.status = "extracting";
       const ttl = c.get("ttlSeconds");
+      extendDemoExpiry(asset, ttl);
       await metadata.save(asset, ttl);
     }
   }
@@ -198,6 +212,7 @@ jobInternalRoutes.post("/:id/status", async (c) => {
       asset.fileCount = body.fileCount;
       asset.extractedSize = body.extractedSize;
       const ttl = c.get("ttlSeconds");
+      extendDemoExpiry(asset, ttl);
       await metadata.save(asset, ttl);
     }
   }

@@ -40,6 +40,12 @@ export function createApp(env: Env) {
     : new SimpleAuthorizer();
   const ttlSeconds = parseInt(env.ASSET_TTL_SECONDS, 10) || 3600;
   const baseUrl = env.BASE_URL;
+  // Anonymous sessions are identity, not content — they must outlive the
+  // demo asset TTL. A large multipart upload can take many hours between the
+  // session-stamped create call and the complete call; if the session
+  // expired in between, the completer would be treated as a different user
+  // and the upload would 404 at the ownership check.
+  const sessionTtlSeconds = 7 * 24 * 60 * 60;
 
   const presignedUrls = (env.R2_S3_ENDPOINT && env.R2_ACCESS_KEY_ID && env.R2_SECRET_ACCESS_KEY)
     ? new R2PresignedUrlGenerator({
@@ -61,7 +67,7 @@ export function createApp(env: Env) {
   app.use("*", authMiddleware(env));
 
   // Anonymous session tracking (for unauthenticated users)
-  app.use("*", sessionMiddleware(sessions, ttlSeconds));
+  app.use("*", sessionMiddleware(sessions, sessionTtlSeconds));
 
   // Inject dependencies into all routes
   app.use("*", async (c, next) => {
