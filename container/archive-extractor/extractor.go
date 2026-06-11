@@ -13,7 +13,8 @@ type ArchiveEntry struct {
 	Size           int64  `json:"size"`           // uncompressed size (-1 if unknown)
 	CompressedSize int64  `json:"compressedSize"` // size in archive (-1 if unknown)
 	IsDirectory    bool   `json:"isDirectory"`
-	Offset         int64  `json:"offset"` // offset in archive (for resume)
+	Offset         int64  `json:"offset"` // offset of entry data in archive (-1 if unknown)
+	Method         uint16 `json:"method"` // compression method (zip only: 0=store, 8=deflate)
 }
 
 // ArchiveExtractor provides access to entries in an archive without

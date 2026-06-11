@@ -2,6 +2,8 @@ package main
 
 import (
 	"archive/zip"
+	"bytes"
+	"compress/flate"
 	"context"
 	"fmt"
 	"io"
@@ -10,7 +12,9 @@ import (
 
 // ZipExtractor implements ArchiveExtractor for ZIP files using random access reads.
 type ZipExtractor struct {
-	reader *zip.Reader
+	reader  *zip.Reader
+	storage ObjectStorage
+	key     string
 }
 
 // NewZipExtractor creates a ZipExtractor. It reads the Central Directory
@@ -55,7 +59,7 @@ func NewZipExtractor(ctx context.Context, storage ObjectStorage, key string) (*Z
 		}
 	}
 
-	return &ZipExtractor{reader: zr}, nil
+	return &ZipExtractor{reader: zr, storage: storage, key: key}, nil
 }
 
 // ListEntries streams entries from the ZIP Central Directory one at a time.
@@ -75,6 +79,7 @@ func (z *ZipExtractor) ListEntries(ctx context.Context, yield func(entry Archive
 			CompressedSize: int64(f.CompressedSize64),
 			IsDirectory:    f.FileInfo().IsDir(),
 			Offset:         offset,
+			Method:         f.Method,
 		}); err != nil {
 			return err
 		}
@@ -82,18 +87,69 @@ func (z *ZipExtractor) ListEntries(ctx context.Context, yield func(entry Archive
 	return nil
 }
 
-// ExtractEntry opens a single entry from the ZIP and returns a reader
-// for its uncompressed content.
-func (z *ZipExtractor) ExtractEntry(_ context.Context, entry ArchiveEntry) (io.ReadCloser, error) {
+// ExtractEntry returns a reader for the given entry's uncompressed content.
+//
+// Fast path: the Central Directory already told us where the entry's
+// compressed bytes live (DataOffset + CompressedSize), so we issue ONE
+// ranged GET for the whole span and decompress locally. Going through
+// zip.File.Open instead would read via the io.ReaderAt, and flate consumes
+// it in ~4 KiB chunks — every chunk became its own HTTPS Range request to
+// R2 (a multi-MB entry cost thousands of round trips; extraction crawled
+// at <1 MiB/s and a 200 GB archive would effectively never finish).
+//
+// Tradeoff: zip.File.Open verifies the entry CRC32; this path does not.
+// Integrity is still covered end-to-end by the MD5 the caller computes for
+// the manifest and R2's own checksums on upload.
+func (z *ZipExtractor) ExtractEntry(ctx context.Context, entry ArchiveEntry) (io.ReadCloser, error) {
 	if entry.Index < 0 || entry.Index >= len(z.reader.File) {
 		return nil, fmt.Errorf("entry index %d out of range [0, %d)", entry.Index, len(z.reader.File))
 	}
+
+	if entry.Offset >= 0 && entry.CompressedSize >= 0 {
+		switch entry.Method {
+		case zip.Store, zip.Deflate:
+			if entry.CompressedSize == 0 {
+				return io.NopCloser(bytes.NewReader(nil)), nil
+			}
+			body, err := z.storage.GetObjectRange(ctx, z.key, entry.Offset, entry.CompressedSize)
+			if err != nil {
+				return nil, fmt.Errorf("failed to range-read zip entry %q: %w", entry.Path, err)
+			}
+			if entry.Method == zip.Store {
+				return body, nil
+			}
+			fr := flate.NewReader(body)
+			return &flateEntryReader{fr: fr, underlying: body}, nil
+		}
+	}
+
+	// Slow path: unknown offset or exotic compression method — let
+	// archive/zip handle it through the ReaderAt.
 	f := z.reader.File[entry.Index]
 	rc, err := f.Open()
 	if err != nil {
 		return nil, fmt.Errorf("failed to open zip entry %q: %w", entry.Path, err)
 	}
 	return rc, nil
+}
+
+// flateEntryReader streams a deflate-compressed zip entry and closes both
+// the decompressor and the underlying HTTP body.
+type flateEntryReader struct {
+	fr         io.ReadCloser
+	underlying io.ReadCloser
+}
+
+func (r *flateEntryReader) Read(p []byte) (int, error) {
+	return r.fr.Read(p)
+}
+
+func (r *flateEntryReader) Close() error {
+	err := r.fr.Close()
+	if cerr := r.underlying.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 // bytesReaderAt wraps a byte slice as io.ReaderAt (fallback for non-ReaderAtStorage).
