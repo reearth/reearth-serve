@@ -192,8 +192,31 @@ func (w *ExtractionWorker) phaseB(ctx context.Context, cp *JobCheckpoint) error 
 	rootPrefix := cp.RootPrefix
 	lastStatusAt := time.Now()
 
+	// Resume low-water mark. Goroutines complete out of index order, so the
+	// highest finished index is NOT safe to persist as LastProcessedIndex: a
+	// crash would make resume skip lower-indexed entries that were still in
+	// flight (observed as files missing after a deploy-rollout resume). Track
+	// the contiguous prefix of settled indexes instead and only persist that.
+	// Directories and resume-skipped entries settle immediately; extracted
+	// and errored entries settle on completion.
+	loWater := resumeAfter
+	settled := make(map[int]struct{})
+	settle := func(idx int) {
+		settled[idx] = struct{}{}
+		for {
+			if _, ok := settled[loWater+1]; !ok {
+				break
+			}
+			delete(settled, loWater+1)
+			loWater++
+		}
+	}
+
 	err = w.streamEntryList(ctx, func(entry ArchiveEntry) error {
 		if entry.IsDirectory {
+			mu.Lock()
+			settle(entry.Index)
+			mu.Unlock()
 			return nil
 		}
 		if entry.Index <= resumeAfter {
@@ -227,6 +250,7 @@ func (w *ExtractionWorker) phaseB(ctx context.Context, cp *JobCheckpoint) error 
 					Path:  e.NormalizedPath,
 					Error: err.Error(),
 				})
+				settle(e.Index)
 				mu.Unlock()
 				return
 			}
@@ -244,7 +268,11 @@ func (w *ExtractionWorker) phaseB(ctx context.Context, cp *JobCheckpoint) error 
 			mu.Lock()
 			cp.ProcessedCount++
 			cp.ProcessedBytes += e.Size
-			cp.LastProcessedIndex = e.Index
+			settle(e.Index)
+			// Persist only the contiguous low-water mark: entries above it
+			// may still be in flight, and resume skips everything ≤ this
+			// index.
+			cp.LastProcessedIndex = loWater
 
 			if err := w.manifest.Add(ctx, fe, &chunkIndex); err != nil {
 				log.Printf("failed to add manifest entry: %v", err)
@@ -258,13 +286,20 @@ func (w *ExtractionWorker) phaseB(ctx context.Context, cp *JobCheckpoint) error 
 				time.Since(lastStatusAt) >= statusUpdateInterval
 			if doCheckpoint {
 				lastStatusAt = time.Now()
+				// Flush the in-memory manifest buffer (even partially full)
+				// before the checkpoint records ManifestChunksWritten — a
+				// checkpoint that claims more progress than the persisted
+				// manifest chunks loses every buffered entry on restart
+				// (observed: a resumed 595-file extraction finished with a
+				// 406-line manifest).
+				if err := w.manifest.FlushChunk(ctx, &chunkIndex); err != nil {
+					log.Printf("failed to flush manifest chunk at checkpoint: %v", err)
+				}
+				cp.ManifestChunksWritten = chunkIndex
 			}
 			processedCount := cp.ProcessedCount
 			processedBytes := cp.ProcessedBytes
 			totalEntries := cp.TotalEntries
-			if doCheckpoint {
-				cp.ManifestChunksWritten = chunkIndex
-			}
 			cpSnapshot := *cp
 			mu.Unlock()
 
@@ -373,6 +408,11 @@ func (w *ExtractionWorker) phaseBSequential(ctx context.Context, cp *JobCheckpoi
 		if cp.ProcessedCount%w.cfg.CheckpointEvery == 0 ||
 			time.Since(lastStatusAt) >= statusUpdateInterval {
 			lastStatusAt = time.Now()
+			// Persist buffered manifest entries before the checkpoint claims
+			// them as written (see the parallel path for the failure mode).
+			if err := w.manifest.FlushChunk(ctx, &chunkIndex); err != nil {
+				log.Printf("failed to flush manifest chunk at checkpoint: %v", err)
+			}
 			cp.ManifestChunksWritten = chunkIndex
 			if err := w.checkpoint.Save(ctx, cp); err != nil {
 				log.Printf("failed to save checkpoint: %v", err)

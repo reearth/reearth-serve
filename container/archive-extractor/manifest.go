@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -71,11 +72,18 @@ func (mw *ManifestWriter) FlushChunk(ctx context.Context, chunkIndex *int) error
 // archive produces a ~100 MB manifest, and holding it all in RAM on top of
 // any other phase-C state OOM'd the default 256 MiB container — on the
 // exact workload the chunking was designed to support.
+//
+// Lines are deduplicated by path while streaming: a resumed extraction
+// re-processes entries between the checkpoint's low-water mark and the
+// indexes that had already completed, so the same path can appear in two
+// chunks. The seen-set costs ~50 bytes per file (25 MB for a 500k-file
+// archive), well within the standard-2 container.
 func (mw *ManifestWriter) Finalize(ctx context.Context, totalChunks int) error {
 	finalKey := fmt.Sprintf("assets/%s/_archive/_manifest.jsonl", mw.assetID)
 
 	pr, pw := io.Pipe()
 	go func() {
+		seen := make(map[string]struct{})
 		for i := range totalChunks {
 			if err := ctx.Err(); err != nil {
 				_ = pw.CloseWithError(err)
@@ -87,7 +95,28 @@ func (mw *ManifestWriter) Finalize(ctx context.Context, totalChunks int) error {
 				_ = pw.CloseWithError(fmt.Errorf("failed to read manifest chunk %d: %w", i, err))
 				return
 			}
-			_, copyErr := io.Copy(pw, body)
+			scanner := bufio.NewScanner(body)
+			scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+			var copyErr error
+			for scanner.Scan() {
+				line := scanner.Bytes()
+				var e struct {
+					Path string `json:"path"`
+				}
+				if err := json.Unmarshal(line, &e); err == nil && e.Path != "" {
+					if _, dup := seen[e.Path]; dup {
+						continue
+					}
+					seen[e.Path] = struct{}{}
+				}
+				if _, err := pw.Write(append(line, '\n')); err != nil {
+					copyErr = err
+					break
+				}
+			}
+			if copyErr == nil {
+				copyErr = scanner.Err()
+			}
 			_ = body.Close()
 			if copyErr != nil {
 				_ = pw.CloseWithError(fmt.Errorf("failed to copy manifest chunk %d: %w", i, copyErr))
