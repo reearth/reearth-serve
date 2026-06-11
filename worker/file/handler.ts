@@ -216,7 +216,16 @@ function serveFile(
       "Cache-Control": "public, max-age=3600, immutable",
       "Content-Disposition": `inline; filename="${encodeURIComponent(displayName)}"`,
     };
-    return new Response(file.body, { status: 200, headers });
+    // encodeBody "manual" tells the runtime the body is ALREADY gzip. The
+    // default ("automatic") treats the body as plain and re-encodes per
+    // Content-Encoding, so the edge stripped the header and shipped raw
+    // gzip bytes to clients — XML/GeoJSON downloads arrived as binary
+    // garbage for any client whose Accept-Encoding didn't surface here.
+    return new Response(file.body, {
+      status: 200,
+      headers,
+      encodeBody: "manual",
+    } as ResponseInit);
   }
 
   // --- Gzip-stored: decompress ---

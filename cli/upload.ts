@@ -1,4 +1,5 @@
 import { readFileSync, statSync } from "node:fs";
+import { open } from "node:fs/promises";
 import { basename } from "node:path";
 import { gzipSync } from "node:zlib";
 import { isCompressiblePath } from "@reearth/compressible";
@@ -123,6 +124,78 @@ async function uploadViaPresigned(
   return completeRes.json() as Promise<AssetUploadResult>;
 }
 
+/**
+ * Multipart upload streamed from disk, for files too large to buffer in
+ * memory (readFileSync caps at ~2 GiB and would hold the whole file anyway).
+ * Parts are read on demand — peak memory is MAX_CONCURRENCY × PART_SIZE.
+ * Local gzip compression is skipped: at this size the win is marginal and
+ * compressing would require a second pass over the file to learn the size.
+ */
+async function uploadLargeFileViaPresigned(
+  endpoint: string,
+  filePath: string,
+  fileName: string,
+  contentType: string,
+  fileSize: number,
+  skipExtraction?: boolean,
+): Promise<AssetUploadResult | null> {
+  const partCount = Math.ceil(fileSize / PART_SIZE);
+
+  const initRes = await fetch(`${endpoint}${PATHS.uploads}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await commonHeaders()) },
+    body: JSON.stringify({ filename: fileName, contentType, size: fileSize, partCount, ...(skipExtraction && { skipExtraction: true }) }),
+  });
+  adoptSessionId(initRes);
+
+  if (initRes.status === 501) return null;
+  if (!initRes.ok) {
+    const body = await initRes.text();
+    throw new Error(`Upload session creation failed (${initRes.status}): ${body}`);
+  }
+
+  const session = await initRes.json() as MultipartUploadResult;
+  if (!("parts" in session)) {
+    throw new Error("Server did not return a multipart session for a large upload");
+  }
+
+  const fh = await open(filePath, "r");
+  const etags: { partNumber: number; etag: string }[] = [];
+  try {
+    const parts = session.parts;
+    for (let i = 0; i < parts.length; i += MAX_CONCURRENCY) {
+      const batch = parts.slice(i, i + MAX_CONCURRENCY);
+      const results = await Promise.all(
+        batch.map(async (part) => {
+          const start = (part.partNumber - 1) * PART_SIZE;
+          const length = Math.min(PART_SIZE, fileSize - start);
+          const chunk = Buffer.alloc(length);
+          await fh.read(chunk, 0, length, start);
+          const etag = await uploadPartWithRetry(part.url, chunk);
+          return { partNumber: part.partNumber, etag };
+        }),
+      );
+      etags.push(...results);
+      process.stderr.write(`\ruploaded ${Math.min(i + MAX_CONCURRENCY, parts.length)}/${parts.length} parts`);
+    }
+    process.stderr.write("\n");
+  } finally {
+    await fh.close();
+  }
+
+  const completeRes = await fetch(`${endpoint}${PATHS.completeUpload(session.uploadId)}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", ...(await commonHeaders()) },
+    body: JSON.stringify({ parts: etags }),
+  });
+  adoptSessionId(completeRes);
+  if (!completeRes.ok) {
+    const body = await completeRes.text();
+    throw new Error(`Upload completion failed (${completeRes.status}): ${body}`);
+  }
+  return completeRes.json() as Promise<AssetUploadResult>;
+}
+
 async function uploadDirect(
   endpoint: string,
   fileName: string,
@@ -197,8 +270,23 @@ export async function doUpload(
   }
 
   const fileName = basename(filePath);
-  const fileData = new Uint8Array(readFileSync(filePath));
   const contentType = lookup(fileName);
+
+  // Files beyond Node's buffer limit (and well before it) must not be read
+  // into memory wholesale. Stream multipart parts straight from disk.
+  const fileSize = statSync(filePath).size;
+  const LARGE_FILE_THRESHOLD = 1024 * 1024 * 1024; // 1 GiB
+  if (!opts.direct && fileSize > LARGE_FILE_THRESHOLD) {
+    const large = await uploadLargeFileViaPresigned(opts.endpoint, filePath, fileName, contentType, fileSize, opts.skipExtraction);
+    if (!large) {
+      console.error("Error: Server does not support presigned uploads; file is too large for direct upload.");
+      process.exit(1);
+    }
+    output(opts.json ? large : large.url, opts.json);
+    return;
+  }
+
+  const fileData = new Uint8Array(readFileSync(filePath));
 
   let result: AssetUploadResult;
   if (opts.direct) {
