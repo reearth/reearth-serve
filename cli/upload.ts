@@ -4,7 +4,7 @@ import { gzipSync } from "node:zlib";
 import { isCompressiblePath } from "@reearth/compressible";
 import { lookup } from "./mime";
 import { PATHS } from "../shared/paths";
-import { commonHeaders } from "./helpers";
+import { adoptSessionId, commonHeaders } from "./helpers";
 import { loadCredentials } from "./config";
 import type { AssetUploadResult, PresignedUploadResult, MultipartUploadResult } from "../shared/api";
 import { output } from "./helpers";
@@ -52,6 +52,10 @@ async function uploadViaPresigned(
   });
 
 
+  // The server may mint a fresh session ID (e.g. ours expired); adopt it so
+  // the complete request below is attributed to the same session.
+  adoptSessionId(initRes);
+
   if (initRes.status === 501) return null;
   if (!initRes.ok) {
     const body = await initRes.text();
@@ -87,6 +91,7 @@ async function uploadViaPresigned(
       headers: { "Content-Type": "application/json", ...(await commonHeaders()) },
       body: JSON.stringify({ parts: etags }),
     });
+    adoptSessionId(completeRes);
     if (!completeRes.ok) {
       const body = await completeRes.text();
       throw new Error(`Upload completion failed (${completeRes.status}): ${body}`);
@@ -110,6 +115,7 @@ async function uploadViaPresigned(
     method: "POST",
     headers: { ...(await commonHeaders()) },
   });
+  adoptSessionId(completeRes);
   if (!completeRes.ok) {
     const body = await completeRes.text();
     throw new Error(`Upload completion failed (${completeRes.status}): ${body}`);
@@ -146,6 +152,7 @@ async function uploadDirect(
     headers,
     body: uploadData as BodyInit,
   });
+  adoptSessionId(res);
 
   if (!res.ok) {
     const body = await res.text();

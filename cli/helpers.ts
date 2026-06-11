@@ -3,7 +3,7 @@ import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync } f
 import { dirname, join, relative } from "node:path";
 import { Writable } from "node:stream";
 import type { AssetMetadata, AssetVersion, FileEntry, Job } from "../shared/api";
-import { loadConfig, loadCredentials, loadOrCreateSessionId } from "./config";
+import { loadConfig, loadCredentials, loadOrCreateSessionId, loadSessionId, saveSessionId } from "./config";
 import { refreshAccessToken } from "./auth";
 
 // --- Output helpers ---
@@ -114,10 +114,29 @@ export async function commonHeaders(): Promise<Record<string, string>> {
   return headers;
 }
 
+/**
+ * Adopt a server-issued session ID from a response.
+ *
+ * The server only trusts session IDs it issued itself: when a request
+ * carries an unknown or expired X-Session-Id, the server mints a fresh one
+ * and returns it in the response's X-Session-Id header. Persist it so the
+ * next request (e.g. completing an upload session created in this request)
+ * is attributed to the same session — otherwise multi-request flows like
+ * presigned uploads fail their ownership check.
+ */
+export function adoptSessionId(res: Response): void {
+  if (loadCredentials()) return;
+  const issued = res.headers.get("X-Session-Id");
+  if (issued && issued !== loadSessionId()) {
+    saveSessionId(issued);
+  }
+}
+
 export async function apiGet<T>(endpoint: string, path: string): Promise<T> {
   const res = await fetch(`${endpoint}${path}`, {
     headers: { ...(await commonHeaders()) },
   });
+  adoptSessionId(res);
 
   if (!res.ok) {
     const body = await res.text();
@@ -135,6 +154,7 @@ export async function apiPost<T>(endpoint: string, path: string, body?: unknown)
     headers,
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
+  adoptSessionId(res);
 
   if (!res.ok) {
     const text = await res.text();
@@ -152,6 +172,7 @@ export async function apiPatch<T>(endpoint: string, path: string, body?: unknown
     headers,
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
+  adoptSessionId(res);
 
   if (!res.ok) {
     const text = await res.text();
@@ -169,6 +190,7 @@ export async function apiPut<T>(endpoint: string, path: string, body?: unknown):
     headers,
     ...(body ? { body: JSON.stringify(body) } : {}),
   });
+  adoptSessionId(res);
 
   if (!res.ok) {
     const text = await res.text();
@@ -182,6 +204,7 @@ export async function apiDelete(endpoint: string, path: string): Promise<void> {
     method: "DELETE",
     headers: { ...(await commonHeaders()) },
   });
+  adoptSessionId(res);
 
   if (!res.ok) {
     const body = await res.text();
