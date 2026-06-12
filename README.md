@@ -1,6 +1,6 @@
 # Re:Earth Serve
 
-Spatial Data Delivery — an asset hosting and tile delivery service built on Cloudflare Workers + R2 + D1.
+Asset hosting built on Cloudflare Workers + R2 + D1 — upload any file or a 200 GB-class archive through the CLI/API, and every file (or extracted archive entry) gets served over HTTP with versioning, range requests, and thumbnails.
 
 ![demo](./docs/demo.gif)
 
