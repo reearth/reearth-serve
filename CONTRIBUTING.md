@@ -125,7 +125,6 @@ Set via `npx wrangler secret put <NAME>`:
 | `R2_BUCKET_NAME` | Yes* | R2 bucket name |
 | `OIDC_ISSUER_URL` | No | OIDC Issuer URL for JWT authentication |
 | `OIDC_AUDIENCE` | No | JWT audience claim for token validation |
-| `OIDC_CLIENT_ID` | No | OAuth2 Client ID |
 | `CERBOS_ENDPOINT` | No | Cerbos PDP endpoint URL for authorization |
 
 \* Required for presigned URL uploads and archive extraction containers.

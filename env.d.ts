@@ -17,10 +17,13 @@ interface Env {
   R2_ACCESS_KEY_ID?: string;
   R2_SECRET_ACCESS_KEY?: string;
   R2_BUCKET_NAME?: string;
-  // OIDC authentication
+  // OIDC authentication. Only issuer + audience are needed server-side: the
+  // Worker verifies inbound JWTs (issuer match + JWKS signature + optional
+  // audience) and never initiates an OAuth flow itself, so there is no
+  // client ID here. The CLI's login flow has its own client ID via
+  // REEARTH_SERVE_CLIENT_ID / `reearth-serve config set clientId`.
   OIDC_ISSUER_URL?: string;
   OIDC_AUDIENCE?: string;
-  OIDC_CLIENT_ID?: string;
   // JWKS cache TTL (default: 3600s)
   JWKS_CACHE_TTL_SECONDS?: string;
   // Authorization

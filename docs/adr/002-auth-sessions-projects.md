@@ -80,7 +80,6 @@ Authentication is handled by validating OIDC-compliant JWTs in a Hono middleware
 |----------|----------|-------------|
 | `OIDC_ISSUER_URL` | No | OIDC Issuer URL (e.g., `https://your-tenant.auth0.com/`) |
 | `OIDC_AUDIENCE` | No | JWT audience claim for token validation |
-| `OIDC_CLIENT_ID` | No | OAuth2 Client ID (also used for CLI build-time embedding) |
 
 ### Anonymous Session Tracking
 

@@ -198,7 +198,7 @@ Introduce user identity, project scoping, and persistent assets.
 - [x] **Access control**: file-layer access control (URL visibility) — distinct from service-layer
 - [ ] **OIDC server integration**: connection to external OIDC server for authentication (not yet implemented)
 - [ ] **Account server integration**: connection to Re:Earth account platform (not yet implemented)
-- [ ] **Cerbos integration**: policy-based authorization via Cerbos (not yet implemented)
+- [ ] **Cerbos integration**: `CerbosAuthorizer` adapter is implemented behind the `Authorizer` interface and enabled by setting `CERBOS_ENDPOINT` (falls back to in-process `SimpleAuthorizer`); deploying a Cerbos PDP and authoring the policy bundle are not yet done
 
 ---
 
