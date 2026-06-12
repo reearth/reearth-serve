@@ -152,6 +152,12 @@ export const jobSchema = z.object({
   fileCount: z.number().optional(),
   extractedSize: z.number().optional(),
   retryCount: z.number().optional(),
+  // Progress markers captured at the last re-enqueue. The cleanup cron resets
+  // retryCount when fileCount/extractedSize moved past these, so the retry
+  // budget counts "died at the same point" repetitions rather than container
+  // deaths (deploy rollouts would otherwise exhaust it on long extractions).
+  retryFileCount: z.number().optional(),
+  retryExtractedSize: z.number().optional(),
   sessionId: z.string().optional(),
   projectId: z.string().optional(),
   versionId: z.string().optional(),

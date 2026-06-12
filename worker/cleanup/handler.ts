@@ -85,6 +85,23 @@ async function reconcileStuckAssets(metadata: D1MetadataStore, jobs: D1JobStore)
   }
 }
 
+// effectiveRetryCount returns the retry budget already consumed by a stuck
+// job. With lossless checkpoint resume, retry_count measures container
+// deaths, not wasted work — and long extractions die for reasons unrelated
+// to the job (deploy rollouts, infra blips). A death *after* measurable
+// progress is not the same failure repeating, so the budget resets; only
+// "died at the same point" repetitions accumulate toward MAX_RETRIES.
+// Jobs whose markers never move (e.g. a single multi-GB entry) keep the
+// plain cumulative count, same as before.
+export function effectiveRetryCount(
+  job: Pick<Job, "retryCount" | "fileCount" | "extractedSize" | "retryFileCount" | "retryExtractedSize">,
+): number {
+  const progressed =
+    (job.fileCount ?? 0) > (job.retryFileCount ?? 0) ||
+    (job.extractedSize ?? 0) > (job.retryExtractedSize ?? 0);
+  return progressed ? 0 : (job.retryCount ?? 0);
+}
+
 async function retriggerPendingJobs(
   metadata: D1MetadataStore,
   jobs: D1JobStore,
@@ -94,25 +111,28 @@ async function retriggerPendingJobs(
   const retriableJobs = await jobs.listRetriable(stuckThresholdMs, MAX_RETRIES, MAX_RETRIABLE_PER_TICK);
 
   for (const job of retriableJobs) {
-    // Mark as permanently failed if max retries exceeded
-    if ((job.retryCount ?? 0) >= MAX_RETRIES) {
-      if (job.status !== "failed") {
-        const updatedJob: Job = {
-          ...job,
-          status: "failed",
-          error: `Max retries (${MAX_RETRIES}) exceeded`,
-          updatedAt: Date.now(),
-          completedAt: Date.now(),
-        };
-        await jobs.save(updatedJob);
+    const retryCount = effectiveRetryCount(job);
 
-        const asset = await metadata.find(job.assetId);
-        if (asset) {
-          asset.status = "failed";
-          await metadata.save(asset, Math.max(0, Math.floor((asset.expiresAt - Date.now()) / 1000)));
-        }
-        console.log(`Marked asset ${job.assetId} as permanently failed: max retries exceeded`);
+    // Mark as permanently failed if max retries exceeded. Storing
+    // MAX_RETRIES + 1 takes the job out of listRetriable's pool for good
+    // (plain `failed` jobs with budget left are retriable by design).
+    if (retryCount >= MAX_RETRIES) {
+      const updatedJob: Job = {
+        ...job,
+        status: "failed",
+        retryCount: MAX_RETRIES + 1,
+        error: `Max retries (${MAX_RETRIES}) exceeded`,
+        updatedAt: Date.now(),
+        completedAt: Date.now(),
+      };
+      await jobs.save(updatedJob);
+
+      const asset = await metadata.find(job.assetId);
+      if (asset) {
+        asset.status = "failed";
+        await metadata.save(asset, Math.max(0, Math.floor((asset.expiresAt - Date.now()) / 1000)));
       }
+      console.log(`Marked asset ${job.assetId} as permanently failed: max retries exceeded`);
       continue;
     }
 
@@ -134,10 +154,14 @@ async function retriggerPendingJobs(
       continue;
     }
 
-    // Only after successful enqueue, persist the incremented retry count.
+    // Only after successful enqueue, persist the incremented retry count
+    // (reset to zero first if the job progressed) and capture the progress
+    // markers this re-enqueue happened at.
     const updatedJob: Job = {
       ...job,
-      retryCount: (job.retryCount ?? 0) + 1,
+      retryCount: retryCount + 1,
+      retryFileCount: job.fileCount ?? 0,
+      retryExtractedSize: job.extractedSize ?? 0,
       status: "pending",
       updatedAt: Date.now(),
     };
@@ -149,4 +173,44 @@ async function retriggerPendingJobs(
     }
     console.log(`Re-enqueued extraction for asset ${job.assetId} (retry ${updatedJob.retryCount}/${MAX_RETRIES})`);
   }
+}
+
+if (import.meta.vitest) {
+  const { test, expect } = import.meta.vitest;
+
+  test("effectiveRetryCount keeps the cumulative count when nothing progressed", () => {
+    expect(effectiveRetryCount({ retryCount: 3 })).toBe(3);
+    expect(effectiveRetryCount({ retryCount: 3, fileCount: 0, extractedSize: 0 })).toBe(3);
+    expect(
+      effectiveRetryCount({
+        retryCount: 4,
+        fileCount: 100,
+        retryFileCount: 100,
+        extractedSize: 5000,
+        retryExtractedSize: 5000,
+      }),
+    ).toBe(4);
+  });
+
+  test("effectiveRetryCount resets when fileCount moved past the last re-enqueue", () => {
+    expect(effectiveRetryCount({ retryCount: 4, fileCount: 101, retryFileCount: 100 })).toBe(0);
+    // Legacy jobs without markers: any progress counts.
+    expect(effectiveRetryCount({ retryCount: 5, fileCount: 1 })).toBe(0);
+  });
+
+  test("effectiveRetryCount resets on byte progress even when fileCount is flat", () => {
+    expect(
+      effectiveRetryCount({
+        retryCount: 2,
+        fileCount: 100,
+        retryFileCount: 100,
+        extractedSize: 6000,
+        retryExtractedSize: 5000,
+      }),
+    ).toBe(0);
+  });
+
+  test("effectiveRetryCount treats missing retryCount as zero", () => {
+    expect(effectiveRetryCount({})).toBe(0);
+  });
 }

@@ -14,7 +14,16 @@ import { rowToModel, modelToRow, encodeCursor, decodeCursor } from "./d1-helpers
 // Meta keys: fields stored in the JSON `meta` column instead of dedicated columns.
 const ASSET_META_KEYS = ["contentEncoding", "originalSize", "archiveFormat", "fileCount", "extractedSize", "jobId"];
 const VERSION_META_KEYS = ["contentEncoding", "originalSize", "archiveFormat", "fileCount", "extractedSize", "jobId"];
-const JOB_META_KEYS = ["completedAt", "startedAt", "error", "totalFiles", "fileCount", "extractedSize"];
+const JOB_META_KEYS = [
+  "completedAt",
+  "startedAt",
+  "error",
+  "totalFiles",
+  "fileCount",
+  "extractedSize",
+  "retryFileCount",
+  "retryExtractedSize",
+];
 
 // Cap unbounded list results so a runaway workspace/project doesn't ship the
 // whole table on every request. Real pagination on these endpoints is tracked
@@ -258,11 +267,21 @@ export class D1JobStore implements JobStore {
 
   async listRetriable(stuckThresholdMs: number, maxRetries: number, limit: number = 50): Promise<Job[]> {
     const stuckBefore = Date.now() - stuckThresholdMs;
+    // `retry_count <= ?1` (not <) admits jobs at the budget boundary so the
+    // handler can mark them permanently failed; the handler then stores
+    // maxRetries + 1 to take them out of this pool for good. The progress
+    // clause re-admits any job whose fileCount/extractedSize moved past the
+    // markers captured at its last re-enqueue — the handler resets the budget
+    // for those (a death after progress is not the same failure repeating).
     const { results } = await this.db
       .prepare(
         `SELECT * FROM jobs
          WHERE type = 'archive-extraction'
-           AND retry_count < ?1
+           AND (retry_count <= ?1
+                OR COALESCE(json_extract(meta, '$.fileCount'), 0) >
+                   COALESCE(json_extract(meta, '$.retryFileCount'), 0)
+                OR COALESCE(json_extract(meta, '$.extractedSize'), 0) >
+                   COALESCE(json_extract(meta, '$.retryExtractedSize'), 0))
            AND (status IN ('pending', 'failed')
                 OR (status = 'running' AND updated_at < ?2))
          ORDER BY updated_at ASC
