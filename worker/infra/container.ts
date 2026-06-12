@@ -122,6 +122,14 @@ export class CloudflareContainerLauncher implements ContainerLauncher {
       INTERNAL_API_SECRET: this.internalApiSecret,
     };
 
-    await stub.startExtraction(envVars);
+    // startExtraction catches container.start() failures internally (a thrown
+    // error would otherwise be swallowed by the JSRPC boundary) and reports
+    // them in its return value. Ignoring it meant a capacity-exhausted start
+    // ("no instance available") looked like success: the queue message was
+    // acked and the job sat in `pending` until the cleanup cron noticed.
+    const result = await stub.startExtraction(envVars);
+    if (result !== "started") {
+      throw new Error(`extractor container failed to start: ${result}`);
+    }
   }
 }

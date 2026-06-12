@@ -120,3 +120,26 @@ accept gzip).
   assets/jobs across long uploads (and across CLI invocations).
 - A `completed` job may carry an `error` field describing partially failed
   entries; clients should surface it.
+
+## Follow-up (2026-06-12): capacity-overflow handling
+
+Concurrency testing planning exposed how jobs behave when all extractor
+container slots (`max_instances = 20`, account ceiling ~25 at `standard-4`)
+are busy:
+
+- `CloudflareContainerLauncher` ignored `startExtraction`'s return value, so
+  a capacity-exhausted start looked like success and the message was acked.
+- The queue consumer retried launch failures immediately; `max_retries = 3`
+  was exhausted within seconds and the message dead-lettered.
+- `listRetriable` picked up `pending` jobs unconditionally, so the cron
+  re-enqueued a capacity-waiting job every tick, burning one of its 5
+  job-retries each pass (~50 minutes to permanent failure).
+
+Fixes: the launcher now throws on a non-`started` result; the queue consumer
+retries with exponential backoff (60s → 20min cap, `max_retries = 20`,
+covering ~5h of full-capacity wait) and touches the job's `updated_at` on
+each failed attempt; `listRetriable` gates `pending` behind the same stuck
+threshold as `running`, so the cron only takes over after the queue stops
+touching the job (DLQ). Layering: queue handles capacity waits without
+spending job retries; the cron's `MAX_RETRIES` budget only meters actual
+container deaths.

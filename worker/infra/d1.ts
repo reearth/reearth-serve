@@ -273,6 +273,14 @@ export class D1JobStore implements JobStore {
     // clause re-admits any job whose fileCount/extractedSize moved past the
     // markers captured at its last re-enqueue — the handler resets the budget
     // for those (a death after progress is not the same failure repeating).
+    //
+    // `pending` is gated by the stuck threshold like `running`: a pending job
+    // whose launch keeps failing on container capacity is actively retried by
+    // the queue with backoff, and each failed attempt touches updated_at
+    // (extraction/handler.ts). Picking pending jobs up immediately would
+    // duplicate that work and burn the cron's retry budget while the queue is
+    // still on it. `failed` stays immediate — the container reported a real
+    // failure and there is no queue message in flight anymore.
     const { results } = await this.db
       .prepare(
         `SELECT * FROM jobs
@@ -282,8 +290,8 @@ export class D1JobStore implements JobStore {
                    COALESCE(json_extract(meta, '$.retryFileCount'), 0)
                 OR COALESCE(json_extract(meta, '$.extractedSize'), 0) >
                    COALESCE(json_extract(meta, '$.retryExtractedSize'), 0))
-           AND (status IN ('pending', 'failed')
-                OR (status = 'running' AND updated_at < ?2))
+           AND (status = 'failed'
+                OR (status IN ('pending', 'running') AND updated_at < ?2))
          ORDER BY updated_at ASC
          LIMIT ?3`,
       )
