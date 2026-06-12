@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.11
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.96.4
 	github.com/aws/smithy-go v1.24.2
+	github.com/klauspost/compress v1.18.6
 	github.com/reearth/compressible/go v0.1.0
 )
 

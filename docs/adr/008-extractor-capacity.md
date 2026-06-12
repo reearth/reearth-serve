@@ -1,6 +1,6 @@
 # ADR-008: Archive Extractor Container Capacity
 
-- **Status:** Accepted
+- **Status:** Accepted (instance-type choice superseded by [ADR-011](./011-recompression-free-extraction.md): `standard-2` → `standard-4`)
 - **Date:** 2026-05-13
 - **Deciders:** @rot1024
 

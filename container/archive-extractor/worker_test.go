@@ -7,6 +7,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
+	"crypto/md5"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -553,5 +554,137 @@ func TestExtractionWorker_ManifestContentTypes(t *testing.T) {
 		} else if gotCT != wantCT {
 			t.Errorf("content type for %s: got %q, want %q", path, gotCT, wantCT)
 		}
+	}
+}
+
+func TestExtractionWorker_ZipTransmux(t *testing.T) {
+	storage := NewMemoryStorage()
+	ctx := context.Background()
+
+	// Multi-MB compressible payload so the deflate stream spans many blocks.
+	content := strings.Repeat("<bldg:Building gml:id=\"BLD_0001\"/>\n", 200000)
+	files := map[string]string{"city.gml": content}
+	archiveData := buildZipArchive(files)
+	archiveKey := "assets/transmux-test/archive.zip"
+	if err := storage.PutObject(ctx, archiveKey, bytes.NewReader(archiveData), int64(len(archiveData)), "application/zip", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	worker := NewExtractionWorker(storage, ExtractionConfig{
+		AssetID:         "transmux-test",
+		ArchiveKey:      archiveKey,
+		ArchiveFilename: "archive.zip",
+		ArchiveFormat:   "zip",
+		MaxConcurrency:  4,
+		CheckpointEvery: 100,
+	})
+	if err := worker.Run(ctx); err != nil {
+		t.Fatalf("worker.Run failed: %v", err)
+	}
+
+	data, ok := storage.GetData("assets/transmux-test/files/city.gml")
+	if !ok {
+		t.Fatal("city.gml not found")
+	}
+
+	// The object must be a valid gzip member that round-trips the content.
+	gr, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("output is not valid gzip: %v", err)
+	}
+	decompressed, err := io.ReadAll(gr)
+	if err != nil {
+		t.Fatalf("failed to decompress: %v", err)
+	}
+	_ = gr.Close()
+	if string(decompressed) != content {
+		t.Error("decompressed content mismatch")
+	}
+
+	// Prove there was no re-encode: the gzip body must be the zip entry's
+	// deflate bytes verbatim, framed by our 10-byte header and 8-byte trailer.
+	zr, err := zip.NewReader(bytes.NewReader(archiveData), int64(len(archiveData)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	zf := zr.File[0]
+	off, err := zf.DataOffset()
+	if err != nil {
+		t.Fatal(err)
+	}
+	rawDeflate := archiveData[off : off+int64(zf.CompressedSize64)]
+	if want := len(gzipMemberHeader) + len(rawDeflate) + gzipTrailerSize; len(data) != want {
+		t.Fatalf("gzip object size = %d, want %d (header+raw deflate+trailer)", len(data), want)
+	}
+	if !bytes.Equal(data[len(gzipMemberHeader):len(data)-gzipTrailerSize], rawDeflate) {
+		t.Error("gzip body is not the zip entry's deflate stream — entry was re-encoded")
+	}
+
+	// Manifest hash must be the MD5 of the *uncompressed* content.
+	manifest := readManifest(t, storage, "transmux-test")
+	if len(manifest) != 1 {
+		t.Fatalf("manifest has %d entries, want 1", len(manifest))
+	}
+	wantHash := fmt.Sprintf("md5:%x", md5.Sum([]byte(content)))
+	if manifest[0].Hash != wantHash {
+		t.Errorf("manifest hash = %q, want %q", manifest[0].Hash, wantHash)
+	}
+	if manifest[0].ContentEncoding != "gzip" {
+		t.Errorf("manifest contentEncoding = %q, want gzip", manifest[0].ContentEncoding)
+	}
+}
+
+func TestExtractionWorker_ZipTransmuxStoredFallback(t *testing.T) {
+	storage := NewMemoryStorage()
+	ctx := context.Background()
+
+	// A compressible-by-extension entry stored with method Store cannot be
+	// transmuxed and must fall back to the decompress→gzip path.
+	content := strings.Repeat("stored but compressible\n", 1000)
+	var buf bytes.Buffer
+	zw := zip.NewWriter(&buf)
+	w, err := zw.CreateHeader(&zip.FileHeader{Name: "stored.txt", Method: zip.Store})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := io.WriteString(w, content); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+	archiveData := buf.Bytes()
+	archiveKey := "assets/stored-test/archive.zip"
+	if err := storage.PutObject(ctx, archiveKey, bytes.NewReader(archiveData), int64(len(archiveData)), "application/zip", nil); err != nil {
+		t.Fatal(err)
+	}
+
+	worker := NewExtractionWorker(storage, ExtractionConfig{
+		AssetID:         "stored-test",
+		ArchiveKey:      archiveKey,
+		ArchiveFilename: "archive.zip",
+		ArchiveFormat:   "zip",
+		MaxConcurrency:  4,
+		CheckpointEvery: 100,
+	})
+	if err := worker.Run(ctx); err != nil {
+		t.Fatalf("worker.Run failed: %v", err)
+	}
+
+	data, ok := storage.GetData("assets/stored-test/files/stored.txt")
+	if !ok {
+		t.Fatal("stored.txt not found")
+	}
+	gr, err := gzip.NewReader(bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("stored.txt should be gzip-compressed via fallback: %v", err)
+	}
+	decompressed, err := io.ReadAll(gr)
+	if err != nil {
+		t.Fatalf("failed to decompress: %v", err)
+	}
+	_ = gr.Close()
+	if string(decompressed) != content {
+		t.Error("decompressed content mismatch")
 	}
 }

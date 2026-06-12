@@ -31,6 +31,20 @@ type ArchiveExtractor interface {
 	ExtractEntry(ctx context.Context, entry ArchiveEntry) (io.ReadCloser, error)
 }
 
+// RawDeflateExtractor is implemented by formats that can hand out an entry's
+// compressed bytes verbatim as a raw DEFLATE stream (zip method 8), together
+// with the entry's CRC-32 from the archive metadata. The worker uses this to
+// transmux deflate entries into gzip objects by adding framing bytes only,
+// skipping the decompress→recompress cycle entirely.
+//
+// ok=false means the entry is not raw-deflate-accessible (stored, exotic
+// method, unknown offset) and the caller must fall back to ExtractEntry.
+// ok=true with a non-nil error means the entry is eligible but the open
+// failed (e.g. a dropped range GET) — retry rather than fall back.
+type RawDeflateExtractor interface {
+	OpenRawDeflate(ctx context.Context, entry ArchiveEntry) (rc io.ReadCloser, crc uint32, ok bool, err error)
+}
+
 // SequentialExtractor is implemented by archive formats that have no
 // usable random-access primitive (e.g. tar, tar.gz). For those formats,
 // per-entry ExtractEntry calls re-open and re-scan the archive each time,

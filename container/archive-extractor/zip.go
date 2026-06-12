@@ -3,11 +3,12 @@ package main
 import (
 	"archive/zip"
 	"bytes"
-	"compress/flate"
 	"context"
 	"fmt"
 	"io"
 	"log"
+
+	"github.com/klauspost/compress/flate"
 )
 
 // ZipExtractor implements ArchiveExtractor for ZIP files using random access reads.
@@ -131,6 +132,23 @@ func (z *ZipExtractor) ExtractEntry(ctx context.Context, entry ArchiveEntry) (io
 		return nil, fmt.Errorf("failed to open zip entry %q: %w", entry.Path, err)
 	}
 	return rc, nil
+}
+
+// OpenRawDeflate implements RawDeflateExtractor: it returns the entry's
+// compressed bytes exactly as stored (one ranged GET, no decompression),
+// plus the CRC-32 recorded in the central directory. The central directory
+// is already in memory (z.reader), so resuming jobs whose entry list predates
+// this field still get a correct CRC.
+func (z *ZipExtractor) OpenRawDeflate(ctx context.Context, entry ArchiveEntry) (io.ReadCloser, uint32, bool, error) {
+	if entry.Method != zip.Deflate || entry.Offset < 0 || entry.CompressedSize <= 0 ||
+		entry.Index < 0 || entry.Index >= len(z.reader.File) {
+		return nil, 0, false, nil
+	}
+	body, err := z.storage.GetObjectRange(ctx, z.key, entry.Offset, entry.CompressedSize)
+	if err != nil {
+		return nil, 0, true, fmt.Errorf("failed to range-read zip entry %q: %w", entry.Path, err)
+	}
+	return body, z.reader.File[entry.Index].CRC32, true, nil
 }
 
 // flateEntryReader streams a deflate-compressed zip entry and closes both

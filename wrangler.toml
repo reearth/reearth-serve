@@ -52,11 +52,15 @@ max_instances = 20
 # `lite` (256 MiB) was too small for Phase B's parallel multipart uploads of
 # gzip-compressed entries — peak per-goroutine buffer reaches multipartPartSize
 # (10 MiB), so 48 concurrent extractions blew past memory and the container
-# OOM-killed silently (job stuck in `extracting`, fileCount=0). `standard-2`
-# (1 vCPU / 6 GiB / 12 GB disk) leaves ~5 GiB headroom over the worst case so
-# PLATEAU citygml (and larger 3D-Tiles archives) extract reliably without
-# tuning MaxConcurrency down. See docs/adr/008-extractor-capacity.md.
-instance_type = "standard-2"
+# OOM-killed silently (job stuck in `extracting`, fileCount=0).
+# `standard-4` (4 vCPU / 12 GiB / 20 GB disk) because extraction throughput is
+# CPU-bound on the decode-for-checksum side stream: a 200 GB-class PLATEAU
+# citygml archive expands ~11×, and at 1 vCPU (standard-2) the measured
+# pipeline topped out at ~37 MiB/s of uncompressed data (~30+ hours per
+# archive). CPU is billed on utilization (not allocation) since 2025-10, so
+# the extra vCPUs cost nothing while idle. See docs/adr/008-extractor-capacity.md
+# and docs/adr/011-recompression-free-extraction.md.
+instance_type = "standard-4"
 
 [[durable_objects.bindings]]
 name = "ARCHIVE_EXTRACTOR"

@@ -7,6 +7,7 @@ import (
 	"crypto/md5"
 	"encoding/json"
 	"fmt"
+	"hash/crc32"
 	"io"
 	"log"
 	"net/http"
@@ -14,6 +15,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/klauspost/compress/flate"
 )
 
 // workerAPITimeout caps every callback to the Worker API. http.DefaultClient
@@ -488,12 +491,24 @@ const statusUpdateInterval = 2 * time.Minute
 const extractEntryAttempts = 3
 
 func (w *ExtractionWorker) extractAndUpload(ctx context.Context, extractor ArchiveExtractor, entry ArchiveEntry) (string, error) {
+	rde, transmuxable := extractor.(RawDeflateExtractor)
+	transmuxable = transmuxable && ShouldCompress(entry.NormalizedPath, entry.Size)
+
 	var lastErr error
 	for attempt := 1; attempt <= extractEntryAttempts; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return "", err
 		}
 		hash, err := func() (string, error) {
+			if transmuxable {
+				hash, handled, err := w.transmuxUpload(ctx, rde, entry)
+				if handled {
+					return hash, err
+				}
+				// Entry turned out not to be raw-deflate (stored, exotic
+				// method) — take the decompress path below from now on.
+				transmuxable = false
+			}
 			rc, err := extractor.ExtractEntry(ctx, entry)
 			if err != nil {
 				return "", fmt.Errorf("extract: %w", err)
@@ -511,6 +526,79 @@ func (w *ExtractionWorker) extractAndUpload(ctx context.Context, extractor Archi
 		}
 	}
 	return "", lastErr
+}
+
+// singlePutMaxBytes is the largest object we upload with one PutObject call.
+// R2 caps a single PUT at ~5 GiB; transmuxed objects above this stream
+// through the multipart path instead (contentLength -1).
+const singlePutMaxBytes = 4 << 30
+
+// transmuxUpload re-wraps a deflate zip entry as a gzip object without
+// re-encoding: gzip is a fixed 10-byte header + the same raw DEFLATE stream +
+// a CRC-32/ISIZE trailer, and the zip central directory already carries both
+// trailer values. Recompression was the dominant CPU cost of extraction
+// (~40 MB/s/core of gzip encode on XML); copying the compressed bytes
+// verbatim makes an entry cost network time instead of CPU time.
+//
+// The stream is still decoded once on the side — without re-encoding — to
+// compute the manifest MD5 and to verify the central-directory CRC-32, which
+// covers the integrity check that skipping archive/zip's reader gave up.
+//
+// handled=false means the entry isn't raw-deflate-accessible and the caller
+// must extract it the normal way.
+func (w *ExtractionWorker) transmuxUpload(ctx context.Context, rde RawDeflateExtractor, entry ArchiveEntry) (hash string, handled bool, err error) {
+	rc, wantCRC, ok, err := rde.OpenRawDeflate(ctx, entry)
+	if !ok || err != nil {
+		return "", ok, err
+	}
+	defer func() { _ = rc.Close() }()
+
+	// Side-channel decoder: every byte tee'd to the upload also flows through
+	// flate→MD5/CRC. It consumes at the same rate as the upload, and the
+	// trailing io.Copy keeps draining if flate finishes ahead of the writer so
+	// the TeeReader can never block on a stalled pipe.
+	pr, pw := io.Pipe()
+	type hashResult struct {
+		sum string
+		err error
+	}
+	hashCh := make(chan hashResult, 1)
+	go func() {
+		h := md5.New()
+		c := crc32.NewIEEE()
+		fr := flate.NewReader(pr)
+		_, err := io.Copy(io.MultiWriter(h, c), fr)
+		if cerr := fr.Close(); err == nil {
+			err = cerr
+		}
+		if err == nil && c.Sum32() != wantCRC {
+			err = fmt.Errorf("crc32 mismatch: central directory %08x, decoded %08x", wantCRC, c.Sum32())
+		}
+		_, _ = io.Copy(io.Discard, pr)
+		hashCh <- hashResult{sum: fmt.Sprintf("md5:%x", h.Sum(nil)), err: err}
+	}()
+
+	size := int64(len(gzipMemberHeader)) + entry.CompressedSize + gzipTrailerSize
+	if size >= singlePutMaxBytes {
+		size = -1
+	}
+	body := io.MultiReader(
+		bytes.NewReader(gzipMemberHeader),
+		io.TeeReader(rc, pw),
+		bytes.NewReader(gzipTrailer(wantCRC, entry.Size)),
+	)
+
+	r2Key := fmt.Sprintf("assets/%s/files/%s", w.cfg.AssetID, entry.NormalizedPath)
+	putErr := w.storage.PutObject(ctx, r2Key, body, size, DetectContentType(entry.NormalizedPath), &PutOptions{ContentEncoding: "gzip"})
+	_ = pw.CloseWithError(putErr) // nil → clean EOF for the decoder
+	res := <-hashCh
+	if putErr != nil {
+		return "", true, fmt.Errorf("upload: %w", putErr)
+	}
+	if res.err != nil {
+		return "", true, fmt.Errorf("verify deflate stream: %w", res.err)
+	}
+	return res.sum, true, nil
 }
 
 // uploadFromReader uploads a single entry's bytes to storage. Caller owns
