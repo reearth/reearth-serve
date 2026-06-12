@@ -58,8 +58,13 @@ export function createApp(env: Env) {
 
   const extractionQueue = env.EXTRACTION_QUEUE ?? null;
   const thumbnailQueue = env.THUMBNAIL_QUEUE ?? null;
-  // Default: anonymous uploads enabled. Only "false" disables — typo-tolerant.
-  const anonymousUploadEnabled = env.ANONYMOUS_UPLOAD_ENABLED !== "false";
+  // Fail closed: anonymous uploads stay off unless explicitly enabled. The
+  // flag lives as a wrangler secret (not in [vars]) so test campaigns can
+  // flip it without touching wrangler.toml: `wrangler secret put
+  // ANONYMOUS_UPLOAD_ENABLED` with "true" to open, `wrangler secret delete`
+  // to close. Secrets survive deploys, and a forgotten flag shows up in
+  // `wrangler secret list` instead of being silently re-enabled.
+  const anonymousUploadEnabled = env.ANONYMOUS_UPLOAD_ENABLED === "true";
 
   const app = new Hono<AppEnv>();
 
