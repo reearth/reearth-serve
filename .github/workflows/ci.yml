@@ -11,6 +11,10 @@ jobs:
     name: Type Check & Unit Tests
     runs-on: ubuntu-latest
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2
+        with:
+          egress-policy: audit
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -24,6 +28,10 @@ jobs:
     name: Build
     runs-on: ubuntu-latest
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2
+        with:
+          egress-policy: audit
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
@@ -39,6 +47,10 @@ jobs:
       run:
         working-directory: container/archive-extractor
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2
+        with:
+          egress-policy: audit
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
@@ -67,6 +79,10 @@ jobs:
       run:
         working-directory: container/thumbnail
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2
+        with:
+          egress-policy: audit
       - uses: actions/checkout@v4
       - uses: actions/setup-go@v5
         with:
@@ -101,6 +117,10 @@ jobs:
       contents: read
       deployments: write
     steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@e14015d583714f6e62063499dc959a02595150a1 # v2
+        with:
+          egress-policy: audit
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
