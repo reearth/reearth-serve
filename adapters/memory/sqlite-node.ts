@@ -80,17 +80,36 @@ export function applyMigrations(db: DatabaseSync, dir: string): void {
   }
 }
 
+/** The domain schema every backend shares (D1 applies it via wrangler). */
+export const DOMAIN_MIGRATIONS_DIR = fileURLToPath(
+  new URL("../cloudflare/migrations", import.meta.url),
+);
+
 /**
- * An in-memory database with `adapters/cloudflare/migrations/*.sql` applied — the
- * repository layer's test fixture, and the shape the Node runtime will use
- * with a file path instead of `:memory:`.
+ * Tables that only exist where Cloudflare KV and Queues do not: `kv` and
+ * `queue_messages`. Kept out of the D1 migrations on purpose — see the
+ * migration file's header.
+ */
+export const SQL_ADAPTER_MIGRATIONS_DIR = fileURLToPath(
+  new URL("../sql/migrations", import.meta.url),
+);
+
+/**
+ * A database with the given migration directories applied, in order — the
+ * repository layer's test fixture, and the shape the Node runtime uses with a
+ * file path instead of `:memory:`.
+ *
+ * Defaults to the domain schema only, so a test that wants `SqlKeyValue` or
+ * `SqlJobQueue` asks for `SQL_ADAPTER_MIGRATIONS_DIR` explicitly.
  */
 export function createSqliteClient(
   path = ":memory:",
-  migrationsDir = fileURLToPath(new URL("../cloudflare/migrations", import.meta.url)),
+  migrations: string | string[] = DOMAIN_MIGRATIONS_DIR,
 ): NodeSqlClient {
   const db = new DatabaseSync(path);
   db.exec("PRAGMA foreign_keys = ON");
-  applyMigrations(db, migrationsDir);
+  for (const dir of typeof migrations === "string" ? [migrations] : migrations) {
+    applyMigrations(db, dir);
+  }
   return new NodeSqlClient(db);
 }

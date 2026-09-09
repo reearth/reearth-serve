@@ -5,16 +5,16 @@ import {
   JOB_UPSERT_SQL, jobUpsertArgs,
   VERSION_INSERT_SQL, versionInsertArgs, assignedVersion,
   USAGE_INCREMENT_SQL, usageIncrementArgs,
-} from "./d1";
+} from "./stores";
 
 /**
  * `AtomicWrites` over the SQL port: every composite write is one `batch()`,
  * which is atomic on D1 and one round trip on a Hrana server (ADR-012 §3).
  *
  * The statements are exactly the ones the individual stores issue — the SQL
- * lives in `d1.ts` and is shared, so the two paths cannot drift.
+ * lives in `stores.ts` and is shared, so the two paths cannot drift.
  */
-export class D1AtomicWrites implements AtomicWrites {
+export class SqlAtomicWrites implements AtomicWrites {
   constructor(private db: SqlClient) {}
 
   async createAsset({ asset, job, usageScopes }: Parameters<AtomicWrites["createAsset"]>[0]): Promise<void> {

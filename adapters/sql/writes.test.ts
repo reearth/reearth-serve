@@ -2,8 +2,8 @@
 // unit, so a failing statement leaves none of the other rows behind (ADR-012 §3).
 import { describe, expect, test } from "vitest";
 import { createSqliteClient } from "../memory/sqlite-node";
-import { D1AtomicWrites } from "./d1-writes";
-import { D1JobStore, D1MetadataStore, D1StorageUsageStore, D1VersionStore } from "./d1";
+import { SqlAtomicWrites } from "./writes";
+import { SqlJobStore, SqlMetadataStore, SqlStorageUsageStore, SqlVersionStore } from "./stores";
 import type { AssetMetadata } from "../../core/asset/model";
 import type { AssetVersion } from "../../core/asset/model";
 import type { Job } from "../../core/job/model";
@@ -11,11 +11,11 @@ import type { Job } from "../../core/job/model";
 function fixture() {
   const sql = createSqliteClient();
   return {
-    writes: new D1AtomicWrites(sql),
-    assets: new D1MetadataStore(sql),
-    versions: new D1VersionStore(sql),
-    jobs: new D1JobStore(sql),
-    usage: new D1StorageUsageStore(sql),
+    writes: new SqlAtomicWrites(sql),
+    assets: new SqlMetadataStore(sql),
+    versions: new SqlVersionStore(sql),
+    jobs: new SqlJobStore(sql),
+    usage: new SqlStorageUsageStore(sql),
   };
 }
 
@@ -53,7 +53,7 @@ const version: AssetVersion = {
   createdAt: 1000,
 };
 
-describe("D1AtomicWrites.createAsset", () => {
+describe("SqlAtomicWrites.createAsset", () => {
   test("writes the asset, its job and every usage counter", async () => {
     const f = fixture();
     await f.writes.createAsset({ asset, job, usageScopes: ["project:p1", "workspace:ws1"] });
@@ -80,7 +80,7 @@ describe("D1AtomicWrites.createAsset", () => {
   });
 });
 
-describe("D1AtomicWrites.createVersion", () => {
+describe("SqlAtomicWrites.createVersion", () => {
   test("returns the assigned version number and increments the counters", async () => {
     const f = fixture();
     const first = await f.writes.createVersion({ version, job, usageScopes: ["project:p1"] });
@@ -112,7 +112,7 @@ describe("D1AtomicWrites.createVersion", () => {
   });
 });
 
-describe("D1AtomicWrites.saveJob", () => {
+describe("SqlAtomicWrites.saveJob", () => {
   test("writes the job and the asset that mirrors it", async () => {
     const f = fixture();
     await f.writes.createAsset({ asset, job });

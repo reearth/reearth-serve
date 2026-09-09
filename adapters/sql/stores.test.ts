@@ -6,15 +6,15 @@ import { describe, expect, test } from "vitest";
 import { createSqliteClient } from "../memory/sqlite-node";
 import type { SqlClient } from "../../core/sql/port";
 import {
-  D1CleanupPendingStore,
-  D1JobStore,
-  D1MemberStore,
-  D1MetadataStore,
-  D1ProjectStore,
-  D1StorageUsageStore,
-  D1VersionStore,
-  D1WorkspaceStore,
-} from "./d1";
+  SqlCleanupPendingStore,
+  SqlJobStore,
+  SqlMemberStore,
+  SqlMetadataStore,
+  SqlProjectStore,
+  SqlStorageUsageStore,
+  SqlVersionStore,
+  SqlWorkspaceStore,
+} from "./stores";
 import type { AssetMetadata } from "../../core/asset/model";
 import type { Job } from "../../core/job/model";
 
@@ -42,9 +42,9 @@ const job = (over: Partial<Job> = {}): Job => ({
   ...over,
 });
 
-describe("D1WorkspaceStore", () => {
+describe("SqlWorkspaceStore", () => {
   test("save, find, delete", async () => {
-    const store = new D1WorkspaceStore(db());
+    const store = new SqlWorkspaceStore(db());
     const ws = { id: "ws1", name: "Test", createdAt: 100, updatedAt: 100 };
     await store.save(ws);
     expect(await store.find("ws1")).toMatchObject(ws);
@@ -54,9 +54,9 @@ describe("D1WorkspaceStore", () => {
   });
 });
 
-describe("D1MemberStore", () => {
+describe("SqlMemberStore", () => {
   test("save, find, list, listByUser, delete", async () => {
-    const store = new D1MemberStore(db());
+    const store = new SqlMemberStore(db());
     const m1 = { workspaceId: "ws1", userId: "u1", role: "owner" as const, createdAt: 100, updatedAt: 100 };
     const m2 = { workspaceId: "ws1", userId: "u2", role: "editor" as const, createdAt: 200, updatedAt: 200 };
     const m3 = { workspaceId: "ws2", userId: "u1", role: "viewer" as const, createdAt: 300, updatedAt: 300 };
@@ -74,9 +74,9 @@ describe("D1MemberStore", () => {
   });
 });
 
-describe("D1ProjectStore", () => {
+describe("SqlProjectStore", () => {
   test("save, find, list by owner and workspace, delete", async () => {
-    const store = new D1ProjectStore(db());
+    const store = new SqlProjectStore(db());
     await store.save({ id: "p1", name: "P1", createdAt: 100, updatedAt: 100, ownerId: "u1", workspaceId: "ws1" });
     await store.save({ id: "p2", name: "P2", createdAt: 200, updatedAt: 200, ownerId: "u1", workspaceId: "ws2" });
 
@@ -90,9 +90,9 @@ describe("D1ProjectStore", () => {
   });
 });
 
-describe("D1MetadataStore", () => {
+describe("SqlMetadataStore", () => {
   test("save, find, update, delete", async () => {
-    const store = new D1MetadataStore(db());
+    const store = new SqlMetadataStore(db());
     await store.save(asset({ userMeta: { a: 1 } }), 3600);
 
     const found = await store.find("a1");
@@ -109,7 +109,7 @@ describe("D1MetadataStore", () => {
   });
 
   test("meta columns round-trip through the JSON meta column", async () => {
-    const store = new D1MetadataStore(db());
+    const store = new SqlMetadataStore(db());
     await store.save(asset({ type: "archive", archiveFormat: "zip", status: "pending", fileCount: 7, jobId: "j1" }), 3600);
     const found = await store.find("a1");
     expect(found?.archiveFormat).toBe("zip");
@@ -118,7 +118,7 @@ describe("D1MetadataStore", () => {
   });
 
   test("list scopes by project and paginates with a cursor", async () => {
-    const store = new D1MetadataStore(db());
+    const store = new SqlMetadataStore(db());
     for (let i = 1; i <= 3; i++) {
       await store.save(asset({ id: `a${i}`, createdAt: i * 100, projectId: "p1" }), 3600);
     }
@@ -134,7 +134,7 @@ describe("D1MetadataStore", () => {
   });
 
   test("list without a scope returns nothing", async () => {
-    const store = new D1MetadataStore(db());
+    const store = new SqlMetadataStore(db());
     await store.save(asset({ projectId: "p1" }), 3600);
     expect((await store.list()).items).toEqual([]);
     expect((await store.list({})).items).toEqual([]);
@@ -142,10 +142,10 @@ describe("D1MetadataStore", () => {
 
   test("list scoped by accessibleByUser joins members and projects", async () => {
     const sql = db();
-    const assets = new D1MetadataStore(sql);
-    await new D1WorkspaceStore(sql).save({ id: "ws1", name: "W", createdAt: 1, updatedAt: 1 });
-    await new D1MemberStore(sql).save({ workspaceId: "ws1", userId: "u1", role: "owner", createdAt: 1, updatedAt: 1 });
-    await new D1ProjectStore(sql).save({ id: "p1", name: "P", createdAt: 1, updatedAt: 1, ownerId: "u1", workspaceId: "ws1" });
+    const assets = new SqlMetadataStore(sql);
+    await new SqlWorkspaceStore(sql).save({ id: "ws1", name: "W", createdAt: 1, updatedAt: 1 });
+    await new SqlMemberStore(sql).save({ workspaceId: "ws1", userId: "u1", role: "owner", createdAt: 1, updatedAt: 1 });
+    await new SqlProjectStore(sql).save({ id: "p1", name: "P", createdAt: 1, updatedAt: 1, ownerId: "u1", workspaceId: "ws1" });
     await assets.save(asset({ id: "mine", projectId: "p1" }), 3600);
     await assets.save(asset({ id: "theirs", projectId: "p9" }), 3600);
 
@@ -154,7 +154,7 @@ describe("D1MetadataStore", () => {
   });
 
   test("listExpired ignores non-expiring assets", async () => {
-    const store = new D1MetadataStore(db());
+    const store = new SqlMetadataStore(db());
     await store.save(asset({ id: "expiring", expiresAt: 500 }), 3600);
     await store.save(asset({ id: "project", expiresAt: 0 }), 3600);
     const expired = await store.listExpired(1000, 10);
@@ -162,9 +162,9 @@ describe("D1MetadataStore", () => {
   });
 });
 
-describe("D1VersionStore", () => {
+describe("SqlVersionStore", () => {
   test("save assigns increasing version numbers per asset", async () => {
-    const store = new D1VersionStore(db());
+    const store = new SqlVersionStore(db());
     const base = { assetId: "a1", version: 0, filename: "f", contentType: "text/plain", size: 1, createdAt: 1 };
     const v1 = await store.save({ ...base, id: "v1" });
     const v2 = await store.save({ ...base, id: "v2" });
@@ -177,7 +177,7 @@ describe("D1VersionStore", () => {
   });
 
   test("findByAssetId, update, delete and deleteByAssetId", async () => {
-    const store = new D1VersionStore(db());
+    const store = new SqlVersionStore(db());
     const base = { assetId: "a1", version: 0, filename: "f", contentType: "text/plain", createdAt: 1 };
     await store.save({ ...base, id: "v1", size: 10 });
     await store.save({ ...base, id: "v2", size: 20 });
@@ -198,9 +198,9 @@ describe("D1VersionStore", () => {
   });
 });
 
-describe("D1JobStore", () => {
+describe("SqlJobStore", () => {
   test("save, find, delete", async () => {
-    const store = new D1JobStore(db());
+    const store = new SqlJobStore(db());
     await store.save(job({ fileCount: 3, error: "boom" }));
     const found = await store.find("j1");
     expect(found?.status).toBe("pending");
@@ -211,7 +211,7 @@ describe("D1JobStore", () => {
   });
 
   test("list scopes by session", async () => {
-    const store = new D1JobStore(db());
+    const store = new SqlJobStore(db());
     await store.save(job({ id: "j1", sessionId: "s1", createdAt: 1 }));
     await store.save(job({ id: "j2", sessionId: "s2", createdAt: 2 }));
     const result = await store.list({ sessionId: "s1" });
@@ -219,7 +219,7 @@ describe("D1JobStore", () => {
   });
 
   test("listRetriable honours the retry budget, the stuck threshold and progress markers", async () => {
-    const store = new D1JobStore(db());
+    const store = new SqlJobStore(db());
     const now = Date.now();
     await store.save(job({ id: "failed", status: "failed", retryCount: 0, updatedAt: now }));
     await store.save(job({ id: "fresh-running", status: "running", retryCount: 0, updatedAt: now }));
@@ -233,8 +233,8 @@ describe("D1JobStore", () => {
 
   test("listStuckAssets joins completed jobs against unfinished assets", async () => {
     const sql = db();
-    const jobs = new D1JobStore(sql);
-    const assets = new D1MetadataStore(sql);
+    const jobs = new SqlJobStore(sql);
+    const assets = new SqlMetadataStore(sql);
     await assets.save(asset({ id: "a1", status: "extracting" }), 3600);
     await assets.save(asset({ id: "a2", status: "ready" }), 3600);
     await jobs.save(job({ id: "j1", assetId: "a1", status: "completed" }));
@@ -244,9 +244,9 @@ describe("D1JobStore", () => {
   });
 });
 
-describe("D1CleanupPendingStore", () => {
+describe("SqlCleanupPendingStore", () => {
   test("add, list, remove", async () => {
-    const store = new D1CleanupPendingStore(db());
+    const store = new SqlCleanupPendingStore(db());
     await store.add("assets/a1/");
     await store.add("assets/a2/");
     expect((await store.list(10)).map((p) => p.prefix).sort()).toEqual(["assets/a1/", "assets/a2/"]);
@@ -255,9 +255,9 @@ describe("D1CleanupPendingStore", () => {
   });
 });
 
-describe("D1StorageUsageStore", () => {
+describe("SqlStorageUsageStore", () => {
   test("increment accumulates, decrement floors at zero, recalculate overwrites", async () => {
-    const store = new D1StorageUsageStore(db());
+    const store = new SqlStorageUsageStore(db());
     expect(await store.get("project:p1")).toBeNull();
 
     await store.increment("project:p1", 1000);
