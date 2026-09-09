@@ -21,11 +21,20 @@ import type { AppEnv, Deps } from "./types";
 export function createApp(deps: Deps) {
   const app = new Hono<AppEnv>();
 
-  // Authentication middleware (JWKS cache comes from deps)
-  app.use("*", authMiddleware(deps.auth));
+  // Authentication middleware (JWKS cache comes from deps).
+  //
+  // `/api/internal/*` is excluded: it authenticates with the shared secret in
+  // the same Authorization header (see `internalApiAuth` below, and the
+  // extraction container's callback in container/archive-extractor). Running
+  // the OIDC middleware there would try to verify that secret as a JWT and
+  // reject every container callback with 401 as soon as an issuer is
+  // configured — i.e. in production.
+  app.use("*", exceptInternalApi(authMiddleware(deps.auth)));
 
-  // Anonymous session tracking (for unauthenticated users)
-  app.use("*", sessionMiddleware(deps.sessions, deps.sessionTtlSeconds));
+  // Anonymous session tracking (for unauthenticated users). Internal callers
+  // are machines with their own credential; minting a demo session per
+  // container callback would only burn a KV write.
+  app.use("*", exceptInternalApi(sessionMiddleware(deps.sessions, deps.sessionTtlSeconds)));
 
   // Inject dependencies into all routes
   app.use("*", async (c, next) => {
@@ -111,6 +120,23 @@ function timingSafeEqual(a: string, b: string): boolean {
     mismatch |= a.charCodeAt(i) ^ b.charCodeAt(i);
   }
   return mismatch === 0;
+}
+
+const INTERNAL_API_PREFIX = "/api/internal/";
+
+/**
+ * Run `mw` for every request except `/api/internal/*`. Internal callers
+ * present a shared secret, not an end-user identity, so the OIDC and session
+ * middlewares must not see them. The context vars those middlewares would
+ * have set are filled with `null` so the rest of the app can still read them.
+ */
+function exceptInternalApi(mw: MiddlewareHandler<AppEnv>): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
+    if (!c.req.path.startsWith(INTERNAL_API_PREFIX)) return mw(c, next);
+    if (c.get("user") === undefined) c.set("user", null);
+    if (c.get("sessionId") === undefined) c.set("sessionId", null);
+    await next();
+  };
 }
 
 function internalApiAuth(expected: string | undefined): MiddlewareHandler {
