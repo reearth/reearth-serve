@@ -1,20 +1,9 @@
 import { createLocalJWKSet, type JWTVerifyGetKey, type JSONWebKeySet } from "jose";
+import type { KeyValue } from "../kv/port";
 
 const DEFAULT_JWKS_CACHE_TTL = 3600;
 // Cap remote JWKS lookup so cold-start auth doesn't block on a slow OIDC provider.
 const JWKS_FETCH_TIMEOUT_MS = 3000;
-
-/**
- * Cross-isolate cache for the fetched JWKS document.
- *
- * Deliberately smaller than a general key-value port (ADR-012 §2 introduces
- * that later): get a string, put a string with a TTL. The Cloudflare KV
- * implementation lives in `infra/kv-cache.ts`.
- */
-export interface JwksCache {
-  get(key: string): Promise<string | null>;
-  put(key: string, value: string, options: { ttlSeconds: number }): Promise<void>;
-}
 
 // In-memory cache (per isolate)
 let memoryCache: { issuer: string; jwks: JWTVerifyGetKey; fetchedAt: number } | null = null;
@@ -29,11 +18,14 @@ function jwksCacheKey(issuer: string): string {
 
 /**
  * Resolve JWKS with 3-tier cache: in-memory → shared cache → remote fetch.
- * Exported for testing.
+ *
+ * The cross-isolate tier is the generic `KeyValue` port (ADR-012 §2), so the
+ * same code caches into Cloudflare KV in production and into the in-memory
+ * store in tests. Exported for testing.
  */
 export async function resolveJWKS(
   issuer: string,
-  opts?: { cache?: JwksCache; ttlSeconds?: number; forceFresh?: boolean },
+  opts?: { cache?: KeyValue; ttlSeconds?: number; forceFresh?: boolean },
 ): Promise<JWTVerifyGetKey> {
   const ttl = opts?.ttlSeconds ?? DEFAULT_JWKS_CACHE_TTL;
 
@@ -119,13 +111,16 @@ if (import.meta.vitest) {
       .sign(privateKey);
   }
 
-  function mockCache(): JwksCache & { _store: Map<string, string> } {
+  function mockCache(): KeyValue & { _store: Map<string, string> } {
     const store = new Map<string, string>();
     return {
       _store: store,
       get: vi.fn(async (key: string) => store.get(key) ?? null),
       put: vi.fn(async (key: string, value: string) => {
         store.set(key, value);
+      }),
+      delete: vi.fn(async (key: string) => {
+        store.delete(key);
       }),
     };
   }

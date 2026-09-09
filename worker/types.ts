@@ -43,6 +43,18 @@ export type ContextDeps = {
 };
 
 /**
+ * Runtime quotas that differ per provider.
+ *
+ * Cloudflare caps a scheduled invocation at ~1000 subrequests; a Node process
+ * has no such cap. The cron reads the number from here instead of hardcoding
+ * Cloudflare's (ADR-012 §2).
+ */
+export type Limits = {
+  /** Storage/database calls one scheduled invocation may spend. */
+  subrequestBudget: number;
+};
+
+/**
  * The whole application's dependency set: everything in `AppEnv.Variables`
  * except the per-request `user` / `sessionId`, plus the request-independent
  * collaborators and configuration that `createApp` and the queue/cron
@@ -61,6 +73,7 @@ export type Deps = ContextDeps & {
   containers: ContainerLauncher;
   /** How long an extraction job may sit untouched before the cron retriggers it. */
   extractionStuckThresholdMs: number;
+  limits: Limits;
 };
 
 export type AppEnv = {

@@ -1,10 +1,9 @@
-import type { AssetMetadata, UploadSession } from "../asset/model";
-import type { MetadataStore, UploadSessionStore } from "../asset/repository";
+import type { AssetMetadata } from "../asset/model";
+import type { MetadataStore } from "../asset/repository";
 import type { Job } from "../job/model";
 import type { JobStore } from "../job/repository";
 import type { Project } from "../project/model";
 import type { ProjectStore } from "../project/repository";
-import type { Session, SessionStore } from "../session/repository";
 import type { Workspace } from "../workspace/model";
 import type { WorkspaceStore } from "../workspace/repository";
 import type { Member } from "../member/model";
@@ -117,26 +116,6 @@ export class KVMetadataStore implements MetadataStore {
       listKey = "asset_list:all";
     }
     return listFromIndex(this.kv, listKey, (id) => this.find(id), options);
-  }
-}
-
-export class KVUploadSessionStore implements UploadSessionStore {
-  constructor(private kv: KVNamespace) {}
-
-  async save(session: UploadSession, ttlSeconds: number): Promise<void> {
-    await this.kv.put(`upload:${session.id}`, JSON.stringify(session), {
-      expirationTtl: ttlSeconds,
-    });
-  }
-
-  async find(id: string): Promise<UploadSession | null> {
-    const raw = await this.kv.get(`upload:${id}`);
-    if (!raw) return null;
-    return JSON.parse(raw) as UploadSession;
-  }
-
-  async delete(id: string): Promise<void> {
-    await this.kv.delete(`upload:${id}`);
   }
 }
 
@@ -564,20 +543,4 @@ if (import.meta.vitest) {
     expect(result.items).toHaveLength(1);
     expect(result.items[0].id).toBe("j1");
   });
-}
-
-export class KVSessionStore implements SessionStore {
-  constructor(private kv: KVNamespace) {}
-
-  async save(session: Session, ttlSeconds: number): Promise<void> {
-    await this.kv.put(`session:${session.id}`, JSON.stringify(session), {
-      expirationTtl: ttlSeconds,
-    });
-  }
-
-  async find(id: string): Promise<Session | null> {
-    const raw = await this.kv.get(`session:${id}`);
-    if (!raw) return null;
-    return JSON.parse(raw) as Session;
-  }
 }
