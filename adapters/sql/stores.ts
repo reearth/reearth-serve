@@ -8,7 +8,7 @@
  * `adapters/sql/` rather than under a provider directory.
  */
 import type { AssetMetadata, AssetVersion } from "../../core/asset/model";
-import type { MetadataStore, VersionStore } from "../../core/asset/repository";
+import type { MetadataStore, StorageUsage, StorageUsageStore, VersionStore } from "../../core/asset/repository";
 import type { ListResult } from "../../core/asset/repository";
 import type { Job } from "../../core/job/model";
 import type { JobStore } from "../../core/job/repository";
@@ -626,19 +626,6 @@ export class SqlCleanupPendingStore implements CleanupPendingStore {
 // ---------------------------------------------------------------------------
 // SqlStorageUsageStore (ADR-004)
 // ---------------------------------------------------------------------------
-
-export interface StorageUsage {
-  totalSize: number;
-  assetCount: number;
-  updatedAt: number;
-}
-
-export interface StorageUsageStore {
-  get(scope: string): Promise<StorageUsage | null>;
-  increment(scope: string, sizeBytes: number): Promise<void>;
-  decrement(scope: string, sizeBytes: number): Promise<void>;
-  recalculate(scope: string, totalSize: number, assetCount: number): Promise<void>;
-}
 
 /** The storage-usage upsert, shared with the batch writer. */
 export const USAGE_INCREMENT_SQL =

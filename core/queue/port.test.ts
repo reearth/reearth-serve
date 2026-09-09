@@ -16,7 +16,7 @@ import { handleThumbnailQueue } from "../thumbnail/handler";
 import { enqueueThumbnail, type ThumbnailMessage } from "../thumbnail/queue";
 import { retryDelaySeconds } from "../extraction/backoff";
 import type { Deps } from "../types";
-import type { ContainerLauncher } from "../../adapters/cloudflare/container";
+import type { ContainerLauncher } from "../container/port";
 import type { Job } from "../job/model";
 
 // The consumers below only ever touch `containers`, `jobs` and `storage`;
