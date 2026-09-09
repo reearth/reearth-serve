@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import type { StoredFile } from "../../core/asset/model";
 import type { FileStorage } from "../../core/asset/repository";
 
@@ -35,7 +36,7 @@ export class MemoryFileStorage implements FileStorage {
       data,
       contentType,
       contentEncoding: options?.contentEncoding,
-      etag: `"${data.byteLength.toString(16)}-${hash(data)}"`,
+      etag: `"${md5(data)}"`,
     });
   }
 
@@ -128,12 +129,11 @@ function toStream(data: Uint8Array): ReadableStream<Uint8Array> {
   });
 }
 
-/** Cheap non-cryptographic digest, enough to make ETags differ per content. */
-function hash(data: Uint8Array): string {
-  let h = 0x811c9dc5;
-  for (let i = 0; i < data.byteLength; i++) {
-    h ^= data[i];
-    h = Math.imul(h, 0x01000193) >>> 0;
-  }
-  return h.toString(16);
+/**
+ * R2 reports the object's MD5 as its ETag for a single-part upload, and the CLI
+ * compares `md5:<etag>` against a locally computed digest to decide whether a
+ * file is unchanged. Anything else here would make every sync look dirty.
+ */
+function md5(data: Uint8Array): string {
+  return createHash("md5").update(data).digest("hex");
 }

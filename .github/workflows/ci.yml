@@ -33,6 +33,27 @@ jobs:
       - run: npm ci
       - run: npm run build
 
+  e2e-node:
+    name: E2E / Node runtime
+    runs-on: ubuntu-latest
+    # The suite runs with no cloud credentials at all: the Node runtime
+    # (runtime/node) on node:sqlite, in-process file storage and the SQL-backed
+    # kv/queue tables. Presigned, container and thumbnail tests are skipped —
+    # that runtime has none of those features.
+    #
+    # Reporting only, for now: the e2e suite has 8 pre-existing failures that
+    # also fail against the Cloudflare dev server, so gating on it would mean
+    # gating on already-red tests. Flip this off once they are fixed.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:e2e:node
+
   container-archive-extractor:
     name: Container / archive-extractor
     runs-on: ubuntu-latest

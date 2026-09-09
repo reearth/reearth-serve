@@ -1,0 +1,18 @@
+{
+  "extends": "./tsconfig.json",
+  "include": ["core/**/*", "shared/**/*", "wasm.d.ts"],
+  "compilerOptions": {
+    "strict": true,
+    "noEmit": true,
+    "lib": ["DOM", "DOM.Iterable", "ES2022"],
+    // The point of this project: no "@cloudflare/workers-types". If core/ ever
+    // reaches for R2Bucket, D1Database, Queue, Env or any other Workers global,
+    // `npm run typecheck` fails here (ADR-012 §1).
+    "types": ["vitest/importMeta", "node"],
+    "target": "ES2022",
+    "module": "ES2022",
+    "moduleResolution": "bundler",
+    "esModuleInterop": true,
+    "resolveJsonModule": true
+  }
+}

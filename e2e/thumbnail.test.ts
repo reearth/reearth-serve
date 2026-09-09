@@ -54,7 +54,12 @@ async function pollThumbnail(url: string, timeoutMs = 30000): Promise<Response> 
   throw new Error(`Thumbnail did not become available within ${timeoutMs}ms (last status: ${lastStatus}): ${url}`);
 }
 
-describe("Thumbnail generation and delivery", () => {
+// Thumbnail generation needs the bundled jSquash wasm codecs, which only a
+// bundler (wrangler/vite) can resolve. Runtimes without them set
+// E2E_THUMBNAILS=false; everywhere else the suite runs as before.
+const thumbnailsAvailable = process.env.E2E_THUMBNAILS !== "false";
+
+describe.skipIf(!thumbnailsAvailable)("Thumbnail generation and delivery", () => {
   let assetId: string;
 
   let sourceFilename: string;

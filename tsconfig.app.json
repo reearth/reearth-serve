@@ -11,7 +11,8 @@
     "shared/**/*",
     "cli/**/*",
     "e2e/**/*",
-    "env.d.ts"
+    "env.d.ts",
+    "wasm.d.ts"
   ],
   "compilerOptions": {
     "composite": true,

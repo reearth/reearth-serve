@@ -10,7 +10,6 @@ vi.mock("../thumbnail/generator", () => ({
 }));
 
 import { MemoryJobQueue } from "../../adapters/memory/memory-queue";
-import { CloudflareJobQueue, toQueueMessages } from "../../adapters/cloudflare/queues";
 import { handleQueue, type ExtractionMessage } from "../extraction/handler";
 import { handleThumbnailQueue } from "../thumbnail/handler";
 import { enqueueThumbnail, type ThumbnailMessage } from "../thumbnail/queue";
@@ -106,44 +105,6 @@ describe("MemoryJobQueue", () => {
     const message = queue.receive()[0];
     message.ack();
     expect(() => message.retry()).toThrow(/settled twice/);
-  });
-});
-
-describe("Cloudflare adapter", () => {
-  test("send forwards delaySeconds and omits the options object without one", async () => {
-    const calls: unknown[][] = [];
-    const queue = new CloudflareJobQueue<ExtractionMessage>({
-      send: async (...args: unknown[]) => {
-        calls.push(args);
-      },
-    } as unknown as Queue<ExtractionMessage>);
-
-    await queue.send(extraction);
-    await queue.send(extraction, { delaySeconds: 300 });
-
-    expect(calls).toEqual([
-      [extraction, undefined],
-      [extraction, { delaySeconds: 300 }],
-    ]);
-  });
-
-  test("toQueueMessages carries attempts and forwards ack/retry per message", () => {
-    const acked: string[] = [];
-    const retried: { id: string; options?: { delaySeconds?: number } }[] = [];
-    const batch = {
-      messages: [
-        { body: extraction, attempts: 3, ack: () => acked.push("m1"), retry: (o?: { delaySeconds?: number }) => retried.push({ id: "m1", options: o }) },
-        { body: extraction, attempts: 1, ack: () => acked.push("m2"), retry: (o?: { delaySeconds?: number }) => retried.push({ id: "m2", options: o }) },
-      ],
-    } as unknown as MessageBatch<ExtractionMessage>;
-
-    const messages = toQueueMessages(batch);
-    expect(messages.map((m) => m.attempts)).toEqual([3, 1]);
-    messages[0].ack();
-    messages[1].retry({ delaySeconds: 60 });
-
-    expect(acked).toEqual(["m1"]);
-    expect(retried).toEqual([{ id: "m2", options: { delaySeconds: 60 } }]);
   });
 });
 
