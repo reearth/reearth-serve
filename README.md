@@ -64,9 +64,11 @@ The production endpoint is `https://serve.reearth.land`. Point the CLI at it via
 
 | Directory | Description |
 |-----------|-------------|
-| `worker/` | Cloudflare Worker (Hono routes, domain logic, infra adapters) |
-| `worker/infra/` | Infrastructure layer (D1, KV, R2, container adapters) |
-| `worker/infra/migrations/` | D1 schema migrations |
+| `core/` | Provider-independent Hono routes, domain logic and port interfaces |
+| `adapters/cloudflare/` | Cloudflare adapters (D1, KV, R2, Queues, Containers) and the composition root |
+| `adapters/cloudflare/migrations/` | D1 schema migrations |
+| `adapters/memory/` | In-memory and `node:sqlite` adapters (tests, local runtimes) |
+| `runtime/cloudflare/` | Cloudflare Worker entrypoint (`wrangler.toml` `main`) |
 | `shared/` | Shared types (Zod schemas) and API path constants |
 | `app/` | React Router frontend |
 | `cli/` | CLI client (Commander.js) |

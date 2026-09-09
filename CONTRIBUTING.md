@@ -63,7 +63,7 @@ Metadata is stored in Cloudflare D1 (SQLite). Sessions and upload sessions use K
 
 ### Schema Migrations
 
-Migrations live in `worker/infra/migrations/` and are managed by wrangler:
+Migrations live in `adapters/cloudflare/migrations/` and are managed by wrangler:
 
 ```bash
 # Create a new migration

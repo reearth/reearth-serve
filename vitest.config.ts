@@ -6,7 +6,7 @@ export default defineConfig({
   },
   test: {
     // The repository layer is tested against `node:sqlite`
-    // (worker/infra/sqlite-node.ts). Node 22 — the version CI runs — only
+    // (adapters/memory/sqlite-node.ts). Node 22 — the version CI runs — only
     // exposes that module behind a flag; Node 24+ accepts the flag as a no-op,
     // so one setting covers both.
     poolOptions: {
@@ -17,7 +17,7 @@ export default defineConfig({
       {
         test: {
           name: "unit",
-          includeSource: ["worker/**/*.ts"],
+          includeSource: ["core/**/*.ts", "adapters/**/*.ts", "runtime/**/*.ts"],
           exclude: ["e2e/**", "node_modules/**"],
         },
       },
