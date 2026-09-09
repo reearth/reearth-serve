@@ -11,6 +11,7 @@ import { CerbosAuthorizer } from "../auth/authorizer";
 import { SimpleAuthorizer } from "./authorizer";
 import { CloudflareContainerLauncher, type ObjectStoreCredentials } from "./container";
 import { KVJwksCache } from "./kv-cache";
+import { CloudflareJobQueue } from "./queues";
 
 // Anonymous sessions are identity, not content — they must outlive the
 // demo asset TTL. A large multipart upload can take many hours between the
@@ -44,8 +45,8 @@ export function buildDeps(env: Env): Deps {
     projects: new D1ProjectStore(env.DB),
     workspaces: new D1WorkspaceStore(env.DB),
     members: new D1MemberStore(env.DB),
-    extractionQueue: env.EXTRACTION_QUEUE ?? null,
-    thumbnailQueue: env.THUMBNAIL_QUEUE ?? null,
+    extractionQueue: env.EXTRACTION_QUEUE ? new CloudflareJobQueue(env.EXTRACTION_QUEUE) : null,
+    thumbnailQueue: env.THUMBNAIL_QUEUE ? new CloudflareJobQueue(env.THUMBNAIL_QUEUE) : null,
     storageUsage: new D1StorageUsageStore(env.DB),
     pendingCleanup: new D1CleanupPendingStore(env.DB),
     // Fail closed: anonymous uploads stay off unless explicitly enabled. The

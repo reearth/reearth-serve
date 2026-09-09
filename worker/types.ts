@@ -10,6 +10,9 @@ import type { SessionStore } from "./session/repository";
 import type { ContainerLauncher } from "./infra/container";
 import type { StorageUsageStore } from "./infra/d1";
 import type { CleanupPendingStore } from "./cleanup/repository";
+import type { JobQueue } from "./queue/port";
+import type { ExtractionMessage } from "./extraction/handler";
+import type { ThumbnailMessage } from "./thumbnail/queue";
 
 /**
  * Dependencies that route handlers read off the request context.
@@ -30,8 +33,8 @@ export type ContextDeps = {
   projects: ProjectStore;
   workspaces: WorkspaceStore;
   members: MemberStore;
-  extractionQueue: Queue | null;
-  thumbnailQueue: Queue | null;
+  extractionQueue: JobQueue<ExtractionMessage> | null;
+  thumbnailQueue: JobQueue<ThumbnailMessage> | null;
   storageUsage: StorageUsageStore;
   pendingCleanup: CleanupPendingStore;
   anonymousUploadEnabled: boolean;

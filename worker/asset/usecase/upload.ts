@@ -5,6 +5,9 @@ import type { JobStore } from "../../job/repository";
 import type { Job } from "../../job/model";
 import { generateId, storageKey } from "./shared";
 import { enqueueThumbnail } from "../../thumbnail/queue";
+import type { ThumbnailMessage } from "../../thumbnail/queue";
+import type { JobQueue } from "../../queue/port";
+import type { ExtractionMessage } from "../../extraction/handler";
 
 export async function uploadAsset(
   metadata: MetadataStore,
@@ -20,7 +23,7 @@ export async function uploadAsset(
   },
   ttlSeconds: number,
   baseUrl: string,
-  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: Queue | null; thumbnailQueue?: Queue | null; skipExtraction?: boolean },
+  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean },
 ): Promise<AssetUploadResult> {
   const id = generateId();
   const now = Date.now();

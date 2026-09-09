@@ -1,4 +1,5 @@
 import { isThumbnailableContentType } from "./sizes";
+import type { JobQueue } from "../queue/port";
 
 export interface ThumbnailMessage {
   assetId: string;
@@ -12,7 +13,7 @@ export interface ThumbnailMessage {
 // must not be derailed by a queue outage. The version row still lands; the
 // user can trigger regeneration later if needed.
 export async function enqueueThumbnail(
-  queue: Queue | null,
+  queue: JobQueue<ThumbnailMessage> | null,
   msg: ThumbnailMessage,
 ): Promise<void> {
   if (!queue) return;

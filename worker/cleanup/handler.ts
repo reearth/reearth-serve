@@ -4,6 +4,7 @@ import type { JobStore } from "../job/repository";
 import type { MetadataStore } from "../asset/repository";
 import type { Deps } from "../types";
 import type { ExtractionMessage } from "../extraction/handler";
+import type { JobQueue } from "../queue/port";
 
 const MAX_RETRIES = 5;
 // Cap per-tick re-enqueue work so a backlog of failed jobs cannot blow the
@@ -101,7 +102,7 @@ export function effectiveRetryCount(
 async function retriggerPendingJobs(
   metadata: MetadataStore,
   jobs: JobStore,
-  queue: { send(message: ExtractionMessage): Promise<void> },
+  queue: JobQueue<ExtractionMessage>,
   stuckThresholdMs: number,
 ): Promise<void> {
   if (!jobs.listRetriable) return;

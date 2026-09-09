@@ -5,6 +5,9 @@ import type { JobStore } from "../../job/repository";
 import type { Job } from "../../job/model";
 import { storageKey } from "./shared";
 import { enqueueThumbnail } from "../../thumbnail/queue";
+import type { ThumbnailMessage } from "../../thumbnail/queue";
+import type { JobQueue } from "../../queue/port";
+import type { ExtractionMessage } from "../../extraction/handler";
 
 export async function completeUploadSession(
   sessions: UploadSessionStore,
@@ -16,7 +19,7 @@ export async function completeUploadSession(
   ttlSeconds: number,
   baseUrl: string,
   parts?: UploadPart[],
-  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: Queue | null; thumbnailQueue?: Queue | null; skipExtraction?: boolean },
+  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean },
 ): Promise<AssetUploadResult | null> {
   const session = await sessions.find(id);
   if (!session) return null;
