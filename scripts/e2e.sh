@@ -66,7 +66,7 @@ OIDC_AUDIENCE = \"e2e-audience\"
 " "${WRANGLER_CONFIG}"
 
 # Anonymous uploads are a fail-closed wrangler secret in production
-# (see worker/app.ts). Supply it for the local dev server via .dev.vars,
+# (see core/app.ts). Supply it for the local dev server via .dev.vars,
 # which the cleanup trap removes.
 if [ -f .dev.vars ]; then
   echo "Error: .dev.vars already exists; refusing to overwrite it." >&2

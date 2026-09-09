@@ -5,7 +5,7 @@
 # after injecting secrets via sed, then run `wrangler deploy`.
 
 name = "reearth-serve"
-main = "./worker/index.ts"
+main = "./runtime/cloudflare/index.ts"
 
 compatibility_date = "2025-03-10"
 compatibility_flags = ["nodejs_compat"]
@@ -26,7 +26,7 @@ BASE_URL = "https://serve.reearth.land"
 # as a wrangler secret so it can be flipped without a redeploy and survives
 # deploys: `wrangler secret put ANONYMOUS_UPLOAD_ENABLED` ("true" enables),
 # `wrangler secret delete ANONYMOUS_UPLOAD_ENABLED` disables (fail-closed
-# default in worker/app.ts). Defining it here would clobber the secret on
+# default in core/app.ts). Defining it here would clobber the secret on
 # every deploy.
 # The extractor heartbeats job status every ~2 minutes (statusUpdateInterval
 # in container/archive-extractor/worker.go), so a running job whose
@@ -47,7 +47,7 @@ id = "KV_NAMESPACE_ID"
 binding = "DB"
 database_name = "reearth-serve"
 database_id = "D1_DATABASE_ID"
-migrations_dir = "worker/infra/migrations"
+migrations_dir = "adapters/cloudflare/migrations"
 
 [[containers]]
 class_name = "ArchiveExtractorContainer"

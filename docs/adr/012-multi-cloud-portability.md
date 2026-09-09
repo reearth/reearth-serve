@@ -22,9 +22,9 @@ What is *not* portable is Cloudflare's value proposition itself: zero-egress R2 
 ### 1. One core, one set of ports, one composition root per cloud
 
 ```
-core/                    domain models, use cases, port interfaces (today: worker/{asset,job,...})
+core/                    domain models, use cases, port interfaces
 adapters/
-  cloudflare/            R2, D1, KV, Queues, Containers (today: worker/infra/)
+  cloudflare/            R2, D1, KV, Queues, Containers
   aws/                   S3, Hrana SQL, SQL-backed queue/KV, ECS RunTask
   gcp/                   GCS, Hrana SQL, SQL-backed queue/KV, Cloud Run Jobs
   memory/                in-memory / local SQLite for unit and e2e tests
