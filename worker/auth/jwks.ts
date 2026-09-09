@@ -4,6 +4,18 @@ const DEFAULT_JWKS_CACHE_TTL = 3600;
 // Cap remote JWKS lookup so cold-start auth doesn't block on a slow OIDC provider.
 const JWKS_FETCH_TIMEOUT_MS = 3000;
 
+/**
+ * Cross-isolate cache for the fetched JWKS document.
+ *
+ * Deliberately smaller than a general key-value port (ADR-012 §2 introduces
+ * that later): get a string, put a string with a TTL. The Cloudflare KV
+ * implementation lives in `infra/kv-cache.ts`.
+ */
+export interface JwksCache {
+  get(key: string): Promise<string | null>;
+  put(key: string, value: string, options: { ttlSeconds: number }): Promise<void>;
+}
+
 // In-memory cache (per isolate)
 let memoryCache: { issuer: string; jwks: JWTVerifyGetKey; fetchedAt: number } | null = null;
 
@@ -11,17 +23,17 @@ export function jwksUrl(issuer: string): URL {
   return new URL(".well-known/jwks.json", issuer.endsWith("/") ? issuer : `${issuer}/`);
 }
 
-function kvKey(issuer: string): string {
+export function jwksCacheKey(issuer: string): string {
   return `jwks:${issuer}`;
 }
 
 /**
- * Resolve JWKS with 3-tier cache: in-memory → KV → remote fetch.
+ * Resolve JWKS with 3-tier cache: in-memory → shared cache → remote fetch.
  * Exported for testing.
  */
 export async function resolveJWKS(
   issuer: string,
-  opts?: { kv?: KVNamespace; ttlSeconds?: number; forceFresh?: boolean },
+  opts?: { cache?: JwksCache; ttlSeconds?: number; forceFresh?: boolean },
 ): Promise<JWTVerifyGetKey> {
   const ttl = opts?.ttlSeconds ?? DEFAULT_JWKS_CACHE_TTL;
 
@@ -31,11 +43,11 @@ export async function resolveJWKS(
     return memoryCache.jwks;
   }
 
-  // 2. KV cache (cross-isolate)
-  if (!opts?.forceFresh && opts?.kv) {
-    const cached = await opts.kv.get<JSONWebKeySet>(kvKey(issuer), "json");
+  // 2. Shared cache (cross-isolate)
+  if (!opts?.forceFresh && opts?.cache) {
+    const cached = await opts.cache.get(jwksCacheKey(issuer));
     if (cached) {
-      const jwks = createLocalJWKSet(cached);
+      const jwks = createLocalJWKSet(JSON.parse(cached) as JSONWebKeySet);
       memoryCache = { issuer, jwks, fetchedAt: Date.now() };
       return jwks;
     }
@@ -50,9 +62,9 @@ export async function resolveJWKS(
   }
   const jwksJson = await res.json() as JSONWebKeySet;
 
-  // Store in KV
-  if (opts?.kv) {
-    await opts.kv.put(kvKey(issuer), JSON.stringify(jwksJson), { expirationTtl: ttl });
+  // Store in the shared cache
+  if (opts?.cache) {
+    await opts.cache.put(jwksCacheKey(issuer), JSON.stringify(jwksJson), { ttlSeconds: ttl });
   }
 
   const jwks = createLocalJWKSet(jwksJson);
@@ -107,40 +119,33 @@ if (import.meta.vitest) {
       .sign(privateKey);
   }
 
-  function mockKV(): KVNamespace & { _store: Map<string, string> } {
+  function mockCache(): JwksCache & { _store: Map<string, string> } {
     const store = new Map<string, string>();
     return {
       _store: store,
-      get: vi.fn(async (key: string, type?: string) => {
-        const v = store.get(key);
-        if (!v) return null;
-        return type === "json" ? JSON.parse(v) : v;
-      }),
+      get: vi.fn(async (key: string) => store.get(key) ?? null),
       put: vi.fn(async (key: string, value: string) => {
         store.set(key, value);
       }),
-      delete: vi.fn(async (key: string) => { store.delete(key); }),
-      list: vi.fn(async () => ({ keys: [], list_complete: true, cacheStatus: null })),
-      getWithMetadata: vi.fn(async () => ({ value: null, metadata: null, cacheStatus: null })),
-    } as unknown as KVNamespace & { _store: Map<string, string> };
+    };
   }
 
   // --- resolveJWKS caching tests ---
 
-  test("resolveJWKS fetches from remote and caches in KV", async () => {
-    const kv = mockKV();
+  test("resolveJWKS fetches from remote and caches it", async () => {
+    const cache = mockCache();
     const fetchSpy = vi.fn(() =>
       Promise.resolve(new Response(JSON.stringify(jwksJson), { status: 200 })),
     );
     vi.stubGlobal("fetch", fetchSpy);
 
-    const jwks = await resolveJWKS(TEST_ISSUER, { kv, ttlSeconds: 600 });
+    const jwks = await resolveJWKS(TEST_ISSUER, { cache, ttlSeconds: 600 });
     expect(jwks).toBeDefined();
     expect(fetchSpy).toHaveBeenCalledTimes(1);
-    expect(kv.put).toHaveBeenCalledWith(
+    expect(cache.put).toHaveBeenCalledWith(
       `jwks:${TEST_ISSUER}`,
       JSON.stringify(jwksJson),
-      { expirationTtl: 600 },
+      { ttlSeconds: 600 },
     );
 
     // Verify the cached JWKS actually works for token verification
@@ -151,15 +156,15 @@ if (import.meta.vitest) {
     vi.unstubAllGlobals();
   });
 
-  test("resolveJWKS uses KV cache on second call (different isolate)", async () => {
-    const kv = mockKV();
-    // Pre-populate KV
-    kv._store.set(`jwks:${TEST_ISSUER}`, JSON.stringify(jwksJson));
+  test("resolveJWKS uses the shared cache on second call (different isolate)", async () => {
+    const cache = mockCache();
+    // Pre-populate the shared cache
+    cache._store.set(`jwks:${TEST_ISSUER}`, JSON.stringify(jwksJson));
 
     const fetchSpy = vi.fn();
     vi.stubGlobal("fetch", fetchSpy);
 
-    const jwks = await resolveJWKS(TEST_ISSUER, { kv });
+    const jwks = await resolveJWKS(TEST_ISSUER, { cache });
     expect(fetchSpy).not.toHaveBeenCalled();
 
     const token = await buildToken();
@@ -170,31 +175,31 @@ if (import.meta.vitest) {
   });
 
   test("resolveJWKS uses in-memory cache on repeated calls (same isolate)", async () => {
-    const kv = mockKV();
-    kv._store.set(`jwks:${TEST_ISSUER}`, JSON.stringify(jwksJson));
+    const cache = mockCache();
+    cache._store.set(`jwks:${TEST_ISSUER}`, JSON.stringify(jwksJson));
 
-    // First call → reads from KV
-    await resolveJWKS(TEST_ISSUER, { kv });
-    expect(kv.get).toHaveBeenCalledTimes(1);
+    // First call → reads from the shared cache
+    await resolveJWKS(TEST_ISSUER, { cache });
+    expect(cache.get).toHaveBeenCalledTimes(1);
 
-    // Second call → in-memory, no KV read
-    await resolveJWKS(TEST_ISSUER, { kv });
-    expect(kv.get).toHaveBeenCalledTimes(1);
+    // Second call → in-memory, no shared-cache read
+    await resolveJWKS(TEST_ISSUER, { cache });
+    expect(cache.get).toHaveBeenCalledTimes(1);
   });
 
   test("resolveJWKS forceFresh bypasses all caches", async () => {
-    const kv = mockKV();
-    kv._store.set(`jwks:${TEST_ISSUER}`, JSON.stringify(jwksJson));
+    const cache = mockCache();
+    cache._store.set(`jwks:${TEST_ISSUER}`, JSON.stringify(jwksJson));
 
     // Warm up in-memory cache
-    await resolveJWKS(TEST_ISSUER, { kv });
+    await resolveJWKS(TEST_ISSUER, { cache });
 
     const fetchSpy = vi.fn(() =>
       Promise.resolve(new Response(JSON.stringify(jwksJson), { status: 200 })),
     );
     vi.stubGlobal("fetch", fetchSpy);
 
-    await resolveJWKS(TEST_ISSUER, { kv, forceFresh: true });
+    await resolveJWKS(TEST_ISSUER, { cache, forceFresh: true });
     expect(fetchSpy).toHaveBeenCalledTimes(1);
 
     vi.unstubAllGlobals();
@@ -211,7 +216,7 @@ if (import.meta.vitest) {
     vi.unstubAllGlobals();
   });
 
-  test("resolveJWKS works without KV (in-memory only)", async () => {
+  test("resolveJWKS works without a shared cache (in-memory only)", async () => {
     const fetchSpy = vi.fn(() =>
       Promise.resolve(new Response(JSON.stringify(jwksJson), { status: 200 })),
     );

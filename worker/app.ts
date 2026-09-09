@@ -4,100 +4,53 @@ import { Scalar } from "@scalar/hono-api-reference";
 import { assetRoutes } from "./asset/handler";
 import { fileRoutes } from "./file/handler";
 import { jobRoutes, jobInternalRoutes } from "./job/handler";
-import { R2FileStorage } from "./infra/storage";
-import {
-  KVUploadSessionStore, KVSessionStore,
-} from "./infra/metadata";
-import {
-  D1MetadataStore, D1JobStore, D1ProjectStore,
-  D1WorkspaceStore, D1MemberStore, D1StorageUsageStore, D1VersionStore,
-  D1CleanupPendingStore,
-} from "./infra/d1";
 import { projectRoutes } from "./project/handler";
 import { workspaceRoutes } from "./workspace/handler";
 import { meRoutes } from "./me/handler";
-import { R2PresignedUrlGenerator } from "./infra/presigned";
 import { authMiddleware } from "./auth/middleware";
-import { CerbosAuthorizer } from "./auth/authorizer";
 import { sessionMiddleware } from "./session/middleware";
-import { SimpleAuthorizer } from "./infra/authorizer";
-import type { AppEnv } from "./types";
+import type { AppEnv, Deps } from "./types";
 
-export function createApp(env: Env) {
-  const metadata = new D1MetadataStore(env.DB);
-  const versions = new D1VersionStore(env.DB);
-  const storage = new R2FileStorage(env.STORAGE);
-  const uploadSessions = new KVUploadSessionStore(env.KV);
-  const jobs = new D1JobStore(env.DB);
-  const projects = new D1ProjectStore(env.DB);
-  const workspaces = new D1WorkspaceStore(env.DB);
-  const memberStore = new D1MemberStore(env.DB);
-  const sessions = new KVSessionStore(env.KV);
-  const storageUsage = new D1StorageUsageStore(env.DB);
-  const pendingCleanup = new D1CleanupPendingStore(env.DB);
-  const authorizer = env.CERBOS_ENDPOINT
-    ? new CerbosAuthorizer(env.CERBOS_ENDPOINT)
-    : new SimpleAuthorizer();
-  const ttlSeconds = parseInt(env.ASSET_TTL_SECONDS, 10) || 3600;
-  const baseUrl = env.BASE_URL;
-  // Anonymous sessions are identity, not content — they must outlive the
-  // demo asset TTL. A large multipart upload can take many hours between the
-  // session-stamped create call and the complete call; if the session
-  // expired in between, the completer would be treated as a different user
-  // and the upload would 404 at the ownership check.
-  const sessionTtlSeconds = 7 * 24 * 60 * 60;
-
-  const presignedUrls = (env.R2_S3_ENDPOINT && env.R2_ACCESS_KEY_ID && env.R2_SECRET_ACCESS_KEY)
-    ? new R2PresignedUrlGenerator({
-        endpoint: env.R2_S3_ENDPOINT,
-        accessKeyId: env.R2_ACCESS_KEY_ID,
-        secretAccessKey: env.R2_SECRET_ACCESS_KEY,
-        bucket: env.R2_BUCKET_NAME || "reearth-serve",
-      })
-    : null;
-
-  const extractionQueue = env.EXTRACTION_QUEUE ?? null;
-  const thumbnailQueue = env.THUMBNAIL_QUEUE ?? null;
-  // Fail closed: anonymous uploads stay off unless explicitly enabled. The
-  // flag lives as a wrangler secret (not in [vars]) so test campaigns can
-  // flip it without touching wrangler.toml: `wrangler secret put
-  // ANONYMOUS_UPLOAD_ENABLED` with "true" to open, `wrangler secret delete`
-  // to close. Secrets survive deploys, and a forgotten flag shows up in
-  // `wrangler secret list` instead of being silently re-enabled.
-  const anonymousUploadEnabled = env.ANONYMOUS_UPLOAD_ENABLED === "true";
-
+/**
+ * Builds the HTTP application from an already-assembled dependency set.
+ *
+ * `createApp` knows nothing about Cloudflare (or any other provider): the
+ * env-to-adapter wiring lives in a composition root such as
+ * `infra/cloudflare-deps.ts` (ADR-012 §1).
+ */
+export function createApp(deps: Deps) {
   const app = new Hono<AppEnv>();
 
-  // Authentication middleware (with KV-backed JWKS cache)
-  app.use("*", authMiddleware(env));
+  // Authentication middleware (JWKS cache comes from deps)
+  app.use("*", authMiddleware(deps.auth));
 
   // Anonymous session tracking (for unauthenticated users)
-  app.use("*", sessionMiddleware(sessions, sessionTtlSeconds));
+  app.use("*", sessionMiddleware(deps.sessions, deps.sessionTtlSeconds));
 
   // Inject dependencies into all routes
   app.use("*", async (c, next) => {
-    c.set("metadata", metadata);
-    c.set("versions", versions);
-    c.set("storage", storage);
-    c.set("uploadSessions", uploadSessions);
-    c.set("presignedUrls", presignedUrls);
-    c.set("jobs", jobs);
-    c.set("ttlSeconds", ttlSeconds);
-    c.set("baseUrl", baseUrl);
-    c.set("authorizer", authorizer);
-    c.set("projects", projects);
-    c.set("workspaces", workspaces);
-    c.set("members", memberStore);
-    c.set("extractionQueue", extractionQueue);
-    c.set("thumbnailQueue", thumbnailQueue);
-    c.set("storageUsage", storageUsage);
-    c.set("pendingCleanup", pendingCleanup);
-    c.set("anonymousUploadEnabled", anonymousUploadEnabled);
+    c.set("metadata", deps.metadata);
+    c.set("versions", deps.versions);
+    c.set("storage", deps.storage);
+    c.set("uploadSessions", deps.uploadSessions);
+    c.set("presignedUrls", deps.presignedUrls);
+    c.set("jobs", deps.jobs);
+    c.set("ttlSeconds", deps.ttlSeconds);
+    c.set("baseUrl", deps.baseUrl);
+    c.set("authorizer", deps.authorizer);
+    c.set("projects", deps.projects);
+    c.set("workspaces", deps.workspaces);
+    c.set("members", deps.members);
+    c.set("extractionQueue", deps.extractionQueue);
+    c.set("thumbnailQueue", deps.thumbnailQueue);
+    c.set("storageUsage", deps.storageUsage);
+    c.set("pendingCleanup", deps.pendingCleanup);
+    c.set("anonymousUploadEnabled", deps.anonymousUploadEnabled);
     await next();
   });
 
   // Public API (versioned)
-  app.get("/api/v1/health", (c) => c.json({ ok: true, anonymousUploadEnabled }));
+  app.get("/api/v1/health", (c) => c.json({ ok: true, anonymousUploadEnabled: deps.anonymousUploadEnabled }));
   app.route("/api/v1/assets", assetRoutes);
   app.route("/api/v1/jobs", jobRoutes);
   app.route("/api/v1/me", meRoutes);
@@ -110,12 +63,12 @@ export function createApp(env: Env) {
   // Asset IDs are embedded in public file URLs, so without auth an attacker
   // who sees a permalink could mark the victim's job failed or "complete"
   // with bogus metadata.
-  app.use("/api/internal/*", internalApiAuth(env.INTERNAL_API_SECRET));
+  app.use("/api/internal/*", internalApiAuth(deps.internalApiSecret));
   app.route("/api/internal/jobs", jobInternalRoutes);
 
   // Internal asset existence check (for container TTL checks)
   app.get("/api/internal/assets/:id/exists", async (c) => {
-    const asset = await metadata.find(c.req.param("id"));
+    const asset = await deps.metadata.find(c.req.param("id"));
     return asset ? c.json({ exists: true }) : c.json({ exists: false }, 404);
   });
 

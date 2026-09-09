@@ -2,7 +2,15 @@ import { Container } from "@cloudflare/containers";
 import type { ArchiveFormat } from "../asset/model";
 
 export interface ContainerLauncher {
+  /**
+   * Whether archive extraction can be launched at all. False means deploy-time
+   * configuration is missing — a permanent problem, not a transient one — so
+   * callers back off instead of burning their retry budget.
+   */
+  readonly archiveExtractorAvailable: boolean;
   launchArchiveExtractor(params: ArchiveExtractorParams): Promise<void>;
+  /** Runs the out-of-Worker thumbnail generator. Throws if it is unavailable. */
+  generateThumbnails(params: ThumbnailGeneratorParams): Promise<void>;
 }
 
 export interface ArchiveExtractorParams {
@@ -10,6 +18,20 @@ export interface ArchiveExtractorParams {
   archiveKey: string;
   archiveFilename: string;
   archiveFormat: ArchiveFormat;
+}
+
+export interface ThumbnailGeneratorParams {
+  assetId: string;
+  versionId?: string;
+  sourceKey: string;
+  contentType: string;
+}
+
+export interface ObjectStoreCredentials {
+  endpoint: string;
+  accessKeyId: string;
+  secretAccessKey: string;
+  bucket: string;
 }
 
 // Hard ceiling on a single extraction run. Activity renewal (below) keeps the
@@ -92,34 +114,47 @@ export class ThumbnailContainer extends Container {
   }
 }
 
+export interface CloudflareContainerConfig {
+  archiveExtractor: DurableObjectNamespace | null;
+  thumbnailGenerator: DurableObjectNamespace | null;
+  baseUrl: string;
+  objectStore: ObjectStoreCredentials | null;
+  internalApiSecret: string | null;
+}
+
 export class CloudflareContainerLauncher implements ContainerLauncher {
-  constructor(
-    private readonly binding: DurableObjectNamespace,
-    private readonly baseUrl: string,
-    private readonly r2Config: {
-      endpoint: string;
-      accessKeyId: string;
-      secretAccessKey: string;
-      bucket: string;
-    },
-    private readonly internalApiSecret: string,
-  ) {}
+  constructor(private readonly config: CloudflareContainerConfig) {}
+
+  get archiveExtractorAvailable(): boolean {
+    return Boolean(
+      this.config.archiveExtractor &&
+      this.config.objectStore &&
+      // Without the shared secret the container cannot authenticate its
+      // status callbacks, so launching it would just produce 401s.
+      this.config.internalApiSecret,
+    );
+  }
 
   async launchArchiveExtractor(params: ArchiveExtractorParams): Promise<void> {
-    const id = this.binding.idFromName(params.assetId);
-    const stub = this.binding.get(id) as DurableObjectStub & ArchiveExtractorContainer;
+    const { archiveExtractor, objectStore, internalApiSecret } = this.config;
+    if (!archiveExtractor || !objectStore || !internalApiSecret) {
+      throw new Error("archive extractor container is not configured");
+    }
+
+    const id = archiveExtractor.idFromName(params.assetId);
+    const stub = archiveExtractor.get(id) as DurableObjectStub & ArchiveExtractorContainer;
 
     const envVars = {
-      R2_ENDPOINT: this.r2Config.endpoint,
-      R2_ACCESS_KEY_ID: this.r2Config.accessKeyId,
-      R2_SECRET_ACCESS_KEY: this.r2Config.secretAccessKey,
-      R2_BUCKET: this.r2Config.bucket,
+      R2_ENDPOINT: objectStore.endpoint,
+      R2_ACCESS_KEY_ID: objectStore.accessKeyId,
+      R2_SECRET_ACCESS_KEY: objectStore.secretAccessKey,
+      R2_BUCKET: objectStore.bucket,
       ASSET_ID: params.assetId,
       ARCHIVE_KEY: params.archiveKey,
       ARCHIVE_FILENAME: params.archiveFilename,
       ARCHIVE_FORMAT: params.archiveFormat,
-      WORKER_API_URL: this.baseUrl,
-      INTERNAL_API_SECRET: this.internalApiSecret,
+      WORKER_API_URL: this.config.baseUrl,
+      INTERNAL_API_SECRET: internalApiSecret,
     };
 
     // startExtraction catches container.start() failures internally (a thrown
@@ -130,6 +165,43 @@ export class CloudflareContainerLauncher implements ContainerLauncher {
     const result = await stub.startExtraction(envVars);
     if (result !== "started") {
       throw new Error(`extractor container failed to start: ${result}`);
+    }
+  }
+
+  async generateThumbnails(params: ThumbnailGeneratorParams): Promise<void> {
+    const { thumbnailGenerator, objectStore } = this.config;
+    if (!thumbnailGenerator) {
+      throw new Error("THUMBNAIL_GENERATOR binding is not configured");
+    }
+    if (!objectStore) {
+      throw new Error("R2 S3 credentials are not configured");
+    }
+
+    // One DO instance per (asset, version) so concurrent requests for the same
+    // source coalesce on a single container. Bursts targeting different assets
+    // spread across max_instances.
+    const idName = params.versionId ? `${params.assetId}:${params.versionId}` : params.assetId;
+    const id = thumbnailGenerator.idFromName(idName);
+    const stub = thumbnailGenerator.get(id) as DurableObjectStub & {
+      generate(envVars: Record<string, string>, request: object): Promise<Response>;
+    };
+
+    const envVars = {
+      R2_ENDPOINT: objectStore.endpoint,
+      R2_ACCESS_KEY_ID: objectStore.accessKeyId,
+      R2_SECRET_ACCESS_KEY: objectStore.secretAccessKey,
+      R2_BUCKET: objectStore.bucket,
+    };
+    const request = {
+      assetId: params.assetId,
+      versionId: params.versionId ?? "",
+      sourceKey: params.sourceKey,
+      contentType: params.contentType,
+    };
+    const res = await stub.generate(envVars, request);
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`container returned ${res.status}: ${body}`);
     }
   }
 }
