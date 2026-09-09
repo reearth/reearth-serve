@@ -1,10 +1,10 @@
 import type { Deps } from "../../core/types";
 import { R2FileStorage } from "./storage";
 import {
-  D1MetadataStore, D1JobStore, D1ProjectStore,
-  D1WorkspaceStore, D1MemberStore, D1StorageUsageStore, D1VersionStore,
-  D1CleanupPendingStore,
-} from "./d1";
+  SqlMetadataStore, SqlJobStore, SqlProjectStore,
+  SqlWorkspaceStore, SqlMemberStore, SqlStorageUsageStore, SqlVersionStore,
+  SqlCleanupPendingStore,
+} from "../sql/stores";
 import { R2PresignedUrlGenerator } from "./presigned";
 import { CerbosAuthorizer } from "../../core/auth/authorizer";
 import { SimpleAuthorizer } from "./authorizer";
@@ -13,7 +13,7 @@ import { CloudflareKeyValue } from "./kv";
 import { KeyValueUploadSessionStore, KeyValueSessionStore } from "../../core/kv/stores";
 import { CloudflareJobQueue } from "./queues";
 import { D1SqlClient } from "./sql";
-import { D1AtomicWrites } from "./d1-writes";
+import { SqlAtomicWrites } from "../sql/writes";
 
 // Anonymous sessions are identity, not content — they must outlive the
 // demo asset TTL. A large multipart upload can take many hours between the
@@ -42,25 +42,25 @@ export function buildDeps(env: Env): Deps {
   const sql = new D1SqlClient(env.DB);
 
   return {
-    metadata: new D1MetadataStore(sql),
-    versions: new D1VersionStore(sql),
-    writes: new D1AtomicWrites(sql),
+    metadata: new SqlMetadataStore(sql),
+    versions: new SqlVersionStore(sql),
+    writes: new SqlAtomicWrites(sql),
     storage: new R2FileStorage(env.STORAGE),
     uploadSessions: new KeyValueUploadSessionStore(kv),
     presignedUrls: objectStore ? new R2PresignedUrlGenerator(objectStore) : null,
-    jobs: new D1JobStore(sql),
+    jobs: new SqlJobStore(sql),
     ttlSeconds: parseInt(env.ASSET_TTL_SECONDS, 10) || 3600,
     baseUrl: env.BASE_URL,
     authorizer: env.CERBOS_ENDPOINT
       ? new CerbosAuthorizer(env.CERBOS_ENDPOINT)
       : new SimpleAuthorizer(),
-    projects: new D1ProjectStore(sql),
-    workspaces: new D1WorkspaceStore(sql),
-    members: new D1MemberStore(sql),
+    projects: new SqlProjectStore(sql),
+    workspaces: new SqlWorkspaceStore(sql),
+    members: new SqlMemberStore(sql),
     extractionQueue: env.EXTRACTION_QUEUE ? new CloudflareJobQueue(env.EXTRACTION_QUEUE) : null,
     thumbnailQueue: env.THUMBNAIL_QUEUE ? new CloudflareJobQueue(env.THUMBNAIL_QUEUE) : null,
-    storageUsage: new D1StorageUsageStore(sql),
-    pendingCleanup: new D1CleanupPendingStore(sql),
+    storageUsage: new SqlStorageUsageStore(sql),
+    pendingCleanup: new SqlCleanupPendingStore(sql),
     // Fail closed: anonymous uploads stay off unless explicitly enabled. The
     // flag lives as a wrangler secret (not in [vars]) so test campaigns can
     // flip it without touching wrangler.toml: `wrangler secret put

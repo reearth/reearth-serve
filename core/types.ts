@@ -8,7 +8,7 @@ import type { WorkspaceStore } from "./workspace/repository";
 import type { MemberStore } from "./member/repository";
 import type { SessionStore } from "./session/repository";
 import type { ContainerLauncher } from "../adapters/cloudflare/container";
-import type { StorageUsageStore } from "../adapters/cloudflare/d1";
+import type { StorageUsageStore } from "../adapters/sql/stores";
 import type { CleanupPendingStore } from "./cleanup/repository";
 import type { JobQueue } from "./queue/port";
 import type { ExtractionMessage } from "./extraction/handler";

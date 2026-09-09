@@ -1,3 +1,12 @@
+/**
+ * The repository layer over the `SqlClient` port (ADR-012 §3).
+ *
+ * Nothing here is Cloudflare-specific: the dialect is SQLite and the transport
+ * is whatever `SqlClient` is handed in — D1 on Cloudflare
+ * (`adapters/cloudflare/sql.ts`), `node:sqlite` on the Node runtime
+ * (`adapters/memory/sqlite-node.ts`). That is why these files live in
+ * `adapters/sql/` rather than under a provider directory.
+ */
 import type { AssetMetadata, AssetVersion } from "../../core/asset/model";
 import type { MetadataStore, VersionStore } from "../../core/asset/repository";
 import type { ListResult } from "../../core/asset/repository";
@@ -10,7 +19,7 @@ import type { WorkspaceStore } from "../../core/workspace/repository";
 import type { Member } from "../../core/member/model";
 import type { MemberStore } from "../../core/member/repository";
 import type { SqlClient, SqlValue } from "../../core/sql/port";
-import { rowToModel, modelToRow, encodeCursor, decodeCursor, queryAll, queryFirst } from "./d1-helpers";
+import { rowToModel, modelToRow, encodeCursor, decodeCursor, queryAll, queryFirst } from "./helpers";
 
 // Meta keys: fields stored in the JSON `meta` column instead of dedicated columns.
 const ASSET_META_KEYS = ["contentEncoding", "originalSize", "archiveFormat", "fileCount", "extractedSize", "jobId"];
@@ -66,10 +75,10 @@ function buildScopeClause(
 }
 
 // ---------------------------------------------------------------------------
-// D1WorkspaceStore
+// SqlWorkspaceStore
 // ---------------------------------------------------------------------------
 
-export class D1WorkspaceStore implements WorkspaceStore {
+export class SqlWorkspaceStore implements WorkspaceStore {
   constructor(private db: SqlClient) {}
 
   async save(workspace: Workspace): Promise<void> {
@@ -92,10 +101,10 @@ export class D1WorkspaceStore implements WorkspaceStore {
 }
 
 // ---------------------------------------------------------------------------
-// D1MemberStore
+// SqlMemberStore
 // ---------------------------------------------------------------------------
 
-export class D1MemberStore implements MemberStore {
+export class SqlMemberStore implements MemberStore {
   constructor(private db: SqlClient) {}
 
   async save(member: Member): Promise<void> {
@@ -143,10 +152,10 @@ export class D1MemberStore implements MemberStore {
 }
 
 // ---------------------------------------------------------------------------
-// D1ProjectStore
+// SqlProjectStore
 // ---------------------------------------------------------------------------
 
-export class D1ProjectStore implements ProjectStore {
+export class SqlProjectStore implements ProjectStore {
   constructor(private db: SqlClient) {}
 
   async save(project: Project): Promise<void> {
@@ -185,7 +194,7 @@ export class D1ProjectStore implements ProjectStore {
 }
 
 // ---------------------------------------------------------------------------
-// D1JobStore
+// SqlJobStore
 // ---------------------------------------------------------------------------
 
 /** The row tuple written by `INSERT OR REPLACE INTO jobs`, shared with the batch writer. */
@@ -203,7 +212,7 @@ export function jobUpsertArgs(job: Job): SqlValue[] {
   ] as SqlValue[];
 }
 
-export class D1JobStore implements JobStore {
+export class SqlJobStore implements JobStore {
   constructor(private db: SqlClient) {}
 
   async save(job: Job): Promise<void> {
@@ -309,7 +318,7 @@ export class D1JobStore implements JobStore {
 }
 
 // ---------------------------------------------------------------------------
-// D1MetadataStore
+// SqlMetadataStore
 // ---------------------------------------------------------------------------
 
 /** The `INSERT OR REPLACE INTO assets` statement, shared with the batch writer. */
@@ -334,7 +343,7 @@ export function assetUpsertArgs(asset: AssetMetadata): SqlValue[] {
   ] as SqlValue[];
 }
 
-export class D1MetadataStore implements MetadataStore {
+export class SqlMetadataStore implements MetadataStore {
   constructor(private db: SqlClient) {}
 
   async save(asset: AssetMetadata, _ttlSeconds: number): Promise<void> {
@@ -438,7 +447,7 @@ function parseAssetRow(row: Record<string, unknown>): AssetMetadata {
 }
 
 // ---------------------------------------------------------------------------
-// D1VersionStore (ADR-005)
+// SqlVersionStore (ADR-005)
 // ---------------------------------------------------------------------------
 
 // Assign the per-asset version number inside the INSERT via a subquery.
@@ -474,7 +483,7 @@ export function assignedVersion(rows: Record<string, unknown>[]): number {
   return value;
 }
 
-export class D1VersionStore implements VersionStore {
+export class SqlVersionStore implements VersionStore {
   constructor(private db: SqlClient) {}
 
   async save(version: AssetVersion): Promise<AssetVersion> {
@@ -585,12 +594,12 @@ function parseVersionRow(row: Record<string, unknown>): AssetVersion {
 }
 
 // ---------------------------------------------------------------------------
-// D1CleanupPendingStore (SCA-02)
+// SqlCleanupPendingStore (SCA-02)
 // ---------------------------------------------------------------------------
 
 import type { CleanupPendingStore, PendingCleanup } from "../../core/cleanup/repository";
 
-export class D1CleanupPendingStore implements CleanupPendingStore {
+export class SqlCleanupPendingStore implements CleanupPendingStore {
   constructor(private db: SqlClient) {}
 
   async add(prefix: string): Promise<void> {
@@ -615,7 +624,7 @@ export class D1CleanupPendingStore implements CleanupPendingStore {
 }
 
 // ---------------------------------------------------------------------------
-// D1StorageUsageStore (ADR-004)
+// SqlStorageUsageStore (ADR-004)
 // ---------------------------------------------------------------------------
 
 export interface StorageUsage {
@@ -644,7 +653,7 @@ export function usageIncrementArgs(scope: string, sizeBytes: number, now = Date.
   return [scope, sizeBytes, 1, now];
 }
 
-export class D1StorageUsageStore implements StorageUsageStore {
+export class SqlStorageUsageStore implements StorageUsageStore {
   constructor(private db: SqlClient) {}
 
   async get(scope: string): Promise<StorageUsage | null> {
