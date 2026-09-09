@@ -22,7 +22,9 @@ npm run dev        # Start dev server with HMR (port 5173)
 | `npm run deploy` | Build + deploy to Cloudflare |
 | `npm run check` | Type check + unit tests |
 | `npm run test` | Unit tests only |
-| `npm run test:e2e:dev` | Start dev server + run E2E tests + shut down |
+| `npm run test:e2e:dev` | Start the Cloudflare dev server + run E2E tests + shut down |
+| `npm run test:e2e:node` | Same suite against the Node runtime, no cloud credentials |
+| `npm run start:node` | Start the Node runtime (API only, port 8788) |
 | `npm run test:e2e` | E2E tests (requires running dev server) |
 | `npm run typecheck` | TypeScript type check |
 | `npm run typegen` | Generate Wrangler + React Router types |
@@ -49,6 +51,11 @@ E2E_ENDPOINT=http://localhost:5173 npm run test:e2e
 | `E2E_ENDPOINT` | `http://localhost:8787` | Dev server URL |
 | `E2E_PRESIGNED` | (unset) | Set to `true` to enable presigned upload tests |
 | `E2E_CONTAINER` | (unset) | Set to `true` to enable container extraction tests (requires Docker) |
+| `E2E_THUMBNAILS` | (unset) | Set to `false` to skip thumbnail tests on a runtime without the jSquash wasm codecs |
+
+`npm run test:e2e:node` starts `runtime/node` instead of wrangler and sets
+`E2E_PRESIGNED=false`, `E2E_CONTAINER=false` and `E2E_THUMBNAILS=false`, since
+that runtime has none of those three features. Everything else runs unchanged.
 
 ### Container Tests (Go)
 
@@ -63,7 +70,10 @@ Metadata is stored in Cloudflare D1 (SQLite). Sessions and upload sessions use K
 
 ### Schema Migrations
 
-Migrations live in `adapters/cloudflare/migrations/` and are managed by wrangler:
+The domain schema lives in `adapters/cloudflare/migrations/` and is managed by
+wrangler. `adapters/sql/migrations/` holds the `kv` and `queue_messages` tables,
+which stand in for Cloudflare KV and Queues — the Node runtime applies both
+directories, and D1 must never get the second one.
 
 ```bash
 # Create a new migration

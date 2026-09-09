@@ -13,7 +13,7 @@
     "init:dev-secrets": "bash scripts/init-dev-secrets.sh",
     "typegen": "wrangler types && react-router typegen",
     "check": "npm run typecheck && npm run test",
-    "typecheck": "tsc -b",
+    "typecheck": "tsc -b && tsc -p tsconfig.core.json",
     "test": "vitest run --project unit",
     "test:watch": "vitest --project unit",
     "test:e2e": "vitest run --project e2e",

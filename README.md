@@ -66,9 +66,12 @@ The production endpoint is `https://serve.reearth.land`. Point the CLI at it via
 |-----------|-------------|
 | `core/` | Provider-independent Hono routes, domain logic and port interfaces |
 | `adapters/cloudflare/` | Cloudflare adapters (D1, KV, R2, Queues, Containers) and the composition root |
-| `adapters/cloudflare/migrations/` | D1 schema migrations |
+| `adapters/cloudflare/migrations/` | D1 schema migrations (the domain schema) |
+| `adapters/sql/` | Provider-independent SQL layer: repositories, atomic writes, `SqlKeyValue`, `SqlJobQueue` |
+| `adapters/sql/migrations/` | `kv` / `queue_messages` tables — applied only where Cloudflare KV and Queues do not exist |
 | `adapters/memory/` | In-memory and `node:sqlite` adapters (tests, local runtimes) |
 | `runtime/cloudflare/` | Cloudflare Worker entrypoint (`wrangler.toml` `main`) |
+| `runtime/node/` | Plain Node entrypoint (API only) |
 | `shared/` | Shared types (Zod schemas) and API path constants |
 | `app/` | React Router frontend |
 | `cli/` | CLI client (Commander.js) |
@@ -85,6 +88,46 @@ The production endpoint is `https://serve.reearth.land`. Point the CLI at it via
 | R2 | Object Storage | File content | Zero egress cost, Range request support |
 
 See [ADR-003](./docs/adr/003-kv-to-d1-migration.md) for the D1 migration rationale, [ADR-005](./docs/adr/005-asset-versioning.md) for asset versioning, [ADR-006](./docs/adr/006-derived-asset-and-asset-edge.md) for derived assets and dependency graphs, and [ADR-007](./docs/adr/007-webhooks-and-event-log.md) for webhooks and event logging.
+
+### Running on Node (API only)
+
+The same `core/` code also runs on a plain Node process, with no Cloudflare
+services at all (see [ADR-012](./docs/adr/012-multi-cloud-portability.md)). It is
+meant for local runs, CI and porting work — not yet for production.
+
+```bash
+npm run start:node   # http://localhost:8788
+```
+
+It serves **`/api/*` and `/files/*` only**. The React Router UI is not served —
+SSR on Node is out of scope, and any other path returns 404 saying so.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `8788` | Listen port |
+| `BASE_URL` | `http://localhost:$PORT` | Public base URL used in generated file links |
+| `SQLITE_PATH` | `:memory:` | SQLite database file; in-memory by default |
+| `INTERNAL_API_SECRET` | (unset) | Shared secret for `/api/internal/*` and `POST /internal/cron`; unset ⇒ both refuse every request |
+| `ANONYMOUS_UPLOAD_ENABLED` | (unset) | `"true"` to allow uploads without a token |
+| `ASSET_TTL_SECONDS` | `3600` | TTL for assets that belong to no project |
+| `OIDC_ISSUER_URL` / `OIDC_AUDIENCE` | (unset) | JWT verification; unset ⇒ demo mode |
+| `OBJECT_STORE_*` | (unset) | Reserved for the future S3 adapter; until then storage is in-process |
+| `CONTAINER_LAUNCHER` | `none` | Only `none` is implemented; any other value fails at startup |
+
+Cloudflare drives the cron trigger and the queue consumers for you; on Node the
+operator does. One tick — cleanup, both queue drains, and the `kv` expiry sweep —
+runs on demand:
+
+```bash
+curl -X POST -H "Authorization: Bearer $INTERNAL_API_SECRET" \
+  http://localhost:8788/internal/cron
+```
+
+Not available on this runtime: presigned uploads (no S3 adapter), archive
+extraction (no container launcher), and thumbnail generation (the jSquash wasm
+codecs need a bundler). File storage is in-process, so everything is lost when
+the process exits unless `SQLITE_PATH` is set — and even then, the file bytes are
+not persisted.
 
 ## API
 

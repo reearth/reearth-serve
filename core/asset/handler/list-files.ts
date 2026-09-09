@@ -32,9 +32,13 @@ export function registerListFilesRoute(app: Hono<AppEnv>) {
       return c.json({ error: "Asset not found" }, 404);
     }
 
+    // Body framing is the runtime's business, not ours: an explicit
+    // `Transfer-Encoding: chunked` next to the empty-string bodies below makes
+    // Node emit both that header and `Content-Length: 0`, which is not valid
+    // HTTP/1.1 and undici refuses to parse. Workers already chunks a streaming
+    // body on its own, so dropping the header changes nothing there.
     const ndjsonHeaders = {
       "Content-Type": "application/x-ndjson",
-      "Transfer-Encoding": "chunked",
     };
     const encoder = new TextEncoder();
 
