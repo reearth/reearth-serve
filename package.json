@@ -18,10 +18,13 @@
     "test:watch": "vitest --project unit",
     "test:e2e": "vitest run --project e2e",
     "test:e2e:dev": "bash scripts/e2e.sh",
+    "test:e2e:node": "bash scripts/e2e-node.sh",
+    "start:node": "NODE_OPTIONS=--experimental-sqlite tsx runtime/node/index.ts",
     "cli": "tsx cli/index.ts --"
   },
   "dependencies": {
     "@cloudflare/containers": "^0.1.1",
+    "@hono/node-server": "^2.1.1",
     "@hono/standard-validator": "^0.2.2",
     "@jsquash/jpeg": "^1.6.0",
     "@jsquash/png": "^3.1.1",
