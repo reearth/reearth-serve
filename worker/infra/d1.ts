@@ -9,7 +9,8 @@ import type { Workspace } from "../workspace/model";
 import type { WorkspaceStore } from "../workspace/repository";
 import type { Member } from "../member/model";
 import type { MemberStore } from "../member/repository";
-import { rowToModel, modelToRow, encodeCursor, decodeCursor } from "./d1-helpers";
+import type { SqlClient, SqlValue } from "./sql";
+import { rowToModel, modelToRow, encodeCursor, decodeCursor, queryAll, queryFirst } from "./d1-helpers";
 
 // Meta keys: fields stored in the JSON `meta` column instead of dedicated columns.
 const ASSET_META_KEYS = ["contentEncoding", "originalSize", "archiveFormat", "fileCount", "extractedSize", "jobId"];
@@ -39,7 +40,7 @@ const PROJECT_LIST_LIMIT = 200;
 function buildScopeClause(
   options: { sessionId?: string; projectId?: string; workspaceId?: string; accessibleByUser?: string } | undefined,
   startIdx: number,
-): { clause: string; binds: unknown[] } | null {
+): { clause: string; binds: SqlValue[] } | null {
   if (!options) return null;
   if (options.sessionId) {
     return { clause: `session_id = ?${startIdx}`, binds: [options.sessionId] };
@@ -69,29 +70,24 @@ function buildScopeClause(
 // ---------------------------------------------------------------------------
 
 export class D1WorkspaceStore implements WorkspaceStore {
-  constructor(private db: D1Database) {}
+  constructor(private db: SqlClient) {}
 
   async save(workspace: Workspace): Promise<void> {
     const row = modelToRow(workspace as unknown as Record<string, unknown>);
-    await this.db
-      .prepare(
-        `INSERT OR REPLACE INTO workspaces (id, name, created_at, updated_at)
+    await this.db.execute(
+      `INSERT OR REPLACE INTO workspaces (id, name, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4)`,
-      )
-      .bind(row.id, row.name, row.created_at, row.updated_at)
-      .run();
+      [row.id, row.name, row.created_at, row.updated_at] as SqlValue[],
+    );
   }
 
   async find(id: string): Promise<Workspace | null> {
-    const row = await this.db
-      .prepare("SELECT * FROM workspaces WHERE id = ?1")
-      .bind(id)
-      .first();
-    return row ? rowToModel<Workspace>(row as Record<string, unknown>) : null;
+    const row = await queryFirst(this.db, "SELECT * FROM workspaces WHERE id = ?1", [id]);
+    return row ? rowToModel<Workspace>(row) : null;
   }
 
   async delete(id: string): Promise<void> {
-    await this.db.prepare("DELETE FROM workspaces WHERE id = ?1").bind(id).run();
+    await this.db.execute("DELETE FROM workspaces WHERE id = ?1", [id]);
   }
 }
 
@@ -100,48 +96,49 @@ export class D1WorkspaceStore implements WorkspaceStore {
 // ---------------------------------------------------------------------------
 
 export class D1MemberStore implements MemberStore {
-  constructor(private db: D1Database) {}
+  constructor(private db: SqlClient) {}
 
   async save(member: Member): Promise<void> {
     const row = modelToRow(member as unknown as Record<string, unknown>);
-    await this.db
-      .prepare(
-        `INSERT OR REPLACE INTO members (workspace_id, user_id, role, created_at, updated_at)
+    await this.db.execute(
+      `INSERT OR REPLACE INTO members (workspace_id, user_id, role, created_at, updated_at)
          VALUES (?1, ?2, ?3, ?4, ?5)`,
-      )
-      .bind(row.workspace_id, row.user_id, row.role, row.created_at, row.updated_at)
-      .run();
+      [row.workspace_id, row.user_id, row.role, row.created_at, row.updated_at] as SqlValue[],
+    );
   }
 
   async find(workspaceId: string, userId: string): Promise<Member | null> {
-    const row = await this.db
-      .prepare("SELECT * FROM members WHERE workspace_id = ?1 AND user_id = ?2")
-      .bind(workspaceId, userId)
-      .first();
-    return row ? rowToModel<Member>(row as Record<string, unknown>) : null;
+    const row = await queryFirst(
+      this.db,
+      "SELECT * FROM members WHERE workspace_id = ?1 AND user_id = ?2",
+      [workspaceId, userId],
+    );
+    return row ? rowToModel<Member>(row) : null;
   }
 
   async list(workspaceId: string): Promise<Member[]> {
-    const { results } = await this.db
-      .prepare("SELECT * FROM members WHERE workspace_id = ?1 ORDER BY created_at LIMIT ?2")
-      .bind(workspaceId, MEMBER_LIST_LIMIT)
-      .all();
-    return results.map((r) => rowToModel<Member>(r as Record<string, unknown>));
+    const rows = await queryAll(
+      this.db,
+      "SELECT * FROM members WHERE workspace_id = ?1 ORDER BY created_at LIMIT ?2",
+      [workspaceId, MEMBER_LIST_LIMIT],
+    );
+    return rows.map((r) => rowToModel<Member>(r));
   }
 
   async listByUser(userId: string): Promise<Member[]> {
-    const { results } = await this.db
-      .prepare("SELECT * FROM members WHERE user_id = ?1 ORDER BY created_at LIMIT ?2")
-      .bind(userId, MEMBER_LIST_LIMIT)
-      .all();
-    return results.map((r) => rowToModel<Member>(r as Record<string, unknown>));
+    const rows = await queryAll(
+      this.db,
+      "SELECT * FROM members WHERE user_id = ?1 ORDER BY created_at LIMIT ?2",
+      [userId, MEMBER_LIST_LIMIT],
+    );
+    return rows.map((r) => rowToModel<Member>(r));
   }
 
   async delete(workspaceId: string, userId: string): Promise<void> {
-    await this.db
-      .prepare("DELETE FROM members WHERE workspace_id = ?1 AND user_id = ?2")
-      .bind(workspaceId, userId)
-      .run();
+    await this.db.execute(
+      "DELETE FROM members WHERE workspace_id = ?1 AND user_id = ?2",
+      [workspaceId, userId],
+    );
   }
 }
 
@@ -150,25 +147,20 @@ export class D1MemberStore implements MemberStore {
 // ---------------------------------------------------------------------------
 
 export class D1ProjectStore implements ProjectStore {
-  constructor(private db: D1Database) {}
+  constructor(private db: SqlClient) {}
 
   async save(project: Project): Promise<void> {
     const row = modelToRow(project as unknown as Record<string, unknown>);
-    await this.db
-      .prepare(
-        `INSERT OR REPLACE INTO projects (id, name, created_at, updated_at, owner_id, workspace_id)
+    await this.db.execute(
+      `INSERT OR REPLACE INTO projects (id, name, created_at, updated_at, owner_id, workspace_id)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)`,
-      )
-      .bind(row.id, row.name, row.created_at, row.updated_at, row.owner_id, row.workspace_id ?? null)
-      .run();
+      [row.id, row.name, row.created_at, row.updated_at, row.owner_id, row.workspace_id ?? null] as SqlValue[],
+    );
   }
 
   async find(id: string): Promise<Project | null> {
-    const row = await this.db
-      .prepare("SELECT * FROM projects WHERE id = ?1")
-      .bind(id)
-      .first();
-    return row ? rowToModel<Project>(row as Record<string, unknown>) : null;
+    const row = await queryFirst(this.db, "SELECT * FROM projects WHERE id = ?1", [id]);
+    return row ? rowToModel<Project>(row) : null;
   }
 
   async list(params: { ownerId?: string; workspaceId?: string }): Promise<Project[]> {
@@ -183,12 +175,12 @@ export class D1ProjectStore implements ProjectStore {
     } else {
       return [];
     }
-    const { results } = await this.db.prepare(query).bind(bindValue, PROJECT_LIST_LIMIT).all();
-    return results.map((r) => rowToModel<Project>(r as Record<string, unknown>));
+    const rows = await queryAll(this.db, query, [bindValue, PROJECT_LIST_LIMIT]);
+    return rows.map((r) => rowToModel<Project>(r));
   }
 
   async delete(id: string, _ownerId: string): Promise<void> {
-    await this.db.prepare("DELETE FROM projects WHERE id = ?1").bind(id).run();
+    await this.db.execute("DELETE FROM projects WHERE id = ?1", [id]);
   }
 }
 
@@ -196,35 +188,35 @@ export class D1ProjectStore implements ProjectStore {
 // D1JobStore
 // ---------------------------------------------------------------------------
 
+/** The row tuple written by `INSERT OR REPLACE INTO jobs`, shared with the batch writer. */
+export const JOB_UPSERT_SQL =
+  `INSERT OR REPLACE INTO jobs
+         (id, asset_id, type, status, created_at, updated_at, retry_count, session_id, project_id, version_id, meta)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)`;
+
+export function jobUpsertArgs(job: Job): SqlValue[] {
+  const row = modelToRow(job as unknown as Record<string, unknown>, JOB_META_KEYS);
+  return [
+    row.id, row.asset_id, row.type, row.status,
+    row.created_at, row.updated_at, row.retry_count ?? 0,
+    row.session_id ?? null, row.project_id ?? null, row.version_id ?? null, row.meta ?? null,
+  ] as SqlValue[];
+}
+
 export class D1JobStore implements JobStore {
-  constructor(private db: D1Database) {}
+  constructor(private db: SqlClient) {}
 
   async save(job: Job): Promise<void> {
-    const row = modelToRow(job as unknown as Record<string, unknown>, JOB_META_KEYS);
-    await this.db
-      .prepare(
-        `INSERT OR REPLACE INTO jobs
-         (id, asset_id, type, status, created_at, updated_at, retry_count, session_id, project_id, version_id, meta)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)`,
-      )
-      .bind(
-        row.id, row.asset_id, row.type, row.status,
-        row.created_at, row.updated_at, row.retry_count ?? 0,
-        row.session_id ?? null, row.project_id ?? null, row.version_id ?? null, row.meta ?? null,
-      )
-      .run();
+    await this.db.execute(JOB_UPSERT_SQL, jobUpsertArgs(job));
   }
 
   async find(id: string): Promise<Job | null> {
-    const row = await this.db
-      .prepare("SELECT * FROM jobs WHERE id = ?1")
-      .bind(id)
-      .first();
-    return row ? rowToModel<Job>(row as Record<string, unknown>, JOB_META_KEYS) : null;
+    const row = await queryFirst(this.db, "SELECT * FROM jobs WHERE id = ?1", [id]);
+    return row ? rowToModel<Job>(row, JOB_META_KEYS) : null;
   }
 
   async delete(id: string): Promise<void> {
-    await this.db.prepare("DELETE FROM jobs WHERE id = ?1").bind(id).run();
+    await this.db.execute("DELETE FROM jobs WHERE id = ?1", [id]);
   }
 
   async list(options?: {
@@ -255,9 +247,9 @@ export class D1JobStore implements JobStore {
     const sql = `SELECT * FROM jobs WHERE ${clause}${cursorClause} ORDER BY created_at DESC, id DESC LIMIT ?${bindIdx}`;
     binds.push(limit + 1);
 
-    const { results } = await this.db.prepare(sql).bind(...binds).all();
-    const hasMore = results.length > limit;
-    const items = results.slice(0, limit).map((r) => rowToModel<Job>(r as Record<string, unknown>, JOB_META_KEYS));
+    const rows = await queryAll(this.db, sql, binds);
+    const hasMore = rows.length > limit;
+    const items = rows.slice(0, limit).map((r) => rowToModel<Job>(r, JOB_META_KEYS));
     const cursor = hasMore && items.length > 0
       ? encodeCursor(items[items.length - 1].createdAt, items[items.length - 1].id)
       : undefined;
@@ -281,9 +273,9 @@ export class D1JobStore implements JobStore {
     // duplicate that work and burn the cron's retry budget while the queue is
     // still on it. `failed` stays immediate — the container reported a real
     // failure and there is no queue message in flight anymore.
-    const { results } = await this.db
-      .prepare(
-        `SELECT * FROM jobs
+    const rows = await queryAll(
+      this.db,
+      `SELECT * FROM jobs
          WHERE type = 'archive-extraction'
            AND (retry_count <= ?1
                 OR COALESCE(json_extract(meta, '$.fileCount'), 0) >
@@ -294,27 +286,25 @@ export class D1JobStore implements JobStore {
                 OR (status IN ('pending', 'running') AND updated_at < ?2))
          ORDER BY updated_at ASC
          LIMIT ?3`,
-      )
-      .bind(maxRetries, stuckBefore, limit)
-      .all();
-    return results.map((r) => rowToModel<Job>(r as Record<string, unknown>, JOB_META_KEYS));
+      [maxRetries, stuckBefore, limit],
+    );
+    return rows.map((r) => rowToModel<Job>(r, JOB_META_KEYS));
   }
 
   async listStuckAssets(limit: number): Promise<Job[]> {
     // `extracting` captures the running-phase drift; `pending` catches the
     // rarer case where the first (running) mirror write was lost too.
-    const { results } = await this.db
-      .prepare(
-        `SELECT j.* FROM jobs j
+    const rows = await queryAll(
+      this.db,
+      `SELECT j.* FROM jobs j
          JOIN assets a ON a.id = j.asset_id
          WHERE j.status = 'completed'
            AND a.status IN ('pending', 'extracting')
          ORDER BY j.updated_at ASC
          LIMIT ?1`,
-      )
-      .bind(limit)
-      .all();
-    return results.map((r) => rowToModel<Job>(r as Record<string, unknown>, JOB_META_KEYS));
+      [limit],
+    );
+    return rows.map((r) => rowToModel<Job>(r, JOB_META_KEYS));
   }
 }
 
@@ -322,43 +312,44 @@ export class D1JobStore implements JobStore {
 // D1MetadataStore
 // ---------------------------------------------------------------------------
 
-export class D1MetadataStore implements MetadataStore {
-  constructor(private db: D1Database) {}
-
-  async save(asset: AssetMetadata, _ttlSeconds: number): Promise<void> {
-    const { userMeta, currentVersion, versionCount, ...rest } = asset as AssetMetadata & Record<string, unknown>;
-    const row = modelToRow(rest as Record<string, unknown>, ASSET_META_KEYS);
-    await this.db
-      .prepare(
-        `INSERT OR REPLACE INTO assets
+/** The `INSERT OR REPLACE INTO assets` statement, shared with the batch writer. */
+export const ASSET_UPSERT_SQL =
+  `INSERT OR REPLACE INTO assets
          (id, filename, content_type, size, created_at, expires_at,
           type, status, session_id, project_id, meta,
           active_version_id, description, user_meta)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)`,
-      )
-      .bind(
-        row.id, row.filename, row.content_type, row.size,
-        row.created_at, row.expires_at,
-        row.type ?? null, row.status ?? null,
-        row.session_id ?? null, row.project_id ?? null, row.meta ?? null,
-        row.active_version_id ?? null, row.description ?? null,
-        userMeta ? JSON.stringify(userMeta) : null,
-      )
-      .run();
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)`;
+
+export function assetUpsertArgs(asset: AssetMetadata): SqlValue[] {
+  const { userMeta, currentVersion: _cv, versionCount: _vc, ...rest } =
+    asset as AssetMetadata & Record<string, unknown>;
+  const row = modelToRow(rest as Record<string, unknown>, ASSET_META_KEYS);
+  return [
+    row.id, row.filename, row.content_type, row.size,
+    row.created_at, row.expires_at,
+    row.type ?? null, row.status ?? null,
+    row.session_id ?? null, row.project_id ?? null, row.meta ?? null,
+    row.active_version_id ?? null, row.description ?? null,
+    userMeta ? JSON.stringify(userMeta) : null,
+  ] as SqlValue[];
+}
+
+export class D1MetadataStore implements MetadataStore {
+  constructor(private db: SqlClient) {}
+
+  async save(asset: AssetMetadata, _ttlSeconds: number): Promise<void> {
+    await this.db.execute(ASSET_UPSERT_SQL, assetUpsertArgs(asset));
   }
 
   async find(id: string): Promise<AssetMetadata | null> {
-    const row = await this.db
-      .prepare("SELECT * FROM assets WHERE id = ?1")
-      .bind(id)
-      .first();
+    const row = await queryFirst(this.db, "SELECT * FROM assets WHERE id = ?1", [id]);
     if (!row) return null;
-    return parseAssetRow(row as Record<string, unknown>);
+    return parseAssetRow(row);
   }
 
   async update(id: string, patch: { activeVersionId?: string | null; expiresAt?: number; description?: string; userMeta?: Record<string, unknown> }): Promise<void> {
     const sets: string[] = [];
-    const binds: unknown[] = [];
+    const binds: SqlValue[] = [];
     let idx = 1;
 
     if (patch.activeVersionId !== undefined) {
@@ -382,11 +373,11 @@ export class D1MetadataStore implements MetadataStore {
 
     const sql = `UPDATE assets SET ${sets.join(", ")} WHERE id = ?${idx}`;
     binds.push(id);
-    await this.db.prepare(sql).bind(...binds).run();
+    await this.db.execute(sql, binds);
   }
 
   async delete(id: string): Promise<void> {
-    await this.db.prepare("DELETE FROM assets WHERE id = ?1").bind(id).run();
+    await this.db.execute("DELETE FROM assets WHERE id = ?1", [id]);
   }
 
   async list(options?: {
@@ -417,9 +408,9 @@ export class D1MetadataStore implements MetadataStore {
     const sql = `SELECT * FROM assets WHERE ${clause}${cursorClause} ORDER BY created_at DESC, id DESC LIMIT ?${bindIdx}`;
     binds.push(limit + 1);
 
-    const { results } = await this.db.prepare(sql).bind(...binds).all();
-    const hasMore = results.length > limit;
-    const items = results.slice(0, limit).map((r) => parseAssetRow(r as Record<string, unknown>));
+    const rows = await queryAll(this.db, sql, binds);
+    const hasMore = rows.length > limit;
+    const items = rows.slice(0, limit).map((r) => parseAssetRow(r));
     const cursor = hasMore && items.length > 0
       ? encodeCursor(items[items.length - 1].createdAt, items[items.length - 1].id)
       : undefined;
@@ -428,13 +419,12 @@ export class D1MetadataStore implements MetadataStore {
   }
 
   async listExpired(now: number, limit: number): Promise<AssetMetadata[]> {
-    const { results } = await this.db
-      .prepare(
-        "SELECT * FROM assets WHERE expires_at > 0 AND expires_at < ?1 LIMIT ?2",
-      )
-      .bind(now, limit)
-      .all();
-    return results.map((r) => parseAssetRow(r as Record<string, unknown>));
+    const rows = await queryAll(
+      this.db,
+      "SELECT * FROM assets WHERE expires_at > 0 AND expires_at < ?1 LIMIT ?2",
+      [now, limit],
+    );
+    return rows.map((r) => parseAssetRow(r));
   }
 }
 
@@ -451,52 +441,56 @@ function parseAssetRow(row: Record<string, unknown>): AssetMetadata {
 // D1VersionStore (ADR-005)
 // ---------------------------------------------------------------------------
 
-export class D1VersionStore implements VersionStore {
-  constructor(private db: D1Database) {}
-
-  async save(version: AssetVersion): Promise<AssetVersion> {
-    const { userMeta, ...rest } = version as AssetVersion & Record<string, unknown>;
-    const row = modelToRow(rest as Record<string, unknown>, VERSION_META_KEYS);
-    // Assign the per-asset version number inside the INSERT via a subquery.
-    // Two concurrent uploaders would otherwise race between SELECT MAX and
-    // INSERT OR REPLACE, and the late writer would silently delete the
-    // early writer's row while its R2 object lingered as an orphan.
-    const result = await this.db
-      .prepare(
-        `INSERT INTO asset_versions
+// Assign the per-asset version number inside the INSERT via a subquery.
+// Two concurrent uploaders would otherwise race between SELECT MAX and
+// INSERT OR REPLACE, and the late writer would silently delete the
+// early writer's row while its R2 object lingered as an orphan.
+export const VERSION_INSERT_SQL =
+  `INSERT INTO asset_versions
          (id, asset_id, version, filename, content_type, size, created_at,
           type, status, meta, user_meta)
          VALUES (?1, ?2,
                  (SELECT COALESCE(MAX(version), 0) + 1 FROM asset_versions WHERE asset_id = ?2),
                  ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
-         RETURNING version`,
-      )
-      .bind(
-        row.id, row.asset_id, row.filename, row.content_type,
-        row.size, row.created_at,
-        row.type ?? null, row.status ?? null, row.meta ?? null,
-        userMeta ? JSON.stringify(userMeta) : null,
-      )
-      .first();
-    const assignedVersion = (result as Record<string, unknown> | null)?.version;
-    if (typeof assignedVersion !== "number") {
-      throw new Error("versions.save: no version returned from INSERT RETURNING");
-    }
-    return { ...version, version: assignedVersion };
+         RETURNING version`;
+
+export function versionInsertArgs(version: AssetVersion): SqlValue[] {
+  const { userMeta, ...rest } = version as AssetVersion & Record<string, unknown>;
+  const row = modelToRow(rest as Record<string, unknown>, VERSION_META_KEYS);
+  return [
+    row.id, row.asset_id, row.filename, row.content_type,
+    row.size, row.created_at,
+    row.type ?? null, row.status ?? null, row.meta ?? null,
+    userMeta ? JSON.stringify(userMeta) : null,
+  ] as SqlValue[];
+}
+
+/** Read the version number assigned by `VERSION_INSERT_SQL`'s RETURNING clause. */
+export function assignedVersion(rows: Record<string, unknown>[]): number {
+  const value = rows[0]?.version;
+  if (typeof value !== "number") {
+    throw new Error("versions.save: no version returned from INSERT RETURNING");
+  }
+  return value;
+}
+
+export class D1VersionStore implements VersionStore {
+  constructor(private db: SqlClient) {}
+
+  async save(version: AssetVersion): Promise<AssetVersion> {
+    const { rows } = await this.db.execute(VERSION_INSERT_SQL, versionInsertArgs(version));
+    return { ...version, version: assignedVersion(rows) };
   }
 
   async find(id: string): Promise<AssetVersion | null> {
-    const row = await this.db
-      .prepare("SELECT * FROM asset_versions WHERE id = ?1")
-      .bind(id)
-      .first();
+    const row = await queryFirst(this.db, "SELECT * FROM asset_versions WHERE id = ?1", [id]);
     if (!row) return null;
-    return parseVersionRow(row as Record<string, unknown>);
+    return parseVersionRow(row);
   }
 
   async findByAssetId(assetId: string, options?: { limit?: number; cursor?: string }): Promise<ListResult<AssetVersion>> {
     const limit = options?.limit ?? 20;
-    const binds: unknown[] = [assetId];
+    const binds: SqlValue[] = [assetId];
     let bindIdx = 2;
     let cursorCondition = "";
 
@@ -512,9 +506,9 @@ export class D1VersionStore implements VersionStore {
     const sql = `SELECT * FROM asset_versions WHERE asset_id = ?1${cursorCondition} ORDER BY version DESC LIMIT ?${bindIdx}`;
     binds.push(limit + 1);
 
-    const { results } = await this.db.prepare(sql).bind(...binds).all();
-    const hasMore = results.length > limit;
-    const items = results.slice(0, limit).map((r) => parseVersionRow(r as Record<string, unknown>));
+    const rows = await queryAll(this.db, sql, binds);
+    const hasMore = rows.length > limit;
+    const items = rows.slice(0, limit).map((r) => parseVersionRow(r));
     const cursor = hasMore && items.length > 0
       ? encodeCursor(items[items.length - 1].createdAt, items[items.length - 1].id)
       : undefined;
@@ -523,17 +517,18 @@ export class D1VersionStore implements VersionStore {
   }
 
   async findLatest(assetId: string): Promise<AssetVersion | null> {
-    const row = await this.db
-      .prepare("SELECT * FROM asset_versions WHERE asset_id = ?1 ORDER BY version DESC LIMIT 1")
-      .bind(assetId)
-      .first();
+    const row = await queryFirst(
+      this.db,
+      "SELECT * FROM asset_versions WHERE asset_id = ?1 ORDER BY version DESC LIMIT 1",
+      [assetId],
+    );
     if (!row) return null;
-    return parseVersionRow(row as Record<string, unknown>);
+    return parseVersionRow(row);
   }
 
   async update(id: string, patch: Partial<Pick<AssetVersion, 'status' | 'userMeta'>>): Promise<void> {
     const sets: string[] = [];
-    const binds: unknown[] = [];
+    const binds: SqlValue[] = [];
     let idx = 1;
 
     if (patch.status !== undefined) {
@@ -549,32 +544,34 @@ export class D1VersionStore implements VersionStore {
 
     const sql = `UPDATE asset_versions SET ${sets.join(", ")} WHERE id = ?${idx}`;
     binds.push(id);
-    await this.db.prepare(sql).bind(...binds).run();
+    await this.db.execute(sql, binds);
   }
 
   async delete(id: string): Promise<void> {
-    await this.db.prepare("DELETE FROM asset_versions WHERE id = ?1").bind(id).run();
+    await this.db.execute("DELETE FROM asset_versions WHERE id = ?1", [id]);
   }
 
   async deleteByAssetId(assetId: string): Promise<{ totalSize: number; count: number }> {
     // First sum up sizes for storage accounting
-    const row = await this.db
-      .prepare("SELECT COALESCE(SUM(size), 0) as total_size, COUNT(*) as count FROM asset_versions WHERE asset_id = ?1")
-      .bind(assetId)
-      .first();
-    const totalSize = (row as Record<string, unknown> | null)?.total_size as number ?? 0;
-    const count = (row as Record<string, unknown> | null)?.count as number ?? 0;
+    const row = await queryFirst(
+      this.db,
+      "SELECT COALESCE(SUM(size), 0) as total_size, COUNT(*) as count FROM asset_versions WHERE asset_id = ?1",
+      [assetId],
+    );
+    const totalSize = row?.total_size as number ?? 0;
+    const count = row?.count as number ?? 0;
 
-    await this.db.prepare("DELETE FROM asset_versions WHERE asset_id = ?1").bind(assetId).run();
+    await this.db.execute("DELETE FROM asset_versions WHERE asset_id = ?1", [assetId]);
     return { totalSize, count };
   }
 
   async count(assetId: string): Promise<number> {
-    const row = await this.db
-      .prepare("SELECT COUNT(*) as cnt FROM asset_versions WHERE asset_id = ?1")
-      .bind(assetId)
-      .first();
-    return (row as Record<string, unknown> | null)?.cnt as number ?? 0;
+    const row = await queryFirst(
+      this.db,
+      "SELECT COUNT(*) as cnt FROM asset_versions WHERE asset_id = ?1",
+      [assetId],
+    );
+    return row?.cnt as number ?? 0;
   }
 }
 
@@ -594,28 +591,26 @@ function parseVersionRow(row: Record<string, unknown>): AssetVersion {
 import type { CleanupPendingStore, PendingCleanup } from "../cleanup/repository";
 
 export class D1CleanupPendingStore implements CleanupPendingStore {
-  constructor(private db: D1Database) {}
+  constructor(private db: SqlClient) {}
 
   async add(prefix: string): Promise<void> {
-    await this.db
-      .prepare("INSERT OR REPLACE INTO cleanup_pending (prefix, created_at) VALUES (?1, ?2)")
-      .bind(prefix, Date.now())
-      .run();
+    await this.db.execute(
+      "INSERT OR REPLACE INTO cleanup_pending (prefix, created_at) VALUES (?1, ?2)",
+      [prefix, Date.now()],
+    );
   }
 
   async list(limit: number): Promise<PendingCleanup[]> {
-    const { results } = await this.db
-      .prepare("SELECT prefix, created_at FROM cleanup_pending ORDER BY created_at ASC LIMIT ?1")
-      .bind(limit)
-      .all();
-    return results.map((r) => {
-      const row = r as Record<string, unknown>;
-      return { prefix: row.prefix as string, createdAt: row.created_at as number };
-    });
+    const rows = await queryAll(
+      this.db,
+      "SELECT prefix, created_at FROM cleanup_pending ORDER BY created_at ASC LIMIT ?1",
+      [limit],
+    );
+    return rows.map((row) => ({ prefix: row.prefix as string, createdAt: row.created_at as number }));
   }
 
   async remove(prefix: string): Promise<void> {
-    await this.db.prepare("DELETE FROM cleanup_pending WHERE prefix = ?1").bind(prefix).run();
+    await this.db.execute("DELETE FROM cleanup_pending WHERE prefix = ?1", [prefix]);
   }
 }
 
@@ -636,447 +631,48 @@ export interface StorageUsageStore {
   recalculate(scope: string, totalSize: number, assetCount: number): Promise<void>;
 }
 
-export class D1StorageUsageStore implements StorageUsageStore {
-  constructor(private db: D1Database) {}
-
-  async get(scope: string): Promise<StorageUsage | null> {
-    const row = await this.db
-      .prepare("SELECT * FROM storage_usage WHERE scope = ?1")
-      .bind(scope)
-      .first();
-    if (!row) return null;
-    return rowToModel<StorageUsage>(row as Record<string, unknown>);
-  }
-
-  async increment(scope: string, sizeBytes: number): Promise<void> {
-    const now = Date.now();
-    await this.db
-      .prepare(
-        `INSERT INTO storage_usage (scope, total_size, asset_count, updated_at)
+/** The storage-usage upsert, shared with the batch writer. */
+export const USAGE_INCREMENT_SQL =
+  `INSERT INTO storage_usage (scope, total_size, asset_count, updated_at)
          VALUES (?1, ?2, ?3, ?4)
          ON CONFLICT(scope) DO UPDATE SET
            total_size = total_size + ?2,
            asset_count = asset_count + 1,
-           updated_at = ?4`,
-      )
-      .bind(scope, sizeBytes, 1, now)
-      .run();
+           updated_at = ?4`;
+
+export function usageIncrementArgs(scope: string, sizeBytes: number, now = Date.now()): SqlValue[] {
+  return [scope, sizeBytes, 1, now];
+}
+
+export class D1StorageUsageStore implements StorageUsageStore {
+  constructor(private db: SqlClient) {}
+
+  async get(scope: string): Promise<StorageUsage | null> {
+    const row = await queryFirst(this.db, "SELECT * FROM storage_usage WHERE scope = ?1", [scope]);
+    if (!row) return null;
+    return rowToModel<StorageUsage>(row);
+  }
+
+  async increment(scope: string, sizeBytes: number): Promise<void> {
+    await this.db.execute(USAGE_INCREMENT_SQL, usageIncrementArgs(scope, sizeBytes));
   }
 
   async decrement(scope: string, sizeBytes: number): Promise<void> {
-    const now = Date.now();
-    await this.db
-      .prepare(
-        `UPDATE storage_usage
+    await this.db.execute(
+      `UPDATE storage_usage
          SET total_size = MAX(0, total_size - ?2),
              asset_count = MAX(0, asset_count - 1),
              updated_at = ?3
          WHERE scope = ?1`,
-      )
-      .bind(scope, sizeBytes, now)
-      .run();
+      [scope, sizeBytes, Date.now()],
+    );
   }
 
   async recalculate(scope: string, totalSize: number, assetCount: number): Promise<void> {
-    const now = Date.now();
-    await this.db
-      .prepare(
-        `INSERT OR REPLACE INTO storage_usage (scope, total_size, asset_count, updated_at)
+    await this.db.execute(
+      `INSERT OR REPLACE INTO storage_usage (scope, total_size, asset_count, updated_at)
          VALUES (?1, ?2, ?3, ?4)`,
-      )
-      .bind(scope, totalSize, assetCount, now)
-      .run();
+      [scope, totalSize, assetCount, Date.now()],
+    );
   }
-}
-
-// --- Tests ---
-
-if (import.meta.vitest) {
-  const { test, expect, beforeEach } = import.meta.vitest;
-
-  // Minimal D1Database mock for unit tests
-  // Uses `as unknown as` casts for D1 types since we only need a functional subset
-  function mockD1(): D1Database & { _tables: Map<string, Map<string, Record<string, unknown>>> } {
-    const tables = new Map<string, Map<string, Record<string, unknown>>>();
-
-    function getTable(name: string): Map<string, Record<string, unknown>> {
-      if (!tables.has(name)) tables.set(name, new Map());
-      return tables.get(name)!;
-    }
-
-    function parseSql(sql: string, binds: unknown[]): D1Result {
-      const trimmed = sql.trim().replace(/\s+/g, " ");
-
-      // INSERT OR REPLACE
-      if (trimmed.startsWith("INSERT OR REPLACE INTO") || trimmed.startsWith("INSERT INTO")) {
-        const tableMatch = trimmed.match(/INTO\s+(\w+)/);
-        if (!tableMatch) throw new Error(`Cannot parse table name from: ${trimmed}`);
-        const tableName = tableMatch[1];
-        const table = getTable(tableName);
-
-        const colMatch = trimmed.match(/\(([^)]+)\)\s+VALUES/);
-        if (!colMatch) throw new Error(`Cannot parse columns from: ${trimmed}`);
-        const cols = colMatch[1].split(",").map((c) => c.trim());
-
-        // Handle ON CONFLICT for storage_usage UPSERT
-        const isUpsert = trimmed.includes("ON CONFLICT");
-
-        const row: Record<string, unknown> = {};
-        for (let i = 0; i < cols.length; i++) {
-          row[cols[i]] = binds[i] ?? null;
-        }
-
-        const pk = getPrimaryKey(tableName);
-        const pkValue = typeof pk === "string" ? String(row[pk]) : pk.map((k) => String(row[k])).join(":");
-
-        if (isUpsert && table.has(pkValue)) {
-          // ON CONFLICT DO UPDATE: apply increments
-          const existing = table.get(pkValue)!;
-          const sizeBytes = binds[1] as number;
-          const now = binds[3] as number;
-          existing.total_size = (existing.total_size as number) + sizeBytes;
-          existing.asset_count = (existing.asset_count as number) + 1;
-          existing.updated_at = now;
-        } else {
-          table.set(pkValue, { ...row });
-        }
-
-        return { results: [], success: true, meta: {} } as unknown as D1Result;
-      }
-
-      // SELECT
-      if (trimmed.startsWith("SELECT")) {
-        const tableMatch = trimmed.match(/FROM\s+(\w+)/);
-        if (!tableMatch) throw new Error(`Cannot parse table name from: ${trimmed}`);
-        const tableName = tableMatch[1];
-        const table = getTable(tableName);
-
-        let rows = [...table.values()];
-
-        // WHERE clause filtering
-        const whereMatch = trimmed.match(/WHERE\s+(.+?)(?:\s+ORDER|\s+LIMIT|$)/);
-        if (whereMatch) {
-          rows = filterRows(rows, whereMatch[1], binds);
-        }
-
-        // ORDER BY created_at DESC
-        if (trimmed.includes("ORDER BY created_at DESC")) {
-          rows.sort((a, b) => (b.created_at as number) - (a.created_at as number));
-        } else if (trimmed.includes("ORDER BY created_at")) {
-          rows.sort((a, b) => (a.created_at as number) - (b.created_at as number));
-        }
-
-        // LIMIT
-        const limitMatch = trimmed.match(/LIMIT\s+\?(\d+)/);
-        if (limitMatch) {
-          const limitIdx = parseInt(limitMatch[1], 10) - 1;
-          const limitVal = binds[limitIdx] as number;
-          rows = rows.slice(0, limitVal);
-        }
-
-        return { results: rows.map((r) => ({ ...r })), success: true, meta: {} } as unknown as D1Result;
-      }
-
-      // DELETE
-      if (trimmed.startsWith("DELETE FROM")) {
-        const tableMatch = trimmed.match(/FROM\s+(\w+)/);
-        if (!tableMatch) throw new Error(`Cannot parse table name from: ${trimmed}`);
-        const tableName = tableMatch[1];
-        const table = getTable(tableName);
-        const pk = getPrimaryKey(tableName);
-
-        const whereMatch = trimmed.match(/WHERE\s+(.+)$/);
-        if (whereMatch) {
-          const toDelete: string[] = [];
-          for (const [key, row] of table) {
-            if (matchesWhere(row, whereMatch[1], binds)) {
-              toDelete.push(key);
-            }
-          }
-          for (const key of toDelete) table.delete(key);
-        }
-
-        return { results: [], success: true, meta: {} } as unknown as D1Result;
-      }
-
-      // UPDATE
-      if (trimmed.startsWith("UPDATE")) {
-        const tableMatch = trimmed.match(/UPDATE\s+(\w+)/);
-        if (!tableMatch) throw new Error(`Cannot parse table name from: ${trimmed}`);
-        const tableName = tableMatch[1];
-        const table = getTable(tableName);
-
-        const whereMatch = trimmed.match(/WHERE\s+(.+)$/);
-        if (whereMatch) {
-          for (const row of table.values()) {
-            if (matchesWhere(row, whereMatch[1], binds)) {
-              // Parse SET clause for storage_usage decrement
-              const sizeBytes = binds[1] as number;
-              const now = binds[2] as number;
-              row.total_size = Math.max(0, (row.total_size as number) - sizeBytes);
-              row.asset_count = Math.max(0, (row.asset_count as number) - 1);
-              row.updated_at = now;
-            }
-          }
-        }
-
-        return { results: [], success: true, meta: {} } as unknown as D1Result;
-      }
-
-      throw new Error(`Unsupported SQL: ${trimmed}`);
-    }
-
-    function getPrimaryKey(tableName: string): string | string[] {
-      if (tableName === "members") return ["workspace_id", "user_id"];
-      return "id";
-    }
-
-    function filterRows(rows: Record<string, unknown>[], whereClause: string, binds: unknown[]): Record<string, unknown>[] {
-      return rows.filter((row) => matchesWhere(row, whereClause, binds));
-    }
-
-    function matchesWhere(row: Record<string, unknown>, whereClause: string, binds: unknown[]): boolean {
-      // Simple equality: column = ?N
-      const eqParts = whereClause.split(" AND ").map((p) => p.trim());
-      for (const part of eqParts) {
-        const eqMatch = part.match(/^(\w+)\s*=\s*\?(\d+)$/);
-        if (eqMatch) {
-          const col = eqMatch[1];
-          const idx = parseInt(eqMatch[2], 10) - 1;
-          if (row[col] !== binds[idx]) return false;
-          continue;
-        }
-
-        // scope = ?1 (simple case already handled above)
-        // For IN clause, status IN, and complex expressions — skip (accept all)
-      }
-      return true;
-    }
-
-    const db = {
-      prepare(sql: string) {
-        let boundBinds: unknown[] = [];
-        const stmt = {
-          bind(...args: unknown[]) {
-            boundBinds = args;
-            return stmt;
-          },
-          async first() {
-            const result = parseSql(sql, boundBinds);
-            return result.results[0] ?? null;
-          },
-          async all() {
-            return parseSql(sql, boundBinds);
-          },
-          async run() {
-            return parseSql(sql, boundBinds);
-          },
-          async raw() {
-            const result = parseSql(sql, boundBinds);
-            return (result.results as Record<string, unknown>[]).map((r) => Object.values(r));
-          },
-        };
-        return stmt;
-      },
-      async dump() { return new ArrayBuffer(0); },
-      async batch() { return []; },
-      async exec() { return { count: 0, duration: 0 }; },
-    } as unknown as D1Database;
-
-    return Object.assign(db, { _tables: tables });
-  }
-
-  // --- D1WorkspaceStore tests ---
-
-  test("workspace save and find", async () => {
-    const db = mockD1();
-    const store = new D1WorkspaceStore(db);
-    const ws = { id: "ws1", name: "Test", createdAt: 100, updatedAt: 100 };
-    await store.save(ws);
-    const found = await store.find("ws1");
-    expect(found).toEqual(ws);
-  });
-
-  test("workspace find returns null for missing", async () => {
-    const db = mockD1();
-    const store = new D1WorkspaceStore(db);
-    expect(await store.find("nonexistent")).toBeNull();
-  });
-
-  test("workspace delete", async () => {
-    const db = mockD1();
-    const store = new D1WorkspaceStore(db);
-    await store.save({ id: "ws1", name: "Test", createdAt: 100, updatedAt: 100 });
-    await store.delete("ws1");
-    expect(await store.find("ws1")).toBeNull();
-  });
-
-  // --- D1MemberStore tests ---
-
-  test("member save, find, list, listByUser", async () => {
-    const db = mockD1();
-    const store = new D1MemberStore(db);
-    const m1 = { workspaceId: "ws1", userId: "u1", role: "owner" as const, createdAt: 100, updatedAt: 100 };
-    const m2 = { workspaceId: "ws1", userId: "u2", role: "editor" as const, createdAt: 200, updatedAt: 200 };
-    const m3 = { workspaceId: "ws2", userId: "u1", role: "viewer" as const, createdAt: 300, updatedAt: 300 };
-    await store.save(m1);
-    await store.save(m2);
-    await store.save(m3);
-
-    expect(await store.find("ws1", "u1")).toEqual(m1);
-    expect(await store.find("ws1", "u3")).toBeNull();
-
-    const wsList = await store.list("ws1");
-    expect(wsList).toHaveLength(2);
-    expect(wsList.map((m) => m.userId).sort()).toEqual(["u1", "u2"]);
-
-    const userList = await store.listByUser("u1");
-    expect(userList).toHaveLength(2);
-    expect(userList.map((m) => m.workspaceId).sort()).toEqual(["ws1", "ws2"]);
-  });
-
-  test("member delete", async () => {
-    const db = mockD1();
-    const store = new D1MemberStore(db);
-    await store.save({ workspaceId: "ws1", userId: "u1", role: "owner" as const, createdAt: 100, updatedAt: 100 });
-    await store.delete("ws1", "u1");
-    expect(await store.find("ws1", "u1")).toBeNull();
-  });
-
-  // --- D1ProjectStore tests ---
-
-  test("project save, find, list by ownerId", async () => {
-    const db = mockD1();
-    const store = new D1ProjectStore(db);
-    const p1 = { id: "p1", name: "Proj1", createdAt: 100, updatedAt: 100, ownerId: "u1", workspaceId: "ws1" };
-    const p2 = { id: "p2", name: "Proj2", createdAt: 200, updatedAt: 200, ownerId: "u1" };
-    await store.save(p1);
-    await store.save(p2);
-
-    expect(await store.find("p1")).toEqual(p1);
-
-    const byOwner = await store.list({ ownerId: "u1" });
-    expect(byOwner).toHaveLength(2);
-  });
-
-  test("project list by workspaceId", async () => {
-    const db = mockD1();
-    const store = new D1ProjectStore(db);
-    await store.save({ id: "p1", name: "P1", createdAt: 100, updatedAt: 100, ownerId: "u1", workspaceId: "ws1" });
-    await store.save({ id: "p2", name: "P2", createdAt: 200, updatedAt: 200, ownerId: "u1", workspaceId: "ws2" });
-
-    const result = await store.list({ workspaceId: "ws1" });
-    expect(result).toHaveLength(1);
-    expect(result[0].id).toBe("p1");
-  });
-
-  test("project list returns empty with no params", async () => {
-    const db = mockD1();
-    const store = new D1ProjectStore(db);
-    expect(await store.list({})).toEqual([]);
-  });
-
-  test("project delete", async () => {
-    const db = mockD1();
-    const store = new D1ProjectStore(db);
-    await store.save({ id: "p1", name: "P1", createdAt: 100, updatedAt: 100, ownerId: "u1" });
-    await store.delete("p1", "u1");
-    expect(await store.find("p1")).toBeNull();
-  });
-
-  // --- D1MetadataStore tests ---
-
-  test("asset save and find", async () => {
-    const db = mockD1();
-    const store = new D1MetadataStore(db);
-    const asset: AssetMetadata = {
-      id: "a1", filename: "test.bin", contentType: "application/octet-stream",
-      size: 100, createdAt: 1000, expiresAt: 2000,
-    };
-    await store.save(asset, 3600);
-    const found = await store.find("a1");
-    expect(found?.id).toBe("a1");
-    expect(found?.filename).toBe("test.bin");
-  });
-
-  test("asset delete", async () => {
-    const db = mockD1();
-    const store = new D1MetadataStore(db);
-    await store.save({
-      id: "a1", filename: "test.bin", contentType: "application/octet-stream",
-      size: 100, createdAt: 1000, expiresAt: 2000,
-    }, 3600);
-    await store.delete("a1");
-    expect(await store.find("a1")).toBeNull();
-  });
-
-  test("asset list filters by projectId", async () => {
-    const db = mockD1();
-    const store = new D1MetadataStore(db);
-    await store.save({ id: "a1", filename: "f1", contentType: "text/plain", size: 10, createdAt: 100, expiresAt: 9999, projectId: "p1" }, 3600);
-    await store.save({ id: "a2", filename: "f2", contentType: "text/plain", size: 20, createdAt: 200, expiresAt: 9999, projectId: "p2" }, 3600);
-
-    const result = await store.list({ projectId: "p1" });
-    expect(result.items).toHaveLength(1);
-    expect(result.items[0].id).toBe("a1");
-  });
-
-  // --- D1StorageUsageStore tests ---
-
-  test("storage usage increment and get", async () => {
-    const db = mockD1();
-    const store = new D1StorageUsageStore(db);
-    await store.increment("project:p1", 1000);
-    const usage = await store.get("project:p1");
-    expect(usage).not.toBeNull();
-    expect(usage!.totalSize).toBe(1000);
-    expect(usage!.assetCount).toBe(1);
-  });
-
-  test("storage usage multiple increments accumulate", async () => {
-    const db = mockD1();
-    const store = new D1StorageUsageStore(db);
-    await store.increment("project:p1", 1000);
-    await store.increment("project:p1", 500);
-    const usage = await store.get("project:p1");
-    expect(usage!.totalSize).toBe(1500);
-    expect(usage!.assetCount).toBe(2);
-  });
-
-  test("storage usage decrement", async () => {
-    const db = mockD1();
-    const store = new D1StorageUsageStore(db);
-    await store.increment("project:p1", 1000);
-    await store.increment("project:p1", 500);
-    await store.decrement("project:p1", 400);
-    const usage = await store.get("project:p1");
-    expect(usage!.totalSize).toBe(1100);
-    expect(usage!.assetCount).toBe(1);
-  });
-
-  test("storage usage decrement does not go below zero", async () => {
-    const db = mockD1();
-    const store = new D1StorageUsageStore(db);
-    await store.increment("project:p1", 100);
-    await store.decrement("project:p1", 999);
-    const usage = await store.get("project:p1");
-    expect(usage!.totalSize).toBe(0);
-    expect(usage!.assetCount).toBe(0);
-  });
-
-  test("storage usage recalculate overwrites", async () => {
-    const db = mockD1();
-    const store = new D1StorageUsageStore(db);
-    await store.increment("project:p1", 1000);
-    await store.recalculate("project:p1", 42, 3);
-    const usage = await store.get("project:p1");
-    expect(usage!.totalSize).toBe(42);
-    expect(usage!.assetCount).toBe(3);
-  });
-
-  test("storage usage get returns null for missing scope", async () => {
-    const db = mockD1();
-    const store = new D1StorageUsageStore(db);
-    expect(await store.get("nonexistent")).toBeNull();
-  });
 }

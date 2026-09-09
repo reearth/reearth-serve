@@ -5,6 +5,14 @@ export default defineConfig({
     "import.meta.vitest": "undefined",
   },
   test: {
+    // The repository layer is tested against `node:sqlite`
+    // (worker/infra/sqlite-node.ts). Node 22 — the version CI runs — only
+    // exposes that module behind a flag; Node 24+ accepts the flag as a no-op,
+    // so one setting covers both.
+    poolOptions: {
+      forks: { execArgv: ["--experimental-sqlite"] },
+      threads: { execArgv: ["--experimental-sqlite"] },
+    },
     projects: [
       {
         test: {
