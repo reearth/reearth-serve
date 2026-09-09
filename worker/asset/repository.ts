@@ -1,4 +1,5 @@
 import type { AssetMetadata, AssetVersion, StoredFile, UploadSession, UploadPart } from "./model";
+import type { Job } from "../job/model";
 
 export interface ListResult<T> {
   items: T[];
@@ -38,6 +39,30 @@ export interface VersionStore {
   delete(id: string): Promise<void>;
   deleteByAssetId(assetId: string): Promise<{ totalSize: number; count: number }>;
   count(assetId: string): Promise<number>;
+}
+
+/**
+ * Writes that must land together or not at all (ADR-012 §3).
+ *
+ * The individual stores above each issue one statement; an upload or a job
+ * status change touches several rows at once, and a partial write leaves the
+ * asset, its job and the storage counters disagreeing. There is no interactive
+ * transaction — D1 offers only an atomic `batch()` — so each composite write is
+ * one method here, and the adapter turns it into one batch.
+ *
+ * `usageScopes` are `project:<id>` / `workspace:<id>` counters incremented by
+ * the size of the asset or version being written.
+ */
+export interface AtomicWrites {
+  /** A new asset, its optional extraction job, and storage-usage increments. */
+  createAsset(input: { asset: AssetMetadata; job?: Job; usageScopes?: string[] }): Promise<void>;
+  /**
+   * A new version, its optional extraction job, and storage-usage increments.
+   * Returns the version with the number the store assigned (see `VersionStore.save`).
+   */
+  createVersion(input: { version: AssetVersion; job?: Job; usageScopes?: string[] }): Promise<AssetVersion>;
+  /** A job row plus the asset row that mirrors its status. */
+  saveJob(input: { job: Job; asset?: AssetMetadata }): Promise<void>;
 }
 
 export interface FileStorage {

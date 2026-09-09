@@ -3,7 +3,7 @@ import { describeRoute } from "hono-openapi";
 import { resolver } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { uploadAsset } from "../usecase";
-import { denyAnonymousUpload, resolveUploadProject } from "./shared";
+import { denyAnonymousUpload, resolveUploadProject, usageScopes } from "./shared";
 import { uploadResultResponseSchema, errorResponseSchema } from "../../../shared/openapi";
 
 export function registerUploadRoute(app: Hono<AppEnv>) {
@@ -31,7 +31,7 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
     const denied = denyAnonymousUpload(c);
     if (denied) return denied;
 
-    const metadata = c.get("metadata");
+    const writes = c.get("writes");
     const storage = c.get("storage");
     const ttlSeconds = c.get("ttlSeconds");
     const baseUrl = c.get("baseUrl");
@@ -58,7 +58,6 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
     const originalSize = originalSizeHeader ? parseInt(originalSizeHeader, 10) : undefined;
     const skipExtraction = c.req.header("X-Skip-Extraction") === "true";
 
-    const jobs = c.get("jobs");
     const sessionId = c.get("sessionId");
     const extractionQueue = c.get("extractionQueue");
     const thumbnailQueue = c.get("thumbnailQueue");
@@ -69,27 +68,18 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
     }
     const projectId = projectResult.projectId;
 
+    // Resolved up front so the counters ride along in the upload's batch.
+    const scopes = await usageScopes(c, projectId);
+
     try {
       const result = await uploadAsset(
-        metadata,
+        writes,
         storage,
-        jobs,
         { name: filename, type: contentType, body, size, contentEncoding, originalSize },
         ttlSeconds,
         baseUrl,
-        { sessionId, projectId, extractionQueue, thumbnailQueue, skipExtraction },
+        { sessionId, projectId, extractionQueue, thumbnailQueue, skipExtraction, usageScopes: scopes },
       );
-
-      // Update storage usage counters for project assets
-      if (result.asset.projectId) {
-        const storageUsage = c.get("storageUsage");
-        const projects = c.get("projects");
-        await storageUsage.increment(`project:${result.asset.projectId}`, result.asset.size);
-        const project = await projects.find(result.asset.projectId);
-        if (project?.workspaceId) {
-          await storageUsage.increment(`workspace:${project.workspaceId}`, result.asset.size);
-        }
-      }
 
       return c.json(result, 201);
     } catch (e) {

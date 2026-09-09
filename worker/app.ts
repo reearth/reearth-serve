@@ -43,6 +43,7 @@ export function createApp(deps: Deps) {
     c.set("members", deps.members);
     c.set("extractionQueue", deps.extractionQueue);
     c.set("thumbnailQueue", deps.thumbnailQueue);
+    c.set("writes", deps.writes);
     c.set("storageUsage", deps.storageUsage);
     c.set("pendingCleanup", deps.pendingCleanup);
     c.set("anonymousUploadEnabled", deps.anonymousUploadEnabled);

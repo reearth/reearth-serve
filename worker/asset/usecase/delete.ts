@@ -1,5 +1,5 @@
 import type { AssetMetadata } from "../model";
-import type { FileStorage, MetadataStore } from "../repository";
+import type { AtomicWrites, FileStorage, MetadataStore } from "../repository";
 import type { CleanupPendingStore } from "../../cleanup/repository";
 import { deleteAllR2Objects, SubrequestBudget } from "../../cleanup/usecase";
 
@@ -66,16 +66,6 @@ if (import.meta.vitest) {
     };
   }
 
-  function mockJobs() {
-    const store = new Map();
-    return {
-      save: vi.fn(async (job: any) => { store.set(job.id, job); }),
-      find: vi.fn(async (id: string) => store.get(id) ?? null),
-      delete: vi.fn(async (id: string) => { store.delete(id); }),
-      list: vi.fn(async () => ({ items: [], cursor: undefined })),
-    };
-  }
-
   function mockStorageWithKeys(keys: string[]): FileStorage {
     const remaining = new Set(keys);
     return {
@@ -101,13 +91,18 @@ if (import.meta.vitest) {
 
   test("deleteAsset removes metadata and every R2 object under the asset prefix", async () => {
     const md = mockMetadata();
-    const jb = mockJobs();
+    // AtomicWrites over the metadata mock: uploadAsset writes through the port.
+    const writes: AtomicWrites = {
+      createAsset: async ({ asset }) => { await md.save(asset, 0); },
+      createVersion: async () => { throw new Error("not used"); },
+      saveJob: async () => {},
+    };
     const { uploadAsset } = await import("./upload");
     const data = new TextEncoder().encode("data");
     const body = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(data); c.close(); } });
 
     const st = mockStorageWithKeys([]);
-    const { asset } = await uploadAsset(md, st, jb, { name: "f.bin", type: "application/octet-stream", body, size: 4 }, 3600, "https://example.com");
+    const { asset } = await uploadAsset(writes, st, { name: "f.bin", type: "application/octet-stream", body, size: 4 }, 3600, "https://example.com");
     // Simulate that archive extraction left files under the prefix.
     const stWithFiles = mockStorageWithKeys([
       `assets/${asset.id}/f.bin`,

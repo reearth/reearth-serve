@@ -1,7 +1,6 @@
 import type { AssetVersion } from "../model";
 import { detectArchiveFormat } from "../model";
-import type { FileStorage, VersionStore, MetadataStore } from "../repository";
-import type { JobStore } from "../../job/repository";
+import type { AtomicWrites, FileStorage, MetadataStore } from "../repository";
 import type { Job } from "../../job/model";
 import { generateId, versionStorageKey } from "./shared";
 import { enqueueThumbnail } from "../../thumbnail/queue";
@@ -16,9 +15,8 @@ export interface UploadVersionResult {
 
 export async function uploadVersion(
   metadata: MetadataStore,
-  versions: VersionStore,
+  writes: AtomicWrites,
   storage: FileStorage,
-  jobs: JobStore,
   assetId: string,
   file: {
     name: string;
@@ -29,7 +27,7 @@ export async function uploadVersion(
     originalSize?: number;
   },
   baseUrl: string,
-  options?: { extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean },
+  options?: { extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[] },
 ): Promise<UploadVersionResult | null> {
   const asset = await metadata.find(assetId);
   if (!asset) return null;
@@ -65,41 +63,48 @@ export async function uploadVersion(
     }),
   };
 
+  // Create extraction job for archives
+  let job: Job | undefined;
+  if (archiveFormat && !options?.skipExtraction) {
+    const jobId = generateId();
+    job = {
+      id: jobId,
+      assetId,
+      type: "archive-extraction",
+      status: "pending",
+      createdAt: now,
+      updatedAt: now,
+      versionId,
+      ...(asset.sessionId && { sessionId: asset.sessionId }),
+      ...(asset.projectId && { projectId: asset.projectId }),
+    };
+    versionInput.jobId = jobId;
+  }
+
   let savedVersion: AssetVersion;
   try {
-    // Create extraction job for archives
-    if (archiveFormat && !options?.skipExtraction) {
-      const jobId = generateId();
-      const job: Job = {
-        id: jobId,
-        assetId,
-        type: "archive-extraction",
-        status: "pending",
-        createdAt: now,
-        updatedAt: now,
-        versionId,
-        ...(asset.sessionId && { sessionId: asset.sessionId }),
-        ...(asset.projectId && { projectId: asset.projectId }),
-      };
-      await jobs.save(job);
-      versionInput.jobId = jobId;
+    // Job row, version row and storage-usage counters in one atomic write
+    // (ADR-012 §3). The version number is assigned inside that batch.
+    savedVersion = await writes.createVersion({
+      version: versionInput,
+      job,
+      usageScopes: asset.projectId ? options?.usageScopes : [],
+    });
 
-      if (options?.extractionQueue) {
-        try {
-          await options.extractionQueue.send({
-            assetId,
-            versionId,
-            archiveKey: key,
-            archiveFilename: file.name,
-            archiveFormat,
-          });
-        } catch (e) {
-          console.error("Failed to enqueue extraction:", e);
-        }
+    // Enqueue only after the rows are committed: the consumer reads them.
+    if (job && archiveFormat && options?.extractionQueue) {
+      try {
+        await options.extractionQueue.send({
+          assetId,
+          versionId,
+          archiveKey: key,
+          archiveFilename: file.name,
+          archiveFormat,
+        });
+      } catch (e) {
+        console.error("Failed to enqueue extraction:", e);
       }
     }
-
-    savedVersion = await versions.save(versionInput);
 
     await enqueueThumbnail(options?.thumbnailQueue ?? null, {
       assetId,
