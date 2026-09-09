@@ -1,3 +1,15 @@
+import type { Row, SqlClient, SqlValue } from "./sql";
+
+/** Run a query and return its rows. */
+export async function queryAll(db: SqlClient, sql: string, args?: SqlValue[]): Promise<Row[]> {
+  return (await db.execute(sql, args)).rows;
+}
+
+/** Run a query and return its first row, or null. */
+export async function queryFirst(db: SqlClient, sql: string, args?: SqlValue[]): Promise<Row | null> {
+  return (await db.execute(sql, args)).rows[0] ?? null;
+}
+
 /** Convert camelCase key to snake_case */
 export function camelToSnake(key: string): string {
   return key.replace(/[A-Z]/g, (m) => `_${m.toLowerCase()}`);

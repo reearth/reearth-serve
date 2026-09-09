@@ -12,6 +12,7 @@ import { SimpleAuthorizer } from "./authorizer";
 import { CloudflareContainerLauncher, type ObjectStoreCredentials } from "./container";
 import { KVJwksCache } from "./kv-cache";
 import { CloudflareJobQueue } from "./queues";
+import { D1SqlClient } from "./sql";
 
 // Anonymous sessions are identity, not content — they must outlive the
 // demo asset TTL. A large multipart upload can take many hours between the
@@ -29,26 +30,28 @@ const DEFAULT_STUCK_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
  */
 export function buildDeps(env: Env): Deps {
   const objectStore = r2Credentials(env);
+  // One SqlClient per invocation; every repository speaks the port, not D1 (ADR-012 §3).
+  const sql = new D1SqlClient(env.DB);
 
   return {
-    metadata: new D1MetadataStore(env.DB),
-    versions: new D1VersionStore(env.DB),
+    metadata: new D1MetadataStore(sql),
+    versions: new D1VersionStore(sql),
     storage: new R2FileStorage(env.STORAGE),
     uploadSessions: new KVUploadSessionStore(env.KV),
     presignedUrls: objectStore ? new R2PresignedUrlGenerator(objectStore) : null,
-    jobs: new D1JobStore(env.DB),
+    jobs: new D1JobStore(sql),
     ttlSeconds: parseInt(env.ASSET_TTL_SECONDS, 10) || 3600,
     baseUrl: env.BASE_URL,
     authorizer: env.CERBOS_ENDPOINT
       ? new CerbosAuthorizer(env.CERBOS_ENDPOINT)
       : new SimpleAuthorizer(),
-    projects: new D1ProjectStore(env.DB),
-    workspaces: new D1WorkspaceStore(env.DB),
-    members: new D1MemberStore(env.DB),
+    projects: new D1ProjectStore(sql),
+    workspaces: new D1WorkspaceStore(sql),
+    members: new D1MemberStore(sql),
     extractionQueue: env.EXTRACTION_QUEUE ? new CloudflareJobQueue(env.EXTRACTION_QUEUE) : null,
     thumbnailQueue: env.THUMBNAIL_QUEUE ? new CloudflareJobQueue(env.THUMBNAIL_QUEUE) : null,
-    storageUsage: new D1StorageUsageStore(env.DB),
-    pendingCleanup: new D1CleanupPendingStore(env.DB),
+    storageUsage: new D1StorageUsageStore(sql),
+    pendingCleanup: new D1CleanupPendingStore(sql),
     // Fail closed: anonymous uploads stay off unless explicitly enabled. The
     // flag lives as a wrangler secret (not in [vars]) so test campaigns can
     // flip it without touching wrangler.toml: `wrangler secret put
