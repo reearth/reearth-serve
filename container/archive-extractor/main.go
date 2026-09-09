@@ -31,10 +31,12 @@ func main() {
 	ctx := context.Background()
 
 	r2, err := NewR2Client(ctx, R2Config{
-		Endpoint:        cfg.R2Endpoint,
-		AccessKeyID:     cfg.R2AccessKeyID,
-		SecretAccessKey: cfg.R2SecretAccessKey,
-		Bucket:          cfg.R2Bucket,
+		Endpoint:        cfg.ObjectStore.Endpoint,
+		AccessKeyID:     cfg.ObjectStore.AccessKeyID,
+		SecretAccessKey: cfg.ObjectStore.SecretAccessKey,
+		Bucket:          cfg.ObjectStore.Bucket,
+		Region:          cfg.ObjectStore.Region,
+		PathStyle:       cfg.ObjectStore.PathStyle,
 	})
 	if err != nil {
 		log.Fatalf("failed to create R2 client: %v", err)
@@ -53,9 +55,14 @@ func main() {
 		}
 	}
 
-	log.Printf("config: endpoint=%s bucket=%s assetId=%s archiveKey=%s format=%s workerAPI=%s accessKeyId=%s...",
-		cfg.R2Endpoint, cfg.R2Bucket, cfg.AssetID, cfg.ArchiveKey, cfg.ArchiveFormat, cfg.WorkerAPIURL,
-		maskString(cfg.R2AccessKeyID))
+	if msg := deprecationMessage(cfg.Deprecations); msg != "" {
+		log.Print(msg)
+	}
+
+	log.Printf("config: endpoint=%s bucket=%s region=%s pathStyle=%t assetId=%s archiveKey=%s format=%s workerAPI=%s accessKeyId=%s...",
+		cfg.ObjectStore.Endpoint, cfg.ObjectStore.Bucket, cfg.ObjectStore.Region, cfg.ObjectStore.PathStyle,
+		cfg.AssetID, cfg.ArchiveKey, cfg.ArchiveFormat, cfg.WorkerAPIURL,
+		maskString(cfg.ObjectStore.AccessKeyID))
 
 	worker := NewExtractionWorker(r2, ExtractionConfig{
 		AssetID:           cfg.AssetID,
@@ -84,11 +91,12 @@ func main() {
 }
 
 type envConfig struct {
-	// R2 connection
-	R2Endpoint        string
-	R2AccessKeyID     string
-	R2SecretAccessKey string
-	R2Bucket          string
+	// Object store connection
+	ObjectStore objectStoreConfig
+
+	// Deprecated environment variable names that supplied the object store
+	// configuration, if any.
+	Deprecations []string
 
 	// Extraction parameters
 	AssetID         string
@@ -106,17 +114,26 @@ type envConfig struct {
 }
 
 func loadConfigFromEnv() (*envConfig, error) {
+	return loadConfig(os.Getenv)
+}
+
+// loadConfig builds the configuration from env, which tests substitute.
+// R2 is path-style, so path style defaults to true here.
+func loadConfig(env getenv) (*envConfig, error) {
+	objectStore, deprecations, err := loadObjectStoreConfig(env, true)
+	if err != nil {
+		return nil, err
+	}
+
 	cfg := &envConfig{
-		R2Endpoint:        os.Getenv("R2_ENDPOINT"),
-		R2AccessKeyID:     os.Getenv("R2_ACCESS_KEY_ID"),
-		R2SecretAccessKey: os.Getenv("R2_SECRET_ACCESS_KEY"),
-		R2Bucket:          os.Getenv("R2_BUCKET"),
-		AssetID:           os.Getenv("ASSET_ID"),
-		ArchiveKey:        os.Getenv("ARCHIVE_KEY"),
-		ArchiveFilename:   os.Getenv("ARCHIVE_FILENAME"),
-		ArchiveFormat:     os.Getenv("ARCHIVE_FORMAT"),
-		WorkerAPIURL:      os.Getenv("WORKER_API_URL"),
-		InternalAPISecret: os.Getenv("INTERNAL_API_SECRET"),
+		ObjectStore:       objectStore,
+		Deprecations:      deprecations,
+		AssetID:           env("ASSET_ID"),
+		ArchiveKey:        env("ARCHIVE_KEY"),
+		ArchiveFilename:   env("ARCHIVE_FILENAME"),
+		ArchiveFormat:     env("ARCHIVE_FORMAT"),
+		WorkerAPIURL:      env("WORKER_API_URL"),
+		InternalAPISecret: env("INTERNAL_API_SECRET"),
 		// Default sized for the `standard-4` container tier (12 GiB memory)
 		// configured in wrangler.toml. Each in-flight part holds up to
 		// multipartPartSize (10 MiB) in a bytes.Buffer, so 48 concurrent
@@ -131,10 +148,6 @@ func loadConfigFromEnv() (*envConfig, error) {
 
 	// Required fields
 	for _, kv := range []struct{ name, val string }{
-		{"R2_ENDPOINT", cfg.R2Endpoint},
-		{"R2_ACCESS_KEY_ID", cfg.R2AccessKeyID},
-		{"R2_SECRET_ACCESS_KEY", cfg.R2SecretAccessKey},
-		{"R2_BUCKET", cfg.R2Bucket},
 		{"ASSET_ID", cfg.AssetID},
 		{"ARCHIVE_KEY", cfg.ArchiveKey},
 		{"ARCHIVE_FILENAME", cfg.ArchiveFilename},
@@ -146,14 +159,14 @@ func loadConfigFromEnv() (*envConfig, error) {
 	}
 
 	// Optional overrides
-	if v := os.Getenv("MAX_CONCURRENCY"); v != "" {
+	if v := env("MAX_CONCURRENCY"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
 			return nil, fmt.Errorf("invalid MAX_CONCURRENCY: %w", err)
 		}
 		cfg.MaxConcurrency = n
 	}
-	if v := os.Getenv("CHECKPOINT_EVERY"); v != "" {
+	if v := env("CHECKPOINT_EVERY"); v != "" {
 		n, err := strconv.Atoi(v)
 		if err != nil {
 			return nil, fmt.Errorf("invalid CHECKPOINT_EVERY: %w", err)
