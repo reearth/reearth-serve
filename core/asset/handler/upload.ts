@@ -84,7 +84,14 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
       return c.json(result, 201);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
-      if (msg.includes("exceeds") || msg.includes("FixedLengthStream")) {
+      // "declared Content-Length" is what a FileStorage adapter says when the
+      // body does not match the header; "FixedLengthStream" is R2's own
+      // wording, kept so the Cloudflare path keeps returning 400 as before.
+      if (
+        msg.includes("declared Content-Length") ||
+        msg.includes("exceeds") ||
+        msg.includes("FixedLengthStream")
+      ) {
         return c.json({ error: "Request body exceeds declared Content-Length" }, 400);
       }
       throw e;

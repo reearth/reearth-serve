@@ -1,32 +1,10 @@
 import { Container } from "@cloudflare/containers";
-import type { ArchiveFormat } from "../../core/asset/model";
 import { objectStoreEnv, type ObjectStoreCredentials } from "./container-env";
-
-export interface ContainerLauncher {
-  /**
-   * Whether archive extraction can be launched at all. False means deploy-time
-   * configuration is missing — a permanent problem, not a transient one — so
-   * callers back off instead of burning their retry budget.
-   */
-  readonly archiveExtractorAvailable: boolean;
-  launchArchiveExtractor(params: ArchiveExtractorParams): Promise<void>;
-  /** Runs the out-of-Worker thumbnail generator. Throws if it is unavailable. */
-  generateThumbnails(params: ThumbnailGeneratorParams): Promise<void>;
-}
-
-export interface ArchiveExtractorParams {
-  assetId: string;
-  archiveKey: string;
-  archiveFilename: string;
-  archiveFormat: ArchiveFormat;
-}
-
-export interface ThumbnailGeneratorParams {
-  assetId: string;
-  versionId?: string;
-  sourceKey: string;
-  contentType: string;
-}
+import type {
+  ArchiveExtractorParams,
+  ContainerLauncher,
+  ThumbnailGeneratorParams,
+} from "../../core/container/port";
 
 export type { ObjectStoreCredentials } from "./container-env";
 

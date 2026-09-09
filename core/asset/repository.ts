@@ -65,6 +65,25 @@ export interface AtomicWrites {
   saveJob(input: { job: Job; asset?: AssetMetadata }): Promise<void>;
 }
 
+/**
+ * Per-scope storage counters (ADR-004): `project:<id>` / `workspace:<id>`.
+ *
+ * Incremented in the same atomic write as the asset row (see `AtomicWrites`),
+ * decremented on delete.
+ */
+export interface StorageUsage {
+  totalSize: number;
+  assetCount: number;
+  updatedAt: number;
+}
+
+export interface StorageUsageStore {
+  get(scope: string): Promise<StorageUsage | null>;
+  increment(scope: string, sizeBytes: number): Promise<void>;
+  decrement(scope: string, sizeBytes: number): Promise<void>;
+  recalculate(scope: string, totalSize: number, assetCount: number): Promise<void>;
+}
+
 export interface FileStorage {
   put(key: string, body: ReadableStream<Uint8Array>, contentType: string, size: number, options?: { contentEncoding?: string }): Promise<void>;
   get(key: string, range?: { offset: number; length: number }): Promise<StoredFile | null>;
