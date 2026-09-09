@@ -1,9 +1,10 @@
-import { R2FileStorage } from "../infra/storage";
-import { D1MetadataStore, D1JobStore, D1VersionStore, D1CleanupPendingStore } from "../infra/d1";
 import { cleanupExpiredAssets, drainPendingCleanups, SubrequestBudget } from "./usecase";
 import type { Job } from "../job/model";
+import type { JobStore } from "../job/repository";
+import type { MetadataStore } from "../asset/repository";
+import type { Deps } from "../types";
+import type { ExtractionMessage } from "../extraction/handler";
 
-const DEFAULT_STUCK_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
 const MAX_RETRIES = 5;
 // Cap per-tick re-enqueue work so a backlog of failed jobs cannot blow the
 // Workers subrequest budget and break the recovery loop itself.
@@ -16,12 +17,8 @@ const MAX_RETRIABLE_PER_TICK = 50;
 // MAX_RETRIABLE_PER_TICK jobs × ~4 ops each).
 const CLEANUP_BUDGET = 700;
 
-export async function handleScheduled(env: Env): Promise<void> {
-  const metadata = new D1MetadataStore(env.DB);
-  const storage = new R2FileStorage(env.STORAGE);
-  const jobs = new D1JobStore(env.DB);
-  const versions = new D1VersionStore(env.DB);
-  const pending = new D1CleanupPendingStore(env.DB);
+export async function handleScheduled(deps: Deps): Promise<void> {
+  const { metadata, storage, jobs, versions, pendingCleanup: pending } = deps;
 
   // Share one budget across both cleanup paths — we don't want drainPending
   // to steal so much budget that expired assets never get processed.
@@ -55,13 +52,12 @@ export async function handleScheduled(env: Env): Promise<void> {
   await reconcileStuckAssets(metadata, jobs);
 
   // Re-trigger pending/failed/stuck extraction jobs via queue
-  if (env.EXTRACTION_QUEUE) {
-    const stuckThresholdMs = parseInt(env.EXTRACTION_STUCK_THRESHOLD_SECONDS || "", 10) * 1000 || DEFAULT_STUCK_THRESHOLD_MS;
-    await retriggerPendingJobs(metadata, jobs, env.EXTRACTION_QUEUE, stuckThresholdMs);
+  if (deps.extractionQueue) {
+    await retriggerPendingJobs(metadata, jobs, deps.extractionQueue, deps.extractionStuckThresholdMs);
   }
 }
 
-async function reconcileStuckAssets(metadata: D1MetadataStore, jobs: D1JobStore): Promise<void> {
+async function reconcileStuckAssets(metadata: MetadataStore, jobs: JobStore): Promise<void> {
   if (!jobs.listStuckAssets) return;
   const stuck = await jobs.listStuckAssets(20);
   if (stuck.length === 0) return;
@@ -103,11 +99,12 @@ export function effectiveRetryCount(
 }
 
 async function retriggerPendingJobs(
-  metadata: D1MetadataStore,
-  jobs: D1JobStore,
-  queue: Queue,
+  metadata: MetadataStore,
+  jobs: JobStore,
+  queue: { send(message: ExtractionMessage): Promise<void> },
   stuckThresholdMs: number,
 ): Promise<void> {
+  if (!jobs.listRetriable) return;
   const retriableJobs = await jobs.listRetriable(stuckThresholdMs, MAX_RETRIES, MAX_RETRIABLE_PER_TICK);
 
   for (const job of retriableJobs) {

@@ -2,17 +2,24 @@ import { createMiddleware } from "hono/factory";
 import { jwtVerify, type JWTVerifyGetKey, type JSONWebKeySet } from "jose";
 import type { AppEnv } from "../types";
 import type { AuthUser } from "./types";
+import type { JwksCache } from "./jwks";
 import { resolveJWKS } from "./jwks";
 
 export { resolveJWKS, resetJWKSCache, jwksUrl } from "./jwks";
+export type { JwksCache } from "./jwks";
 
-export interface AuthMiddlewareOptions {
-  OIDC_ISSUER_URL?: string;
-  OIDC_AUDIENCE?: string;
-  /** KV namespace for cross-isolate JWKS caching */
-  KV?: KVNamespace;
+/**
+ * Provider-independent authentication configuration. The composition root
+ * translates environment variables and bindings into this shape (ADR-012 §1);
+ * the middleware itself never reads `Env`.
+ */
+export interface AuthConfig {
+  issuer?: string;
+  audience?: string;
+  /** Cross-isolate JWKS cache. Optional — the in-isolate cache always applies. */
+  jwksCache?: JwksCache;
   /** JWKS cache TTL in seconds (default: 3600) */
-  JWKS_CACHE_TTL_SECONDS?: string;
+  jwksCacheTtlSeconds?: number;
   /** Override JWKS resolution (for testing) */
   jwks?: JWTVerifyGetKey;
 }
@@ -20,18 +27,16 @@ export interface AuthMiddlewareOptions {
 /**
  * JWT authentication middleware.
  *
- * - If OIDC_ISSUER_URL is not configured, all requests proceed as demo mode (user = null).
+ * - If no issuer is configured, all requests proceed as demo mode (user = null).
  * - If Authorization header is present, validates the JWT. Invalid tokens → 401.
  * - If no Authorization header, proceeds as demo mode (user = null).
  */
-export function authMiddleware(env: AuthMiddlewareOptions) {
-  const issuer = env.OIDC_ISSUER_URL;
-  const audience = env.OIDC_AUDIENCE;
-  const jwksOverride = env.jwks;
-  const kv = env.KV;
-  const ttlSeconds = env.JWKS_CACHE_TTL_SECONDS
-    ? parseInt(env.JWKS_CACHE_TTL_SECONDS, 10)
-    : undefined;
+export function authMiddleware(config: AuthConfig) {
+  const issuer = config.issuer;
+  const audience = config.audience;
+  const jwksOverride = config.jwks;
+  const cache = config.jwksCache;
+  const ttlSeconds = config.jwksCacheTtlSeconds;
 
   return createMiddleware<AppEnv>(async (c, next) => {
     // No OIDC configured — everything is demo mode
@@ -54,7 +59,7 @@ export function authMiddleware(env: AuthMiddlewareOptions) {
     const token = match[1];
 
     try {
-      const jwks = jwksOverride ?? await resolveJWKS(issuer, { kv, ttlSeconds });
+      const jwks = jwksOverride ?? await resolveJWKS(issuer, { cache, ttlSeconds });
       const { payload } = await jwtVerify(token, jwks, {
         issuer,
         ...(audience && { audience }),
@@ -120,7 +125,7 @@ if (import.meta.vitest) {
       .sign(privateKey);
   }
 
-  function createTestApp(opts: AuthMiddlewareOptions) {
+  function createTestApp(opts: AuthConfig) {
     const app = new Hono<AppEnv>();
     app.use("*", authMiddleware(opts));
     app.get("/test", (c) => {
@@ -140,7 +145,7 @@ if (import.meta.vitest) {
   });
 
   test("no Authorization header → demo mode (user=null)", async () => {
-    const app = createTestApp({ OIDC_ISSUER_URL: TEST_ISSUER, jwks: localJWKS });
+    const app = createTestApp({ issuer: TEST_ISSUER, jwks: localJWKS });
     const res = await app.request("/test");
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ user: null });
@@ -148,8 +153,8 @@ if (import.meta.vitest) {
 
   test("valid token → user set", async () => {
     const app = createTestApp({
-      OIDC_ISSUER_URL: TEST_ISSUER,
-      OIDC_AUDIENCE: TEST_AUDIENCE,
+      issuer: TEST_ISSUER,
+      audience: TEST_AUDIENCE,
       jwks: localJWKS,
     });
     const token = await buildToken();
@@ -165,8 +170,8 @@ if (import.meta.vitest) {
 
   test("expired token → 401", async () => {
     const app = createTestApp({
-      OIDC_ISSUER_URL: TEST_ISSUER,
-      OIDC_AUDIENCE: TEST_AUDIENCE,
+      issuer: TEST_ISSUER,
+      audience: TEST_AUDIENCE,
       jwks: localJWKS,
     });
     const token = await buildToken({ expiresIn: "-1s" });
@@ -178,8 +183,8 @@ if (import.meta.vitest) {
 
   test("wrong audience → 401", async () => {
     const app = createTestApp({
-      OIDC_ISSUER_URL: TEST_ISSUER,
-      OIDC_AUDIENCE: TEST_AUDIENCE,
+      issuer: TEST_ISSUER,
+      audience: TEST_AUDIENCE,
       jwks: localJWKS,
     });
     const token = await buildToken({ audience: "wrong-audience" });
@@ -191,8 +196,8 @@ if (import.meta.vitest) {
 
   test("wrong issuer → 401", async () => {
     const app = createTestApp({
-      OIDC_ISSUER_URL: TEST_ISSUER,
-      OIDC_AUDIENCE: TEST_AUDIENCE,
+      issuer: TEST_ISSUER,
+      audience: TEST_AUDIENCE,
       jwks: localJWKS,
     });
     const token = await buildToken({ issuer: "https://wrong-issuer.example.com/" });
@@ -204,7 +209,7 @@ if (import.meta.vitest) {
 
   test("invalid header format → 401", async () => {
     const app = createTestApp({
-      OIDC_ISSUER_URL: TEST_ISSUER,
+      issuer: TEST_ISSUER,
       jwks: localJWKS,
     });
     const res = await app.request("/test", {
@@ -215,7 +220,7 @@ if (import.meta.vitest) {
 
   test("garbage token → 401", async () => {
     const app = createTestApp({
-      OIDC_ISSUER_URL: TEST_ISSUER,
+      issuer: TEST_ISSUER,
       jwks: localJWKS,
     });
     const res = await app.request("/test", {
@@ -226,7 +231,7 @@ if (import.meta.vitest) {
 
   test("no audience configured → accepts any audience", async () => {
     const app = createTestApp({
-      OIDC_ISSUER_URL: TEST_ISSUER,
+      issuer: TEST_ISSUER,
       jwks: localJWKS,
     });
     const token = await buildToken({ audience: "anything" });

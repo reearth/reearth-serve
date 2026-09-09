@@ -1,5 +1,6 @@
 import { createRequestHandler } from "react-router";
 import { createApp } from "./app";
+import { buildDeps } from "./infra/cloudflare-deps";
 import { handleScheduled } from "./cleanup/handler";
 import { handleQueue } from "./extraction/handler";
 import { handleThumbnailQueue } from "./thumbnail/handler";
@@ -29,7 +30,7 @@ export default {
       url.pathname.startsWith("/api/") ||
       url.pathname.startsWith("/files")
     ) {
-      const app = createApp(env);
+      const app = createApp(buildDeps(env));
       return app.fetch(request, env, ctx);
     }
 
@@ -40,16 +41,17 @@ export default {
   },
 
   async scheduled(_event, env, _ctx) {
-    await handleScheduled(env);
+    await handleScheduled(buildDeps(env));
   },
 
   async queue(batch: MessageBatch, env: Env, _ctx: ExecutionContext) {
+    const deps = buildDeps(env);
     if (batch.queue === "reearth-serve-thumbnail") {
-      await handleThumbnailQueue(batch as MessageBatch<import("./thumbnail/queue").ThumbnailMessage>, env);
+      await handleThumbnailQueue(batch as MessageBatch<import("./thumbnail/queue").ThumbnailMessage>, deps);
       return;
     }
     // Default: extraction queue (covers the original single-queue deployment
     // where batch.queue may be undefined under older wrangler builds).
-    await handleQueue(batch as MessageBatch<import("./extraction/handler").ExtractionMessage>, env);
+    await handleQueue(batch as MessageBatch<import("./extraction/handler").ExtractionMessage>, deps);
   },
 } satisfies ExportedHandler<Env>;
