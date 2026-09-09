@@ -74,6 +74,7 @@ function fakeDeps(overrides: Partial<Deps> = {}): Deps {
     auth: {},
     containers: unused("containers"),
     extractionStuckThresholdMs: 1000,
+    limits: { subrequestBudget: 700 },
     ...overrides,
   };
 }

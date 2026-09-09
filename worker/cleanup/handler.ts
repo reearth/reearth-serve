@@ -11,19 +11,15 @@ const MAX_RETRIES = 5;
 // Workers subrequest budget and break the recovery loop itself.
 const MAX_RETRIABLE_PER_TICK = 50;
 
-// Subrequest budget split between cleanup and retrigger phases. Workers
-// scheduled invocations cap around 1000 subrequests per run; we partition
-// ~70% to cleanup (the R2 list+deleteMany cycles scale with archive size)
-// and leave enough for the retrigger path (listRetriable + up to
-// MAX_RETRIABLE_PER_TICK jobs × ~4 ops each).
-const CLEANUP_BUDGET = 700;
-
 export async function handleScheduled(deps: Deps): Promise<void> {
   const { metadata, storage, jobs, versions, pendingCleanup: pending } = deps;
 
   // Share one budget across both cleanup paths — we don't want drainPending
-  // to steal so much budget that expired assets never get processed.
-  const budget = new SubrequestBudget(CLEANUP_BUDGET);
+  // to steal so much budget that expired assets never get processed. How much
+  // there is to spend is a provider limit, so it comes from `deps.limits`
+  // (Cloudflare: ~70% of the ~1000-subrequest scheduled cap, leaving room for
+  // the retrigger path below).
+  const budget = new SubrequestBudget(deps.limits.subrequestBudget);
 
   const result = await cleanupExpiredAssets(metadata, storage, jobs, {
     maxAssets: 100,

@@ -2,11 +2,10 @@ import { createMiddleware } from "hono/factory";
 import { jwtVerify, type JWTVerifyGetKey, type JSONWebKeySet } from "jose";
 import type { AppEnv } from "../types";
 import type { AuthUser } from "./types";
-import type { JwksCache } from "./jwks";
+import type { KeyValue } from "../kv/port";
 import { resolveJWKS } from "./jwks";
 
 export { resolveJWKS, resetJWKSCache, jwksUrl } from "./jwks";
-export type { JwksCache } from "./jwks";
 
 /**
  * Provider-independent authentication configuration. The composition root
@@ -17,7 +16,7 @@ export interface AuthConfig {
   issuer?: string;
   audience?: string;
   /** Cross-isolate JWKS cache. Optional — the in-isolate cache always applies. */
-  jwksCache?: JwksCache;
+  jwksCache?: KeyValue;
   /** JWKS cache TTL in seconds (default: 3600) */
   jwksCacheTtlSeconds?: number;
   /** Override JWKS resolution (for testing) */

@@ -1,6 +1,5 @@
 import type { Deps } from "../types";
 import { R2FileStorage } from "./storage";
-import { KVUploadSessionStore, KVSessionStore } from "./metadata";
 import {
   D1MetadataStore, D1JobStore, D1ProjectStore,
   D1WorkspaceStore, D1MemberStore, D1StorageUsageStore, D1VersionStore,
@@ -10,7 +9,8 @@ import { R2PresignedUrlGenerator } from "./presigned";
 import { CerbosAuthorizer } from "../auth/authorizer";
 import { SimpleAuthorizer } from "./authorizer";
 import { CloudflareContainerLauncher, type ObjectStoreCredentials } from "./container";
-import { KVJwksCache } from "./kv-cache";
+import { CloudflareKeyValue } from "./kv";
+import { KeyValueUploadSessionStore, KeyValueSessionStore } from "../kv/stores";
 import { CloudflareJobQueue } from "./queues";
 import { D1SqlClient } from "./sql";
 import { D1AtomicWrites } from "./d1-writes";
@@ -24,6 +24,10 @@ const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 
 const DEFAULT_STUCK_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
 
+// Workers scheduled invocations cap around 1000 subrequests per run; the cron
+// spends ~70% of that on the cleanup loop and leaves the rest for retriggers.
+const CLEANUP_SUBREQUEST_BUDGET = 700;
+
 /**
  * Cloudflare composition root: the one place that turns Workers bindings into
  * the provider-independent `Deps` the app and the queue/cron handlers run on
@@ -31,6 +35,9 @@ const DEFAULT_STUCK_THRESHOLD_MS = 24 * 60 * 60 * 1000; // 24 hours
  */
 export function buildDeps(env: Env): Deps {
   const objectStore = r2Credentials(env);
+  // One KeyValue per invocation, shared by every store that only needs
+  // "JSON blob under a key with a TTL" (ADR-012 §2).
+  const kv = new CloudflareKeyValue(env.KV);
   // One SqlClient per invocation; every repository speaks the port, not D1 (ADR-012 §3).
   const sql = new D1SqlClient(env.DB);
 
@@ -39,7 +46,7 @@ export function buildDeps(env: Env): Deps {
     versions: new D1VersionStore(sql),
     writes: new D1AtomicWrites(sql),
     storage: new R2FileStorage(env.STORAGE),
-    uploadSessions: new KVUploadSessionStore(env.KV),
+    uploadSessions: new KeyValueUploadSessionStore(kv),
     presignedUrls: objectStore ? new R2PresignedUrlGenerator(objectStore) : null,
     jobs: new D1JobStore(sql),
     ttlSeconds: parseInt(env.ASSET_TTL_SECONDS, 10) || 3600,
@@ -62,13 +69,13 @@ export function buildDeps(env: Env): Deps {
     // `wrangler secret list` instead of being silently re-enabled.
     anonymousUploadEnabled: env.ANONYMOUS_UPLOAD_ENABLED === "true",
 
-    sessions: new KVSessionStore(env.KV),
+    sessions: new KeyValueSessionStore(kv),
     sessionTtlSeconds: SESSION_TTL_SECONDS,
     internalApiSecret: env.INTERNAL_API_SECRET,
     auth: {
       issuer: env.OIDC_ISSUER_URL,
       audience: env.OIDC_AUDIENCE,
-      jwksCache: new KVJwksCache(env.KV),
+      jwksCache: kv,
       jwksCacheTtlSeconds: env.JWKS_CACHE_TTL_SECONDS
         ? parseInt(env.JWKS_CACHE_TTL_SECONDS, 10)
         : undefined,
@@ -82,6 +89,7 @@ export function buildDeps(env: Env): Deps {
     }),
     extractionStuckThresholdMs:
       parseInt(env.EXTRACTION_STUCK_THRESHOLD_SECONDS || "", 10) * 1000 || DEFAULT_STUCK_THRESHOLD_MS,
+    limits: { subrequestBudget: CLEANUP_SUBREQUEST_BUDGET },
   };
 }
 
