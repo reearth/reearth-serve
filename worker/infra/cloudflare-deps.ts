@@ -13,6 +13,7 @@ import { CloudflareContainerLauncher, type ObjectStoreCredentials } from "./cont
 import { KVJwksCache } from "./kv-cache";
 import { CloudflareJobQueue } from "./queues";
 import { D1SqlClient } from "./sql";
+import { D1AtomicWrites } from "./d1-writes";
 
 // Anonymous sessions are identity, not content — they must outlive the
 // demo asset TTL. A large multipart upload can take many hours between the
@@ -36,6 +37,7 @@ export function buildDeps(env: Env): Deps {
   return {
     metadata: new D1MetadataStore(sql),
     versions: new D1VersionStore(sql),
+    writes: new D1AtomicWrites(sql),
     storage: new R2FileStorage(env.STORAGE),
     uploadSessions: new KVUploadSessionStore(env.KV),
     presignedUrls: objectStore ? new R2PresignedUrlGenerator(objectStore) : null,

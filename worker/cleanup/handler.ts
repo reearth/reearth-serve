@@ -1,7 +1,7 @@
 import { cleanupExpiredAssets, drainPendingCleanups, SubrequestBudget } from "./usecase";
 import type { Job } from "../job/model";
 import type { JobStore } from "../job/repository";
-import type { MetadataStore } from "../asset/repository";
+import type { AtomicWrites, MetadataStore } from "../asset/repository";
 import type { Deps } from "../types";
 import type { ExtractionMessage } from "../extraction/handler";
 import type { JobQueue } from "../queue/port";
@@ -45,16 +45,16 @@ export async function handleScheduled(deps: Deps): Promise<void> {
     console.log(`Cleanup: drained ${drainResult.drainedPrefixes.length} pending prefixes${suffix}`);
   }
 
-  // Self-heal: the internal status callback writes the job row and the
-  // asset row separately. If the asset write fails after the job commits,
-  // the asset is stuck at "extracting" even though the job is "completed".
-  // The retrigger path only chases pending/failed jobs, so without this
-  // step the drift never resolves on its own.
+  // Self-heal: the job row and the asset row are written together now, but
+  // rows written before that (or by a partially-applied older release) can
+  // still be stuck at "extracting" while the job says "completed". The
+  // retrigger path only chases pending/failed jobs, so without this step the
+  // drift never resolves on its own.
   await reconcileStuckAssets(metadata, jobs);
 
   // Re-trigger pending/failed/stuck extraction jobs via queue
   if (deps.extractionQueue) {
-    await retriggerPendingJobs(metadata, jobs, deps.extractionQueue, deps.extractionStuckThresholdMs);
+    await retriggerPendingJobs(metadata, jobs, deps.writes, deps.extractionQueue, deps.extractionStuckThresholdMs);
   }
 }
 
@@ -102,6 +102,7 @@ export function effectiveRetryCount(
 async function retriggerPendingJobs(
   metadata: MetadataStore,
   jobs: JobStore,
+  writes: AtomicWrites,
   queue: JobQueue<ExtractionMessage>,
   stuckThresholdMs: number,
 ): Promise<void> {
@@ -123,13 +124,10 @@ async function retriggerPendingJobs(
         updatedAt: Date.now(),
         completedAt: Date.now(),
       };
-      await jobs.save(updatedJob);
-
       const asset = await metadata.find(job.assetId);
-      if (asset) {
-        asset.status = "failed";
-        await metadata.save(asset, Math.max(0, Math.floor((asset.expiresAt - Date.now()) / 1000)));
-      }
+      if (asset) asset.status = "failed";
+      // Job and its asset mirror in one atomic write (ADR-012 §3).
+      await writes.saveJob({ job: updatedJob, asset: asset ?? undefined });
       console.log(`Marked asset ${job.assetId} as permanently failed: max retries exceeded`);
       continue;
     }

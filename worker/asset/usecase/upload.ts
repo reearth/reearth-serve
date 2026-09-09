@@ -1,7 +1,6 @@
 import type { AssetMetadata, AssetUploadResult } from "../model";
 import { detectArchiveFormat } from "../model";
-import type { FileStorage, MetadataStore } from "../repository";
-import type { JobStore } from "../../job/repository";
+import type { AtomicWrites, FileStorage } from "../repository";
 import type { Job } from "../../job/model";
 import { generateId, storageKey } from "./shared";
 import { enqueueThumbnail } from "../../thumbnail/queue";
@@ -10,9 +9,8 @@ import type { JobQueue } from "../../queue/port";
 import type { ExtractionMessage } from "../../extraction/handler";
 
 export async function uploadAsset(
-  metadata: MetadataStore,
+  writes: AtomicWrites,
   storage: FileStorage,
-  jobs: JobStore,
   file: {
     name: string;
     type: string;
@@ -23,7 +21,7 @@ export async function uploadAsset(
   },
   ttlSeconds: number,
   baseUrl: string,
-  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean },
+  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[] },
 ): Promise<AssetUploadResult> {
   const id = generateId();
   const now = Date.now();
@@ -54,38 +52,41 @@ export async function uploadAsset(
     ...(options?.projectId && { projectId: options.projectId }),
   };
 
-  try {
-    // Create extraction job for archives (unless skipped)
-    if (archiveFormat && !options?.skipExtraction) {
-      const job: Job = {
-        id,
-        assetId: id,
-        type: "archive-extraction",
-        status: "pending",
-        createdAt: now,
-        updatedAt: now,
-        ...(options?.sessionId && { sessionId: options.sessionId }),
-        ...(options?.projectId && { projectId: options.projectId }),
-      };
-      await jobs.save(job);
-      asset.jobId = id;
+  // Create extraction job for archives (unless skipped)
+  let job: Job | undefined;
+  if (archiveFormat && !options?.skipExtraction) {
+    job = {
+      id,
+      assetId: id,
+      type: "archive-extraction",
+      status: "pending",
+      createdAt: now,
+      updatedAt: now,
+      ...(options?.sessionId && { sessionId: options.sessionId }),
+      ...(options?.projectId && { projectId: options.projectId }),
+    };
+    asset.jobId = id;
+  }
 
-      // Enqueue extraction job
-      if (options?.extractionQueue) {
-        try {
-          await options.extractionQueue.send({
-            assetId: id,
-            archiveKey: key,
-            archiveFilename: file.name,
-            archiveFormat,
-          });
-        } catch (e) {
-          console.error("Failed to enqueue extraction:", e);
-        }
+  try {
+    // Job row, asset row and storage-usage counters in one atomic write, so a
+    // failure never leaves an asset without its job or the counters short
+    // (ADR-012 §3).
+    await writes.createAsset({ asset, job, usageScopes: options?.usageScopes });
+
+    // Enqueue only after the rows are committed: the consumer reads them.
+    if (job && options?.extractionQueue) {
+      try {
+        await options.extractionQueue.send({
+          assetId: id,
+          archiveKey: key,
+          archiveFilename: file.name,
+          archiveFormat: archiveFormat!,
+        });
+      } catch (e) {
+        console.error("Failed to enqueue extraction:", e);
       }
     }
-
-    await metadata.save(asset, options?.projectId ? 0 : ttlSeconds);
 
     // Best-effort thumbnail enqueue. Skipped for non-image content types.
     await enqueueThumbnail(options?.thumbnailQueue ?? null, {
@@ -120,15 +121,16 @@ if (import.meta.vitest) {
     return new ReadableStream({ start(c) { c.enqueue(data); c.close(); } });
   }
 
-  function mockMetadata(): MetadataStore {
-    const store = new Map<string, AssetMetadata>();
-    return {
-      save: vi.fn(async (asset: AssetMetadata, _ttl: number) => { store.set(asset.id, asset); }),
-      find: vi.fn(async (id: string) => store.get(id) ?? null),
-      update: vi.fn(async () => {}),
-      delete: vi.fn(async (id: string) => { store.delete(id); }),
-      list: vi.fn(async () => ({ items: [], cursor: undefined })),
+  type CreateAssetInput = Parameters<AtomicWrites["createAsset"]>[0];
+
+  function mockWrites() {
+    const calls: CreateAssetInput[] = [];
+    const writes: AtomicWrites = {
+      createAsset: vi.fn(async (input: CreateAssetInput) => { calls.push(input); }),
+      createVersion: vi.fn(async () => { throw new Error("not used"); }),
+      saveJob: vi.fn(async () => { throw new Error("not used"); }),
     };
+    return { writes, calls };
   }
 
   function mockStorage(): FileStorage {
@@ -144,23 +146,12 @@ if (import.meta.vitest) {
     };
   }
 
-  function mockJobs(): JobStore {
-    const store = new Map<string, Job>();
-    return {
-      save: vi.fn(async (job: Job) => { store.set(job.id, job); }),
-      find: vi.fn(async (id: string) => store.get(id) ?? null),
-      delete: vi.fn(async (id: string) => { store.delete(id); }),
-      list: vi.fn(async () => ({ items: [], cursor: undefined })),
-    };
-  }
-
   test("uploadAsset creates metadata and stores file via stream", async () => {
-    const md = mockMetadata();
+    const { writes, calls } = mockWrites();
     const st = mockStorage();
-    const jb = mockJobs();
 
     const result = await uploadAsset(
-      md, st, jb,
+      writes, st,
       { name: "test.txt", type: "text/plain", body: toStream(new TextEncoder().encode("hello")), size: 5 },
       3600, "https://example.com",
     );
@@ -170,18 +161,16 @@ if (import.meta.vitest) {
     expect(result.asset.size).toBe(5);
     expect(result.asset.type).toBeUndefined();
     expect(result.asset.status).toBeUndefined();
-    expect(md.save).toHaveBeenCalledOnce();
     expect(st.put).toHaveBeenCalledOnce();
-    expect(jb.save).not.toHaveBeenCalled();
+    expect(calls).toHaveLength(1);
+    expect(calls[0].job).toBeUndefined();
   });
 
-  test("uploadAsset detects ZIP and creates job", async () => {
-    const md = mockMetadata();
-    const st = mockStorage();
-    const jb = mockJobs();
+  test("uploadAsset detects ZIP and writes the job in the same batch", async () => {
+    const { writes, calls } = mockWrites();
 
     const result = await uploadAsset(
-      md, st, jb,
+      writes, mockStorage(),
       { name: "data.zip", type: "application/zip", body: toStream(new Uint8Array(10)), size: 10 },
       3600, "https://example.com",
     );
@@ -190,33 +179,57 @@ if (import.meta.vitest) {
     expect(result.asset.status).toBe("pending");
     expect(result.asset.archiveFormat).toBe("zip");
     expect(result.asset.jobId).toBe(result.asset.id);
-    expect(jb.save).toHaveBeenCalledOnce();
+    expect(calls[0].job?.id).toBe(result.asset.id);
   });
 
   test("uploadAsset detects tar.gz and creates job", async () => {
-    const md = mockMetadata();
-    const st = mockStorage();
-    const jb = mockJobs();
+    const { writes, calls } = mockWrites();
 
     const result = await uploadAsset(
-      md, st, jb,
+      writes, mockStorage(),
       { name: "data.tar.gz", type: "application/gzip", body: toStream(new Uint8Array(10)), size: 10 },
       3600, "https://example.com",
     );
 
-    expect(result.asset.type).toBe("archive");
     expect(result.asset.archiveFormat).toBe("tar.gz");
-    expect(jb.save).toHaveBeenCalledOnce();
+    expect(calls[0].job).toBeDefined();
+  });
+
+  test("uploadAsset passes the storage-usage scopes into the batch", async () => {
+    const { writes, calls } = mockWrites();
+
+    await uploadAsset(
+      writes, mockStorage(),
+      { name: "a.txt", type: "text/plain", body: toStream(new Uint8Array(3)), size: 3 },
+      3600, "https://example.com",
+      { projectId: "p1", usageScopes: ["project:p1", "workspace:ws1"] },
+    );
+
+    expect(calls[0].usageScopes).toEqual(["project:p1", "workspace:ws1"]);
+  });
+
+  test("uploadAsset enqueues extraction only after the rows are committed", async () => {
+    const { writes } = mockWrites();
+    const order: string[] = [];
+    (writes.createAsset as ReturnType<typeof vi.fn>).mockImplementation(async () => { order.push("write"); });
+    const extractionQueue = { send: vi.fn(async () => { order.push("enqueue"); }) };
+
+    await uploadAsset(
+      writes, mockStorage(),
+      { name: "data.zip", type: "application/zip", body: toStream(new Uint8Array(10)), size: 10 },
+      3600, "https://example.com",
+      { extractionQueue },
+    );
+
+    expect(order).toEqual(["write", "enqueue"]);
   });
 
   test("uploadAsset does not compress (compression is client responsibility)", async () => {
-    const md = mockMetadata();
-    const st = mockStorage();
-    const jb = mockJobs();
+    const { writes } = mockWrites();
     const data = new TextEncoder().encode('{"data":' + '"x"'.repeat(500) + '}');
 
     const result = await uploadAsset(
-      md, st, jb,
+      writes, mockStorage(),
       { name: "data.json", type: "application/json", body: toStream(data), size: data.byteLength },
       3600, "https://example.com",
     );
@@ -227,12 +240,10 @@ if (import.meta.vitest) {
   });
 
   test("uploadAsset records contentEncoding and originalSize when provided", async () => {
-    const md = mockMetadata();
-    const st = mockStorage();
-    const jb = mockJobs();
+    const { writes } = mockWrites();
 
     const result = await uploadAsset(
-      md, st, jb,
+      writes, mockStorage(),
       {
         name: "data.json", type: "application/json",
         body: toStream(new Uint8Array(50)), size: 50,
@@ -247,12 +258,10 @@ if (import.meta.vitest) {
   });
 
   test("uploadAsset with skipExtraction detects archive but does not create job", async () => {
-    const md = mockMetadata();
-    const st = mockStorage();
-    const jb = mockJobs();
+    const { writes, calls } = mockWrites();
 
     const result = await uploadAsset(
-      md, st, jb,
+      writes, mockStorage(),
       { name: "data.zip", type: "application/zip", body: toStream(new Uint8Array(10)), size: 10 },
       3600, "https://example.com",
       { skipExtraction: true },
@@ -262,6 +271,6 @@ if (import.meta.vitest) {
     expect(result.asset.archiveFormat).toBe("zip");
     expect(result.asset.status).toBeUndefined();
     expect(result.asset.jobId).toBeUndefined();
-    expect(jb.save).not.toHaveBeenCalled();
+    expect(calls[0].job).toBeUndefined();
   });
 }

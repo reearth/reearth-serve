@@ -63,13 +63,11 @@ export function registerExtractRoute(app: Hono<AppEnv>) {
       ...(sessionId && { sessionId }),
       ...(asset.projectId && { projectId: asset.projectId }),
     };
-    await jobs.save(job);
-
     // Update asset status
     asset.status = "pending";
     asset.jobId = id;
-    const ttlSeconds = c.get("ttlSeconds");
-    await metadata.save(asset, ttlSeconds);
+    // Job row and its asset mirror in one atomic write (ADR-012 §3).
+    await c.get("writes").saveJob({ job, asset });
 
     // Enqueue
     if (extractionQueue) {

@@ -52,6 +52,7 @@ function fakeDeps(overrides: Partial<Deps> = {}): Deps {
   return {
     metadata: new MemoryMetadataStore(),
     versions: unused("versions"),
+    writes: unused("writes"),
     storage: unused("storage"),
     uploadSessions: unused("uploadSessions"),
     presignedUrls: null,

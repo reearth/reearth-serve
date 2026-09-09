@@ -1,4 +1,4 @@
-import type { FileStorage, MetadataStore, VersionStore, UploadSessionStore, PresignedUrlGenerator } from "./asset/repository";
+import type { AtomicWrites, FileStorage, MetadataStore, VersionStore, UploadSessionStore, PresignedUrlGenerator } from "./asset/repository";
 import type { JobStore } from "./job/repository";
 import type { AuthUser } from "./auth/types";
 import type { AuthConfig } from "./auth/middleware";
@@ -23,6 +23,8 @@ import type { ThumbnailMessage } from "./thumbnail/queue";
 export type ContextDeps = {
   metadata: MetadataStore;
   versions: VersionStore;
+  /** Multi-row writes that must land together (upload, job status). */
+  writes: AtomicWrites;
   storage: FileStorage;
   uploadSessions: UploadSessionStore;
   presignedUrls: PresignedUrlGenerator | null;

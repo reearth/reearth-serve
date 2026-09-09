@@ -4,7 +4,7 @@ import { resolver, validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata, uploadVersion } from "../usecase";
 import { canAccessAsset } from "../access";
-import { accessCtx, denyAnonymousUpload } from "./shared";
+import { accessCtx, denyAnonymousUpload, usageScopes } from "./shared";
 import { versionResponseSchema, errorResponseSchema, idParamSchema } from "../../../shared/openapi";
 
 export function registerUploadVersionRoute(app: Hono<AppEnv>) {
@@ -35,9 +35,8 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
       if (denied) return denied;
 
       const metadata = c.get("metadata");
-      const versions = c.get("versions");
+      const writes = c.get("writes");
       const storage = c.get("storage");
-      const jobs = c.get("jobs");
       const baseUrl = c.get("baseUrl");
       const { id } = c.req.valid("param");
 
@@ -69,26 +68,18 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
       const extractionQueue = c.get("extractionQueue");
       const thumbnailQueue = c.get("thumbnailQueue");
 
+      // Resolved up front so the counters ride along in the version's batch.
+      const scopes = await usageScopes(c, asset.projectId);
+
       const result = await uploadVersion(
-        metadata, versions, storage, jobs, id,
+        metadata, writes, storage, id,
         { name: filename, type: c.req.header("Content-Type") || "application/octet-stream", body, size, contentEncoding, originalSize },
         baseUrl,
-        { extractionQueue, thumbnailQueue, skipExtraction },
+        { extractionQueue, thumbnailQueue, skipExtraction, usageScopes: scopes },
       );
 
       if (!result) {
         return c.json({ error: "Asset not found" }, 404);
-      }
-
-      // Update storage usage
-      if (asset.projectId) {
-        const storageUsage = c.get("storageUsage");
-        const projects = c.get("projects");
-        await storageUsage.increment(`project:${asset.projectId}`, result.version.size);
-        const project = await projects.find(asset.projectId);
-        if (project?.workspaceId) {
-          await storageUsage.increment(`workspace:${project.workspaceId}`, result.version.size);
-        }
       }
 
       return c.json({ version: result.version, url: result.url }, 201);

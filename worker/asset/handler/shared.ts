@@ -62,3 +62,23 @@ export async function resolveUploadProject(
   }
   return { ok: true, projectId: header };
 }
+
+/**
+ * Storage-usage counter scopes for a project asset: the project itself and,
+ * when the project belongs to one, its workspace. Empty for session-scoped
+ * (demo) assets, which are not counted.
+ *
+ * Resolved before the write so the counters can travel in the same atomic
+ * batch as the asset/version row (ADR-012 §3) instead of being incremented
+ * afterwards, where a failure left the counters short.
+ */
+export async function usageScopes(
+  c: Context<AppEnv>,
+  projectId: string | null | undefined,
+): Promise<string[]> {
+  if (!projectId) return [];
+  const scopes = [`project:${projectId}`];
+  const project = await c.get("projects").find(projectId);
+  if (project?.workspaceId) scopes.push(`workspace:${project.workspaceId}`);
+  return scopes;
+}

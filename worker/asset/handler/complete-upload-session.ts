@@ -4,7 +4,7 @@ import { resolver, validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { completeUploadSession } from "../usecase";
 import { canAccessProject } from "../access";
-import { accessCtx } from "./shared";
+import { accessCtx, usageScopes } from "./shared";
 import { uploadResultResponseSchema, errorResponseSchema, idParamSchema, completeUploadBodySchema } from "../../../shared/openapi";
 
 export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
@@ -21,7 +21,7 @@ export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
     zValidator("param", idParamSchema),
     async (c) => {
     const sessions = c.get("uploadSessions");
-    const metadata = c.get("metadata");
+    const writes = c.get("writes");
     const storage = c.get("storage");
     const presignedUrls = c.get("presignedUrls");
     const ttlSeconds = c.get("ttlSeconds");
@@ -51,24 +51,14 @@ export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
       parts = body.parts;
     }
 
-    const jobs = c.get("jobs");
     const sessionId = c.get("sessionId");
     const extractionQueue = c.get("extractionQueue");
     const thumbnailQueue = c.get("thumbnailQueue");
-    const result = await completeUploadSession(sessions, metadata, storage, presignedUrls, jobs, id, ttlSeconds, baseUrl, parts, { sessionId, extractionQueue, thumbnailQueue });
+    // Resolved up front so the counters ride along in the asset's batch.
+    const scopes = await usageScopes(c, session.projectId);
+    const result = await completeUploadSession(sessions, writes, storage, presignedUrls, id, ttlSeconds, baseUrl, parts, { sessionId, extractionQueue, thumbnailQueue, usageScopes: scopes });
     if (!result) {
       return c.json({ error: "Upload session not found or file not yet uploaded" }, 404);
-    }
-
-    // Update storage usage counters for project assets
-    if (result.asset.projectId) {
-      const storageUsage = c.get("storageUsage");
-      const projects = c.get("projects");
-      await storageUsage.increment(`project:${result.asset.projectId}`, result.asset.size);
-      const project = await projects.find(result.asset.projectId);
-      if (project?.workspaceId) {
-        await storageUsage.increment(`workspace:${project.workspaceId}`, result.asset.size);
-      }
     }
 
     return c.json(result, 201);

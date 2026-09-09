@@ -176,8 +176,6 @@ jobInternalRoutes.post("/:id/status", async (c) => {
     job.error = body.error;
   }
 
-  await jobs.save(job);
-
   // Demo-mode assets expire `ttlSeconds` after upload, but extraction of a
   // large archive can outlive that window — the cleanup cron would delete
   // the asset mid-extraction and the container would abort at its next
@@ -191,41 +189,27 @@ jobInternalRoutes.post("/:id/status", async (c) => {
     }
   };
 
-  // Update asset status to reflect job progress
-  if (body.status === "running") {
-    const metadata = c.get("metadata");
-    const asset = await metadata.find(job.assetId);
-    if (asset) {
-      asset.status = "extracting";
-      const ttl = c.get("ttlSeconds");
-      extendDemoExpiry(asset, ttl);
-      await metadata.save(asset, ttl);
-    }
+  // Mirror the job status onto the asset. The two rows go out in one atomic
+  // write (ADR-012 §3) — a job marked completed while its asset still says
+  // "extracting" is exactly the drift the cleanup cron has to reconcile.
+  const ttl = c.get("ttlSeconds");
+  const asset = await c.get("metadata").find(job.assetId);
+
+  if (asset && body.status === "running") {
+    asset.status = "extracting";
+    extendDemoExpiry(asset, ttl);
+  }
+  if (asset && body.status === "completed") {
+    asset.status = "ready";
+    asset.fileCount = body.fileCount;
+    asset.extractedSize = body.extractedSize;
+    extendDemoExpiry(asset, ttl);
+  }
+  if (asset && body.status === "failed") {
+    asset.status = "failed";
   }
 
-  // If completed, update asset metadata
-  if (body.status === "completed") {
-    const metadata = c.get("metadata");
-    const asset = await metadata.find(job.assetId);
-    if (asset) {
-      asset.status = "ready";
-      asset.fileCount = body.fileCount;
-      asset.extractedSize = body.extractedSize;
-      const ttl = c.get("ttlSeconds");
-      extendDemoExpiry(asset, ttl);
-      await metadata.save(asset, ttl);
-    }
-  }
-
-  if (body.status === "failed") {
-    const metadata = c.get("metadata");
-    const asset = await metadata.find(job.assetId);
-    if (asset) {
-      asset.status = "failed";
-      const ttl = c.get("ttlSeconds");
-      await metadata.save(asset, ttl);
-    }
-  }
+  await c.get("writes").saveJob({ job, asset: asset ?? undefined });
 
   return c.json({ ok: true });
 });
