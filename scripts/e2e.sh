@@ -65,6 +65,15 @@ OIDC_ISSUER_URL = \"${OIDC_ISSUER}\"\\
 OIDC_AUDIENCE = \"e2e-audience\"
 " "${WRANGLER_CONFIG}"
 
+# Anonymous uploads are a fail-closed wrangler secret in production
+# (see worker/app.ts). Supply it for the local dev server via .dev.vars,
+# which the cleanup trap removes.
+if [ -f .dev.vars ]; then
+  echo "Error: .dev.vars already exists; refusing to overwrite it." >&2
+  exit 1
+fi
+echo 'ANONYMOUS_UPLOAD_ENABLED = "true"' > .dev.vars
+
 echo "Starting dev server on port ${PORT}..."
 npm run dev -- --port "$PORT" &
 DEV_PID=$!
