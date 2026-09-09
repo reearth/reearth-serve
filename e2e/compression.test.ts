@@ -87,7 +87,7 @@ describe("Compression", () => {
 
   test("CLI direct upload compresses compressible files", async () => {
     const { execSync } = await import("node:child_process");
-    const { writeFileSync, unlinkSync } = await import("node:fs");
+    const { writeFileSync, unlinkSync, mkdtempSync } = await import("node:fs");
     const { join } = await import("node:path");
     const os = await import("node:os");
 
@@ -95,8 +95,16 @@ describe("Compression", () => {
     const tmpFile = join(os.tmpdir(), "cli-compress-test.json");
     writeFileSync(tmpFile, data);
 
+    // Isolated config dir: the default ~/.config/reearth-serve may hold real
+    // credentials, which would turn this into an authenticated upload and be
+    // rejected for lacking X-Project-Id.
+    const configDir = mkdtempSync(join(os.tmpdir(), "serve-e2e-compress-config-"));
+
     try {
-      const output = execSync(`npx tsx cli/index.ts --endpoint ${BASE} --json upload --direct "${tmpFile}"`, { encoding: "utf-8" });
+      const output = execSync(`npx tsx cli/index.ts --endpoint ${BASE} --json upload --direct "${tmpFile}"`, {
+        encoding: "utf-8",
+        env: { ...process.env, REEARTH_SERVE_CONFIG_DIR: configDir },
+      });
       const result = JSON.parse(output);
       expect(result.asset.contentEncoding).toBe("gzip");
       expect(result.asset.originalSize).toBe(Buffer.byteLength(data));

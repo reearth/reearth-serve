@@ -1,6 +1,19 @@
 export const BASE = process.env.E2E_ENDPOINT ?? "http://localhost:8787";
 export const MOCK_OIDC = process.env.E2E_MOCK_OIDC ?? "http://localhost:18999";
 
+/**
+ * Shared secret the server under test was started with. `/api/internal/*` is
+ * fail-closed: without a configured secret it answers 503, and without a
+ * matching `Authorization: Bearer` it answers 401 (see core/app.ts). Both
+ * e2e launch scripts set the secret and export it here.
+ */
+export const INTERNAL_API_SECRET = process.env.E2E_INTERNAL_API_SECRET ?? "";
+
+/** Headers authorizing a call to `/api/internal/*`. */
+export function internalHeaders(extra: Record<string, string> = {}): Record<string, string> {
+  return { Authorization: `Bearer ${INTERNAL_API_SECRET}`, ...extra };
+}
+
 export function rewriteUrl(url: string): string {
   const parsed = new URL(url);
   const base = new URL(BASE);

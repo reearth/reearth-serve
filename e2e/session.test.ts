@@ -1,9 +1,22 @@
 import { describe, test, expect, beforeAll } from "vitest";
 import { BASE } from "./helpers";
 
-// Helper: generate a valid 16-char hex session ID
+// Helper: generate a well-formed but server-unknown 16-char hex session ID
 function generateSessionId(): string {
   return Array.from({ length: 16 }, () => Math.floor(Math.random() * 16).toString(16)).join("");
+}
+
+/**
+ * Ask the server for a session. Since 100b9e9 the middleware only honors
+ * X-Session-Id values it issued itself, so tests that need an owning session
+ * must take one from the response header rather than inventing one.
+ */
+async function newSession(): Promise<string> {
+  const res = await fetch(`${BASE}/api/v1/assets`);
+  if (!res.ok) throw new Error(`Session mint failed: ${res.status}`);
+  const id = res.headers.get("X-Session-Id");
+  if (!id) throw new Error("Server did not issue a session ID");
+  return id;
 }
 
 // Helper: upload a file with a specific session
@@ -35,12 +48,25 @@ describe("Session-based authorization", () => {
       expect(sessionId).toMatch(/^[0-9a-f]{16}$/);
     });
 
-    test("Valid client-generated X-Session-Id → accepted", async () => {
-      const sessionId = generateSessionId();
+    test("Server-issued X-Session-Id → reused as-is", async () => {
+      const sessionId = await newSession();
       const res = await fetch(`${BASE}/api/v1/assets`, {
         headers: { "X-Session-Id": sessionId },
       });
       expect(res.status).toBe(200);
+      // Nothing minted: the server keeps the session it already issued.
+      expect(res.headers.get("X-Session-Id")).toBeNull();
+    });
+
+    test("Well-formed but unknown X-Session-Id → not adopted, fresh one minted", async () => {
+      const claimed = generateSessionId();
+      const res = await fetch(`${BASE}/api/v1/assets`, {
+        headers: { "X-Session-Id": claimed },
+      });
+      expect(res.status).toBe(200);
+      const issued = res.headers.get("X-Session-Id");
+      expect(issued).toMatch(/^[0-9a-f]{16}$/);
+      expect(issued).not.toBe(claimed);
     });
 
     test("Invalid X-Session-Id format → 401", async () => {
@@ -55,9 +81,14 @@ describe("Session-based authorization", () => {
   });
 
   describe("Asset isolation between sessions", () => {
-    const sessionA = generateSessionId();
-    const sessionB = generateSessionId();
+    let sessionA: string;
+    let sessionB: string;
     let assetId: string;
+
+    beforeAll(async () => {
+      sessionA = await newSession();
+      sessionB = await newSession();
+    });
 
     test("Upload with session A", async () => {
       const { status, body } = await uploadWithSession(sessionA, "secret.txt", "session A data");
@@ -114,9 +145,14 @@ describe("Session-based authorization", () => {
   });
 
   describe("Job isolation between sessions", () => {
-    const sessionA = generateSessionId();
-    const sessionB = generateSessionId();
+    let sessionA: string;
+    let sessionB: string;
     let jobId: string;
+
+    beforeAll(async () => {
+      sessionA = await newSession();
+      sessionB = await newSession();
+    });
 
     test("Upload archive with session A → job created", async () => {
       const { status, body } = await uploadWithSession(sessionA, "test.zip", "PK\x03\x04fake");

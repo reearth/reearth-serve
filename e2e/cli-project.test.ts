@@ -1,8 +1,8 @@
-import { describe, test, expect, beforeAll, afterAll } from "vitest";
+import { describe, test, expect, beforeAll } from "vitest";
 import { execSync } from "node:child_process";
-import { writeFileSync, mkdirSync, rmSync, existsSync } from "node:fs";
+import { writeFileSync, mkdtempSync } from "node:fs";
 import { join } from "node:path";
-import { homedir } from "node:os";
+import { tmpdir } from "node:os";
 import { BASE, MOCK_OIDC, signToken } from "./helpers";
 
 // Auto-detect if mock OIDC server is reachable
@@ -14,14 +14,18 @@ try {
   // not reachable
 }
 
-const CONFIG_DIR = join(homedir(), ".config", "reearth-serve");
-const CREDENTIALS_FILE = join(CONFIG_DIR, "credentials.json");
-const CONFIG_FILE = join(CONFIG_DIR, "config.json");
+// The CLI reads its credentials from REEARTH_SERVE_CONFIG_DIR. Use a throwaway
+// directory: writing into the developer's real ~/.config/reearth-serve leaked
+// this suite's access token into every other e2e test that shells out to the
+// CLI concurrently (see e2e/compression.test.ts).
+let configDir: string;
+let CREDENTIALS_FILE: string;
+let CONFIG_FILE: string;
 
 function cli(args: string): string {
   return execSync(
     `npx tsx cli/index.ts --endpoint ${BASE} ${args}`,
-    { encoding: "utf-8" },
+    { encoding: "utf-8", env: { ...process.env, REEARTH_SERVE_CONFIG_DIR: configDir } },
   ).trim();
 }
 
@@ -31,8 +35,6 @@ function cliJson(args: string): unknown {
 
 describe("CLI project commands", { skip: !mockOidcAvailable }, () => {
   let token: string;
-  let savedCredentials: string | null = null;
-  let savedConfig: string | null = null;
 
   beforeAll(async () => {
     const res = await fetch(`${BASE}/api/v1/health`);
@@ -40,16 +42,9 @@ describe("CLI project commands", { skip: !mockOidcAvailable }, () => {
 
     token = await signToken({ sub: "cli-proj-user" });
 
-    // Backup existing credentials/config if present
-    mkdirSync(CONFIG_DIR, { recursive: true });
-    try {
-      savedCredentials = existsSync(CREDENTIALS_FILE)
-        ? execSync(`cat "${CREDENTIALS_FILE}"`, { encoding: "utf-8" })
-        : null;
-      savedConfig = existsSync(CONFIG_FILE)
-        ? execSync(`cat "${CONFIG_FILE}"`, { encoding: "utf-8" })
-        : null;
-    } catch { /* ignore */ }
+    configDir = mkdtempSync(join(tmpdir(), "serve-e2e-proj-config-"));
+    CREDENTIALS_FILE = join(configDir, "credentials.json");
+    CONFIG_FILE = join(configDir, "config.json");
 
     // Write test credentials
     writeFileSync(CREDENTIALS_FILE, JSON.stringify({
@@ -59,20 +54,6 @@ describe("CLI project commands", { skip: !mockOidcAvailable }, () => {
 
     // Clear default project
     writeFileSync(CONFIG_FILE, JSON.stringify({}));
-  });
-
-  afterAll(() => {
-    // Restore original credentials/config
-    if (savedCredentials !== null) {
-      writeFileSync(CREDENTIALS_FILE, savedCredentials, { mode: 0o600 });
-    } else if (existsSync(CREDENTIALS_FILE)) {
-      rmSync(CREDENTIALS_FILE);
-    }
-    if (savedConfig !== null) {
-      writeFileSync(CONFIG_FILE, savedConfig);
-    } else if (existsSync(CONFIG_FILE)) {
-      rmSync(CONFIG_FILE);
-    }
   });
 
   test("project list (empty)", () => {

@@ -16,7 +16,9 @@ describe("authentication", { skip: !mockOidcAvailable }, () => {
   test("health endpoint works without auth", async () => {
     const res = await fetch(`${BASE}/api/v1/health`);
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ ok: true });
+    // The upload gate is surfaced here so the CLI can fail fast with a login
+    // hint before uploading (731a4ce). The e2e servers run with it enabled.
+    expect(await res.json()).toEqual({ ok: true, anonymousUploadEnabled: true });
   });
 
   test("valid token → authenticated request succeeds", async () => {

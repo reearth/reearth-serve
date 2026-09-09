@@ -7,6 +7,7 @@ set -euo pipefail
 PORT="${E2E_PORT:-8788}"
 ENDPOINT="http://localhost:${PORT}"
 MOCK_OIDC_PORT="${MOCK_OIDC_PORT:-18998}"
+INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-e2e-internal-secret}"
 
 cleanup() {
   if [ -n "${SERVER_PID:-}" ]; then
@@ -44,7 +45,7 @@ echo "Starting Node runtime on port ${PORT}..."
 PORT="${PORT}" \
 BASE_URL="${ENDPOINT}" \
 SQLITE_PATH=":memory:" \
-INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-e2e-internal-secret}" \
+INTERNAL_API_SECRET="${INTERNAL_API_SECRET}" \
 ANONYMOUS_UPLOAD_ENABLED="true" \
 OIDC_ISSUER_URL="${OIDC_ISSUER}" \
 OIDC_AUDIENCE="e2e-audience" \
@@ -76,6 +77,7 @@ echo "Running E2E tests against the Node runtime..."
 # generation needs the bundled jSquash wasm. Each is skipped by its own flag.
 E2E_ENDPOINT="${ENDPOINT}" \
 E2E_MOCK_OIDC="http://localhost:${MOCK_OIDC_PORT}" \
+E2E_INTERNAL_API_SECRET="${INTERNAL_API_SECRET}" \
 E2E_PRESIGNED="false" \
 E2E_CONTAINER="false" \
 E2E_THUMBNAILS="false" \
