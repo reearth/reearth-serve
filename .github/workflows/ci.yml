@@ -40,11 +40,6 @@ jobs:
     # (runtime/node) on node:sqlite, in-process file storage and the SQL-backed
     # kv/queue tables. Presigned, container and thumbnail tests are skipped —
     # that runtime has none of those features.
-    #
-    # Reporting only, for now: the e2e suite has 8 pre-existing failures that
-    # also fail against the Cloudflare dev server, so gating on it would mean
-    # gating on already-red tests. Flip this off once they are fixed.
-    continue-on-error: true
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4

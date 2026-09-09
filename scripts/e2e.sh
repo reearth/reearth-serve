@@ -3,6 +3,7 @@ set -euo pipefail
 
 PORT="${E2E_PORT:-5173}"
 ENDPOINT="http://localhost:${PORT}"
+INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-e2e-internal-secret}"
 MOCK_OIDC_PORT="${MOCK_OIDC_PORT:-18999}"
 WRANGLER_CONFIG="wrangler.toml"
 WRANGLER_BACKUP=""
@@ -65,14 +66,17 @@ OIDC_ISSUER_URL = \"${OIDC_ISSUER}\"\\
 OIDC_AUDIENCE = \"e2e-audience\"
 " "${WRANGLER_CONFIG}"
 
-# Anonymous uploads are a fail-closed wrangler secret in production
-# (see core/app.ts). Supply it for the local dev server via .dev.vars,
-# which the cleanup trap removes.
+# Anonymous uploads and the internal-API secret are fail-closed wrangler
+# secrets in production (see core/app.ts). Supply them for the local dev
+# server via .dev.vars, which the cleanup trap removes.
 if [ -f .dev.vars ]; then
   echo "Error: .dev.vars already exists; refusing to overwrite it." >&2
   exit 1
 fi
-echo 'ANONYMOUS_UPLOAD_ENABLED = "true"' > .dev.vars
+{
+  echo 'ANONYMOUS_UPLOAD_ENABLED = "true"'
+  echo "INTERNAL_API_SECRET = \"${INTERNAL_API_SECRET}\""
+} > .dev.vars
 
 echo "Starting dev server on port ${PORT}..."
 npm run dev -- --port "$PORT" &
@@ -98,4 +102,7 @@ if ! curl -sf "${ENDPOINT}/api/v1/health" > /dev/null 2>&1; then
 fi
 
 echo "Running E2E tests..."
-E2E_ENDPOINT="${ENDPOINT}" E2E_MOCK_OIDC="http://localhost:${MOCK_OIDC_PORT}" npm run test:e2e -- "$@"
+E2E_ENDPOINT="${ENDPOINT}" \
+E2E_MOCK_OIDC="http://localhost:${MOCK_OIDC_PORT}" \
+E2E_INTERNAL_API_SECRET="${INTERNAL_API_SECRET}" \
+  npm run test:e2e -- "$@"

@@ -1,5 +1,5 @@
 import { describe, test, expect, beforeAll } from "vitest";
-import { BASE, rewriteUrl, uploadFile } from "./helpers";
+import { BASE, internalHeaders, rewriteUrl, uploadFile } from "./helpers";
 
 const containerAvailable = process.env.E2E_CONTAINER === "true";
 
@@ -63,10 +63,19 @@ describe("Archive & Job", () => {
       expect(res.status).toBe(404);
     });
 
-    test("POST /api/internal/jobs/:id/status returns 404 for non-existent job", async () => {
+    test("POST /api/internal/jobs/:id/status without the internal secret returns 401", async () => {
       const res = await fetch(`${BASE}/api/internal/jobs/nonexistent-job-id/status`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: "running" }),
+      });
+      expect(res.status).toBe(401);
+    });
+
+    test("POST /api/internal/jobs/:id/status returns 404 for non-existent job", async () => {
+      const res = await fetch(`${BASE}/api/internal/jobs/nonexistent-job-id/status`, {
+        method: "POST",
+        headers: internalHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ status: "running" }),
       });
       expect(res.status).toBe(404);
@@ -95,7 +104,7 @@ describe("Archive & Job", () => {
       // Container reports running → asset becomes extracting
       const runRes = await fetch(`${BASE}/api/internal/jobs/${assetId}/status`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: internalHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ status: "running" }),
       });
       expect(runRes.status).toBe(200);
@@ -106,7 +115,7 @@ describe("Archive & Job", () => {
       // Container reports completed → asset becomes ready
       const completeRes = await fetch(`${BASE}/api/internal/jobs/${assetId}/status`, {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: internalHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({ status: "completed", fileCount: 1, extractedSize: 5 }),
       });
       expect(completeRes.status).toBe(200);
