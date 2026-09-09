@@ -1,5 +1,6 @@
 import { Container } from "@cloudflare/containers";
 import type { ArchiveFormat } from "../asset/model";
+import { objectStoreEnv, type ObjectStoreCredentials } from "./container-env";
 
 export interface ContainerLauncher {
   /**
@@ -27,12 +28,7 @@ export interface ThumbnailGeneratorParams {
   contentType: string;
 }
 
-export interface ObjectStoreCredentials {
-  endpoint: string;
-  accessKeyId: string;
-  secretAccessKey: string;
-  bucket: string;
-}
+export type { ObjectStoreCredentials } from "./container-env";
 
 // Hard ceiling on a single extraction run. Activity renewal (below) keeps the
 // container alive while the Go process works, so a hung process would
@@ -145,10 +141,7 @@ export class CloudflareContainerLauncher implements ContainerLauncher {
     const stub = archiveExtractor.get(id) as DurableObjectStub & ArchiveExtractorContainer;
 
     const envVars = {
-      R2_ENDPOINT: objectStore.endpoint,
-      R2_ACCESS_KEY_ID: objectStore.accessKeyId,
-      R2_SECRET_ACCESS_KEY: objectStore.secretAccessKey,
-      R2_BUCKET: objectStore.bucket,
+      ...objectStoreEnv(objectStore),
       ASSET_ID: params.assetId,
       ARCHIVE_KEY: params.archiveKey,
       ARCHIVE_FILENAME: params.archiveFilename,
@@ -186,12 +179,7 @@ export class CloudflareContainerLauncher implements ContainerLauncher {
       generate(envVars: Record<string, string>, request: object): Promise<Response>;
     };
 
-    const envVars = {
-      R2_ENDPOINT: objectStore.endpoint,
-      R2_ACCESS_KEY_ID: objectStore.accessKeyId,
-      R2_SECRET_ACCESS_KEY: objectStore.secretAccessKey,
-      R2_BUCKET: objectStore.bucket,
-    };
+    const envVars = objectStoreEnv(objectStore);
     const request = {
       assetId: params.assetId,
       versionId: params.versionId ?? "",

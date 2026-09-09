@@ -58,21 +58,31 @@ type R2Client struct {
 	bucket string
 }
 
-// R2Config holds the configuration for connecting to R2.
+// R2Config holds the configuration for connecting to an S3-compatible object
+// store (R2 in production, but MinIO/S3/GCS work the same way).
 type R2Config struct {
 	Endpoint        string
 	AccessKeyID     string
 	SecretAccessKey string
 	Bucket          string
+	// Region is the signing region; empty means "auto" (what R2 expects).
+	Region string
+	// PathStyle addresses buckets as <endpoint>/<bucket> instead of using a
+	// virtual host. R2 and MinIO want this on.
+	PathStyle bool
 }
 
 // NewR2Client creates a new R2 client using S3-compatible API.
 func NewR2Client(ctx context.Context, cfg R2Config) (*R2Client, error) {
+	region := cfg.Region
+	if region == "" {
+		region = defaultRegion
+	}
 	awsCfg, err := config.LoadDefaultConfig(ctx,
 		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
 			cfg.AccessKeyID, cfg.SecretAccessKey, "",
 		)),
-		config.WithRegion("auto"),
+		config.WithRegion(region),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
@@ -81,7 +91,7 @@ func NewR2Client(ctx context.Context, cfg R2Config) (*R2Client, error) {
 	endpoint := cfg.Endpoint
 	client := s3.NewFromConfig(awsCfg, func(o *s3.Options) {
 		o.BaseEndpoint = &endpoint
-		o.UsePathStyle = true
+		o.UsePathStyle = cfg.PathStyle
 		// Disable CRC32 checksum — R2 does not support AWS SDK v2's default checksum validation
 		o.RequestChecksumCalculation = aws.RequestChecksumCalculationWhenRequired
 		o.ResponseChecksumValidation = aws.ResponseChecksumValidationWhenRequired

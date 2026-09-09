@@ -15,6 +15,8 @@ import (
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/davidbyttow/govips/v2/vips"
+
+	"reearth-serve/thumbnail/objectstore"
 )
 
 // Thumbnail sizes mirror worker/thumbnail/sizes.ts. Keep these in sync.
@@ -171,24 +173,28 @@ func thumbKey(assetID, versionID, sizeName string) string {
 }
 
 func newS3Client(ctx context.Context) (*s3.Client, string, error) {
-	endpoint := os.Getenv("R2_ENDPOINT")
-	accessKey := os.Getenv("R2_ACCESS_KEY_ID")
-	secretKey := os.Getenv("R2_SECRET_ACCESS_KEY")
-	bucket := os.Getenv("R2_BUCKET")
-	if endpoint == "" || accessKey == "" || secretKey == "" || bucket == "" {
-		return nil, "", fmt.Errorf("R2 credentials not configured")
+	store, deprecated, err := objectstore.Load(os.Getenv, func(endpoint string) bool {
+		return strings.Contains(endpoint, "r2.cloudflarestorage.com")
+	})
+	if err != nil {
+		return nil, "", fmt.Errorf("object store not configured: %w", err)
+	}
+	if msg := objectstore.DeprecationMessage(deprecated); msg != "" {
+		log.Print(msg)
 	}
 
 	cfg, err := config.LoadDefaultConfig(ctx,
-		config.WithRegion("auto"),
-		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(accessKey, secretKey, "")),
+		config.WithRegion(store.Region),
+		config.WithCredentialsProvider(credentials.NewStaticCredentialsProvider(
+			store.AccessKeyID, store.SecretAccessKey, "",
+		)),
 	)
 	if err != nil {
 		return nil, "", err
 	}
 	client := s3.NewFromConfig(cfg, func(o *s3.Options) {
-		o.UsePathStyle = strings.Contains(endpoint, "r2.cloudflarestorage.com")
-		o.BaseEndpoint = aws.String(endpoint)
+		o.UsePathStyle = store.PathStyle
+		o.BaseEndpoint = aws.String(store.Endpoint)
 	})
-	return client, bucket, nil
+	return client, store.Bucket, nil
 }
