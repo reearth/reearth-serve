@@ -124,4 +124,40 @@ describe("createApp with hand-built deps", () => {
     expect((await app.request("/api/internal/assets/missing/exists", authorized)).status).toBe(404);
     expect((await app.request("/api/internal/assets/a1/exists")).status).toBe(401);
   });
+
+  test("internal routes take the shared secret even when OIDC is configured", async () => {
+    // Regression: the OIDC middleware used to run on /api/internal/* too, so
+    // the container's `Authorization: Bearer <INTERNAL_API_SECRET>` was
+    // verified as a JWT and rejected 401 on any server with an issuer set.
+    const metadata = new MemoryMetadataStore();
+    metadata.assets.set("a1", {
+      id: "a1",
+      filename: "a.bin",
+      contentType: "application/octet-stream",
+      size: 1,
+      createdAt: 0,
+      expiresAt: 0,
+    });
+    const sessions = new MemorySessionStore();
+    const app = createApp(
+      fakeDeps({
+        metadata,
+        sessions,
+        internalApiSecret: "s3cret",
+        auth: {
+          issuer: "https://idp.example.test/",
+          jwks: () => {
+            throw new Error("JWKS must not be consulted for internal calls");
+          },
+        },
+      }),
+    );
+
+    const res = await app.request("/api/internal/assets/a1/exists", {
+      headers: { Authorization: "Bearer s3cret" },
+    });
+    expect(res.status).toBe(200);
+    // A machine caller must not burn a demo session either.
+    expect(sessions.sessions.size).toBe(0);
+  });
 });
