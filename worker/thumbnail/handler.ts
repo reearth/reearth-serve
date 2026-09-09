@@ -3,6 +3,7 @@ import { generateThumbnails } from "./generator";
 import { legacyThumbKey, versionThumbKey } from "../asset/usecase/shared";
 import { thumbnailFilename, THUMBNAIL_CONTENT_TYPE } from "./sizes";
 import type { Deps } from "../types";
+import type { QueueMessage } from "../queue/port";
 
 // 20 MiB dispatch threshold. Below this we run jSquash inside the Worker;
 // above this we hand off to the libvips container. The boundary is intentionally
@@ -11,10 +12,10 @@ import type { Deps } from "../types";
 const WORKER_INLINE_MAX_BYTES = 20 * 1024 * 1024;
 
 export async function handleThumbnailQueue(
-  batch: MessageBatch<ThumbnailMessage>,
+  messages: QueueMessage<ThumbnailMessage>[],
   deps: Deps,
 ): Promise<void> {
-  for (const message of batch.messages) {
+  for (const message of messages) {
     try {
       await processMessage(message.body, deps);
       message.ack();

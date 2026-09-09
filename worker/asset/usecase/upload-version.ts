@@ -5,6 +5,9 @@ import type { JobStore } from "../../job/repository";
 import type { Job } from "../../job/model";
 import { generateId, versionStorageKey } from "./shared";
 import { enqueueThumbnail } from "../../thumbnail/queue";
+import type { ThumbnailMessage } from "../../thumbnail/queue";
+import type { JobQueue } from "../../queue/port";
+import type { ExtractionMessage } from "../../extraction/handler";
 
 export interface UploadVersionResult {
   version: AssetVersion;
@@ -26,7 +29,7 @@ export async function uploadVersion(
     originalSize?: number;
   },
   baseUrl: string,
-  options?: { extractionQueue?: Queue | null; thumbnailQueue?: Queue | null; skipExtraction?: boolean },
+  options?: { extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean },
 ): Promise<UploadVersionResult | null> {
   const asset = await metadata.find(assetId);
   if (!asset) return null;
