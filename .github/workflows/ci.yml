@@ -4,7 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    # Stacked PRs target the branch below them, not main; run CI for those too.
+    branches: [main, "stack/**"]
 
 jobs:
   check:
