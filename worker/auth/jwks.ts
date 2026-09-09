@@ -23,7 +23,7 @@ export function jwksUrl(issuer: string): URL {
   return new URL(".well-known/jwks.json", issuer.endsWith("/") ? issuer : `${issuer}/`);
 }
 
-export function jwksCacheKey(issuer: string): string {
+function jwksCacheKey(issuer: string): string {
   return `jwks:${issuer}`;
 }
 
