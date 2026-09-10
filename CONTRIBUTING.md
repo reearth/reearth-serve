@@ -116,7 +116,8 @@ Deployment is triggered on push to `main` via `scripts/deploy.sh`:
 | Secret | Description |
 |--------|-------------|
 | `CLOUDFLARE_API_TOKEN` | Cloudflare API token with Workers + Containers + R2 + KV + D1 permissions |
-| `CLOUDFLARE_ACCOUNT_ID` | Your Cloudflare account ID |
+| `CLOUDFLARE_ACCOUNT_ID` | Optional. When unset, `scripts/deploy.sh` lists the accounts the token can see and uses the only one; with several, set this or `CLOUDFLARE_ACCOUNT_NAME` |
+| `CLOUDFLARE_ACCOUNT_NAME` | Optional. Picks the account by name when the token can see more than one |
 | `CLOUDFLARE_KV_NAMESPACE_ID` | KV namespace ID |
 | `CLOUDFLARE_D1_DATABASE_ID` | D1 database ID |
 | `CLOUDFLARE_R2_BUCKET_NAME` | R2 bucket name |
@@ -173,8 +174,9 @@ npm run deploy
 
 ```bash
 cp .env.example .env
-# Fill in CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_KV_NAMESPACE_ID,
-# CLOUDFLARE_D1_DATABASE_ID, CLOUDFLARE_R2_BUCKET_NAME
+# Fill in CLOUDFLARE_KV_NAMESPACE_ID, CLOUDFLARE_D1_DATABASE_ID,
+# CLOUDFLARE_R2_BUCKET_NAME. CLOUDFLARE_ACCOUNT_ID is optional: it is
+# auto-selected from the API token when the token sees exactly one account.
 npm run deploy
 ```
 

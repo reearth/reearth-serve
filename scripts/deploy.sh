@@ -19,12 +19,64 @@ else
 fi
 
 # Validate required variables
-for var in CLOUDFLARE_ACCOUNT_ID CLOUDFLARE_KV_NAMESPACE_ID CLOUDFLARE_D1_DATABASE_ID CLOUDFLARE_R2_BUCKET_NAME; do
+for var in CLOUDFLARE_KV_NAMESPACE_ID CLOUDFLARE_D1_DATABASE_ID CLOUDFLARE_R2_BUCKET_NAME; do
   if [ -z "${!var:-}" ]; then
     echo "Error: ${var} is not set"
     exit 1
   fi
 done
+
+# Resolve the account. CLOUDFLARE_ACCOUNT_ID wins when set. Otherwise ask the
+# API which accounts the token can see: exactly one is used as-is; several are
+# disambiguated by CLOUDFLARE_ACCOUNT_NAME; anything else is an error listing
+# the candidates. wrangler would prompt interactively here, which hangs in CI.
+resolve_account_id() {
+  if [ -n "${CLOUDFLARE_ACCOUNT_ID:-}" ]; then
+    return 0
+  fi
+  if [ -z "${CLOUDFLARE_API_TOKEN:-}" ]; then
+    echo "Error: CLOUDFLARE_ACCOUNT_ID is not set and CLOUDFLARE_API_TOKEN is missing, so it cannot be auto-selected"
+    exit 1
+  fi
+  local response
+  response=$(curl -sS --fail-with-body \
+    -H "Authorization: Bearer ${CLOUDFLARE_API_TOKEN}" \
+    "https://api.cloudflare.com/client/v4/accounts?per_page=50") || {
+    echo "Error: could not list Cloudflare accounts: ${response}"
+    exit 1
+  }
+  # One "<id>\t<name>" line per account.
+  local accounts
+  accounts=$(printf '%s' "${response}" | node -e '
+    const body = JSON.parse(require("fs").readFileSync(0, "utf8"));
+    if (!body.success) { console.error(JSON.stringify(body.errors)); process.exit(1); }
+    for (const a of body.result) console.log(`${a.id}\t${a.name}`);
+  ') || { echo "Error: Cloudflare API rejected the account listing"; exit 1; }
+
+  local count
+  count=$(printf '%s\n' "${accounts}" | grep -c . || true)
+  if [ "${count}" -eq 0 ]; then
+    echo "Error: the API token has access to no Cloudflare accounts"
+    exit 1
+  fi
+  if [ -n "${CLOUDFLARE_ACCOUNT_NAME:-}" ]; then
+    CLOUDFLARE_ACCOUNT_ID=$(printf '%s\n' "${accounts}" | awk -F'\t' -v n="${CLOUDFLARE_ACCOUNT_NAME}" '$2 == n { print $1; exit }')
+    if [ -z "${CLOUDFLARE_ACCOUNT_ID}" ]; then
+      echo "Error: no account named '${CLOUDFLARE_ACCOUNT_NAME}'. Accounts visible to this token:"
+      printf '%s\n' "${accounts}" | sed 's/^/  /'
+      exit 1
+    fi
+  elif [ "${count}" -eq 1 ]; then
+    CLOUDFLARE_ACCOUNT_ID=$(printf '%s\n' "${accounts}" | cut -f1)
+  else
+    echo "Error: the API token can see ${count} accounts; set CLOUDFLARE_ACCOUNT_ID or CLOUDFLARE_ACCOUNT_NAME:"
+    printf '%s\n' "${accounts}" | sed 's/^/  /'
+    exit 1
+  fi
+  echo "Auto-selected Cloudflare account: $(printf '%s\n' "${accounts}" | awk -F'\t' -v id="${CLOUDFLARE_ACCOUNT_ID}" '$1 == id { print $2 }') (${CLOUDFLARE_ACCOUNT_ID})"
+}
+resolve_account_id
+export CLOUDFLARE_ACCOUNT_ID
 
 # Backup and inject values into wrangler.toml
 WRANGLER_BACKUP="${WRANGLER_CONFIG}.bak.$$"
