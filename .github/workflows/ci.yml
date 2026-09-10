@@ -111,6 +111,24 @@ jobs:
       - name: Build
         run: go build -o /dev/null .
 
+  # Single required status check for branch rules. It aggregates every job
+  # above so the ruleset can require "CI" instead of tracking job names.
+  ci:
+    name: CI
+    needs: [check, build, e2e-node, container-archive-extractor, container-thumbnail]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check job results
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS"
+          if echo "$RESULTS" | grep -Eq '"result": *"(failure|cancelled)"'; then
+            echo "One or more CI jobs failed." >&2
+            exit 1
+          fi
+
   deploy:
     name: Deploy
     needs: [check, build]
