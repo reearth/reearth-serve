@@ -142,6 +142,24 @@ export const claimSiteHostBodySchema = z.object({
   kind: siteHostKindSchema.optional(),
 });
 
+/**
+ * `PATCH …/hosts/:hostname` (ADR-013 B6): the two switches a claimed name has.
+ *
+ * - `disabled` — B3's publish state. True takes the site down (`503`, name
+ *   held); false brings it back.
+ * - `previews` — B4's `v{n}--` / `latest--` hosts, off by default.
+ *
+ * Both are optional, but an empty body is a no-op the caller did not mean, so
+ * at least one must be present.
+ */
+export const updateSiteHostBodySchema = z.object({
+  disabled: z.boolean().optional(),
+  previews: z.boolean().optional(),
+}).refine(
+  (body) => body.disabled !== undefined || body.previews !== undefined,
+  { message: "at least one of disabled or previews is required" },
+);
+
 // --- Upload session ---
 
 export const presignedUploadResultSchema = z.object({
@@ -285,5 +303,6 @@ export type UpdateAssetBody = z.infer<typeof updateAssetBodySchema>;
 export type SiteHostKind = z.infer<typeof siteHostKindSchema>;
 export type SiteHost = z.infer<typeof siteHostSchema>;
 export type ClaimSiteHostBody = z.infer<typeof claimSiteHostBodySchema>;
+export type UpdateSiteHostBody = z.infer<typeof updateSiteHostBodySchema>;
 export type UpdateVersionBody = z.infer<typeof updateVersionBodySchema>;
 export type SetActiveVersionBody = z.infer<typeof setActiveVersionBodySchema>;

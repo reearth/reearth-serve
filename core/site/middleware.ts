@@ -21,14 +21,17 @@ import type { AppEnv } from "../types";
  * What a site host resolved to.
  *
  * - `asset` — serve this ID through the file router.
+ * - `disabled` — the name is claimed and held but its owner has taken the site
+ *   down (B3): `503`, because "exists, not serving" is the true answer.
  * - `gone` — the name is held by a released row inside its cooldown (B3): the
  *   site is gone, and saying so is not the same as saying the name is free.
  *
- * A `null` resolution is the third case (miss) and stays outside the union so
+ * A `null` resolution is the fourth case (miss) and stays outside the union so
  * a resolver can express it without constructing anything.
  */
 export type SiteTarget =
   | { kind: "asset"; id: string }
+  | { kind: "disabled" }
   | { kind: "gone" };
 
 /** Resolves a host's leading label, or null for 404. */
@@ -127,6 +130,7 @@ export function siteHostMiddleware(opts: SiteHostOptions): MiddlewareHandler<App
         },
       });
     }
+    if (target.kind === "disabled") return disabledResponse();
     if (target.kind === "gone") return goneResponse();
 
     const url = new URL(c.req.url);
@@ -163,6 +167,31 @@ export function goneResponse(): Response {
     },
   });
 }
+
+/**
+ * The disabled-site page (ADR-013 B3).
+ *
+ * `503`, not `404`: the name is claimed and held, and "exists, not serving" is
+ * both true and not an invitation to claim it. `no-store` because the site
+ * comes back the moment its owner enables it again, `noindex` so the outage
+ * does not replace the site in a search index, and `Retry-After` so a crawler
+ * that honours it comes back in an hour instead of hammering the host.
+ */
+export function disabledResponse(): Response {
+  return new Response(DISABLED_PAGE, {
+    status: 503,
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Robots-Tag": "noindex",
+      "Retry-After": "3600",
+    },
+  });
+}
+
+const DISABLED_PAGE =
+  '<!doctype html><meta charset="utf-8"><title>This site is temporarily unavailable</title>' +
+  "<h1>This site is temporarily unavailable</h1>";
 
 const GONE_PAGE =
   '<!doctype html><meta charset="utf-8"><title>This site has moved or been removed</title>' +

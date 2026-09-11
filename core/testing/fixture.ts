@@ -14,7 +14,7 @@ import type { Deps } from "../types";
 import type { AssetMetadata, AssetVersion } from "../asset/model";
 import type { ListResult, MetadataStore, VersionStore } from "../asset/repository";
 import type { Session, SessionStore } from "../session/repository";
-import type { SiteHost, SiteHostStore } from "../site/repository";
+import type { SiteHost, SiteHostPatch, SiteHostStore } from "../site/repository";
 import { MemoryFileStorage } from "../../adapters/memory/storage";
 import { MemoryKeyValue } from "../../adapters/memory/memory-kv";
 import { SimpleAuthorizer } from "../../adapters/cloudflare/authorizer";
@@ -104,6 +104,15 @@ export class MemorySiteHostStore implements SiteHostStore {
     if (this.hosts.has(host.hostname)) return false;
     this.hosts.set(host.hostname, { ...host });
     return true;
+  }
+  async update(hostname: string, patch: SiteHostPatch): Promise<void> {
+    const host = this.hosts.get(hostname);
+    if (!host || host.releasedAt !== null) return;
+    this.hosts.set(hostname, {
+      ...host,
+      ...(patch.disabledAt !== undefined && { disabledAt: patch.disabledAt }),
+      ...(patch.previews !== undefined && { previews: patch.previews }),
+    });
   }
   async remove(hostname: string): Promise<void> {
     this.hosts.delete(hostname);

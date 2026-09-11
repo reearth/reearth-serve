@@ -1,14 +1,14 @@
 import type { Command } from "commander";
 import { PATHS } from "../shared/paths";
 import type { SiteHost } from "../shared/api";
-import { apiGet, apiPost, apiDelete, output } from "./helpers";
+import { apiGet, apiPost, apiPatch, apiDelete, output } from "./helpers";
 
 /**
- * `asset host add|list|remove` (ADR-013 B6).
+ * `asset host add|list|remove|disable|enable` (ADR-013 B6).
  *
- * Entity-verb grammar, like `asset version …`. `disable`/`enable` (B3) and
- * `update --previews` (B4) join this group when those land; `upload --site
- * --name` (C2) is a different command entirely.
+ * Entity-verb grammar, like `asset version …`. `update --previews` (B4) joins
+ * this group when that lands; `upload --site --name` (C2) is a different
+ * command entirely.
  */
 export function registerHostCommands(program: Command, asset: Command) {
   const host = asset
@@ -50,7 +50,7 @@ export function registerHostCommands(program: Command, asset: Command) {
           return;
         }
         for (const h of data.hosts) {
-          console.log(`${h.hostname}  ${h.url}`);
+          console.log(`${h.hostname}  ${hostState(h)}  ${h.url}`);
         }
       }
     });
@@ -70,4 +70,73 @@ export function registerHostCommands(program: Command, asset: Command) {
         console.log("The name is held for 30 days before it can be claimed again.");
       }
     });
+
+  registerPublishState(program, host, "disable", true);
+  registerPublishState(program, host, "enable", false);
+}
+
+/**
+ * `asset host disable|enable <id> [<name>] [--all]` (ADR-013 B3).
+ *
+ * `--all` is a loop over the asset's names rather than a flag on the asset:
+ * the row is the single source of truth for whether a site serves, so there is
+ * nothing to disagree with it.
+ */
+function registerPublishState(program: Command, host: Command, verb: "disable" | "enable", disabled: boolean) {
+  host
+    .command(verb)
+    .description(
+      disabled
+        ? "Take a site down (the host answers 503; the name stays held)"
+        : "Put a disabled site back up",
+    )
+    .argument("<id>", "Asset ID")
+    .argument("[name]", "Name or full host (omit with --all)")
+    .option("--all", "Apply to every name of the asset")
+    .action(async (id: string, name: string | undefined, cmdOpts: { all?: boolean }) => {
+      const opts = program.opts<{ endpoint: string; json: boolean }>();
+      const names = await targetNames(opts.endpoint, id, name, cmdOpts.all);
+
+      const updated: SiteHost[] = [];
+      for (const hostname of names) {
+        const data = await apiPatch<{ host: SiteHost }>(
+          opts.endpoint,
+          PATHS.assetHost(id, hostname),
+          { disabled },
+        );
+        updated.push(data.host);
+      }
+
+      if (opts.json) {
+        output({ hosts: updated }, true);
+      } else {
+        for (const h of updated) {
+          console.log(`${disabled ? "Disabled" : "Enabled"}: ${h.hostname}`);
+        }
+      }
+    });
+}
+
+/** The names one invocation acts on: the one given, or all of the asset's. */
+async function targetNames(
+  endpoint: string,
+  id: string,
+  name: string | undefined,
+  all: boolean | undefined,
+): Promise<string[]> {
+  if (all) {
+    if (name) throw new Error("Give a name or --all, not both");
+    const data = await apiGet<{ hosts: SiteHost[] }>(endpoint, PATHS.assetHosts(id));
+    if (data.hosts.length === 0) throw new Error("No site hosts");
+    return data.hosts.map((h) => h.hostname);
+  }
+  if (!name) throw new Error("Give a name, or --all for every name of the asset");
+  return [name];
+}
+
+/** The publish state (ADR-013 B3) as `asset host list` prints it. */
+export function hostState(h: SiteHost): string {
+  if (h.releasedAt) return "released";
+  if (h.disabledAt) return "disabled";
+  return "enabled";
 }

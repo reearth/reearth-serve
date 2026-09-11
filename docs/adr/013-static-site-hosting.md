@@ -1,6 +1,6 @@
 # ADR-013: Static Site Hosting from Archive Assets
 
-- **Status:** Accepted — Part A, B1, B2, the release half of B3 and the resolution/API/CLI of B6 implemented; B3's disable/enable, B4, B5, B7 and Part C proposed
+- **Status:** Accepted — Part A, B1–B3 and the resolution/API/CLI of B6 implemented; B4, B5, B7 and Part C proposed
 - **Date:** 2026-09-11
 - **Deciders:** @rot1024
 - **Related:** ADR-014 (asset access control: `restricted` mode, grants, signed URLs, API keys)
@@ -138,7 +138,7 @@ the procurement conversations in ROADMAP Phase 6). The extractor writes
 nothing to local disk, so non-root needs no volume. Image size is ~12.6 MB,
 essentially the binary.
 
-## Part B — Site hosts (B1 implemented; B2–B7 proposed)
+## Part B — Site hosts (B1–B3 implemented; B4–B7 proposed)
 
 Part B introduces one new concept, the **site host**: a hostname under the
 service's wildcard suffix (or a customer's own domain) that serves exactly
@@ -321,7 +321,7 @@ addressed through it.
   report `name is reserved` rather than the format error: they are
   well-formed labels the system has taken for itself.
 
-### B3. Publish state: enabled, disabled, released (release implemented)
+### B3. Publish state: enabled, disabled, released (implemented)
 
 A named site has three states. Claiming a name publishes it; the other two
 are the answers to "take it down for a while" and "give the name up".
@@ -354,13 +354,26 @@ states: they are capability URLs and stay reachable while the asset exists.
 
 **Implementation notes.**
 
-- **Release is implemented; disable/enable is not.** `DELETE
-  …/hosts/:hostname` sets `released_at`, nulls `asset_id` and drops the
-  cache entry; the host then answers `410` with a plain `text/html` page
-  ("This site has moved or been removed"), `Cache-Control: no-store` and
-  `X-Robots-Tag: noindex`, and the name cannot be claimed for 30 days. The
-  `disabled_at` column exists and is never written — the `503` state, the
-  `PATCH` endpoint and `asset host disable|enable` are still open.
+- All three states are implemented. `DELETE …/hosts/:hostname` sets
+  `released_at`, nulls `asset_id` and drops the cache entry; `PATCH
+  …/hosts/:hostname {disabled}` sets or clears `disabled_at` and drops the
+  same key, so the switch takes effect on the next request rather than when
+  the 60 s resolution cache expires.
+- **The disabled page also carries `Retry-After: 3600`**, which the table
+  above does not list. `no-store` keeps the outage out of caches and
+  `noindex` out of indexes, but neither tells a crawler when to come back;
+  an hour is long enough to stop it hammering a host whose owner has
+  deliberately taken it down.
+- **A released name cannot be disabled or enabled: `409`.** It has no asset
+  and is living out its cooldown, so the state change would be one nobody
+  could observe — and answering `404` would say the name is free, which is
+  the one thing release exists not to say. Ownership of a released row is
+  judged by its `project_id` (its `asset_id` is null); a released row
+  belonging to another project is still a `404`, so the endpoint never
+  confirms a name the caller cannot act on.
+- **Disable outranks nothing; release outranks disable.** The resolver
+  checks `released_at` first, so a name that was disabled and then released
+  answers `410`, not `503`.
 - The cleanup cron purges released rows past the cooldown
   (`purgeReleasedSiteHosts`, 100 per tick). A claim that arrives after the
   cooldown has run out but before the cron sweeps also purges the stale row,
@@ -477,9 +490,13 @@ is the kind of thing an audit asks about.
   unclaimed name costs no database read per request; every claim and release
   drops the key. A cache that is down or holding junk falls through to the
   table rather than taking the site down.
-- **`PATCH …/hosts/:hostname` is not implemented** — it toggles `disabled`
-  (B3) and `previews` (B4), neither of which exists yet.
-- CLI: `asset host add|list|remove` only, with `--json`, for the same reason.
+- **`PATCH …/hosts/:hostname`** takes `{disabled?, previews?}` and requires at
+  least one of them: an empty body is a no-op the caller did not mean, so it
+  is a `400`. It answers `200 {host, siteUrl}`, the same envelope as `POST`.
+  `previews` is stored but has no effect until B4.
+- CLI: `asset host add|list|remove|disable|enable`, with `--json`.
+  `asset host list` prints the state (enabled / disabled / released) beside
+  the hostname. `asset host update --previews` is B4 and
   `upload --site --name <slug>` is C2.
 - The API shows a row without `verified_at` (B5) or `created_by`, plus the
   site `url`; `POST` answers `201 { host, siteUrl }`.
@@ -769,9 +786,11 @@ case: tile viewers and data consumers rely on `404` for missing entries.
    `siteUrl` on archive uploads. Remaining and deliberately outside the
    code: the wildcard DNS record, the certificate and the Worker route on
    the zone, after which the variable is uncommented in `wrangler.toml`.
-2. **B2, B3, B6** named sites with publish state — `site_hosts` table,
-   validation and reserved list, disable/enable, release cooldown, hosts
-   API and `asset host` CLI, event-log entries.
+2. ~~**B2, B3** named sites with publish state~~ — done: `site_hosts`
+   table, validation and reserved list, disable/enable, release cooldown,
+   hosts API and `asset host` CLI. **B6** is done apart from the `--`
+   preview branch (B4) and the event-log entries, which wait on an event
+   store (ADR-007); the emit points are marked in `core/site/usecase.ts`.
 3. **B4** preview hosts — `v{n}--` / `latest--`, `previews` flag,
    `noindex`.
 4. **B7** `password` access mode — form + cookie, Basic fallback, PBKDF2

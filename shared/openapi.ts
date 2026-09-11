@@ -8,7 +8,7 @@ import {
   createProjectBodySchema, createWorkspaceBodySchema,
   addMemberBodySchema, updateMemberBodySchema,
   updateAssetBodySchema, updateVersionBodySchema, setActiveVersionBodySchema,
-  siteHostSchema, claimSiteHostBodySchema,
+  siteHostSchema, claimSiteHostBodySchema, updateSiteHostBodySchema,
 } from "./api";
 
 // --- Response envelopes ---
@@ -107,6 +107,7 @@ export {
   updateVersionBodySchema,
   setActiveVersionBodySchema,
   claimSiteHostBodySchema,
+  updateSiteHostBodySchema,
   errorResponseSchema,
   fileEntrySchema,
 };

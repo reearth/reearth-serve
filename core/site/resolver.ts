@@ -29,6 +29,7 @@ export function hostCacheKey(hostname: string): string {
 /** The cached form of a resolution, including the miss (so a 404 is cheap too). */
 type CachedResolution =
   | { t: "asset"; id: string }
+  | { t: "disabled" }
   | { t: "gone" }
   | { t: "miss" };
 
@@ -71,7 +72,11 @@ async function resolveNamed(deps: ComposedResolverDeps, hostname: string): Promi
     // (ADR-013 B3).
     : row.releasedAt !== null || row.assetId === null
       ? { t: "gone" }
-      : { t: "asset", id: row.assetId };
+      // Disabled is held-but-not-serving: 503, not 404, so it does not read as
+      // an unclaimed name (ADR-013 B3).
+      : row.disabledAt !== null
+        ? { t: "disabled" }
+        : { t: "asset", id: row.assetId };
 
   await writeCache(deps.cache, key, resolution);
   return fromCached(resolution);
@@ -79,6 +84,7 @@ async function resolveNamed(deps: ComposedResolverDeps, hostname: string): Promi
 
 function fromCached(resolution: CachedResolution): SiteTarget | null {
   if (resolution.t === "asset") return { kind: "asset", id: resolution.id };
+  if (resolution.t === "disabled") return { kind: "disabled" };
   if (resolution.t === "gone") return { kind: "gone" };
   return null;
 }

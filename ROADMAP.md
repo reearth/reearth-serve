@@ -191,7 +191,7 @@ Upload a `.zip` archive; the server extracts it and serves the contents as a dir
 
 ### Phase 1.5 — Frontend Hosting (AI-generated apps, one zip → one site)
 
-Municipal and enterprise users increasingly generate frontend apps with AI but have no Netlify / Cloudflare Pages to put them on. Serve already extracts and serves archives; this phase closes the gap to "upload a zip, get a working site". Design: [ADR-013](./docs/adr/013-static-site-hosting.md) (Part A, B1–B2 and most of B3/B6 implemented; the rest of Part B and Part C proposed).
+Municipal and enterprise users increasingly generate frontend apps with AI but have no Netlify / Cloudflare Pages to put them on. Serve already extracts and serves archives; this phase closes the gap to "upload a zip, get a working site". Design: [ADR-013](./docs/adr/013-static-site-hosting.md) (Part A, B1–B3 and most of B6 implemented; the rest of Part B and Part C proposed).
 
 **Part A — delivery semantics** ✅
 
@@ -204,10 +204,10 @@ Municipal and enterprise users increasingly generate frontend apps with AI but h
 
 - [x] B1 Per-asset origin — `https://<id>.serve.reearth.land/` so root-relative paths resolve and hosted pages are origin-isolated from the API and from each other; site hosts serve nothing but files. Enabled by `SITE_HOST_SUFFIX`; the zone-side wildcard DNS record, certificate and Worker route are an ops step, so the variable stays commented out in `wrangler.toml` until they exist
 - [x] B2 Named sites — `https://<name>.serve.reearth.land/` via a `site_hosts` table: DNS-label validation, no `--`, not ID-shaped, reserved list, editor-only, project assets only (archives only), per-project quota of 20. `custom` (B5) is rejected with 400 until that lands
-- [ ] B3 Publish state — release ✅ (410 for 30 days against takeover, purged by the cleanup cron; asset deletion releases rather than cascades). Disable/enable (503, name held) and the temporarily-unavailable page are **not** implemented; `disabled_at` exists in the schema and is unused
+- [x] B3 Publish state — enabled / disabled / released. Disable answers `503` with a "temporarily unavailable" page (`no-store`, `noindex`, `Retry-After: 3600`) and keeps the name held; release answers `410` for 30 days against takeover, is purged by the cleanup cron, and asset deletion releases rather than cascades. `PATCH …/hosts/:hostname` and `asset host disable|enable <id> <name>|--all`; a released name cannot be patched (409)
 - [ ] B4 Preview hosts — `v<n>--<name>` (pinned) and `latest--<name>`, `noindex`, per-name `previews` flag, **off by default**
 - [ ] B5 Custom domains — the `custom` kind of `site_hosts`: TXT verification + Cloudflare for SaaS certificate
-- [ ] B6 Hosts API and CLI — resolution order (ID → `--` → `site_hosts`, with a 60 s KV cache in front) ✅, `GET`/`POST /api/v1/assets/:id/hosts`, `DELETE …/hosts/:hostname`, `GET /api/v1/projects/:id/hosts` ✅, `asset host add|list|remove` ✅. Pending: the `--` preview branch (B4), `PATCH …/hosts/:hostname` and `asset host disable|enable|update` (B3/B4), event-log entries (ADR-007 has no event store yet — the two emit points are marked in `core/site/usecase.ts`)
+- [ ] B6 Hosts API and CLI — resolution order (ID → `--` → `site_hosts`, with a 60 s KV cache in front) ✅, `GET`/`POST /api/v1/assets/:id/hosts`, `DELETE …/hosts/:hostname`, `GET /api/v1/projects/:id/hosts` ✅, `asset host add|list|remove|disable|enable` ✅, `PATCH …/hosts/:hostname` ✅. Pending: the `--` preview branch and `asset host update --previews` (B4), event-log entries (ADR-007 has no event store yet — the two emit points are marked in `core/site/usecase.ts`)
 - [ ] B7 Viewer authentication — `hosting.access: password` on the asset (project assets only; demo assets are always public), enforced on every URL form: password page + signed cookie for browsers, `Authorization: Basic` for tools, PBKDF2 hash, rate limit, `private` caching, credentialed CORS; `members` mode after OIDC integration
 
 **Part C — site behaviour & tooling**

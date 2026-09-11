@@ -6,7 +6,7 @@
  * splits. Nothing here is Cloudflare-specific — the dialect is SQLite and the
  * transport is D1 or `node:sqlite` depending on who constructs it.
  */
-import type { SiteHost, SiteHostStore } from "../../core/site/repository";
+import type { SiteHost, SiteHostPatch, SiteHostStore } from "../../core/site/repository";
 import type { SqlClient, SqlValue } from "../../core/sql/port";
 import type { Row } from "../../core/sql/port";
 import { queryAll, queryFirst } from "./helpers";
@@ -54,6 +54,28 @@ export class SqlSiteHostStore implements SiteHostStore {
       ] as SqlValue[],
     );
     return result.rowsAffected > 0;
+  }
+
+  async update(hostname: string, patch: SiteHostPatch): Promise<void> {
+    const sets: string[] = [];
+    const binds: SqlValue[] = [hostname];
+
+    if (patch.disabledAt !== undefined) {
+      binds.push(patch.disabledAt);
+      sets.push(`disabled_at = ?${binds.length}`);
+    }
+    if (patch.previews !== undefined) {
+      binds.push(patch.previews ? 1 : 0);
+      sets.push(`previews = ?${binds.length}`);
+    }
+    if (sets.length === 0) return;
+
+    // `released_at IS NULL`: a name that was released between the caller's read
+    // and this write must stay released rather than come back enabled.
+    await this.db.execute(
+      `UPDATE site_hosts SET ${sets.join(", ")} WHERE hostname = ?1 AND released_at IS NULL`,
+      binds,
+    );
   }
 
   async remove(hostname: string): Promise<void> {

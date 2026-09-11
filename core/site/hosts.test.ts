@@ -370,6 +370,115 @@ describe("the site host itself", () => {
   });
 });
 
+describe("PATCH /assets/:id/hosts/:hostname", () => {
+  function patch(app: App, auth: Record<string, string>, body: unknown, name = `kawasaki-flood-map${SUFFIX}`) {
+    return app.request(`/api/v1/assets/${ASSET_ID}/hosts/${name}`, {
+      method: "PATCH",
+      headers: { ...auth, "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  }
+
+  test("disabling takes the site down with a 503 page; enabling brings it back", async () => {
+    const { app, auth, siteHosts } = await siteFixture();
+    await claim(app, auth, { hostname: "kawasaki-flood-map" });
+    expect((await app.request(...site("kawasaki-flood-map"))).status).toBe(200);
+
+    const disabled = await patch(app, auth, { disabled: true });
+    expect(disabled.status).toBe(200);
+    const body = await disabled.json() as { host: SiteHost };
+    expect(body.host.disabledAt).toEqual(expect.any(Number));
+    expect(siteHosts.hosts.get(`kawasaki-flood-map${SUFFIX}`)?.disabledAt).toEqual(expect.any(Number));
+
+    // The host says "held, not serving" — and the PATCH dropped the cached
+    // resolution, so it says it on the very next request.
+    const down = await app.request(...site("kawasaki-flood-map"));
+    expect(down.status).toBe(503);
+    expect(down.headers.get("Content-Type")).toContain("text/html");
+    expect(down.headers.get("Cache-Control")).toBe("no-store");
+    expect(down.headers.get("X-Robots-Tag")).toBe("noindex");
+    expect(down.headers.get("Retry-After")).toBe("3600");
+    expect(await down.text()).toContain("This site is temporarily unavailable");
+
+    // The name is still held: nobody else may claim it while it is down.
+    const taken = await claim(app, auth, { hostname: "kawasaki-flood-map" });
+    expect(taken.status).toBe(400);
+    expect(await taken.json()).toEqual({ error: NAME_ERRORS.taken });
+
+    // The ID host and /files/ are capability URLs, unaffected by publish state.
+    expect((await app.request(...site(ASSET_ID))).status).toBe(200);
+    expect((await app.request(`/files/${ASSET_ID}/`)).status).toBe(200);
+
+    const enabled = await patch(app, auth, { disabled: false });
+    expect(enabled.status).toBe(200);
+    expect((await enabled.json() as { host: SiteHost }).host.disabledAt).toBeNull();
+    expect((await app.request(...site("kawasaki-flood-map"))).status).toBe(200);
+  });
+
+  test("the previews flag is stored and reported", async () => {
+    const { app, auth, siteHosts } = await siteFixture();
+    await claim(app, auth, { hostname: "kawasaki-flood-map" });
+
+    const res = await patch(app, auth, { previews: true });
+    expect(res.status).toBe(200);
+    expect((await res.json() as { host: SiteHost }).host.previews).toBe(true);
+    expect(siteHosts.hosts.get(`kawasaki-flood-map${SUFFIX}`)?.previews).toBe(true);
+
+    // Both switches in one request, each independent of the other.
+    const both = await patch(app, auth, { disabled: true, previews: false });
+    expect((await both.json() as { host: SiteHost }).host).toMatchObject({
+      previews: false, disabledAt: expect.any(Number),
+    });
+  });
+
+  test("an empty body is refused rather than silently doing nothing", async () => {
+    const { app, auth } = await siteFixture();
+    await claim(app, auth, { hostname: "kawasaki-flood-map" });
+    expect((await patch(app, auth, {})).status).toBe(400);
+  });
+
+  test("a released name cannot be updated: 409, not a revival", async () => {
+    const { app, auth, siteHosts } = await siteFixture();
+    await claim(app, auth, { hostname: "kawasaki-flood-map" });
+    await app.request(`/api/v1/assets/${ASSET_ID}/hosts/kawasaki-flood-map${SUFFIX}`, {
+      method: "DELETE", headers: auth,
+    });
+
+    const res = await patch(app, auth, { disabled: false });
+    expect(res.status).toBe(409);
+    expect(await res.json()).toEqual({ error: SITE_HOST_ERRORS.released });
+    // Still released: the 410 page, not the site.
+    expect(siteHosts.hosts.get(`kawasaki-flood-map${SUFFIX}`)?.releasedAt).toEqual(expect.any(Number));
+    expect((await app.request(...site("kawasaki-flood-map"))).status).toBe(410);
+  });
+
+  test("a name the asset does not hold is a 404", async () => {
+    const { app, auth } = await siteFixture();
+    expect((await patch(app, auth, { disabled: true }, `never-claimed${SUFFIX}`)).status).toBe(404);
+  });
+
+  test("a viewer cannot disable a site", async () => {
+    const editor = await siteFixture();
+    await claim(editor.app, editor.auth, { hostname: "kawasaki-flood-map" });
+
+    const viewer = await siteFixture({ role: "viewer" });
+    viewer.siteHosts.hosts.set(`kawasaki-flood-map${SUFFIX}`, {
+      hostname: `kawasaki-flood-map${SUFFIX}`, assetId: ASSET_ID, projectId: PROJECT_ID,
+      kind: "subdomain", verifiedAt: null, disabledAt: null, previews: false,
+      releasedAt: null, createdAt: 0, createdBy: USER,
+    });
+    const res = await patch(viewer.app, viewer.auth, { disabled: true });
+    expect(res.status).toBe(404);
+    expect(viewer.siteHosts.hosts.get(`kawasaki-flood-map${SUFFIX}`)?.disabledAt).toBeNull();
+  });
+
+  test("an anonymous caller cannot disable a site", async () => {
+    const { app, auth } = await siteFixture();
+    await claim(app, auth, { hostname: "kawasaki-flood-map" });
+    expect((await patch(app, {}, { disabled: true })).status).toBe(404);
+  });
+});
+
 describe("asset deletion and the cleanup cron", () => {
   test("deleting an asset releases its names rather than cascading them away", async () => {
     const { app, auth, siteHosts, metadata } = await siteFixture();

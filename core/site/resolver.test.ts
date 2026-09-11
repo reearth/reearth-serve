@@ -59,6 +59,16 @@ describe("composeSiteHostResolver", () => {
     expect(await resolve("kawasaki-flood-map")).toEqual({ kind: "asset", id: ASSET_ID });
   });
 
+  test("a disabled row is disabled, not a miss and not gone", async () => {
+    const { resolve } = setup([row({ disabledAt: 4000 })]);
+    expect(await resolve("kawasaki-flood-map")).toEqual({ kind: "disabled" });
+  });
+
+  test("a released row that was also disabled is gone: release outranks disable", async () => {
+    const { resolve } = setup([row({ disabledAt: 4000, releasedAt: 5000, assetId: null })]);
+    expect(await resolve("kawasaki-flood-map")).toEqual({ kind: "gone" });
+  });
+
   test("a released row is gone, not a miss", async () => {
     const { resolve } = setup([row({ releasedAt: 5000, assetId: null })]);
     expect(await resolve("kawasaki-flood-map")).toEqual({ kind: "gone" });
@@ -99,6 +109,19 @@ describe("the resolution cache", () => {
     hosts.hosts.set(`kawasaki-flood-map${SUFFIX}`, row());
     // Still the cached miss — which is why claiming drops the key.
     expect(await resolve("kawasaki-flood-map")).toBeNull();
+    await cache.delete(hostCacheKey(`kawasaki-flood-map${SUFFIX}`));
+    expect(await resolve("kawasaki-flood-map")).toEqual({ kind: "asset", id: ASSET_ID });
+  });
+
+  test("a disabled row is cached as disabled, which is why the PATCH drops the key", async () => {
+    const cache = new MemoryKeyValue();
+    const { hosts, resolve } = setup([row({ disabledAt: 4000 })], { cache });
+    expect(await resolve("kawasaki-flood-map")).toEqual({ kind: "disabled" });
+
+    // Enabling the row without dropping the key leaves the site down until the
+    // entry expires; the use case drops it for exactly this reason.
+    hosts.hosts.set(`kawasaki-flood-map${SUFFIX}`, row({ disabledAt: null }));
+    expect(await resolve("kawasaki-flood-map")).toEqual({ kind: "disabled" });
     await cache.delete(hostCacheKey(`kawasaki-flood-map${SUFFIX}`));
     expect(await resolve("kawasaki-flood-map")).toEqual({ kind: "asset", id: ASSET_ID });
   });

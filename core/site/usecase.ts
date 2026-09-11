@@ -11,7 +11,7 @@ import type { KeyValue } from "../kv/port";
 import type { AssetMetadata } from "../asset/model";
 import { hostCacheKey } from "./resolver";
 import { cooldownError, NAME_ERRORS, toSiteName, validateSiteName } from "./names";
-import type { SiteHost, SiteHostKind, SiteHostStore } from "./repository";
+import type { SiteHost, SiteHostKind, SiteHostPatch, SiteHostStore } from "./repository";
 
 /** Per-project cap on active names. Raised per plan later (B2). */
 export const SITE_HOST_QUOTA = 20;
@@ -25,6 +25,7 @@ export const SITE_HOST_ERRORS = {
   projectRequired: "names require a project asset",
   archiveRequired: "names require an archive asset",
   quota: `project has reached its limit of ${SITE_HOST_QUOTA} site names`,
+  released: "name has been released",
 } as const;
 
 export type ClaimFailure = { ok: false; status: 400 | 503; error: string };
@@ -123,6 +124,74 @@ export async function claimSiteHost(deps: SiteHostDeps, params: ClaimParams): Pr
   // ADR-007: emit site_host.claimed here — there is no event store in core yet.
 
   return { ok: true, host };
+}
+
+export type UpdateResult =
+  | { ok: true; host: SiteHost }
+  | { ok: false; status: 404 | 409; error: string };
+
+export interface UpdateParams {
+  /** The asset the caller is acting through; the row must belong to it. */
+  assetId: string;
+  /** The asset's project, for deciding what a released row is allowed to say. */
+  projectId: string | undefined;
+  hostname: string;
+  /** B3: true sets `disabled_at`, false clears it. Undefined leaves it alone. */
+  disabled?: boolean;
+  /** B4: `v{n}--` / `latest--` previews. Undefined leaves it alone. */
+  previews?: boolean;
+  now?: number;
+}
+
+/**
+ * Change a claimed name's publish state (B3) or its preview flag (B4).
+ *
+ * Disabling holds the name and takes the site down (`503`); enabling puts it
+ * back. A released row is not a candidate: it has no asset and is living out
+ * its cooldown, so the answer is `409` rather than a state change nobody could
+ * observe.
+ */
+export async function updateSiteHost(deps: SiteHostDeps, params: UpdateParams): Promise<UpdateResult> {
+  const now = params.now ?? Date.now();
+  const hostname = toFullHost(params.hostname, deps.suffix);
+
+  const existing = await deps.hosts.find(hostname);
+  if (!existing) return notFound();
+  if (existing.releasedAt !== null) {
+    // The row's asset is gone, so ownership is judged by the project that still
+    // holds the name. Someone else's released name is a 404: this endpoint must
+    // not confirm that a name exists to a caller who cannot act on it.
+    return existing.projectId === params.projectId && params.projectId !== undefined
+      ? { ok: false, status: 409, error: SITE_HOST_ERRORS.released }
+      : notFound();
+  }
+  if (existing.assetId !== params.assetId) return notFound();
+
+  const patch: SiteHostPatch = {
+    ...(params.disabled !== undefined && { disabledAt: params.disabled ? now : null }),
+    ...(params.previews !== undefined && { previews: params.previews }),
+  };
+  await deps.hosts.update(hostname, patch);
+
+  // The resolver caches the row's state, disabled included, so the switch has
+  // to reach the cache or the site would take up to a minute to go down.
+  await dropCache(deps.cache, [hostname]);
+
+  // ADR-007: emit site_host.disabled / .enabled / .previews_changed here —
+  // there is no event store in core yet.
+
+  return {
+    ok: true,
+    host: {
+      ...existing,
+      disabledAt: patch.disabledAt !== undefined ? patch.disabledAt : existing.disabledAt,
+      previews: patch.previews !== undefined ? patch.previews : existing.previews,
+    },
+  };
+}
+
+function notFound(): UpdateResult {
+  return { ok: false, status: 404, error: "Host not found" };
 }
 
 export type ReleaseResult = { ok: true } | { ok: false; status: 404; error: string };

@@ -29,6 +29,14 @@ export interface SiteHost {
   createdBy: string | null;
 }
 
+/** The mutable part of a claimed row. Omitted fields are left alone. */
+export interface SiteHostPatch {
+  /** Timestamp to disable at, or null to enable (B3). */
+  disabledAt?: number | null;
+  /** Whether `v{n}--` / `latest--` hosts resolve (B4). */
+  previews?: boolean;
+}
+
 export interface SiteHostStore {
   find(hostname: string): Promise<SiteHost | null>;
   /** Active (not released) rows of an asset. */
@@ -41,6 +49,12 @@ export interface SiteHostStore {
    * "name is taken" rather than overwriting someone else's row.
    */
   insert(host: SiteHost): Promise<boolean>;
+  /**
+   * Change the two switches of an active row (B3 disable/enable, B4 previews).
+   * Released rows are never touched: the caller rejects them before getting
+   * here, and the `released_at IS NULL` guard keeps a race from reviving one.
+   */
+  update(hostname: string, patch: SiteHostPatch): Promise<void>;
   /** Hard-remove a row. Only for a cooldown that has run out, and for the cron. */
   remove(hostname: string): Promise<void>;
   /** Start the cooldown: set `released_at`, null `asset_id`. */

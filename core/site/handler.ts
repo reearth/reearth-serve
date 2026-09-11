@@ -4,6 +4,7 @@
  * ```
  * GET    /api/v1/assets/:id/hosts
  * POST   /api/v1/assets/:id/hosts   {hostname, kind?}
+ * PATCH  /api/v1/assets/:id/hosts/:hostname   {disabled?, previews?}
  * DELETE /api/v1/assets/:id/hosts/:hostname
  * GET    /api/v1/projects/:id/hosts
  * ```
@@ -25,12 +26,13 @@ import { getAssetMetadata } from "../asset/usecase";
 import type { SiteHost as SiteHostRow } from "./repository";
 import {
   claimSiteHost, listAssetSiteHosts, listProjectSiteHosts, releaseSiteHost,
-  siteHostUrl, type SiteHostDeps,
+  siteHostUrl, updateSiteHost, type SiteHostDeps,
 } from "./usecase";
 import type { SiteHost as SiteHostDto } from "../../shared/api";
 import {
   claimSiteHostBodySchema, errorResponseSchema, idParamSchema,
   siteHostListResponseSchema, siteHostParamSchema, siteHostResponseSchema,
+  updateSiteHostBodySchema,
 } from "../../shared/openapi";
 
 /** The action name checked against the role map (core/auth/roles.ts). */
@@ -114,6 +116,47 @@ export function registerAssetHostRoutes(app: Hono<AppEnv>) {
 
       const host = toSiteHostDto(result.host, c.get("baseUrl"));
       return c.json({ host, siteUrl: host.url }, 201);
+    },
+  );
+
+  app.patch("/:id/hosts/:hostname",
+    describeRoute({
+      tags: ["Assets"],
+      summary: "Update a site host's publish state or preview flag",
+      description:
+        "Disables or enables a name (ADR-013 B3) and toggles `v{n}--` / `latest--` " +
+        "preview hosts (B4). A disabled name is held and answers 503. Released names " +
+        "cannot be updated.",
+      responses: {
+        200: { description: "Host updated", content: { "application/json": { schema: resolver(siteHostResponseSchema) } } },
+        400: { description: "Neither field was given", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        404: { description: "Asset or host not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        409: { description: "The name has been released", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      },
+    }),
+    zValidator("param", siteHostParamSchema),
+    zValidator("json", updateSiteHostBodySchema),
+    async (c) => {
+      const { id, hostname } = c.req.valid("param");
+      const asset = await getAssetMetadata(c.get("metadata"), id);
+      // Same bar as claiming and releasing: taking a public site down is a
+      // change to it, not a read of it.
+      if (!asset || !await canAccessAsset(asset, accessCtx(c), MANAGE_HOSTS_ACTION)) {
+        return c.json({ error: "Asset not found" }, 404);
+      }
+
+      const body = c.req.valid("json");
+      const result = await updateSiteHost(siteHostDeps(c), {
+        assetId: asset.id,
+        projectId: asset.projectId,
+        hostname,
+        disabled: body.disabled,
+        previews: body.previews,
+      });
+      if (!result.ok) return c.json({ error: result.error }, result.status);
+
+      const host = toSiteHostDto(result.host, c.get("baseUrl"));
+      return c.json({ host, siteUrl: host.url }, 200);
     },
   );
 
