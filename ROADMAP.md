@@ -198,9 +198,10 @@ Municipal and enterprise users increasingly generate frontend apps with AI but h
 - [x] **Cache policy** — `ETag` / `If-None-Match` → 304; HTML at asset-ID URLs revalidates every load, other files 1 h, version-ID URLs immutable; `Vary: Accept-Encoding`
 - [x] **Web content types** — fonts, source maps, web manifests, media, plain text in the extractor's table, plus `/etc/mime.types` in the (now distroless, non-root) container image for the long tail
 - [ ] **Per-asset origin** — `https://<id>.serve.reearth.land/` so root-relative paths (`/assets/app.js`) resolve and hosted pages are origin-isolated from the API and from each other
+- [ ] **User-chosen subdomains** — `https://<slug>.serve.reearth.land/` via a `site_hosts` table: reserved names, ID-shape exclusion, 30-day release cooldown against takeover, `asset host add/list/remove`
 - [ ] **SPA fallback** — serve `index.html` (200) for unmatched paths when the asset opts in; `404.html` support
 - [ ] **CLI directory upload** — `upload ./dist` zips and uploads in one step
-- [ ] **Custom domains** — CNAME onto an asset
+- [ ] **Custom domains** — the `custom` kind of `site_hosts`: TXT verification + Cloudflare for SaaS certificate
 - [ ] **`_headers` / `_redirects`** — Netlify-style per-site header (CSP) and redirect rules
 
 ---

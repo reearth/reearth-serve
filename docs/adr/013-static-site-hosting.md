@@ -155,8 +155,128 @@ https://{versionId}.serve.reearth.land/         → /files/{versionId}/   (pinne
   archive uploads.
 - IDs are 16 lowercase hex characters, so they are valid DNS labels as-is.
 
+**Zone-side work.** The wildcard is not only a `wrangler.toml` line. On the
+`reearth.land` zone: a `*.serve` DNS record (proxied) and a certificate
+that covers `*.serve.reearth.land` — a wildcard on the apex certificate
+covers only one level (`*.reearth.land`), so `serve` needs its own
+Advanced Certificate or Total TLS. Both are one-time console/Terraform
+steps and belong in `docs/deploy`, not in code. Locally and on the Node
+runtime, `SITE_HOST_SUFFIX` (e.g. `.serve.reearth.land`, or
+`.localhost:8787` for `lvh.me`-style dev) configures the suffix the
+middleware strips; unset disables site hosts entirely.
+
+**Nothing but the site on a site host.** A site host answers file delivery
+and nothing else. The middleware rewrites *every* path on
+`{id}.serve.reearth.land` into `/files/{id}/…`, so `/api/v1/assets` on a
+site host is looked up as a file named `api/v1/assets` inside the archive
+and 404s. Without this rule the API would be reachable from every hosted
+origin, and the isolation in the previous bullet would be cosmetic. The
+same rule keeps `/files/{otherId}/…` on a site host from reaching another
+asset. CORS `*` on file responses is unchanged — cross-origin *reads* of
+public files are the product; what isolation removes is same-origin
+*ambient* access.
+
+**Cache keys.** Cloudflare caches by full URL, so `abc.serve.reearth.land/x`
+and `serve.reearth.land/files/abc/x` are separate cache entries for the
+same bytes. Acceptable: the site host is the canonical URL once this
+lands, and the path form stays for API clients and tiles.
+
 Until this lands, the README instructs users to build with a relative base
 (Vite `base: './'`).
+
+### 5b. User-chosen subdomains (proposed)
+
+An ID-shaped host (`3f9a1c…serve.reearth.land`) is correct but not
+something a municipality prints on a poster. Let a project member name the
+site:
+
+```
+https://kawasaki-flood-map.serve.reearth.land/   → asset 3f9a1c…
+```
+
+**Model.** A `site_hosts` table, one row per hostname, generalising the
+custom-domain idea in §7 so both share one resolver:
+
+| column | notes |
+|--------|-------|
+| `hostname` | primary key, lowercase, full host (`kawasaki-flood-map.serve.reearth.land` or `map.city.example.jp`) |
+| `asset_id` | target; `ON DELETE CASCADE` |
+| `project_id` | for listing and quota |
+| `kind` | `subdomain` \| `custom` |
+| `verified_at` | null for `subdomain` (nothing to verify); the TXT check for `custom` |
+| `created_at`, `created_by` | audit |
+| `released_at` | set instead of deleting; see reuse below |
+
+**Resolution.** The middleware takes the host label (or the full host for
+`custom`) and decides in this order, before any I/O:
+
+1. Label matches `^[0-9a-f]{16}$` → asset or version ID. Direct.
+2. Otherwise → `site_hosts` lookup. Hit → rewrite to `/files/{asset_id}/…`.
+3. Miss → 404 with a plain-text body (no JSON error, no listing).
+
+Step 1 before step 2 means slugs and IDs can never collide: slugs are
+forbidden from matching the ID pattern at creation time (a 16-character
+lowercase hex slug is rejected). The lookup is one indexed D1 read per
+request; put a KV cache in front (`host:{hostname}` → asset ID, short TTL)
+and delete the entry on any change to the row. Version IDs are never
+sluggable — a slug names the moving target (the asset), not a snapshot.
+
+**Validation** at creation:
+
+- DNS label: 3–63 characters, `[a-z0-9-]`, no leading/trailing hyphen, no
+  `--` at positions 3–4 (reserved for IDNA `xn--`). Lowercased on input.
+- Not ID-shaped (above).
+- Not reserved. A static list in code: `www api app admin dashboard
+  login auth files static assets cdn mail ftp ns1 ns2 status docs help
+  support reearth eukarya plateau serve untiled` and every current or
+  planned first-party subdomain. Reserved words are also blocked as
+  prefixes/suffixes with a hyphen (`api-v2`, `login-reearth`) — cheap, and
+  it removes the obvious phishing shapes.
+- Unique across the table, including released rows inside their cooldown.
+
+**Who may.** Project `editor` or above on the asset's project (same rule
+as `asset update`). **Only project assets**: demo-mode assets expire in an
+hour and must not hold names. Per-project quota (default 20 hosts) to keep
+squatting bounded; raise per plan later.
+
+**Reuse and takeover.** Releasing a slug does not delete the row; it sets
+`released_at`. For 30 days the name resolves to a 410 page ("this site has
+moved or been removed") and cannot be claimed by another project. After
+that the row is purged by the cleanup cron and the name is free. This
+closes the classic subdomain-takeover path where a stale link on the
+city's website starts serving someone else's content the day after the
+name is dropped. Renaming an asset's slug is "create new, release old" —
+the old name 410s rather than redirecting, because a redirect from a name
+the project no longer controls is exactly the thing we are preventing.
+
+**Multiple names per asset** are allowed (a short one and a formal one);
+one asset per name is enforced by the primary key.
+
+**API.**
+
+```
+GET    /api/v1/assets/:id/hosts               list hosts for the asset
+POST   /api/v1/assets/:id/hosts   {hostname}  claim (subdomain) / register (custom)
+DELETE /api/v1/assets/:id/hosts/:hostname     release
+GET    /api/v1/projects/:id/hosts             list across the project
+```
+
+CLI: `asset host add <id> <name>`, `asset host list <id>`,
+`asset host remove <id> <name>`; `upload --site --name <slug>` claims in one
+step and prints the site URL. Errors are specific: `name is reserved`,
+`name is taken`, `name was recently released and is on cooldown until …`,
+`name must be 3–63 lowercase letters, digits or hyphens`.
+
+**Event log.** Host claim/release are events (ADR-007) with actor
+attribution — a name change on a public site is the kind of thing an
+audit asks about.
+
+**Custom domains (§7) become the `custom` kind of the same table.** The
+only differences are the verification step (TXT record
+`_reearth-serve-verify.<host>` containing a token) and certificate
+issuance (Cloudflare for SaaS custom hostnames, or the platform's
+equivalent on other clouds per ADR-012). Resolution, quota, release
+cooldown and API are shared.
 
 ### 6. SPA fallback and `404.html` (proposed)
 
@@ -180,9 +300,9 @@ prerequisite.
   step should stay fast) into a temp file and uploads that. A `--site`
   flag sets `hosting.spa`. This is the "one command from `dist/` to URL"
   experience.
-- Custom domains: a `domains` table mapping hostname → asset ID, validated
-  by a `TXT` record, resolved in the same middleware as §5. Cloudflare for
-  SaaS (custom hostnames) issues the certificate.
+- Custom domains: the `custom` kind of the `site_hosts` table in §5b —
+  same resolver, plus TXT verification and a Cloudflare for SaaS custom
+  hostname for the certificate.
 - `_headers` (per-path CSP, `X-Frame-Options`) and `_redirects` read from
   the archive root at extraction time and stored on the version as
   `meta.hosting`. Applied in the handler; bounded in size and rule count.
@@ -227,7 +347,25 @@ and differ between Alpine, Debian and the macOS table local `go test`
 reads. Types Serve documents and tests stay in code; the file is the
 fallback. See §4.
 
-### G. `distroless/base` for the thumbnail container too
+### G. Slugs as a path prefix (`serve.reearth.land/s/kawasaki-flood-map/`)
+
+No zone work, but it inherits every problem §5 exists to solve: absolute
+paths break and every site is same-origin with the API. Rejected.
+
+### H. Slugs as the asset ID itself (user-chosen IDs)
+
+Would remove the lookup, but IDs are used as storage prefixes, job IDs and
+capability tokens (URL-as-capability); making them guessable and renamable
+touches every layer. A separate name → ID mapping keeps IDs opaque and
+lets one asset carry several names.
+
+### I. Redirect a released slug to its successor
+
+Convenient for renames, harmful for takeover: whoever holds the old name's
+target after release would control where a still-published link lands.
+Released names 410 for the cooldown and then disappear.
+
+### J. `distroless/base` for the thumbnail container too
 
 That image needs libvips and its shared-library tree; copying it into a
 libc-only base is fragile for no size win. It stays on
@@ -254,9 +392,12 @@ libc-only base is fragile for no size win. It stays on
 ## Follow-ups
 
 1. §5 per-asset origin — the one change that turns "works with a relative
-   base" into "works with any build". Needs the wildcard route on the zone
-   and a `Host` rewrite middleware.
-2. §6 SPA fallback / `404.html`.
-3. §7 CLI `upload <dir>`, then custom domains and `_headers` /
-   `_redirects`.
-4. Migrate `S3FileStorage` (when it exists) to return `etag`.
+   base" into "works with any build". Needs the wildcard DNS record and
+   certificate on the zone, `SITE_HOST_SUFFIX`, and a `Host` rewrite
+   middleware that serves nothing but files on site hosts.
+2. §5b user-chosen subdomains — `site_hosts` table, reserved list,
+   release cooldown, `asset host` CLI.
+3. §6 SPA fallback / `404.html`.
+4. §7 CLI `upload <dir>`, then custom domains as the `custom` kind of
+   `site_hosts`, and `_headers` / `_redirects`.
+5. Migrate `S3FileStorage` (when it exists) to return `etag`.
