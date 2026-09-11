@@ -152,6 +152,9 @@ not persisted.
 | `POST` | `/api/v1/assets/uploads` | Create presigned upload session |
 | `POST` | `/api/v1/assets/uploads/:id/complete` | Complete upload session |
 | `POST` | `/api/v1/assets/:id/extract` | Start archive extraction |
+| `GET` | `/api/v1/assets/:id/hosts` | List the asset's site hosts (named subdomains) |
+| `POST` | `/api/v1/assets/:id/hosts` | Claim a name (`{ hostname, kind? }`; bare label or full host) |
+| `DELETE` | `/api/v1/assets/:id/hosts/:hostname` | Release a name (410 and held for 30 days) |
 | `GET` | `/api/v1/jobs` | List jobs (`?limit=&cursor=`) |
 | `GET` | `/api/v1/jobs/:id` | Get extraction job status |
 | `POST` | `/api/v1/jobs/:id/retry` | Retry a failed extraction job |
@@ -160,6 +163,7 @@ not persisted.
 | `POST` | `/api/v1/projects` | Create project |
 | `GET` | `/api/v1/projects/:id` | Get project |
 | `DELETE` | `/api/v1/projects/:id` | Delete project |
+| `GET` | `/api/v1/projects/:id/hosts` | List every site host in the project |
 | `POST` | `/api/v1/workspaces` | Create workspace |
 | `GET` | `/api/v1/workspaces/:id` | Get workspace |
 | `DELETE` | `/api/v1/workspaces/:id` | Delete workspace |
@@ -196,6 +200,16 @@ Assets support **versioning** — uploading to an existing asset (`POST /api/v1/
 **Static site hosting.** Zip a built frontend (the `dist/` folder of a Vite/Next/Astro export — a single root folder is stripped automatically), upload it, and `/files/:id/` serves its `index.html`. Nested `index.html` files resolve on trailing-slash URLs, and a directory URL without the slash redirects to it so relative links keep working. The extractor assigns `Content-Type` for web payloads (HTML, JS/MJS, CSS, WASM, SVG, fonts, source maps, web manifests, media). Under `/files/:id/`, absolute-path references (`/assets/app.js`) do not resolve — build with a relative base (Vite `base: './'`), or enable site hosts below. See [ADR-013](./docs/adr/013-static-site-hosting.md).
 
 **Site hosts.** With `SITE_HOST_SUFFIX` set (e.g. `.serve.reearth.land`), every asset also has its own hostname: `https://<assetId>.serve.reearth.land/` serves exactly what `/files/<assetId>/` serves, and a version ID in place of the asset ID gives a pinned, immutable preview (marked `X-Robots-Tag: noindex`). Root-relative paths resolve there, so the `base: './'` advice above is unnecessary once it is enabled, and each site is its own origin — a hosted page cannot reach the API, the UI or another asset same-origin. Nothing but files is reachable on a site host: `/api/v1/health` is looked up as a file inside the archive. Archive uploads get a `siteUrl` in the response and the CLI prints it. Enabling it needs zone-side setup (a wildcard DNS record, a certificate covering `*.serve.reearth.land`, and a Worker route) — see the comment in `wrangler.toml` and [ADR-013 B1](./docs/adr/013-static-site-hosting.md).
+
+**Named sites.** An ID-shaped host is correct but not printable, so an archive asset in a project can also be given a name:
+
+```bash
+reearth-serve asset host add <assetId> kawasaki-flood-map   # → https://kawasaki-flood-map.serve.reearth.land/
+reearth-serve asset host list <assetId>
+reearth-serve asset host remove <assetId> kawasaki-flood-map
+```
+
+Names are 3–63 characters of `[a-z0-9-]` with no leading or trailing hyphen and no `--` anywhere (`--` is reserved for preview hosts), are not ID-shaped, and are not on the reserved list (`www`, `api`, `admin`, `latest`, `v<n>`, … — also blocked as hyphen-delimited parts, so `api-v2` is out). Claiming requires **editor or above** on the asset's **project**: demo-mode assets cannot hold a name, and only archives can, since a single file has no site. Twenty active names per project; one asset may have several names. Removing a name **releases** it rather than deleting it — for 30 days the host answers `410` with a plain "This site has moved or been removed" page and nobody can claim it, which closes the subdomain-takeover path where a stale link starts serving someone else's content. Deleting an asset releases its names the same way. ID hosts and `/files/:id/` are unaffected by any of this. See [ADR-013 B2–B3](./docs/adr/013-static-site-hosting.md).
 
 **Caching.** Every file response carries an `ETag`; `If-None-Match` answers `304`. Asset-ID URLs follow the active version, so they stay revalidatable: HTML is `max-age=0, must-revalidate`, everything else `max-age=3600`. Version-ID URLs (`/files/:versionId/...`) are immutable and cached for a year. Gzip-stored files send `Vary: Accept-Encoding`.
 

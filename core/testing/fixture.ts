@@ -14,7 +14,9 @@ import type { Deps } from "../types";
 import type { AssetMetadata, AssetVersion } from "../asset/model";
 import type { ListResult, MetadataStore, VersionStore } from "../asset/repository";
 import type { Session, SessionStore } from "../session/repository";
+import type { SiteHost, SiteHostStore } from "../site/repository";
 import { MemoryFileStorage } from "../../adapters/memory/storage";
+import { MemoryKeyValue } from "../../adapters/memory/memory-kv";
 import { SimpleAuthorizer } from "../../adapters/cloudflare/authorizer";
 
 /** Archive asset, active version {@link VERSION_ID}. */
@@ -84,6 +86,61 @@ export class MemorySessionStore implements SessionStore {
   }
 }
 
+/** In-memory `site_hosts` (ADR-013 B2), with the SQL store's semantics. */
+export class MemorySiteHostStore implements SiteHostStore {
+  readonly hosts = new Map<string, SiteHost>();
+
+  async find(hostname: string): Promise<SiteHost | null> {
+    return this.hosts.get(hostname) ?? null;
+  }
+  async listByAsset(assetId: string): Promise<SiteHost[]> {
+    return this.active().filter((h) => h.assetId === assetId);
+  }
+  async listByProject(projectId: string): Promise<SiteHost[]> {
+    return this.active().filter((h) => h.projectId === projectId);
+  }
+  async insert(host: SiteHost): Promise<boolean> {
+    // The primary key wins, released rows included — same as INSERT OR IGNORE.
+    if (this.hosts.has(host.hostname)) return false;
+    this.hosts.set(host.hostname, { ...host });
+    return true;
+  }
+  async remove(hostname: string): Promise<void> {
+    this.hosts.delete(hostname);
+  }
+  async release(hostname: string, releasedAt: number): Promise<void> {
+    const host = this.hosts.get(hostname);
+    if (!host || host.releasedAt !== null) return;
+    this.hosts.set(hostname, { ...host, releasedAt, assetId: null });
+  }
+  async releaseByAsset(assetId: string, releasedAt: number): Promise<string[]> {
+    const released: string[] = [];
+    for (const host of this.active()) {
+      if (host.assetId !== assetId) continue;
+      this.hosts.set(host.hostname, { ...host, releasedAt, assetId: null });
+      released.push(host.hostname);
+    }
+    return released;
+  }
+  async countActiveByProject(projectId: string): Promise<number> {
+    return (await this.listByProject(projectId)).length;
+  }
+  async purgeReleasedBefore(before: number, limit: number): Promise<string[]> {
+    const due = [...this.hosts.values()]
+      .filter((h) => h.releasedAt !== null && h.releasedAt < before)
+      .sort((a, b) => (a.releasedAt ?? 0) - (b.releasedAt ?? 0))
+      .slice(0, limit);
+    for (const host of due) this.hosts.delete(host.hostname);
+    return due.map((h) => h.hostname);
+  }
+
+  private active(): SiteHost[] {
+    return [...this.hosts.values()]
+      .filter((h) => h.releasedAt === null)
+      .sort((a, b) => a.createdAt - b.createdAt);
+  }
+}
+
 /** A dependency the test does not expect to be touched; calling it fails loudly. */
 export function unused<T>(name: string): T {
   return new Proxy({} as object, {
@@ -110,6 +167,8 @@ export async function fixture(overrides?: Partial<Deps>) {
   const metadata = new MemoryMetadataStore();
   const versions = new MemoryVersionStore();
   const storage = new MemoryFileStorage();
+  const siteHosts = new MemorySiteHostStore();
+  const cache = new MemoryKeyValue();
 
   // Archive asset with an active version, extracted into the versioned layout.
   // app.js is stored gzip the way the extractor transmuxes deflate entries.
@@ -173,6 +232,8 @@ export async function fixture(overrides?: Partial<Deps>) {
     pendingCleanup: unused("pendingCleanup"),
     anonymousUploadEnabled: false,
     siteHostSuffix: undefined,
+    siteHosts,
+    cache,
     sessions: new MemorySessionStore(),
     sessionTtlSeconds: 60,
     internalApiSecret: undefined,
@@ -182,5 +243,5 @@ export async function fixture(overrides?: Partial<Deps>) {
     limits: { subrequestBudget: 700 },
     ...overrides,
   };
-  return { app: createApp(deps), deps, metadata, versions, storage, geojson };
+  return { app: createApp(deps), deps, metadata, versions, storage, siteHosts, cache, geojson };
 }

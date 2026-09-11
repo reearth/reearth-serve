@@ -18,6 +18,9 @@ const permissions: Record<string, Record<string, Set<Role>>> = {
     create: new Set(["owner", "admin", "editor"]),
     delete: new Set(["owner", "admin", "editor"]),
     extract: new Set(["owner", "admin", "editor"]),
+    // Claiming and releasing site names (ADR-013 B2/B3): the same bar as an
+    // asset update, so a viewer can see an asset's names but not change them.
+    "manage-hosts": new Set(["owner", "admin", "editor"]),
   },
   job: {
     read: new Set(["owner", "admin", "editor", "viewer"]),

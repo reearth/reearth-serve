@@ -91,6 +91,13 @@ npx wrangler d1 migrations list reearth-serve --remote
 
 Migrations are automatically applied before deployment in `scripts/deploy.sh`.
 
+The latest domain migration is `0004_add_site_hosts.sql` (ADR-013 B2). It adds
+a table only, so it is backward-compatible and can be applied before the deploy:
+`npx wrangler d1 migrations apply reearth-serve --remote`. The Node runtime and
+the unit tests pick it up automatically — both apply
+`adapters/cloudflare/migrations/` wholesale — so nothing outside D1 needs a
+manual step.
+
 When developing locally, the E2E test script (`scripts/e2e.sh`) automatically applies migrations after clearing miniflare state.
 
 ### Schema Changes

@@ -2,6 +2,8 @@ import type { AssetMetadata } from "../model";
 import type { AtomicWrites, FileStorage, MetadataStore } from "../repository";
 import type { CleanupPendingStore } from "../../cleanup/repository";
 import { deleteAllR2Objects, SubrequestBudget } from "../../cleanup/usecase";
+import { releaseAssetSiteHosts } from "../../site/usecase";
+import type { SiteHostDeps } from "../../site/usecase";
 
 // Small inline budget so a DELETE doesn't monopolise the HTTP request's
 // subrequest cap. Archive assets with huge extractions overflow this and
@@ -12,10 +14,24 @@ export async function deleteAsset(
   metadata: MetadataStore,
   storage: FileStorage,
   id: string,
-  options?: { pendingCleanup?: CleanupPendingStore; budget?: SubrequestBudget },
+  options?: {
+    pendingCleanup?: CleanupPendingStore;
+    budget?: SubrequestBudget;
+    /** Site-host stores; omitted where the caller has no site hosts (tests). */
+    siteHosts?: SiteHostDeps;
+    now?: number;
+  },
 ): Promise<boolean> {
   const asset = await metadata.find(id);
   if (!asset) return false;
+
+  // Release the asset's names before the row goes; ADR-013 B3: "asset deletion
+  // releases, it does not cascade". The rows live out their 30-day cooldown
+  // answering 410 and cannot be re-claimed meanwhile, which is what closes the
+  // subdomain-takeover window a cascading delete would reopen.
+  if (options?.siteHosts) {
+    await releaseAssetSiteHosts(options.siteHosts, id, options.now);
+  }
 
   // Drop the D1 row first so the asset is immediately unreachable via the
   // API. R2 cleanup is best-effort inline; any leftover object under the

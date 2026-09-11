@@ -1,6 +1,6 @@
 # ADR-013: Static Site Hosting from Archive Assets
 
-- **Status:** Accepted — Part A and B1 implemented; the rest of Part B and Part C proposed
+- **Status:** Accepted — Part A, B1, B2, the release half of B3 and the resolution/API/CLI of B6 implemented; B3's disable/enable, B4, B5, B7 and Part C proposed
 - **Date:** 2026-09-11
 - **Deciders:** @rot1024
 - **Related:** ADR-014 (asset access control: `restricted` mode, grants, signed URLs, API keys)
@@ -240,7 +240,7 @@ https://{versionId}.serve.reearth.land/         → /files/{versionId}/   (pinne
   canonical URL once this lands; the path form stays for API clients and
   tiles.
 
-### B2. Named sites: user-chosen subdomains
+### B2. Named sites: user-chosen subdomains (implemented)
 
 An ID-shaped host is correct but not printable. A project member names the
 site:
@@ -294,7 +294,34 @@ asset per name is enforced by the primary key. Names point at assets, never
 at versions: a name is the moving target, and B4 is how a fixed version is
 addressed through it.
 
-### B3. Publish state: enabled, disabled, released
+**Implementation notes.**
+
+- Migration `0004_add_site_hosts.sql`, the table exactly as above plus an
+  index on `released_at` the B3 purge needs. `core/site/repository.ts` is the
+  port, `adapters/sql/site-hosts.ts` the SQLite implementation (D1 and
+  `node:sqlite` both), `core/site/names.ts` the pure validation, and
+  `core/site/usecase.ts` everything that needs the table.
+- **Only archives may be named.** The ADR said "project assets"; a name on a
+  single-file asset would promise a site that does not exist (B1 already
+  withholds `siteUrl` from one), so a non-archive is `400 "names require an
+  archive asset"`.
+- **Claiming needs `SITE_HOST_SUFFIX`.** Rows store the full host, so with no
+  suffix configured there is no host to store: `POST` answers `503 "site
+  hosts are not enabled on this server"`. Reading and listing work either
+  way, so enabling the feature later does not lose rows.
+- **`kind: "custom"` is refused** with `400 "custom domains are not supported
+  yet"` until B5.
+- The authorization action is `manage-hosts` on the `asset` kind
+  (`core/auth/roles.ts`), owner/admin/editor — the bar the ADR names. A
+  caller who fails it gets `404`, matching the rest of the asset API rather
+  than confirming the asset exists.
+- `hostname` is accepted as either the bare label or the full host, and
+  reported as the full host.
+- Validation order is shape first, then reserved. ID-shaped and `v{n}` names
+  report `name is reserved` rather than the format error: they are
+  well-formed labels the system has taken for itself.
+
+### B3. Publish state: enabled, disabled, released (release implemented)
 
 A named site has three states. Claiming a name publishes it; the other two
 are the answers to "take it down for a while" and "give the name up".
@@ -324,6 +351,26 @@ are the answers to "take it down for a while" and "give the name up".
 
 ID hosts (B1) and the `/files/{id}/` path are unaffected by any of these
 states: they are capability URLs and stay reachable while the asset exists.
+
+**Implementation notes.**
+
+- **Release is implemented; disable/enable is not.** `DELETE
+  …/hosts/:hostname` sets `released_at`, nulls `asset_id` and drops the
+  cache entry; the host then answers `410` with a plain `text/html` page
+  ("This site has moved or been removed"), `Cache-Control: no-store` and
+  `X-Robots-Tag: noindex`, and the name cannot be claimed for 30 days. The
+  `disabled_at` column exists and is never written — the `503` state, the
+  `PATCH` endpoint and `asset host disable|enable` are still open.
+- The cleanup cron purges released rows past the cooldown
+  (`purgeReleasedSiteHosts`, 100 per tick). A claim that arrives after the
+  cooldown has run out but before the cron sweeps also purges the stale row,
+  so a free name is claimable immediately rather than on the cron's
+  schedule.
+- **Asset deletion releases.** `deleteAsset` releases the asset's names
+  before dropping its row, in one `UPDATE … RETURNING` so a concurrent claim
+  cannot slip between a read and a write.
+- Releasing frees a slot against the per-project quota immediately, even
+  though the row is still held.
 
 ### B4. Preview hosts: `v{n}--name` and `latest--name`
 
@@ -378,7 +425,7 @@ The `custom` kind of `site_hosts`. Differences from `subdomain`:
 Resolution, publish state, quota, release cooldown, API and CLI are
 shared with B2–B3.
 
-### B6. Resolution order, API and CLI
+### B6. Resolution order, API and CLI (partly implemented)
 
 The middleware decides in this order, before any I/O:
 
@@ -415,6 +462,29 @@ must be 3–63 lowercase letters, digits or hyphens and may not contain
 **Event log.** Claim, disable, enable, release and preview toggles are
 events (ADR-007) with actor attribution — a name change on a public site
 is the kind of thing an audit asks about.
+
+**Implementation notes.**
+
+- The resolver is `core/site/resolver.ts`, composed once in `core/app.ts` and
+  handed to B1's `SiteHostResolver` seam. `SiteTarget` grew a discriminant so
+  it can say "gone" as well as "found"; a miss stays `null`.
+- **Step 2 is a stub.** A label containing `--` resolves to nothing (404)
+  until B4 implements previews. It deliberately does not fall through to step
+  3: without that, `v3--name` would serve the production site.
+- The cache is the `KeyValue` port (ADR-012 §2), reached through a new
+  `cache` dependency — Cloudflare KV on the Worker, the `kv` table on Node.
+  Key `host:{hostname}`, 60 s, and **misses are cached too**, so an
+  unclaimed name costs no database read per request; every claim and release
+  drops the key. A cache that is down or holding junk falls through to the
+  table rather than taking the site down.
+- **`PATCH …/hosts/:hostname` is not implemented** — it toggles `disabled`
+  (B3) and `previews` (B4), neither of which exists yet.
+- CLI: `asset host add|list|remove` only, with `--json`, for the same reason.
+  `upload --site --name <slug>` is C2.
+- The API shows a row without `verified_at` (B5) or `created_by`, plus the
+  site `url`; `POST` answers `201 { host, siteUrl }`.
+- No events: `core/` has no event store yet. The two emit points are marked
+  with `// ADR-007:` comments in `core/site/usecase.ts`.
 
 ### B7. Viewer authentication: password-protected sites
 

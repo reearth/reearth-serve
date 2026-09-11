@@ -12,6 +12,7 @@ import {
   SqlProjectStore, SqlStorageUsageStore, SqlVersionStore, SqlWorkspaceStore,
 } from "../../adapters/sql/stores";
 import { SqlAtomicWrites } from "../../adapters/sql/writes";
+import { SqlSiteHostStore } from "../../adapters/sql/site-hosts";
 import { SqlJobQueue } from "../../adapters/sql/queue";
 import { SqlKeyValue } from "../../adapters/sql/kv";
 import { MemoryFileStorage } from "../../adapters/memory/storage";
@@ -94,6 +95,8 @@ export function buildNodeRuntime(env: Env = process.env): NodeRuntime {
     pendingCleanup: new SqlCleanupPendingStore(sql),
     anonymousUploadEnabled: config.anonymousUploadEnabled,
     siteHostSuffix: config.siteHostSuffix,
+    siteHosts: new SqlSiteHostStore(sql),
+    cache: kv,
     sessions: new KeyValueSessionStore(kv),
     sessionTtlSeconds: SESSION_TTL_SECONDS,
     internalApiSecret: config.internalApiSecret,

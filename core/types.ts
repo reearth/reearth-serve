@@ -11,6 +11,8 @@ import type { ContainerLauncher } from "./container/port";
 import type { StorageUsageStore } from "./asset/repository";
 import type { CleanupPendingStore } from "./cleanup/repository";
 import type { JobQueue } from "./queue/port";
+import type { KeyValue } from "./kv/port";
+import type { SiteHostStore } from "./site/repository";
 import type { ExtractionMessage } from "./extraction/handler";
 import type { ThumbnailMessage } from "./thumbnail/queue";
 
@@ -46,6 +48,16 @@ export type ContextDeps = {
    * upload responses carry no `siteUrl`.
    */
   siteHostSuffix: string | undefined;
+  /** Named sites: the `site_hosts` table (ADR-013 B2). */
+  siteHosts: SiteHostStore;
+  /**
+   * General-purpose short-lived cache over the `KeyValue` port (ADR-012 §2).
+   * Today it holds site-host resolutions (`host:{hostname}`, 60 s) so a page
+   * view on a named site is not a database read. Everything in it must be
+   * reconstructible from the source of truth: entries expire, and a provider
+   * may evict one at any time.
+   */
+  cache: KeyValue;
 };
 
 /**

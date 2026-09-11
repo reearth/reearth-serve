@@ -14,6 +14,7 @@ import { KeyValueUploadSessionStore, KeyValueSessionStore } from "../../core/kv/
 import { CloudflareJobQueue } from "./queues";
 import { D1SqlClient } from "./sql";
 import { SqlAtomicWrites } from "../sql/writes";
+import { SqlSiteHostStore } from "../sql/site-hosts";
 
 // Anonymous sessions are identity, not content — they must outlive the
 // demo asset TTL. A large multipart upload can take many hours between the
@@ -71,6 +72,11 @@ export function buildDeps(env: Env): Deps {
     // Site hosts (ADR-013 B1). Off until the zone carries the wildcard DNS
     // record and a certificate for the suffix; see wrangler.toml.
     siteHostSuffix: env.SITE_HOST_SUFFIX || undefined,
+    // Named sites (ADR-013 B2). The table is always wired up: reading and
+    // listing names works even where the suffix is unset, so enabling the
+    // feature later does not lose rows.
+    siteHosts: new SqlSiteHostStore(sql),
+    cache: kv,
 
     sessions: new KeyValueSessionStore(kv),
     sessionTtlSeconds: SESSION_TTL_SECONDS,

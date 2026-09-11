@@ -5,6 +5,7 @@ import type { AppEnv } from "../../types";
 import { getAssetMetadata, deleteAsset } from "../usecase";
 import { canAccessAsset } from "../access";
 import { accessCtx } from "./shared";
+import { siteHostDeps } from "../../site/handler";
 import { errorResponseSchema, idParamSchema } from "../../../shared/openapi";
 
 export function registerDeleteRoute(app: Hono<AppEnv>) {
@@ -33,7 +34,10 @@ export function registerDeleteRoute(app: Hono<AppEnv>) {
       const { totalSize: versionsTotalSize } = await versions.deleteByAssetId(id);
 
       const pendingCleanup = c.get("pendingCleanup");
-      const deleted = await deleteAsset(metadata, storage, id, { pendingCleanup });
+      const deleted = await deleteAsset(metadata, storage, id, {
+        pendingCleanup,
+        siteHosts: siteHostDeps(c),
+      });
       if (!deleted) {
         return c.json({ error: "Asset not found" }, 404);
       }

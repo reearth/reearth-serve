@@ -9,7 +9,8 @@ import { workspaceRoutes } from "./workspace/handler";
 import { meRoutes } from "./me/handler";
 import { authMiddleware } from "./auth/middleware";
 import { sessionMiddleware } from "./session/middleware";
-import { siteHostMiddleware } from "./site/middleware";
+import { normalizeSiteHostSuffix, siteHostMiddleware } from "./site/middleware";
+import { composeSiteHostResolver } from "./site/resolver";
 import type { AppEnv, Deps } from "./types";
 
 /**
@@ -30,9 +31,17 @@ export function createApp(deps: Deps) {
   // minting an anonymous session per page view would burn a KV write for an
   // identity nothing reads.
   const site = siteApp(deps);
+  // The resolver decides ID hosts, preview hosts and named hosts in that order
+  // (ADR-013 B6). It needs the normalised suffix to rebuild the full hostname
+  // a `site_hosts` row is keyed by; when site hosts are off the middleware
+  // never calls it.
+  const suffix = normalizeSiteHostSuffix(deps.siteHostSuffix);
   app.use("*", siteHostMiddleware({
     suffix: deps.siteHostSuffix,
     serve: (req) => site.fetch(req),
+    resolve: suffix
+      ? composeSiteHostResolver({ hosts: deps.siteHosts, cache: deps.cache, suffix })
+      : undefined,
   }));
 
   // Authentication middleware (JWKS cache comes from deps).
@@ -140,6 +149,8 @@ function injectDeps(deps: Deps, opts: { siteHost: boolean }): MiddlewareHandler<
     c.set("pendingCleanup", deps.pendingCleanup);
     c.set("anonymousUploadEnabled", deps.anonymousUploadEnabled);
     c.set("siteHostSuffix", deps.siteHostSuffix);
+    c.set("siteHosts", deps.siteHosts);
+    c.set("cache", deps.cache);
     c.set("siteHost", opts.siteHost);
     await next();
   };

@@ -13,6 +13,10 @@ export const PATHS = {
   assetVersions: (id: string) => `${API_V1}/assets/${id}/versions`,
   assetVersion: (id: string, versionId: string) => `${API_V1}/assets/${id}/versions/${versionId}`,
   assetActiveVersion: (id: string) => `${API_V1}/assets/${id}/active-version`,
+  assetHosts: (id: string) => `${API_V1}/assets/${id}/hosts`,
+  assetHost: (id: string, hostname: string) =>
+    `${API_V1}/assets/${id}/hosts/${encodeURIComponent(hostname)}`,
+  projectHosts: (id: string) => `${API_V1}/projects/${id}/hosts`,
   assetFiles: (id: string, prefix?: string) =>
     `${API_V1}/assets/${id}/files${prefix ? `?prefix=${encodeURIComponent(prefix)}` : ""}`,
   jobs: `${API_V1}/jobs`,

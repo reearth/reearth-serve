@@ -113,6 +113,35 @@ export const assetUploadResultSchema = z.object({
   siteUrl: z.string().optional(),
 });
 
+// --- Site hosts (ADR-013 B2) ---
+
+export const siteHostKindSchema = z.enum(["subdomain", "custom"]);
+
+/**
+ * A row of `site_hosts` as the API shows it: the columns a caller can act on,
+ * plus the URL the site is served from. `verifiedAt` (B5's TXT check) and
+ * `createdBy` stay internal.
+ */
+export const siteHostSchema = z.object({
+  hostname: z.string(),
+  /** Null once the name has been released and is living out its cooldown. */
+  assetId: z.string().nullable(),
+  projectId: z.string(),
+  kind: siteHostKindSchema,
+  /** Whether `v{n}--` / `latest--` hosts resolve (ADR-013 B4). */
+  previews: z.boolean(),
+  disabledAt: z.number().nullable().optional(),
+  releasedAt: z.number().nullable().optional(),
+  createdAt: z.number(),
+  url: z.string(),
+});
+
+export const claimSiteHostBodySchema = z.object({
+  /** Bare label (`kawasaki-flood-map`) or the full host; both are accepted. */
+  hostname: z.string(),
+  kind: siteHostKindSchema.optional(),
+});
+
 // --- Upload session ---
 
 export const presignedUploadResultSchema = z.object({
@@ -253,5 +282,8 @@ export type UpdateJobStatusBody = z.infer<typeof updateJobStatusBodySchema>;
 export type ErrorResponse = z.infer<typeof errorResponseSchema>;
 export type FileEntry = z.infer<typeof fileEntrySchema>;
 export type UpdateAssetBody = z.infer<typeof updateAssetBodySchema>;
+export type SiteHostKind = z.infer<typeof siteHostKindSchema>;
+export type SiteHost = z.infer<typeof siteHostSchema>;
+export type ClaimSiteHostBody = z.infer<typeof claimSiteHostBodySchema>;
 export type UpdateVersionBody = z.infer<typeof updateVersionBodySchema>;
 export type SetActiveVersionBody = z.infer<typeof setActiveVersionBodySchema>;

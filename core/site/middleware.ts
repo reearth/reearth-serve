@@ -11,16 +11,27 @@ import type { AppEnv } from "../types";
  * rule a hosted page would run same-origin with the management surface and
  * the per-asset origin would be cosmetic.
  *
- * B1 resolves ID-shaped labels only. B2 (named sites) adds a `site_hosts`
- * lookup, and B6 fixes the order: ID shape first, then `--` previews, then
- * the table. `SiteHostResolver` is where those slot in — the middleware
- * itself never grows a branch per host kind.
+ * B1 resolved ID-shaped labels only. B2 (named sites) adds the `site_hosts`
+ * lookup and B6 fixes the order: ID shape first, then `--` previews, then the
+ * table — all of it inside `SiteHostResolver` (see `./resolver.ts`), so the
+ * middleware itself never grows a branch per host kind.
  */
 
-/** What a site host resolved to: the ID the file router should serve. */
-export type SiteTarget = { id: string };
+/**
+ * What a site host resolved to.
+ *
+ * - `asset` — serve this ID through the file router.
+ * - `gone` — the name is held by a released row inside its cooldown (B3): the
+ *   site is gone, and saying so is not the same as saying the name is free.
+ *
+ * A `null` resolution is the third case (miss) and stays outside the union so
+ * a resolver can express it without constructing anything.
+ */
+export type SiteTarget =
+  | { kind: "asset"; id: string }
+  | { kind: "gone" };
 
-/** Resolves a host's leading label to a file-router ID, or null for 404. */
+/** Resolves a host's leading label, or null for 404. */
 export type SiteHostResolver = (label: string) => Promise<SiteTarget | null>;
 
 /** Asset and version IDs: 16 lowercase hex characters, valid DNS labels as-is. */
@@ -31,7 +42,7 @@ const ID_LABEL = /^[0-9a-f]{16}$/;
  * miss — a name is not a thing this part knows how to resolve (B2 does).
  */
 export const resolveIdLabel: SiteHostResolver = async (label) =>
-  ID_LABEL.test(label) ? { id: label } : null;
+  ID_LABEL.test(label) ? { kind: "asset", id: label } : null;
 
 export interface SiteHostOptions {
   /** `SITE_HOST_SUFFIX`, e.g. `.serve.reearth.land`. Undefined ⇒ feature off. */
@@ -107,7 +118,7 @@ export function siteHostMiddleware(opts: SiteHostOptions): MiddlewareHandler<App
     if (!target) {
       // Plain text, not the API's JSON error: on a site host there is no API,
       // and `no-store` keeps an unresolvable name from being cached as dead
-      // (it becomes resolvable the moment B2 lets someone claim it).
+      // (it becomes resolvable the moment someone claims it — B2).
       return new Response("Not found", {
         status: 404,
         headers: {
@@ -116,6 +127,7 @@ export function siteHostMiddleware(opts: SiteHostOptions): MiddlewareHandler<App
         },
       });
     }
+    if (target.kind === "gone") return goneResponse();
 
     const url = new URL(c.req.url);
     const prefix = `/files/${target.id}`;
@@ -132,6 +144,29 @@ export function siteHostMiddleware(opts: SiteHostOptions): MiddlewareHandler<App
     return unrewriteLocation(res, prefix);
   };
 }
+
+/**
+ * The released-name page (ADR-013 B3).
+ *
+ * `410`, not `404`: for the 30 days of the cooldown the name is still held, so
+ * "gone" is the true answer and it does not invite a claim. `no-store` because
+ * the page turns back into a site the moment the project re-points the name,
+ * and `noindex` so a search engine does not keep the tombstone.
+ */
+export function goneResponse(): Response {
+  return new Response(GONE_PAGE, {
+    status: 410,
+    headers: {
+      "Content-Type": "text/html; charset=utf-8",
+      "Cache-Control": "no-store",
+      "X-Robots-Tag": "noindex",
+    },
+  });
+}
+
+const GONE_PAGE =
+  '<!doctype html><meta charset="utf-8"><title>This site has moved or been removed</title>' +
+  "<h1>This site has moved or been removed</h1>";
 
 /**
  * Undo the path rewrite in a `Location` header.
@@ -172,7 +207,7 @@ if (import.meta.vitest) {
   });
 
   test("resolveIdLabel accepts only 16 lowercase hex characters", async () => {
-    expect(await resolveIdLabel("3f9a1c2b4d5e6f70")).toEqual({ id: "3f9a1c2b4d5e6f70" });
+    expect(await resolveIdLabel("3f9a1c2b4d5e6f70")).toEqual({ kind: "asset", id: "3f9a1c2b4d5e6f70" });
     expect(await resolveIdLabel("3F9A1C2B4D5E6F70")).toBeNull();
     expect(await resolveIdLabel("kawasaki-flood-map")).toBeNull();
     expect(await resolveIdLabel("3f9a1c2b4d5e6f7")).toBeNull();

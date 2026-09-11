@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import { request as httpRequest } from "node:http";
-import { BASE, uploadFile } from "./helpers";
+import { BASE, createProjectForAuth, signToken, uploadFile } from "./helpers";
 
 // Per-asset site hosts (ADR-013 B1). Only the launch script that starts the
 // server with SITE_HOST_SUFFIX exports this, so the suite is skipped wherever
@@ -61,5 +61,98 @@ describe.skipIf(!SUFFIX)("site hosts", () => {
     expect(res.status).toBe(404);
     expect(res.contentType).toContain("text/plain");
     expect(res.body).toBe("Not found");
+  });
+
+  // Named sites (ADR-013 B2/B3/B6). Claiming needs an authenticated project
+  // asset, so this one goes through the mock OIDC the way the auth suite does.
+  test("a claimed name serves the asset, and releasing it turns the host into a 410", async () => {
+    const token = await signToken();
+    const projectId = await createProjectForAuth(token, "e2e-site-hosts");
+
+    // A zip so the asset is an archive — only archives may be named. The
+    // extraction container is not available in this runtime, so the site's
+    // entries are absent and the archive itself is what the host serves.
+    const zip = new TextEncoder().encode("PK\x03\x04 not really a zip");
+    const upload = await fetch(`${BASE}/api/v1/assets`, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/zip",
+        "Content-Length": String(zip.byteLength),
+        "X-Filename": "site.zip",
+        "X-Skip-Extraction": "true",
+        "X-Project-Id": projectId,
+        Authorization: `Bearer ${token}`,
+      },
+      body: zip as BodyInit,
+    });
+    expect(upload.status).toBe(201);
+    const assetId = (await upload.json() as { asset: { id: string } }).asset.id;
+
+    const name = `e2e-site-${Date.now().toString(36)}`;
+    const claimed = await fetch(`${BASE}/api/v1/assets/${assetId}/hosts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ hostname: name }),
+    });
+    expect(claimed.status).toBe(201);
+    const { host, siteUrl } = await claimed.json() as { host: { hostname: string }; siteUrl: string };
+    expect(host.hostname).toBe(`${name}${suffix}`);
+    expect(siteUrl).toBe(`http://${name}${suffix}/`);
+
+    // The name resolves through site_hosts to the asset: the archive is served
+    // at its own filename, exactly as it is under /files/{id}/site.zip.
+    const archive = await get(`${name}${suffix}`, "/site.zip");
+    expect(archive.status).toBe(200);
+    expect(archive.body).toContain("not really a zip");
+
+    // The name is taken now.
+    const again = await fetch(`${BASE}/api/v1/assets/${assetId}/hosts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ hostname: name }),
+    });
+    expect(again.status).toBe(400);
+    expect((await again.json() as { error: string }).error).toBe("name is taken");
+
+    const listed = await fetch(`${BASE}/api/v1/assets/${assetId}/hosts`, {
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect((await listed.json() as { hosts: unknown[] }).hosts).toHaveLength(1);
+
+    // Release: 410 for the cooldown, and the name cannot be re-claimed.
+    const released = await fetch(`${BASE}/api/v1/assets/${assetId}/hosts/${name}${suffix}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(released.status).toBe(204);
+
+    const gone = await get(`${name}${suffix}`, "/site.zip");
+    expect(gone.status).toBe(410);
+    expect(gone.contentType).toContain("text/html");
+    expect(gone.body).toContain("This site has moved or been removed");
+
+    const reclaim = await fetch(`${BASE}/api/v1/assets/${assetId}/hosts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ hostname: name }),
+    });
+    expect(reclaim.status).toBe(400);
+    expect((await reclaim.json() as { error: string }).error).toMatch(/on cooldown until/);
+  });
+
+  test("a name cannot be claimed for a demo asset", async () => {
+    const { status, body, sessionId } = await uploadFile(
+      new TextEncoder().encode("x"), "a.zip", "application/zip",
+    );
+    expect(status).toBe(201);
+    // The demo session that owns the asset, or the claim would 404 at the
+    // ownership check before it could reject the demo asset itself.
+    const res = await fetch(`${BASE}/api/v1/assets/${body.asset.id}/hosts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Session-Id": sessionId ?? "" },
+      body: JSON.stringify({ hostname: "demo-site-name" }),
+    });
+    expect(res.status).toBe(400);
+    expect((await res.json() as { error: string }).error).toBe("names require a project asset");
   });
 });

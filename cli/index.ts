@@ -4,6 +4,7 @@ import type { AssetMetadata, AssetVersion, Job } from "../shared/api";
 import { apiGet, apiPost, apiPatch, apiPut, apiDelete, output, formatAsset, formatJob, formatVersion, formatBytes } from "./helpers";
 import { doUpload } from "./upload";
 import { registerFileCommands } from "./file";
+import { registerHostCommands } from "./host";
 import { login, logout, whoami } from "./auth";
 import { registerProjectCommands } from "./project";
 import { registerWorkspaceCommands } from "./workspace";
@@ -305,6 +306,9 @@ version
       console.log(formatVersion(data.version));
     }
   });
+
+// host subcommand (ADR-013 B2/B3)
+registerHostCommands(program, asset);
 
 asset
   .command("set-version")
