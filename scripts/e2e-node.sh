@@ -8,6 +8,10 @@ PORT="${E2E_PORT:-8788}"
 ENDPOINT="http://localhost:${PORT}"
 MOCK_OIDC_PORT="${MOCK_OIDC_PORT:-18998}"
 INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-e2e-internal-secret}"
+# Site hosts (ADR-013 B1). The suffix carries the port because it is compared
+# against the Host header verbatim; the apex ("localhost:PORT") does not end
+# with it, so every other test is unaffected.
+SITE_HOST_SUFFIX="${SITE_HOST_SUFFIX:-.localhost:${PORT}}"
 
 cleanup() {
   if [ -n "${SERVER_PID:-}" ]; then
@@ -50,6 +54,7 @@ ANONYMOUS_UPLOAD_ENABLED="true" \
 OIDC_ISSUER_URL="${OIDC_ISSUER}" \
 OIDC_AUDIENCE="e2e-audience" \
 CONTAINER_LAUNCHER="none" \
+SITE_HOST_SUFFIX="${SITE_HOST_SUFFIX}" \
   npm run start:node &
 SERVER_PID=$!
 
@@ -78,6 +83,7 @@ echo "Running E2E tests against the Node runtime..."
 E2E_ENDPOINT="${ENDPOINT}" \
 E2E_MOCK_OIDC="http://localhost:${MOCK_OIDC_PORT}" \
 E2E_INTERNAL_API_SECRET="${INTERNAL_API_SECRET}" \
+E2E_SITE_HOST_SUFFIX="${SITE_HOST_SUFFIX}" \
 E2E_PRESIGNED="false" \
 E2E_CONTAINER="false" \
 E2E_THUMBNAILS="false" \

@@ -221,7 +221,7 @@ fileRoutes.on("GET", ["/:id", "/:id/", "/:id/:path{.+}"], async (c) => {
     return c.json({ error: "File not found" }, 404);
   }
 
-  return serveFile(located, {
+  const res = await serveFile(located, {
     range,
     rangeHeader,
     clientAcceptsGzip,
@@ -229,6 +229,15 @@ fileRoutes.on("GET", ["/:id", "/:id/", "/:id/:path{.+}"], async (c) => {
     cacheControl: cacheControlFor({ pinned, contentType: located.contentType }),
     storage,
   });
+
+  // A version-ID site host is a pinned preview of a page that is also served
+  // by the asset-ID host: same content, two URLs, only one of which should be
+  // indexed (ADR-013 B4). `pinned` is already known here, so the header costs
+  // no extra lookup. Asset-ID hosts and the `/files/…` path form are
+  // unaffected.
+  if (pinned && c.get("siteHost")) res.headers.set("X-Robots-Tag", "noindex");
+
+  return res;
 });
 
 async function serveThumbnail(

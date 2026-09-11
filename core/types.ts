@@ -40,6 +40,12 @@ export type ContextDeps = {
   storageUsage: StorageUsageStore;
   pendingCleanup: CleanupPendingStore;
   anonymousUploadEnabled: boolean;
+  /**
+   * `SITE_HOST_SUFFIX` — the wildcard suffix site hosts live under, e.g.
+   * `.serve.reearth.land` (ADR-013 B1). Undefined ⇒ site hosts are off and
+   * upload responses carry no `siteUrl`.
+   */
+  siteHostSuffix: string | undefined;
 };
 
 /**
@@ -80,5 +86,11 @@ export type AppEnv = {
   Variables: ContextDeps & {
     user: AuthUser | null;
     sessionId: string | null;
+    /**
+     * True when the request arrived on a site host and was rewritten into
+     * `/files/…` (ADR-013 B1). The file handler uses it to mark pinned
+     * (version-ID) hosts `noindex`.
+     */
+    siteHost: boolean;
   };
 };

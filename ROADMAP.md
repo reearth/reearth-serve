@@ -202,7 +202,7 @@ Municipal and enterprise users increasingly generate frontend apps with AI but h
 
 **Part B — site hosts**
 
-- [ ] B1 Per-asset origin — `https://<id>.serve.reearth.land/` so root-relative paths resolve and hosted pages are origin-isolated from the API and from each other; site hosts serve nothing but files
+- [x] B1 Per-asset origin — `https://<id>.serve.reearth.land/` so root-relative paths resolve and hosted pages are origin-isolated from the API and from each other; site hosts serve nothing but files. Enabled by `SITE_HOST_SUFFIX`; the zone-side wildcard DNS record, certificate and Worker route are an ops step, so the variable stays commented out in `wrangler.toml` until they exist
 - [ ] B2 Named sites — `https://<name>.serve.reearth.land/` via a `site_hosts` table: DNS-label validation, no `--`, not ID-shaped, reserved list, editor-only, project assets only, per-project quota
 - [ ] B3 Publish state — disable (503, name held) / enable / release (410 for 30 days against takeover; asset deletion releases rather than cascades)
 - [ ] B4 Preview hosts — `v<n>--<name>` (pinned) and `latest--<name>`, `noindex`, per-name `previews` flag, **off by default**

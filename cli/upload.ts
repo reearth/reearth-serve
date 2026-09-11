@@ -282,7 +282,11 @@ export async function doUpload(
       console.error("Error: Server does not support presigned uploads; file is too large for direct upload.");
       process.exit(1);
     }
-    output(opts.json ? large : large.url, opts.json);
+    if (opts.json) {
+      output(large, true);
+    } else {
+      printUrls(large);
+    }
     return;
   }
 
@@ -299,6 +303,16 @@ export async function doUpload(
   if (opts.json) {
     output(result, true);
   } else {
-    console.log(result.url);
+    printUrls(result);
   }
+}
+
+/**
+ * The file URL, plus the site host when the server hosts this archive as a
+ * site (ADR-013 B1). The file URL stays the first line so anything piping the
+ * output into `head -1` keeps working.
+ */
+function printUrls(result: AssetUploadResult): void {
+  console.log(result.url);
+  if (result.siteUrl) console.log(`Site: ${result.siteUrl}`);
 }

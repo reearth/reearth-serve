@@ -34,6 +34,19 @@ BASE_URL = "https://serve.reearth.land"
 # by a deploy rollout) and should be re-enqueued to resume from checkpoint.
 # The previous 24h default left orphaned extractions invisible for a day.
 EXTRACTION_STUCK_THRESHOLD_SECONDS = "1800"
+# Per-asset site hosts (ADR-013 B1): every request whose Host is
+# "{assetId|versionId}.serve.reearth.land" is served as /files/{id}/… and
+# nothing else is reachable on that hostname. Commented out on purpose —
+# enabling it before the zone is ready would hand out siteUrls that do not
+# resolve. Zone-side prerequisites on reearth.land, both one-time ops steps:
+#   1. a proxied wildcard DNS record for *.serve
+#   2. a certificate covering *.serve.reearth.land (Advanced Certificate or
+#      Total TLS — the apex wildcard covers one level only)
+#   3. a Worker route for "*.serve.reearth.land/*" pointing at this Worker
+# `routes` above deliberately stays apex-only; the wildcard is added on the
+# zone once (1)–(2) exist, so a half-configured wildcard never serves TLS
+# errors to visitors.
+# SITE_HOST_SUFFIX = ".serve.reearth.land"
 
 [[r2_buckets]]
 binding = "STORAGE"

@@ -93,6 +93,7 @@ export function buildNodeRuntime(env: Env = process.env): NodeRuntime {
     storageUsage: new SqlStorageUsageStore(sql),
     pendingCleanup: new SqlCleanupPendingStore(sql),
     anonymousUploadEnabled: config.anonymousUploadEnabled,
+    siteHostSuffix: config.siteHostSuffix,
     sessions: new KeyValueSessionStore(kv),
     sessionTtlSeconds: SESSION_TTL_SECONDS,
     internalApiSecret: config.internalApiSecret,

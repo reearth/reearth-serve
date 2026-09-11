@@ -68,6 +68,7 @@ function fakeDeps(overrides: Partial<Deps> = {}): Deps {
     storageUsage: unused("storageUsage"),
     pendingCleanup: unused("pendingCleanup"),
     anonymousUploadEnabled: false,
+    siteHostSuffix: undefined,
     sessions: new MemorySessionStore(),
     sessionTtlSeconds: 60,
     internalApiSecret: undefined,

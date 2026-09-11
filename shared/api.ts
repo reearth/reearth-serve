@@ -108,6 +108,9 @@ export const assetMetadataSchema = z.object({
 export const assetUploadResultSchema = z.object({
   asset: assetMetadataSchema,
   url: z.string(),
+  // Site host of an archive asset (ADR-013 B1). Present only when the
+  // deployment has SITE_HOST_SUFFIX configured and the asset is an archive.
+  siteUrl: z.string().optional(),
 });
 
 // --- Upload session ---

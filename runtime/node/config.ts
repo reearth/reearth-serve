@@ -24,6 +24,12 @@ export type NodeConfig = {
   oidcIssuerUrl: string | undefined;
   oidcAudience: string | undefined;
   /**
+   * Wildcard suffix per-asset site hosts live under, e.g.
+   * `.serve.reearth.land` or `.localhost:8788` locally (ADR-013 B1). Unset ⇒
+   * site hosts are off. Validated (leading dot) when the app is built.
+   */
+  siteHostSuffix: string | undefined;
+  /**
    * Parsed `OBJECT_STORE_*`. Reserved for the S3 adapter; until that exists the
    * runtime logs and falls back to in-process storage when it is set.
    */
@@ -51,6 +57,7 @@ export function loadConfig(env: Env): NodeConfig {
     assetTtlSeconds: intOr(env.ASSET_TTL_SECONDS, DEFAULT_ASSET_TTL_SECONDS),
     oidcIssuerUrl: env.OIDC_ISSUER_URL || undefined,
     oidcAudience: env.OIDC_AUDIENCE || undefined,
+    siteHostSuffix: env.SITE_HOST_SUFFIX || undefined,
     objectStore: objectStore(env),
     containerLauncher: containerLauncher(env.CONTAINER_LAUNCHER),
   };

@@ -28,6 +28,9 @@ interface Env {
   // Anonymous (demo-mode) upload toggle. Set to "false" to require login for uploads.
   // Defaults to "true" — read & non-upload operations are not affected.
   ANONYMOUS_UPLOAD_ENABLED?: string;
+  // Wildcard suffix that per-asset site hosts live under, e.g.
+  // ".serve.reearth.land" (ADR-013 B1). Unset ⇒ site hosts are off.
+  SITE_HOST_SUFFIX?: string;
   // Cloudflare Containers
   ARCHIVE_EXTRACTOR?: DurableObjectNamespace;
   THUMBNAIL_GENERATOR?: DurableObjectNamespace;

@@ -68,6 +68,9 @@ export function buildDeps(env: Env): Deps {
     // to close. Secrets survive deploys, and a forgotten flag shows up in
     // `wrangler secret list` instead of being silently re-enabled.
     anonymousUploadEnabled: env.ANONYMOUS_UPLOAD_ENABLED === "true",
+    // Site hosts (ADR-013 B1). Off until the zone carries the wildcard DNS
+    // record and a certificate for the suffix; see wrangler.toml.
+    siteHostSuffix: env.SITE_HOST_SUFFIX || undefined,
 
     sessions: new KeyValueSessionStore(kv),
     sessionTtlSeconds: SESSION_TTL_SECONDS,

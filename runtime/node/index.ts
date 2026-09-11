@@ -11,6 +11,7 @@
  */
 import { serve } from "@hono/node-server";
 import { createApp } from "../../core/app";
+import { isSiteHost } from "../../core/site/middleware";
 import { buildNodeRuntime, type NodeRuntime } from "./deps";
 import { runCron } from "./cron";
 
@@ -19,6 +20,13 @@ export function createNodeHandler(runtime: NodeRuntime): (request: Request) => P
 
   return async (request: Request): Promise<Response> => {
     const url = new URL(request.url);
+
+    // Site hosts (ADR-013 B1) serve files at every path, so they are decided
+    // before the API-only guard below — and before /internal/cron, which must
+    // not be reachable from a hosted origin.
+    if (isSiteHost(request.headers.get("Host") ?? url.host, runtime.deps.siteHostSuffix)) {
+      return app.fetch(request);
+    }
 
     if (url.pathname === "/internal/cron") {
       if (request.method !== "POST") {

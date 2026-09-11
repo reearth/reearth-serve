@@ -1,6 +1,7 @@
 import { createRequestHandler } from "react-router";
 import { createApp } from "../../core/app";
 import { buildDeps } from "../../adapters/cloudflare/cloudflare-deps";
+import { isSiteHost } from "../../core/site/middleware";
 import { handleScheduled } from "../../core/cleanup/handler";
 import { handleQueue } from "../../core/extraction/handler";
 import { handleThumbnailQueue } from "../../core/thumbnail/handler";
@@ -26,10 +27,13 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
 
-    // API routes: /api/*, /files/*
+    // API routes: /api/*, /files/* — plus every path on a site host, whose
+    // whole surface is file delivery (ADR-013 B1). Without the host check the
+    // React Router UI would answer at `{assetId}.serve.reearth.land/`.
     if (
       url.pathname.startsWith("/api/") ||
-      url.pathname.startsWith("/files")
+      url.pathname.startsWith("/files") ||
+      isSiteHost(request.headers.get("Host") ?? url.host, env.SITE_HOST_SUFFIX)
     ) {
       const app = createApp(buildDeps(env));
       return app.fetch(request, env, ctx);

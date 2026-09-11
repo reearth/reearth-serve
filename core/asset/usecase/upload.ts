@@ -3,6 +3,7 @@ import { detectArchiveFormat } from "../model";
 import type { AtomicWrites, FileStorage } from "../repository";
 import type { Job } from "../../job/model";
 import { generateId, storageKey } from "./shared";
+import { siteUrlFor } from "../../site/url";
 import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
 import type { JobQueue } from "../../queue/port";
@@ -21,7 +22,7 @@ export async function uploadAsset(
   },
   ttlSeconds: number,
   baseUrl: string,
-  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[] },
+  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string },
 ): Promise<AssetUploadResult> {
   const id = generateId();
   const now = Date.now();
@@ -108,9 +109,17 @@ export async function uploadAsset(
     throw e;
   }
 
+  const siteUrl = siteUrlFor({
+    assetId: id,
+    baseUrl,
+    siteHostSuffix: options?.siteHostSuffix,
+    archive: Boolean(archiveFormat),
+  });
+
   return {
     asset,
     url: `${baseUrl}/files/${id}/${encodeURIComponent(file.name)}`,
+    ...(siteUrl && { siteUrl }),
   };
 }
 
@@ -180,6 +189,34 @@ if (import.meta.vitest) {
     expect(result.asset.archiveFormat).toBe("zip");
     expect(result.asset.jobId).toBe(result.asset.id);
     expect(calls[0].job?.id).toBe(result.asset.id);
+  });
+
+  test("uploadAsset adds siteUrl for an archive when a site host suffix is configured", async () => {
+    const { writes } = mockWrites();
+
+    const archive = await uploadAsset(
+      writes, mockStorage(),
+      { name: "site.zip", type: "application/zip", body: toStream(new Uint8Array(10)), size: 10 },
+      3600, "https://example.com",
+      { siteHostSuffix: ".serve.example.com" },
+    );
+    expect(archive.siteUrl).toBe(`https://${archive.asset.id}.serve.example.com/`);
+
+    // A single file is not a site, and without a suffix there is no host.
+    const plain = await uploadAsset(
+      writes, mockStorage(),
+      { name: "a.txt", type: "text/plain", body: toStream(new Uint8Array(3)), size: 3 },
+      3600, "https://example.com",
+      { siteHostSuffix: ".serve.example.com" },
+    );
+    expect(plain.siteUrl).toBeUndefined();
+
+    const unconfigured = await uploadAsset(
+      writes, mockStorage(),
+      { name: "site.zip", type: "application/zip", body: toStream(new Uint8Array(10)), size: 10 },
+      3600, "https://example.com",
+    );
+    expect(unconfigured.siteUrl).toBeUndefined();
   });
 
   test("uploadAsset detects tar.gz and creates job", async () => {

@@ -1,6 +1,6 @@
 # ADR-013: Static Site Hosting from Archive Assets
 
-- **Status:** Accepted — Part A implemented; Parts B and C proposed
+- **Status:** Accepted — Part A and B1 implemented; the rest of Part B and Part C proposed
 - **Date:** 2026-09-11
 - **Deciders:** @rot1024
 - **Related:** ADR-014 (asset access control: `restricted` mode, grants, signed URLs, API keys)
@@ -138,7 +138,7 @@ the procurement conversations in ROADMAP Phase 6). The extractor writes
 nothing to local disk, so non-root needs no volume. Image size is ~12.6 MB,
 essentially the binary.
 
-## Part B — Site hosts (proposed)
+## Part B — Site hosts (B1 implemented; B2–B7 proposed)
 
 Part B introduces one new concept, the **site host**: a hostname under the
 service's wildcard suffix (or a customer's own domain) that serves exactly
@@ -146,7 +146,7 @@ one asset's files at `/`. Everything else in this part — IDs, names,
 publish state, previews, custom domains — is a rule for how a hostname
 resolves to an asset and a version.
 
-### B1. Per-asset origin
+### B1. Per-asset origin (implemented)
 
 Root-relative paths and origin isolation are one problem with one fix:
 serve each asset from its own hostname.
@@ -156,25 +156,57 @@ https://{assetId}.serve.reearth.land/           → /files/{assetId}/
 https://{versionId}.serve.reearth.land/         → /files/{versionId}/   (pinned)
 ```
 
-- **Routing.** A middleware in `core/app.ts` runs before the router. When
+- **Routing.** `core/site/middleware.ts`, registered first in `core/app.ts`
+  — before the OIDC and session middlewares and before every route. When
   the request's `Host` ends with the configured suffix, it takes the
   leading label, resolves it to an asset (and optionally a version) per
-  B2–B4, and rewrites the path to `/files/{id}{path}`. Nothing below the
-  middleware changes.
+  B2–B4, and dispatches the request, path rewritten to `/files/{id}{path}`
+  and query string intact, into a second Hono instance that carries file
+  delivery *and nothing else*. A file-only router rather than a path guard
+  on the main app: "no API route can match here" is then a property of the
+  router, not a rule to remember when adding a route. The resolver is a
+  seam (`SiteHostResolver`) so B2's table lookup and B4's `--` split slot in
+  without the middleware growing a branch per host kind. Nothing below it
+  changes, except that the file handler adds `X-Robots-Tag: noindex` when a
+  site host resolved to a version ID (B4) — it already knows whether the URL
+  is pinned, so this costs no second lookup — and the middleware strips the
+  `/files/{id}` prefix back out of the directory-redirect `Location` (A1).
+  Each runtime entrypoint routes by path before the app sees the request
+  (`/api/*` and `/files/*` on both; `/internal/cron` on Node, React Router
+  SSR on the Worker), so both also send everything on a site host to the
+  app — otherwise the UI would answer at `{assetId}.serve.reearth.land/`.
 - **Configuration.** `SITE_HOST_SUFFIX` (e.g. `.serve.reearth.land`;
-  `.localhost:8787` for local development) names the suffix. Unset
-  disables site hosts entirely, so the Node runtime and tests opt in
-  explicitly.
+  `.localhost:8787` for local development) names the suffix, in both
+  composition roots. It must start with a dot — without one,
+  `notserve.reearth.land` would match a suffix of `serve.reearth.land` —
+  and it is compared against the `Host` header verbatim, port included. A
+  suffix without the dot fails at startup rather than silently disabling
+  the feature. Unset disables site hosts entirely, so the Node runtime and
+  tests opt in explicitly. On Cloudflare the variable stays commented out
+  in `wrangler.toml` until the zone-side work below is done: a `siteUrl`
+  that does not resolve is worse than no `siteUrl`.
+- **Anything else on the host is `404`.** A label that is not ID-shaped
+  gets `404` with `Content-Type: text/plain`, the body `Not found` and
+  `Cache-Control: no-store` — no JSON error (there is no API here) and
+  nothing cached, since B2 can make the name resolvable at any moment.
+- **No session on a site host.** The OIDC and session middlewares are
+  skipped there, as they are for `/api/internal/*`: a hosted page is pure
+  file delivery, and minting an anonymous session per page view would burn
+  a KV write for an identity nothing reads.
 - **Zone-side work.** On the `reearth.land` zone: a proxied `*.serve` DNS
-  record and a certificate covering `*.serve.reearth.land`. A wildcard on
-  the apex certificate covers one level only (`*.reearth.land`), so
-  `serve` needs its own Advanced Certificate or Total TLS. One-time
-  console/Terraform steps, documented under `docs/deploy`, not in code.
-  The one-level limit is also why every host form below is a single
-  label — see B4 for the `--` separator that follows from it.
+  record, a certificate covering `*.serve.reearth.land`, and a Worker route
+  for `*.serve.reearth.land/*` (`routes` in `wrangler.toml` stays
+  apex-only, so a half-configured wildcard never serves TLS errors to
+  visitors). A wildcard on the apex certificate covers one level only
+  (`*.reearth.land`), so `serve` needs its own Advanced Certificate or
+  Total TLS. One-time console/Terraform steps, listed in the commented-out
+  `SITE_HOST_SUFFIX` block in `wrangler.toml`, not in code. The one-level
+  limit is also why every host form below is a single label — see B4 for
+  the `--` separator that follows from it.
 - **Absolute paths resolve.** `/assets/app.js` on `abc.serve.reearth.land`
-  is `/files/abc/assets/app.js`. Until this lands, the README instructs
-  users to build with a relative base (Vite `base: './'`).
+  is `/files/abc/assets/app.js`. Where site hosts are not enabled, the
+  README still instructs users to build with a relative base (Vite
+  `base: './'`).
 - **Isolation.** Each hosted site is its own origin: a page can read its
   own `localStorage` and nothing else. The API and the future Web UI stay
   on the apex. This removes the standing hazard that any uploaded HTML runs
@@ -195,9 +227,13 @@ https://{versionId}.serve.reearth.land/         → /files/{versionId}/   (pinne
   ID hosts *do* honour is the asset's access mode (B7): a
   password-protected asset is protected on every URL form, or it is not
   protected at all.
-- **Upload response** gains a `siteUrl` next to `url`; the CLI prints it
-  for archive uploads. IDs are 16 lowercase hex characters and therefore
-  valid DNS labels as-is.
+- **Upload response** gains a `siteUrl` next to `url` — only for archive
+  assets, and only where `SITE_HOST_SUFFIX` is set; the scheme follows
+  `BASE_URL`. The CLI prints it as a second line (`Site: …`), leaving the
+  file URL first so existing scripts keep working. IDs are 16 lowercase hex
+  characters and therefore valid DNS labels as-is; the resolver requires
+  exactly that shape, which is what lets B2 test the ID form before
+  touching the table (B6).
 - **Cache keys.** Cloudflare caches by full URL, so
   `abc.serve.reearth.land/x` and `serve.reearth.land/files/abc/x` are
   separate entries for the same bytes. Acceptable: the site host is the
@@ -658,10 +694,11 @@ case: tile viewers and data consumers rely on `404` for missing entries.
 
 ## Follow-ups
 
-1. **B1** per-asset origin — the one change that turns "works with a
-   relative base" into "works with any build". Wildcard DNS record and
-   certificate on the zone, `SITE_HOST_SUFFIX`, `Host` rewrite middleware
-   that serves nothing but files on site hosts.
+1. ~~**B1** per-asset origin~~ — done: `SITE_HOST_SUFFIX`, the `Host`
+   rewrite middleware that serves nothing but files on site hosts, and
+   `siteUrl` on archive uploads. Remaining and deliberately outside the
+   code: the wildcard DNS record, the certificate and the Worker route on
+   the zone, after which the variable is uncommented in `wrangler.toml`.
 2. **B2, B3, B6** named sites with publish state — `site_hosts` table,
    validation and reserved list, disable/enable, release cooldown, hosts
    API and `asset host` CLI, event-log entries.

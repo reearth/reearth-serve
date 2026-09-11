@@ -9,6 +9,7 @@ import { workspaceRoutes } from "./workspace/handler";
 import { meRoutes } from "./me/handler";
 import { authMiddleware } from "./auth/middleware";
 import { sessionMiddleware } from "./session/middleware";
+import { siteHostMiddleware } from "./site/middleware";
 import type { AppEnv, Deps } from "./types";
 
 /**
@@ -20,6 +21,19 @@ import type { AppEnv, Deps } from "./types";
  */
 export function createApp(deps: Deps) {
   const app = new Hono<AppEnv>();
+
+  // Site hosts (ADR-013 B1). First of all the middlewares and ahead of every
+  // route: a request whose Host is `{id}{SITE_HOST_SUFFIX}` must resolve
+  // through file delivery and nothing else, so it is dispatched into a
+  // file-only app instead of continuing down this router. It also runs before
+  // OIDC and session tracking — a hosted page is pure file delivery, and
+  // minting an anonymous session per page view would burn a KV write for an
+  // identity nothing reads.
+  const site = siteApp(deps);
+  app.use("*", siteHostMiddleware({
+    suffix: deps.siteHostSuffix,
+    serve: (req) => site.fetch(req),
+  }));
 
   // Authentication middleware (JWKS cache comes from deps).
   //
@@ -37,27 +51,7 @@ export function createApp(deps: Deps) {
   app.use("*", exceptInternalApi(sessionMiddleware(deps.sessions, deps.sessionTtlSeconds)));
 
   // Inject dependencies into all routes
-  app.use("*", async (c, next) => {
-    c.set("metadata", deps.metadata);
-    c.set("versions", deps.versions);
-    c.set("storage", deps.storage);
-    c.set("uploadSessions", deps.uploadSessions);
-    c.set("presignedUrls", deps.presignedUrls);
-    c.set("jobs", deps.jobs);
-    c.set("ttlSeconds", deps.ttlSeconds);
-    c.set("baseUrl", deps.baseUrl);
-    c.set("authorizer", deps.authorizer);
-    c.set("projects", deps.projects);
-    c.set("workspaces", deps.workspaces);
-    c.set("members", deps.members);
-    c.set("extractionQueue", deps.extractionQueue);
-    c.set("thumbnailQueue", deps.thumbnailQueue);
-    c.set("writes", deps.writes);
-    c.set("storageUsage", deps.storageUsage);
-    c.set("pendingCleanup", deps.pendingCleanup);
-    c.set("anonymousUploadEnabled", deps.anonymousUploadEnabled);
-    await next();
-  });
+  app.use("*", injectDeps(deps, { siteHost: false }));
 
   // Public API (versioned)
   app.get("/api/v1/health", (c) => c.json({ ok: true, anonymousUploadEnabled: deps.anonymousUploadEnabled }));
@@ -107,6 +101,48 @@ export function createApp(deps: Deps) {
   app.get("/api/v1/docs", Scalar({ url: "/api/v1/doc" }));
 
   return app;
+}
+
+/**
+ * The router a site host is served by (ADR-013 B1): file delivery and nothing
+ * else. It is a separate Hono instance rather than a path guard on the main
+ * app because "no API route can match here" is then a property of the router,
+ * not of a rule someone has to remember when adding a route.
+ */
+function siteApp(deps: Deps) {
+  const app = new Hono<AppEnv>();
+  // No auth and no session middleware: a hosted page is capability-URL file
+  // delivery, and the handlers below read neither `user` nor `sessionId`.
+  app.use("*", injectDeps(deps, { siteHost: true }));
+  app.route("/files", fileRoutes);
+  return app;
+}
+
+/** Request-independent collaborators, read off the context by every handler. */
+function injectDeps(deps: Deps, opts: { siteHost: boolean }): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
+    c.set("metadata", deps.metadata);
+    c.set("versions", deps.versions);
+    c.set("storage", deps.storage);
+    c.set("uploadSessions", deps.uploadSessions);
+    c.set("presignedUrls", deps.presignedUrls);
+    c.set("jobs", deps.jobs);
+    c.set("ttlSeconds", deps.ttlSeconds);
+    c.set("baseUrl", deps.baseUrl);
+    c.set("authorizer", deps.authorizer);
+    c.set("projects", deps.projects);
+    c.set("workspaces", deps.workspaces);
+    c.set("members", deps.members);
+    c.set("extractionQueue", deps.extractionQueue);
+    c.set("thumbnailQueue", deps.thumbnailQueue);
+    c.set("writes", deps.writes);
+    c.set("storageUsage", deps.storageUsage);
+    c.set("pendingCleanup", deps.pendingCleanup);
+    c.set("anonymousUploadEnabled", deps.anonymousUploadEnabled);
+    c.set("siteHostSuffix", deps.siteHostSuffix);
+    c.set("siteHost", opts.siteHost);
+    await next();
+  };
 }
 
 /**
