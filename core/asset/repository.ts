@@ -78,7 +78,12 @@ export interface VersionStore {
    * would read every newer version to find it.
    */
   findByAssetAndNumber(assetId: string, version: number): Promise<AssetVersion | null>;
-  update(id: string, patch: Partial<Pick<AssetVersion, 'status' | 'userMeta'>>): Promise<void>;
+  /**
+   * `hosting` is ADR-013 C3's parsed `_headers` / `_redirects`. It is *system*
+   * metadata, written only by the extraction-completion hook and never by the
+   * PATCH route, which is why it sits beside `userMeta` here rather than in it.
+   */
+  update(id: string, patch: Partial<Pick<AssetVersion, 'status' | 'userMeta' | 'hosting'>>): Promise<void>;
   delete(id: string): Promise<void>;
   deleteByAssetId(assetId: string): Promise<{ totalSize: number; count: number }>;
   count(assetId: string): Promise<number>;

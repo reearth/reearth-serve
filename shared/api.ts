@@ -70,6 +70,41 @@ export const createProjectBodySchema = z.object({
   workspaceId: z.string().optional(),
 });
 
+// --- Site hosting rules (ADR-013 C3) ---
+
+/**
+ * One block of `_headers`: a path pattern and the headers it adds. Header
+ * names are lowercased at parse time; values are verbatim.
+ */
+export const siteHeaderRuleSchema = z.object({
+  pattern: z.string(),
+  headers: z.record(z.string(), z.string()),
+});
+
+/** One line of `_redirects`. `status` 200 is a rewrite, not a redirect. */
+export const siteRedirectRuleSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+  status: z.number(),
+  /** `!` in the file: apply even when `from` exists as a file. */
+  force: z.boolean(),
+});
+
+/**
+ * The parsed contents of an archive's `_headers` and `_redirects`, stored as
+ * system metadata on the version the extraction produced (ADR-013 C3).
+ *
+ * System metadata, never `userMeta`: a caller that PATCHed its own metadata
+ * would otherwise silently delete the site's routing. `warnings` is why a rule
+ * the author wrote is not in the list, and is the whole reason this is visible
+ * in the API at all.
+ */
+export const siteHostingSchema = z.object({
+  headers: z.array(siteHeaderRuleSchema),
+  redirects: z.array(siteRedirectRuleSchema),
+  warnings: z.array(z.string()),
+});
+
 // --- Asset ---
 
 export const assetVersionSchema = z.object({
@@ -89,6 +124,12 @@ export const assetVersionSchema = z.object({
   extractedSize: z.number().optional(),
   jobId: z.string().optional(),
   userMeta: z.record(z.string(), z.unknown()).optional(),
+  /**
+   * `_headers` / `_redirects` as parsed at extraction time (ADR-013 C3).
+   * Read-only system metadata — it lives in the version's `meta` column, which
+   * is exactly what ADR-005's system/user split reserves for fields serve owns.
+   */
+  hosting: siteHostingSchema.optional(),
 });
 
 export const assetMetadataSchema = z.object({
@@ -130,6 +171,13 @@ export const assetMetadataSchema = z.object({
    * PATCHes the whole object would silently turn the flag off.
    */
   spa: z.boolean().optional(),
+  /**
+   * `_headers` / `_redirects` for an archive that has no version row
+   * (ADR-013 C3). A first upload creates only the asset — versions start at the
+   * second — so the rules of a one-version site have nowhere else to live. When
+   * a version does carry them, the version's win.
+   */
+  hosting: siteHostingSchema.optional(),
 });
 
 export const assetUploadResultSchema = z.object({
@@ -366,6 +414,9 @@ export type UpdateMemberBody = z.infer<typeof updateMemberBodySchema>;
 export type Project = z.infer<typeof projectSchema>;
 export type CreateProjectBody = z.infer<typeof createProjectBodySchema>;
 export type AssetAccess = z.infer<typeof assetAccessSchema>;
+export type SiteHeaderRule = z.infer<typeof siteHeaderRuleSchema>;
+export type SiteRedirectRule = z.infer<typeof siteRedirectRuleSchema>;
+export type SiteHosting = z.infer<typeof siteHostingSchema>;
 export type AssetType = z.infer<typeof assetTypeSchema>;
 export type AssetStatus = z.infer<typeof assetStatusSchema>;
 export type ArchiveFormat = z.infer<typeof archiveFormatSchema>;

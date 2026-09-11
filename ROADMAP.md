@@ -189,9 +189,11 @@ Upload a `.zip` archive; the server extracts it and serves the contents as a dir
 
 ---
 
-### Phase 1.5 — Frontend Hosting (AI-generated apps, one zip → one site)
+### Phase 1.5 — Frontend Hosting (AI-generated apps, one zip → one site) ✅
 
-Municipal and enterprise users increasingly generate frontend apps with AI but have no Netlify / Cloudflare Pages to put them on. Serve already extracts and serves archives; this phase closes the gap to "upload a zip, get a working site". Design: [ADR-013](./docs/adr/013-static-site-hosting.md) (Part A, B1–B5, most of B6, B7's `password` mode, C1 and C2 implemented; B7's `members` mode and C3 proposed).
+Municipal and enterprise users increasingly generate frontend apps with AI but have no Netlify / Cloudflare Pages to put them on. Serve already extracts and serves archives; this phase closes the gap to "upload a zip, get a working site". Design: [ADR-013](./docs/adr/013-static-site-hosting.md) (Parts A–C implemented).
+
+**One caveat on the tick:** B7's `members` mode is still open, and deliberately so — it waits on the OIDC integration listed in Phase 2. Everything else in Parts A, B and C is built; B6's event-log entries wait on an event store (ADR-007), which no phase has yet.
 
 **Part A — delivery semantics** ✅
 
@@ -214,7 +216,7 @@ Municipal and enterprise users increasingly generate frontend apps with AI but h
 
 - [x] C1 SPA fallback — `spa` on the asset (a flat 0/1 column, like `access`, not a key in caller-owned `userMeta`): an extensionless miss inside an extracted archive serves the root `index.html` at `200` with the moving HTML cache policy, on every URL form. Withheld from file-shaped paths (`\.[a-z0-9]{1,8}$`) so a missing tile or chunk still 404s, and it runs only after the access check and the directory-redirect probe. Independently, a root `404.html` answers any remaining miss with status `404`, `no-store` and no `ETag`. Archive assets in a project only. `PATCH /api/v1/assets/:id {spa}` and `asset update <id> --spa on|off`. **Ops:** migration `0007_asset_spa.sql` must be applied
 - [x] C2 CLI directory upload — `upload ./dist [--site] [--name <slug>] [--password]` zips, uploads, configures and claims in one step. A dependency-free **stored** zip writer (`cli/zip.ts`): forward-slash paths, `.DS_Store` / `Thumbs.db` / `.git` / `node_modules` skipped at any depth, symbolic links skipped with a warning, reproducible output, ZIP64 refused with a "zip it yourself" message past 4 GiB or 65 535 files. Uploaded as `<dirname>.zip` through the existing presigned/direct path, so it is an ordinary archive asset. The three flags are project-only and a demo upload gets a note rather than a server error
-- [ ] C3 `_headers` / `_redirects` — Netlify-style per-site header (CSP) and redirect rules
+- [x] C3 `_headers` / `_redirects` — Netlify-style control files at the archive root, read and parsed by the **Worker** when extraction completes and stored on the version (or, for a one-version asset, the asset) as system `meta.hosting`. `_headers`: path blocks with indented `Name: value` lines, exact / `:placeholder` / trailing-`*` patterns, and a denylist (`Cache-Control`, `ETag`, `Vary`, `Content-Type`, `Set-Cookie`, `Access-Control-*`, …) so the handler's own headers always win. `_redirects`: `from to [status]` with `301/302/307/308/200`, `:splat`, first-match-wins, and `!` for Netlify's forced (non-shadowing) form; **targets must be paths inside the same site**. Caps: 64 KB per file, 100 header rules × 20 headers, 2 KB per value, 500 redirect rules, 256 KB of stored JSON — past any of them the file is ignored and a warning is recorded, visible in `GET /api/v1/assets/:id/versions/:vid` and in `asset version show`. No migration: `meta` already exists on both rows
 
 ---
 

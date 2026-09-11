@@ -229,6 +229,30 @@ It is **opt-in**, because the default has to stay right for the other use case: 
 
 Independently of the flag, if the archive has a root **`404.html`** it is served — with status `404`, `Cache-Control: no-store` and no `ETag` — for any miss the SPA fallback did not take. The status stays `404`, so an error page cannot mislead a loader the way a `200` can. Site (archive) assets in a project only; the flag is a property of the asset, so it applies on every URL form (`/files/:id/…`, ID and named hosts, previews). See [ADR-013 C1](./docs/adr/013-static-site-hosting.md).
 
+**Headers and redirects.** Two Netlify-style control files at the root of the archive configure the site. They are read and parsed once, when extraction finishes, and stored on the version — so a redeploy replaces them and nothing is parsed per request. Neither file is ever served: `/_headers` and `/_redirects` answer `404` like any other miss.
+
+`_headers` attaches response headers to paths. A line starting with `/` opens a block; indented `Name: value` lines belong to it; `#` comments and blank lines are ignored. Patterns are an exact path, a trailing `/*` prefix wildcard, or `:placeholder` segments that match one segment each. Later rules override earlier ones for the same header.
+
+```
+/*
+  X-Frame-Options: DENY
+  Referrer-Policy: no-referrer
+/admin/*
+  Content-Security-Policy: default-src 'self'
+```
+
+`_redirects` is `from to [status]`, one rule per line, first match wins. The status is `301`, `302`, `307`, `308` or `200`; `200` is a **rewrite** — the other file's bytes are served at the requested URL, which is how a single-page app is routed (`/* /index.html 200` does the same job as `--spa on`, and the two can coexist). A trailing `!` makes a rule **forced**: without it the rule only fires when `from` is not a real file, so a catch-all rewrite never shadows the site's own assets. `:splat` in the target stands for whatever a trailing `*` matched, and `:name` for a `:name` segment.
+
+```
+/old-page   /new-page       301
+/blog/*     /news/:splat    301!
+/*          /index.html     200
+```
+
+Two things a rule may not do. It may not **redirect off the site**: targets must be paths inside the same archive (no `https://…`, no `//host`), because a site is served from a hostname Serve gave it and bouncing visitors elsewhere from that name is a phishing primitive. And it may not set a header delivery owns — `Cache-Control`, `ETag`, `Last-Modified`, `Vary`, `Content-Type`, `Content-Length`/`-Encoding`/`-Range`, `Accept-Ranges`, `Set-Cookie`, `WWW-Authenticate` or any `Access-Control-*` — since those are decided per request by the cache policy, the ETag machinery and the asset's access mode. `X-Robots-Tag` *is* allowed, though a preview host still forces `noindex`. Everything the files are actually for works: `Content-Security-Policy`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, `X-Content-Type-Options`, `Strict-Transport-Security`, `Link`.
+
+Limits: 64 KB per file, 100 header rules with at most 20 headers each, 2 KB per header value, 500 redirect rules, and 256 KB of parsed rules in total. Exceeding a size or count limit ignores that whole file (a half-applied rule set is worse than none); a single malformed or refused line only costs that line. Either way the reason is recorded and shown by `reearth-serve asset version show <assetId> <versionId>` and in `GET /api/v1/assets/:id/versions/:versionId` — a rule that was refused is invisible on the site itself, so that is where to look for it. See [ADR-013 C3](./docs/adr/013-static-site-hosting.md).
+
 **Site hosts.** With `SITE_HOST_SUFFIX` set (e.g. `.serve.reearth.land`), every asset also has its own hostname: `https://<assetId>.serve.reearth.land/` serves exactly what `/files/<assetId>/` serves, and a version ID in place of the asset ID gives a pinned, immutable preview (marked `X-Robots-Tag: noindex`). Root-relative paths resolve there, so the `base: './'` advice above is unnecessary once it is enabled, and each site is its own origin — a hosted page cannot reach the API, the UI or another asset same-origin. Nothing but files is reachable on a site host: `/api/v1/health` is looked up as a file inside the archive. Archive uploads get a `siteUrl` in the response and the CLI prints it. Enabling it needs zone-side setup (a wildcard DNS record, a certificate covering `*.serve.reearth.land`, and a Worker route) — see the comment in `wrangler.toml` and [ADR-013 B1](./docs/adr/013-static-site-hosting.md). Once a suffix is configured, **the apex is the only hostname that is not a site**: every other `Host` is looked up in the site-hosts table (custom domains cannot be recognised any other way) and answers a plain-text `404` if it has no row, so the UI, `/api/v1/health` and the docs are reachable on the apex alone.
 
 **Protecting a site.** A staging site or an internal dashboard can be put behind a shared password (ADR-013 B7):

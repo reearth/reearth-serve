@@ -22,8 +22,11 @@ import type { SqlClient, SqlValue } from "../../core/sql/port";
 import { rowToModel, modelToRow, encodeCursor, decodeCursor, queryAll, queryFirst } from "./helpers";
 
 // Meta keys: fields stored in the JSON `meta` column instead of dedicated columns.
-const ASSET_META_KEYS = ["contentEncoding", "originalSize", "archiveFormat", "fileCount", "extractedSize", "jobId"];
-const VERSION_META_KEYS = ["contentEncoding", "originalSize", "archiveFormat", "fileCount", "extractedSize", "jobId"];
+// `hosting` is ADR-013 C3's parsed `_headers` / `_redirects` — system metadata
+// in the ADR-005 sense, which is exactly what this column is for, so it needs
+// no migration and no new column.
+const ASSET_META_KEYS = ["contentEncoding", "originalSize", "archiveFormat", "fileCount", "extractedSize", "jobId", "hosting"];
+const VERSION_META_KEYS = ["contentEncoding", "originalSize", "archiveFormat", "fileCount", "extractedSize", "jobId", "hosting"];
 const JOB_META_KEYS = [
   "completedAt",
   "startedAt",
@@ -625,7 +628,7 @@ export class SqlVersionStore implements VersionStore {
     return parseVersionRow(row);
   }
 
-  async update(id: string, patch: Partial<Pick<AssetVersion, 'status' | 'userMeta'>>): Promise<void> {
+  async update(id: string, patch: Partial<Pick<AssetVersion, 'status' | 'userMeta' | 'hosting'>>): Promise<void> {
     const sets: string[] = [];
     const binds: SqlValue[] = [];
     let idx = 1;
@@ -637,6 +640,22 @@ export class SqlVersionStore implements VersionStore {
     if (patch.userMeta !== undefined) {
       sets.push(`user_meta = ?${idx++}`);
       binds.push(patch.userMeta ? JSON.stringify(patch.userMeta) : null);
+    }
+    if (patch.hosting !== undefined) {
+      // `meta` holds several system fields at once, so the column is read,
+      // merged and written back rather than overwritten — a plain SET would
+      // drop `contentEncoding`, `fileCount` and the rest. Two statements on a
+      // path that runs once per extraction; `json_set` would save one but ties
+      // the store to SQLite's JSON1 build in both runtimes.
+      const row = await queryFirst(this.db, "SELECT meta FROM asset_versions WHERE id = ?1", [id]);
+      if (!row) return;
+      let meta: Record<string, unknown> = {};
+      if (typeof row.meta === "string") {
+        try { meta = JSON.parse(row.meta) as Record<string, unknown>; } catch { meta = {}; }
+      }
+      meta.hosting = patch.hosting;
+      sets.push(`meta = ?${idx++}`);
+      binds.push(JSON.stringify(meta));
     }
 
     if (sets.length === 0) return;

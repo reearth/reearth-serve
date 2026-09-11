@@ -1,6 +1,6 @@
 # ADR-013: Static Site Hosting from Archive Assets
 
-- **Status:** Accepted — Part A, B1–B5, the resolution/API/CLI of B6, B7's `password` mode, C1 and C2 implemented; B7's `members` mode and C3 proposed
+- **Status:** Accepted — Parts A–C implemented (B7 `members` deferred)
 - **Date:** 2026-09-11
 - **Deciders:** @rot1024
 - **Related:** ADR-014 (asset access control: `restricted` mode, grants, signed URLs, API keys)
@@ -829,7 +829,7 @@ every URL form, cookie/Basic proof, `private` caching, credentialed CORS
   (there is still no event store — same gap as B6). `upload --password`
   landed with C2. `members` mode waits on the OIDC integration as specified.
 
-## Part C — Site behaviour and tooling (C1 and C2 implemented; C3 proposed)
+## Part C — Site behaviour and tooling (implemented)
 
 ### C1. SPA fallback and `404.html` (implemented)
 
@@ -967,13 +967,97 @@ command from `dist/` to URL" experience.
 - **`--site` sets the flat `spa` field**, not `hosting.spa` — see C1's
   notes.
 
-### C3. `_headers` and `_redirects`
+### C3. `_headers` and `_redirects` (implemented)
 
 Netlify-style files read from the archive root at extraction time and
 stored on the version as `meta.hosting`: `_headers` for per-path response
 headers (CSP, `X-Frame-Options`), `_redirects` for path rules. Applied in
 the handler; bounded in size and rule count. Rules cannot set
 `Cache-Control` or `ETag` (A2/A3 own those) or point outside the asset.
+
+**Implementation notes.**
+
+- **The Worker parses, not the container.** ADR-011's extractor streams
+  entries and must keep doing exactly that; teaching it a second file
+  format would put a header denylist and a rule-count cap in the one
+  process with no idea what a header means. The two files are extracted
+  like any other entry — verified: nothing in `worker.go` filters on a
+  name, and the root-folder prefix is already stripped by the time an
+  entry is written, so they land at the files root — and the Worker reads
+  them back from storage in `core/site/hosting.ts` when the internal
+  job-status route sees `completed`. That route is the **only** place a
+  job becomes `completed` (the Node runtime's only launcher is `none`, and
+  the cleanup cron can only fail a job), so the hook has one caller. No Go
+  change was needed.
+- **Where the rules live.** `hosting` is a key in the existing system
+  `meta` JSON column (ADR-005's system/user split), so there is **no
+  migration**: `asset_versions.meta` and `assets.meta` already exist and
+  `rowToModel` already merges them into the model. It surfaces as
+  `version.hosting` rather than `version.meta.hosting` because that is how
+  every other system-meta field (`fileCount`, `jobId`, `contentEncoding`)
+  already surfaces; the storage location is exactly what the ADR named.
+- **Deviation: the asset row is a second home.** A *first* upload creates
+  no version row — versions start at the second (`POST /api/v1/assets/:id`)
+  — and that first upload is precisely the `upload ./dist` path C3 exists
+  for. So the hook writes to the version when the job names one and to the
+  asset otherwise, and `hostingFor(asset, version)` reads
+  `version.hosting ?? asset.hosting`: the same "versioned first, legacy
+  second" order `locate()` already uses for the bytes. The asset-row case
+  rides the same atomic write as the status mirror; the version case is a
+  second statement immediately after, since `saveJob` carries a job and an
+  asset and nothing else.
+- **Order in the handler.** After `resolveAccess` — a protected site's
+  redirect map must not be probeable without the password — then: the two
+  control files answer `404`; forced (`!`) redirects; the A1 lookup; plain
+  redirects (Netlify's shadowing semantics: a rule only fires when `from`
+  is not a file); the directory-redirect probe; C1's fallbacks. A `200`
+  rule is a rewrite and rejoins the normal lookup, guarded to **one**
+  rewrite so a pair of rules cannot loop. `/* /index.html 200` is
+  therefore equivalent to C1's `spa` flag, and the two coexist.
+- **Handler wins, by construction.** Rule headers are applied to the
+  response the moment it is built, *before* the handler sets
+  `X-Robots-Tag`, `Vary` and CORS — so anything delivery decides overwrites
+  a rule that tried to decide it too. Everything already on the response by
+  then (`Cache-Control`, `ETag`, `Content-Type`, the framing headers) is on
+  the parser's denylist, along with `Set-Cookie`, `WWW-Authenticate` and
+  the whole `access-control-*` family (B7 owns CORS). `X-Robots-Tag` is
+  deliberately *allowed*: a production site may set its own robots policy,
+  and a preview host still wins because `noindex` goes on afterwards.
+  `Content-Type` is denied too — the extractor assigned it from the entry's
+  name (A4) and a rule that disagreed would make the same bytes mean two
+  things.
+- **Redirect targets are internal only.** Netlify allows an external
+  target because the name belongs to the site's owner either way; here a
+  site lives under `serve.reearth.land`, and letting an uploaded zip bounce
+  visitors off that name is a phishing primitive. `to` must be a rooted
+  path, not `//host`, no scheme, no backslash. A deliberate limit — if
+  external redirects are ever wanted they need a per-site opt-in, not a
+  line in a file anyone with upload rights can write.
+- **Caps.** 64 KB per file, 100 header rules, 20 headers per rule, 2 KB per
+  value, 500 redirect rules, 256 KB of stored JSON. Exceeding a *size or
+  count* cap ignores the whole file with one warning — a half-applied rule
+  set is worse than none, because the author cannot tell which half
+  survived. A single bad or denied line only costs that line. Every warning
+  is stored alongside the rules and is visible in
+  `GET /api/v1/assets/:id/versions/:vid` and in `asset version show`
+  (`Hosting: n header rule(s), m redirect rule(s)` plus one line per
+  warning) — a refused rule is invisible on the site itself, so this is the
+  only place it can be noticed.
+- **Responses that do not get rule headers:** the B7 auth page, the JSON
+  `404`, and the `410`/`503` site pages (which the middleware answers
+  before the handler runs). The C1 `index.html` fallback and the archive's
+  `404.html` *do* get them — they are the site's own content — and they are
+  matched against the path the visitor asked for, not the file that was
+  read, so a rule written for `/about` applies when `/about` is answered by
+  the shell.
+- **Tested in unit, not e2e**, for C1's reason: the Node e2e runtime has no
+  extraction container, so no archive there can contain a control file.
+  `core/site/rules.test.ts` covers the two grammars and every rejection,
+  `core/file/site-rules.test.ts` the delivery path against the real app,
+  and `core/site/hosting.test.ts` the completion hook through the real
+  internal route. No e2e was added: a version cannot be created with `meta`
+  directly, so there is nothing an e2e could set up that the unit suite
+  does not already exercise.
 
 ## Alternatives Considered
 
@@ -1122,6 +1206,11 @@ case: tile viewers and data consumers rely on `404` for missing entries.
    `upload <dir>`~~ — done: a dependency-free stored-zip writer
    (`cli/zip.ts`), the skip list, symlinks skipped, ZIP64 refused, and
    `--site` / `--name` / `--password` applied after the upload.
-6. **B5** custom domains; **C3** `_headers` / `_redirects`.
+6. ~~**B5** custom domains~~ — done. ~~**C3** `_headers` / `_redirects`~~ —
+   done: Worker-side parsing at job completion, `meta.hosting` on the
+   version (or the asset, for a one-version site), the header denylist,
+   internal-only redirect targets, `200` rewrites and `!` forcing, the
+   caps, and warnings surfaced in the version API and the CLI. No
+   migration.
 7. **B7** `members` access mode, once OIDC integration lands.
 8. Migrate `S3FileStorage` (when it exists) to return `etag`.

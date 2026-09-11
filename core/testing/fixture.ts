@@ -12,6 +12,7 @@ import { gzipSync } from "node:zlib";
 import { createApp } from "../app";
 import type { Deps } from "../types";
 import type { AssetMetadata, AssetVersion } from "../asset/model";
+import type { SiteHosting } from "../../shared/api";
 import type { AssetProtection, ListResult, MetadataStore, VersionStore } from "../asset/repository";
 import { hashPassword } from "../access/password";
 import type { Session, SessionStore } from "../session/repository";
@@ -131,7 +132,23 @@ export class MemoryVersionStore implements VersionStore {
     const all = (await this.findByAssetId(assetId)).items;
     return all.find((v) => v.version === version) ?? null;
   }
-  async update(): Promise<void> {}
+  /**
+   * The patch the SQL store applies. It was a no-op while nothing read a
+   * mutable version field; ADR-013 C3's `hosting` is read by the file handler
+   * on every request, so a test that completes a job has to see it afterwards.
+   */
+  async update(
+    id: string,
+    patch: Partial<Pick<AssetVersion, "status" | "userMeta" | "hosting">>,
+  ): Promise<void> {
+    const version = this.versions.get(id);
+    if (!version) return;
+    const next = { ...version };
+    if (patch.status !== undefined) next.status = patch.status;
+    if (patch.userMeta !== undefined) next.userMeta = patch.userMeta;
+    if (patch.hosting !== undefined) next.hosting = patch.hosting;
+    this.versions.set(id, next);
+  }
   async delete(id: string): Promise<void> {
     this.versions.delete(id);
   }
@@ -260,6 +277,40 @@ export async function seedNotFoundPage(
     "text/html; charset=utf-8",
     body.length,
   );
+}
+
+/**
+ * Put an extra entry at a path inside the seeded archive's active version.
+ *
+ * The delivery suites need a second file more often than they need a second
+ * asset: a rewrite target, a control file the handler must refuse to serve.
+ */
+export async function seedEntry(
+  storage: MemoryFileStorage,
+  path: string,
+  body: string,
+  contentType = "text/html; charset=utf-8",
+): Promise<void> {
+  await storage.put(
+    `assets/${ASSET_ID}/v/${VERSION_ID}/files/${path}`,
+    stream(bytes(body)),
+    contentType,
+    body.length,
+  );
+}
+
+/**
+ * Put parsed `_headers` / `_redirects` rules on the seeded version
+ * (ADR-013 C3), the way the extraction-completion hook would.
+ */
+export function seedHosting(
+  versions: MemoryVersionStore,
+  hosting: SiteHosting,
+  versionId = VERSION_ID,
+): void {
+  const version = versions.versions.get(versionId);
+  if (!version) throw new Error(`seedHosting: no version ${versionId}`);
+  versions.versions.set(versionId, { ...version, hosting });
 }
 
 /** A dependency the test does not expect to be touched; calling it fails loudly. */

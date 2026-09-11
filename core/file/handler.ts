@@ -12,6 +12,10 @@ import {
   accessModeOf, AUTH_PATH_SEGMENT, resolveAccess, type AccessDeps,
 } from "../access/resolve";
 import { SITE_PREVIEW_HEADER, type SitePreview } from "../site/middleware";
+import { hostingFor, isControlFile } from "../site/hosting";
+import {
+  applySiteHeaders, siteRedirect, siteRedirectResponse, targetFilePath,
+} from "./site-routing";
 import { parseRange, sliceStream } from "./stream";
 import {
   isThumbnailSize,
@@ -372,17 +376,70 @@ fileRoutes.on("GET", ["/:id", "/:id/", "/:id/:path{.+}"], async (c) => {
   // live under the legacy prefix, which is also the fallback when the
   // versioned key is missing.
   const layouts = version ? [versionedLayout(asset, version), legacyLayout(asset)] : [legacyLayout(asset)];
+  const isArchive = layouts.some((l) => l.archive);
+
+  // `_headers` / `_redirects` (ADR-013 C3). The rules were parsed once, at
+  // extraction time; this is all the request pays for them.
+  const hosting = isArchive ? hostingFor(asset, version) : null;
+
+  // The control files are the site's configuration, not its content. They are
+  // answered as a miss so an archive cannot publish its own rule set — and
+  // nothing else changes, including the file list API, which is tooling.
+  if (isArchive && isControlFile(filePath)) {
+    return decorate(c.json({ error: "File not found" }, 404));
+  }
+
+  // A forced rule (`!`) is consulted before the lookup, so it can shadow a file
+  // that exists. Ordering matters beyond that: `resolveAccess` already ran, so
+  // a protected site's redirect map cannot be probed without the password.
+  let servePath = filePath;
+  let rewritten = false;
+  if (hosting) {
+    const forced = siteRedirect(hosting, servePath, "force");
+    if (forced) {
+      if (forced.status === 200) {
+        servePath = targetFilePath(forced.to);
+        rewritten = true;
+      } else {
+        return decorate(siteRedirectResponse(forced, {
+          assetId: id, requestUrl: c.req.url, protected: isProtected,
+        }));
+      }
+    }
+  }
 
   let located: Located | null = null;
   for (const layout of layouts) {
-    located = await locate(storage, layout, filePath);
+    located = await locate(storage, layout, servePath);
     if (located) break;
+  }
+
+  // Plain rules apply only to a path that is not a file — Netlify's shadowing
+  // semantics — so they are consulted here, after the lookup missed and before
+  // the directory probe and C1's fallbacks.
+  if (!located && hosting) {
+    const fallbackRule = siteRedirect(hosting, servePath, "fallback");
+    if (fallbackRule && fallbackRule.status !== 200) {
+      return decorate(siteRedirectResponse(fallbackRule, {
+        assetId: id, requestUrl: c.req.url, protected: isProtected,
+      }));
+    }
+    // One rewrite, never a chain: a rule whose target is itself rewritten would
+    // be a loop with no natural end, and `!rewritten` is the whole guard.
+    if (fallbackRule && !rewritten) {
+      servePath = targetFilePath(fallbackRule.to);
+      rewritten = true;
+      for (const layout of layouts) {
+        located = await locate(storage, layout, servePath);
+        if (located) break;
+      }
+    }
   }
 
   if (!located) {
     // `/files/:id/docs` where `docs/index.html` exists: redirect to the slash
     // form so relative links inside the page resolve against the directory.
-    if (filePath !== "" && !filePath.endsWith("/") && (await hasIndex(storage, layouts, filePath))) {
+    if (servePath !== "" && !servePath.endsWith("/") && (await hasIndex(storage, layouts, servePath))) {
       const url = new URL(c.req.url);
       url.pathname = `${url.pathname}/`;
       return decorate(c.redirect(url.toString(), 301));
@@ -392,9 +449,11 @@ fileRoutes.on("GET", ["/:id", "/:id/", "/:id/:path{.+}"], async (c) => {
     // check, after the A1 lookup and after the directory-redirect probe, so a
     // protected asset is challenged before anything is served and a real
     // directory still redirects rather than rendering the app shell.
-    const fallback = await archiveFallback(storage, layouts, filePath, asset.spa === true);
+    const fallback = await archiveFallback(storage, layouts, servePath, asset.spa === true);
     if (!fallback) return decorate(c.json({ error: "File not found" }, 404));
-    if (fallback.kind === "notFound") return decorate(serve404Page(fallback.located));
+    if (fallback.kind === "notFound") {
+      return decorate(applySiteHeaders(serve404Page(fallback.located), hosting, servePath));
+    }
     // The SPA case rejoins the normal path below, so the index is served by
     // exactly the code a direct hit on `/index.html` takes: gzip passthrough,
     // ETag, conditional requests, the A2 cache policy and `noindex` on a
@@ -414,6 +473,11 @@ fileRoutes.on("GET", ["/:id", "/:id/", "/:id/:path{.+}"], async (c) => {
     }),
     storage,
   });
+
+  // `_headers` rules go on first, so everything the handler sets below — and
+  // everything `serveFile` already set — wins over a rule that named the same
+  // header (ADR-013 C3).
+  applySiteHeaders(res, hosting, servePath);
 
   // A preview host serves the same pages as the production name: same content,
   // several URLs, only one of which should be indexed (ADR-013 B4). That covers

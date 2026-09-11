@@ -59,7 +59,23 @@ export function formatVersion(v: AssetVersion): string {
   if (v.fileCount) lines.push(`Files:        ${v.fileCount}`);
   if (v.jobId) lines.push(`Job:          ${v.jobId}`);
   if (v.userMeta) lines.push(`User Meta:    ${JSON.stringify(v.userMeta)}`);
+  lines.push(...formatHosting(v.hosting));
   return lines.join("\n");
+}
+
+/**
+ * The `_headers` / `_redirects` summary (ADR-013 C3).
+ *
+ * Counts, then every warning on its own line: a rule the author wrote and the
+ * parser refused is invisible on the site itself, so the only place it can be
+ * noticed is here and in the API response this reads.
+ */
+function formatHosting(hosting: AssetVersion["hosting"]): string[] {
+  if (!hosting) return [];
+  const counts = `${hosting.headers.length} header rule(s), ${hosting.redirects.length} redirect rule(s)`;
+  const lines = [`Hosting:      ${counts}`];
+  for (const warning of hosting.warnings) lines.push(`  warning:    ${warning}`);
+  return lines;
 }
 
 export function formatJob(job: Job): string {
