@@ -1,5 +1,4 @@
-import { Hono } from "hono";
-import { cors } from "hono/cors";
+import { Hono, type Context } from "hono";
 import type { AppEnv } from "../types";
 import { decompressStream } from "../asset/compression";
 import type { AssetMetadata, AssetVersion, StoredFile } from "../asset/model";
@@ -7,6 +6,11 @@ import type { FileStorage } from "../asset/repository";
 import { resolveAssetVersion } from "../asset/usecase";
 import { legacyThumbKey, versionThumbKey } from "../asset/usecase/shared";
 import { cacheControlFor, etagMatches, representationEtag } from "./caching";
+import { addVary, applyCors, preflightResponse, type CorsPolicy } from "./cors";
+import { handleAuthSubmit } from "../access/form";
+import {
+  accessModeOf, AUTH_PATH_SEGMENT, resolveAccess, type AccessDeps,
+} from "../access/resolve";
 import { SITE_PREVIEW_HEADER, type SitePreview } from "../site/middleware";
 import { parseRange, sliceStream } from "./stream";
 import {
@@ -156,15 +160,58 @@ async function hasIndex(storage: FileStorage, layouts: Layout[], path: string): 
   return false;
 }
 
-// File delivery uses a URL-as-capability model by design (ROADMAP "file-layer
-// access control (URL visibility) — distinct from service-layer"). Knowing
-// the asset ID grants download; confidentiality relies on ID unguessability
-// and on enumeration endpoints (list APIs) being scoped to the caller, NOT on
-// request-time auth here. Do not add access checks without updating ROADMAP.
+// File delivery is **capability by default, access mode when the asset asks
+// for it** (ADR-013 B7; ADR-014 §5 generalises it).
+//
+// For a `public` asset — every asset unless someone protects it — nothing has
+// changed: knowing the ID grants the download, confidentiality rests on ID
+// unguessability and on the list APIs being scoped to the caller, and
+// `resolveAccess` costs one string comparison on a row already in hand. An
+// asset whose `access` is `password` is checked here, before any storage I/O,
+// on every URL form that reaches this router. Any *further* access check
+// belongs in `core/access/`, behind `resolveAccess`, not inline below.
 export const fileRoutes = new Hono<AppEnv>();
 
-// CORS only on file delivery routes
-fileRoutes.use("/*", cors({ origin: "*" }));
+/** What `resolveAccess` and the auth form need, off the request context. */
+function accessDeps(c: Context<AppEnv>): AccessDeps {
+  return {
+    metadata: c.get("metadata"),
+    kv: c.get("cache"),
+    signingSecret: c.get("signingSecret"),
+    // Set by the composition root when it builds the file-only site router, not
+    // read from a header: a visitor cannot claim to be on a site host.
+    siteHost: c.get("siteHost"),
+  };
+}
+
+// POST …/_serve/auth — the password form's endpoint (ADR-013 B7).
+//
+// Registered ahead of the catch-all and for POST only, which is what stops an
+// archive that happens to contain a file named `_serve/auth` from shadowing it:
+// that file is still served on GET, and file lookup never sees a POST. On a
+// site host the visitor posts to `/_serve/auth` and the site middleware
+// rewrites it to exactly this path.
+fileRoutes.post(`/:id/${AUTH_PATH_SEGMENT}`, async (c) => {
+  const asset = await c.get("metadata").find(c.req.param("id"));
+  if (!asset) return c.json({ error: "File not found" }, 404);
+  const res = await handleAuthSubmit(asset, c.req.raw, accessDeps(c));
+  // Null means the asset is not protected: there is no auth endpoint on a
+  // public asset, and saying so would confirm the ID.
+  return res ?? c.json({ error: "File not found" }, 404);
+});
+
+// Preflight. It carries no credentials and proves nothing, so it is answered
+// without an access check — but the policy it announces still depends on the
+// asset's mode, which costs one metadata read.
+fileRoutes.on("OPTIONS", ["/:id", "/:id/", "/:id/:path{.+}"], async (c) => {
+  // The same resolution the GET route does, so a version-ID URL announces the
+  // policy of the asset it belongs to rather than falling back to public.
+  const resolved = await resolveAssetVersion(c.get("metadata"), c.get("versions"), c.req.param("id"));
+  return preflightResponse(c.req.raw, {
+    protected: !!resolved && accessModeOf(resolved.asset) === "password",
+    origin: c.req.header("Origin") ?? null,
+  });
+});
 
 // GET /files/:id                 — single-file asset, or an archive's index.html
 // GET /files/:id/:filename       — serve single-file asset
@@ -184,20 +231,51 @@ fileRoutes.on("GET", ["/:id", "/:id/", "/:id/:path{.+}"], async (c) => {
 
   // Thumbnail dispatch (query parameter or _thumbs/ path).
   const thumb = detectThumbRequest(filePath, c.req.query("thumb"));
+  // Errors raised before the asset is known cannot know its mode, so they take
+  // the public policy: they disclose nothing, and a cross-origin caller should
+  // still be able to read the status.
+  const anonymousCors: CorsPolicy = { protected: false, origin: null };
   if (thumb === "invalid") {
-    return c.json({ error: "Invalid thumbnail size" }, 400);
+    const res = c.json({ error: "Invalid thumbnail size" }, 400);
+    applyCors(res.headers, anonymousCors);
+    return res;
   }
 
   // Resolve asset + version
   const resolved = await resolveAssetVersion(metadataStore, versions, id);
   if (!resolved) {
-    return c.json({ error: "File not found" }, 404);
+    const res = c.json({ error: "File not found" }, 404);
+    applyCors(res.headers, anonymousCors);
+    return res;
   }
 
   const { asset, version } = resolved;
 
+  // The access check (ADR-013 B7), before any storage I/O and before the
+  // thumbnail branch — a protected asset's thumbnail is as much of a leak as
+  // its index page. A challenge, a 429 or the fail-closed 503 all come back as
+  // the resolution's own response; only the CORS headers are added to it, so a
+  // browser fetch can read the 401 rather than seeing an opaque network error.
+  const access = await resolveAccess(asset, c.req.raw, accessDeps(c));
+  const corsPolicy: CorsPolicy = {
+    protected: accessModeOf(asset) === "password",
+    origin: c.req.header("Origin") ?? null,
+  };
+  if (access.kind === "challenge") {
+    applyCors(access.response.headers, corsPolicy);
+    return access.response;
+  }
+  const isProtected = access.protected;
+
+  /** Everything that leaves this route goes through here. */
+  const decorate = (res: Response): Response => {
+    if (isProtected) addVary(res.headers, "Cookie", "Authorization");
+    applyCors(res.headers, corsPolicy);
+    return res;
+  };
+
   if (thumb) {
-    return serveThumbnail(storage, asset, version, thumb);
+    return decorate(await serveThumbnail(storage, asset, version, thumb, isProtected));
   }
 
   // A URL that names a version ID is pinned: its bytes can never change, so
@@ -228,9 +306,9 @@ fileRoutes.on("GET", ["/:id", "/:id/", "/:id/:path{.+}"], async (c) => {
     if (filePath !== "" && !filePath.endsWith("/") && (await hasIndex(storage, layouts, filePath))) {
       const url = new URL(c.req.url);
       url.pathname = `${url.pathname}/`;
-      return c.redirect(url.toString(), 301);
+      return decorate(c.redirect(url.toString(), 301));
     }
-    return c.json({ error: "File not found" }, 404);
+    return decorate(c.json({ error: "File not found" }, 404));
   }
 
   const res = await serveFile(located, {
@@ -238,7 +316,11 @@ fileRoutes.on("GET", ["/:id", "/:id/", "/:id/:path{.+}"], async (c) => {
     rangeHeader,
     clientAcceptsGzip,
     ifNoneMatch: c.req.header("If-None-Match"),
-    cacheControl: cacheControlFor({ pinned, contentType: located.contentType }),
+    cacheControl: cacheControlFor({
+      pinned,
+      contentType: located.contentType,
+      protected: isProtected,
+    }),
     storage,
   });
 
@@ -249,7 +331,7 @@ fileRoutes.on("GET", ["/:id", "/:id/", "/:id/:path{.+}"], async (c) => {
   // `/files/…` path form are unaffected.
   if (c.get("siteHost") && (pinned || preview)) res.headers.set("X-Robots-Tag", "noindex");
 
-  return res;
+  return decorate(res);
 });
 
 async function serveThumbnail(
@@ -257,16 +339,20 @@ async function serveThumbnail(
   asset: { id: string },
   version: { id: string } | null,
   size: ThumbnailSize,
+  isProtected: boolean,
 ): Promise<Response> {
   const filename = thumbnailFilename(size);
   const key = version
     ? versionThumbKey(asset.id, version.id, filename)
     : legacyThumbKey(asset.id, filename);
   const file = await storage.get(key, undefined);
+  // A thumbnail is derived from the asset, so it follows the asset's mode
+  // (ADR-014 §1): protected assets get `private` here too.
+  const scope = isProtected ? "private" : "public";
   if (!file) {
     return new Response(JSON.stringify({ error: "Thumbnail not available" }), {
       status: 404,
-      headers: { "Content-Type": "application/json", "Cache-Control": "public, max-age=30" },
+      headers: { "Content-Type": "application/json", "Cache-Control": `${scope}, max-age=30` },
     });
   }
 
@@ -275,7 +361,7 @@ async function serveThumbnail(
     headers: {
       "Content-Type": THUMBNAIL_CONTENT_TYPE,
       "Content-Length": String(file.size),
-      "Cache-Control": "public, max-age=31536000, immutable",
+      "Cache-Control": `${scope}, max-age=31536000, immutable`,
     },
   });
 }

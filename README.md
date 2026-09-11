@@ -108,6 +108,7 @@ SSR on Node is out of scope, and any other path returns 404 saying so.
 | `BASE_URL` | `http://localhost:$PORT` | Public base URL used in generated file links |
 | `SQLITE_PATH` | `:memory:` | SQLite database file; in-memory by default |
 | `INTERNAL_API_SECRET` | (unset) | Shared secret for `/api/internal/*` and `POST /internal/cron`; unset ⇒ both refuse every request |
+| `SIGNING_SECRET` | (unset) | HMAC key for the password cookie of protected sites (ADR-013 B7); unset ⇒ protected assets answer 503 and protecting one is refused |
 | `ANONYMOUS_UPLOAD_ENABLED` | (unset) | `"true"` to allow uploads without a token |
 | `ASSET_TTL_SECONDS` | `3600` | TTL for assets that belong to no project |
 | `OIDC_ISSUER_URL` / `OIDC_AUDIENCE` | (unset) | JWT verification; unset ⇒ demo mode |
@@ -199,12 +200,28 @@ These endpoints require `Authorization: Bearer $INTERNAL_API_SECRET` — set it 
 | `HEAD` | any of the above | Headers only |
 | `GET` | `/files/:id/_thumbs/:size.webp` | Image thumbnail (`xs`/`sm`/`md`/`lg`) |
 | `GET` | `/files/:id/:filename?thumb=:size` | Same thumbnail, accessed via query parameter |
+| `POST` | `/files/:id/_serve/auth` | Password form of a protected asset (`/_serve/auth` on a site host) — sets the cookie and redirects back |
 
 Assets support **versioning** — uploading to an existing asset (`POST /api/v1/assets/:id`) creates a new version while keeping the asset ID and URL stable. Each asset can have an explicit active version; if unset, the latest version is served. File URLs (`/files/:id/:filename`) resolve the active/latest version automatically. Version IDs can also be used directly in file URLs. Demo mode assets (no project) auto-expire after 1 hour. Project assets are permanent. See [ADR-005](./docs/adr/005-asset-versioning.md).
 
 **Static site hosting.** Zip a built frontend (the `dist/` folder of a Vite/Next/Astro export — a single root folder is stripped automatically), upload it, and `/files/:id/` serves its `index.html`. Nested `index.html` files resolve on trailing-slash URLs, and a directory URL without the slash redirects to it so relative links keep working. The extractor assigns `Content-Type` for web payloads (HTML, JS/MJS, CSS, WASM, SVG, fonts, source maps, web manifests, media). Under `/files/:id/`, absolute-path references (`/assets/app.js`) do not resolve — build with a relative base (Vite `base: './'`), or enable site hosts below. See [ADR-013](./docs/adr/013-static-site-hosting.md).
 
 **Site hosts.** With `SITE_HOST_SUFFIX` set (e.g. `.serve.reearth.land`), every asset also has its own hostname: `https://<assetId>.serve.reearth.land/` serves exactly what `/files/<assetId>/` serves, and a version ID in place of the asset ID gives a pinned, immutable preview (marked `X-Robots-Tag: noindex`). Root-relative paths resolve there, so the `base: './'` advice above is unnecessary once it is enabled, and each site is its own origin — a hosted page cannot reach the API, the UI or another asset same-origin. Nothing but files is reachable on a site host: `/api/v1/health` is looked up as a file inside the archive. Archive uploads get a `siteUrl` in the response and the CLI prints it. Enabling it needs zone-side setup (a wildcard DNS record, a certificate covering `*.serve.reearth.land`, and a Worker route) — see the comment in `wrangler.toml` and [ADR-013 B1](./docs/adr/013-static-site-hosting.md). Once a suffix is configured, **the apex is the only hostname that is not a site**: every other `Host` is looked up in the site-hosts table (custom domains cannot be recognised any other way) and answers a plain-text `404` if it has no row, so the UI, `/api/v1/health` and the docs are reachable on the apex alone.
+
+**Protecting a site.** A staging site or an internal dashboard can be put behind a shared password (ADR-013 B7):
+
+```bash
+reearth-serve asset protect <assetId> --password   # prompts twice, never echoes
+reearth-serve asset protect <assetId> --off        # remove it
+```
+
+- **What a visitor sees.** A branded password page (`401`, `no-store`, `noindex`) with a form that posts to `/_serve/auth` on the site host (or `/files/<id>/_serve/auth` on the apex). On success the response sets an `HttpOnly` cookie good for 7 days and sends the visitor back where they were. Changing the password signs everyone out — the cookie carries a version that the change increments.
+- **Tools use HTTP Basic.** `curl -u :<password> …`, QGIS, Cesium's `Resource` headers and `file cp --password` all work: the username is ignored and only the password is checked. A request that does not look like a browser navigation (no `text/html` in `Accept`) gets `401` with `WWW-Authenticate: Basic` and a JSON body instead of the page, so a client that knows what to do with the header sees it — and a browser does not, which is what keeps the native credential dialog from covering the branded page.
+- **It is a property of the asset, not of one hostname.** Every URL form is protected at once: `/files/<id>/…`, `<id>.serve…`, the named host, `v<n>--`/`latest--` previews, custom domains, thumbnails, `Range` requests and `HEAD`. Protecting only the pretty hostname would be theatre — the asset ID is printed in every `siteUrl`.
+- **CORS caveat.** `Access-Control-Allow-Origin: *` cannot be combined with credentials, so a protected asset echoes the request's `Origin` and sets `Access-Control-Allow-Credentials: true`. A page embedding a protected tileset must fetch with `credentials: "include"` (or send Basic). Public assets keep `*`. This is the one place protection changes how an asset is consumed, which is why `access` is visible in the API response.
+- **Caching.** Responses keep their usual lifetimes but become `private`, with `Vary: Cookie, Authorization`, so no shared cache stores them.
+- **Limits.** Site (archive) assets in a project only — demo assets are always public, and protecting a plain dataset is [ADR-014](./docs/adr/014-asset-access-control.md)'s job. Ten wrong passwords from one IP in 15 minutes gets `429`. And it does not hide the asset's *existence*: a protected URL answers `401`, not `404`. A shared password is a speed bump for staging, not a control for sensitive data.
+- **Operator setup.** Set `SIGNING_SECRET` (`wrangler secret put SIGNING_SECRET`, or the env var on Node). Until it is set, protecting an asset is refused with `503` and an already-protected asset answers `503` rather than serving its bytes.
 
 **Named sites.** An ID-shaped host is correct but not printable, so an archive asset in a project can also be given a name:
 
@@ -277,6 +294,8 @@ npm run cli -- asset list --limit 50 --cursor <cursor>
 npm run cli -- asset show <id>
 npm run cli -- asset update <id> --description "My dataset" --user-meta '{"tag":"v1"}'
 npm run cli -- asset delete <id>
+npm run cli -- asset protect <id> --password    # prompts twice; protects a site
+npm run cli -- asset protect <id> --off         # public again
 
 # Versioning
 npm run cli -- asset upload <id> ./updated-data.geojson   # upload new version
@@ -298,6 +317,8 @@ npm run cli -- file sync <id> ./local           # hash-based diff sync
 npm run cli -- file sync --delete <id> ./local  # sync + remove extra local files
 npm run cli -- file thumb <id> --size xs        # download xs thumbnail (default md)
 npm run cli -- file thumb <id> --size md --url  # print URL without downloading
+npm run cli -- file cp -r <id>:. ./out --password   # protected asset: prompts, then sends Basic
+REEARTH_SERVE_SITE_PASSWORD=… npm run cli -- file sync <id> ./local   # same, non-interactive
 
 # Job management
 npm run cli -- job list

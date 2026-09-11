@@ -258,12 +258,54 @@ export function siteHostMiddleware(opts: SiteHostOptions): MiddlewareHandler<App
     headers.delete(SITE_PREVIEW_HEADER);
     if (target.preview) headers.set(SITE_PREVIEW_HEADER, target.preview);
 
-    // No body is carried over: only GET/HEAD reach the file router, and any
-    // other method 404s there, so re-streaming a body would be for nothing.
-    const res = await opts.serve(new Request(url, { method: c.req.raw.method, headers }));
+    const rewritten = await rewriteRequest(c.req.raw, url, headers);
+    if (!rewritten) return tooLargeResponse();
+    const res = await opts.serve(rewritten);
 
     return unrewriteLocation(res, prefix);
   };
+}
+
+/**
+ * The largest body the rewrite will carry, in bytes.
+ *
+ * The only `POST` a site host has is the password form (ADR-013 B7), which is a
+ * few hundred bytes. The body is buffered rather than streamed because a
+ * duplex request body is not portable across the two runtimes, and buffering
+ * only makes sense with a bound on it — otherwise a visitor could make the
+ * process hold an arbitrarily large upload for a route that does not exist.
+ */
+const MAX_REWRITTEN_BODY_BYTES = 64 * 1024;
+
+/**
+ * Build the request the file-only router is asked to serve.
+ *
+ * `GET`/`HEAD` have no body. Anything else is buffered, so the form endpoint
+ * can read it; a body over the cap yields null, which the caller turns into a
+ * `413`.
+ */
+async function rewriteRequest(
+  original: Request,
+  url: URL,
+  headers: Headers,
+): Promise<Request | null> {
+  const method = original.method;
+  if (method === "GET" || method === "HEAD") {
+    return new Request(url, { method, headers });
+  }
+  const declared = Number.parseInt(original.headers.get("Content-Length") ?? "", 10);
+  if (Number.isFinite(declared) && declared > MAX_REWRITTEN_BODY_BYTES) return null;
+
+  const body = await original.arrayBuffer();
+  if (body.byteLength > MAX_REWRITTEN_BODY_BYTES) return null;
+  return new Request(url, { method, headers, body });
+}
+
+function tooLargeResponse(): Response {
+  return new Response("Payload too large", {
+    status: 413,
+    headers: { "Content-Type": "text/plain; charset=utf-8", "Cache-Control": "no-store" },
+  });
 }
 
 /**

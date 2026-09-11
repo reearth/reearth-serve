@@ -26,6 +26,11 @@ class MemoryMetadataStore implements MetadataStore {
   async list(): Promise<{ items: AssetMetadata[]; cursor?: string }> {
     return { items: [...this.assets.values()] };
   }
+  // Access mode (ADR-013 B7): nothing here is protected.
+  async findProtection(): Promise<null> {
+    return null;
+  }
+  async setProtection(): Promise<void> {}
 }
 
 class MemorySessionStore implements SessionStore {
@@ -74,6 +79,7 @@ function fakeDeps(overrides: Partial<Deps> = {}): Deps {
     customHostnames: unused("customHostnames"),
     siteFallbackOrigin: undefined,
     cache: unused("cache"),
+    signingSecret: undefined,
     sessions: new MemorySessionStore(),
     sessionTtlSeconds: 60,
     internalApiSecret: undefined,

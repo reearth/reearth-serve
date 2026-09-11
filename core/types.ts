@@ -78,6 +78,17 @@ export type ContextDeps = {
    * may evict one at any time.
    */
   cache: KeyValue;
+  /**
+   * `SIGNING_SECRET` — the HMAC key the viewer-authentication cookie is signed
+   * with (ADR-013 B7). The name is the one ADR-014 §4 reserves for signed URLs,
+   * so both proofs share one deployment secret and one rotation.
+   *
+   * Undefined ⇒ protected assets fail closed: serving them `503` is the only
+   * safe answer, because no cookie could be minted or trusted, and handing the
+   * bytes out anyway would silently unprotect every protected asset the moment
+   * the secret went missing from an environment.
+   */
+  signingSecret: string | undefined;
 };
 
 /**

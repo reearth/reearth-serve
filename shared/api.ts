@@ -5,6 +5,16 @@ import { z } from "zod";
 export const assetTypeSchema = z.enum(["file", "archive"]);
 export const assetStatusSchema = z.enum(["pending", "ready", "extracting", "failed"]);
 export const archiveFormatSchema = z.enum(["zip", "tar", "tar.gz", "tar.bz2"]);
+/**
+ * How an asset's files are guarded (ADR-013 B7, ADR-014 §1).
+ *
+ * ADR-013 B7 writes the field as `hosting.access`; ADR-014 §1 declares the flat
+ * `access` field canonical and the two the same thing. The flat name is the one
+ * implemented — protection is a property of the asset, not of hosting, and
+ * ADR-014's `restricted` mode joins this enum without a shape change.
+ */
+export const assetAccessSchema = z.enum(["public", "password"]);
+
 export const jobTypeSchema = z.literal("archive-extraction");
 export const jobStatusSchema = z.enum(["pending", "running", "completed", "failed"]);
 
@@ -103,6 +113,12 @@ export const assetMetadataSchema = z.object({
   userMeta: z.record(z.string(), z.unknown()).optional(),
   currentVersion: assetVersionSchema.optional(),
   versionCount: z.number().optional(),
+  /**
+   * Access mode (ADR-013 B7). Visible to the caller because it changes how the
+   * asset is consumed — a protected asset needs a credentialed fetch. The
+   * password hash, its salt and its version are never exposed.
+   */
+  access: assetAccessSchema.optional(),
 });
 
 export const assetUploadResultSchema = z.object({
@@ -280,12 +296,30 @@ export const updateJobStatusBodySchema = z.object({
 
 // --- Asset update ---
 
+/** ADR-013 B7: the bounds a shared site password must fall within. */
+export const PASSWORD_MIN_LENGTH = 8;
+export const PASSWORD_MAX_LENGTH = 128;
+
 export const updateAssetBodySchema = z.object({
   description: z.string().optional(),
   userMeta: z.record(z.string(), z.unknown()).optional(),
   activeVersionId: z.string().nullable().optional(),
   expiresAt: z.number().optional(),
-});
+  /**
+   * Turn protection on or off (ADR-013 B7). `password` requires `password`;
+   * `public` forbids it, so "unprotect" cannot be typed as an accidental
+   * password change. Re-sending `password` with a new secret rotates it and
+   * bumps the version, which invalidates every outstanding cookie.
+   */
+  access: assetAccessSchema.optional(),
+  password: z.string().min(PASSWORD_MIN_LENGTH).max(PASSWORD_MAX_LENGTH).optional(),
+}).refine(
+  (body) => body.access !== "password" || body.password !== undefined,
+  { message: "access \"password\" requires a password", path: ["password"] },
+).refine(
+  (body) => body.password === undefined || body.access === "password",
+  { message: "password is only accepted with access \"password\"", path: ["password"] },
+);
 
 // --- Version update ---
 
@@ -315,6 +349,7 @@ export type AddMemberBody = z.infer<typeof addMemberBodySchema>;
 export type UpdateMemberBody = z.infer<typeof updateMemberBodySchema>;
 export type Project = z.infer<typeof projectSchema>;
 export type CreateProjectBody = z.infer<typeof createProjectBodySchema>;
+export type AssetAccess = z.infer<typeof assetAccessSchema>;
 export type AssetType = z.infer<typeof assetTypeSchema>;
 export type AssetStatus = z.infer<typeof assetStatusSchema>;
 export type ArchiveFormat = z.infer<typeof archiveFormatSchema>;

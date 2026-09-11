@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { PATHS } from "../shared/paths";
 import type { AssetMetadata, AssetVersion, Job } from "../shared/api";
-import { apiGet, apiPost, apiPatch, apiPut, apiDelete, output, formatAsset, formatJob, formatVersion, formatBytes } from "./helpers";
+import { apiGet, apiPost, apiPatch, apiPut, apiDelete, output, formatAsset, formatJob, formatVersion, formatBytes, promptPasswordTwice } from "./helpers";
 import { doUpload } from "./upload";
 import { registerFileCommands } from "./file";
 import { registerHostCommands } from "./host";
@@ -193,6 +193,50 @@ asset
       output(data, true);
     } else {
       console.log(formatAsset(data.asset));
+    }
+  });
+
+/**
+ * `asset protect <id> --password | --off` (ADR-013 B7).
+ *
+ * The password is only ever read from a prompt, twice, without echo. Not from
+ * an argument: a command line is visible in `ps`, in shell history and in CI
+ * logs. `--password` therefore takes no value, and a value passed anyway is
+ * refused rather than silently used.
+ */
+asset
+  .command("protect")
+  .description("Password-protect a site (archive) asset, or remove the protection")
+  .argument("<id>", "Asset ID")
+  .option("--password", "Prompt for a new password (never pass it on the command line)")
+  .option("--off", "Remove the protection: the site becomes public again")
+  .action(async (id: string, cmdOpts: { password?: boolean | string; off?: boolean }) => {
+    const opts = program.opts<{ endpoint: string; json: boolean }>();
+
+    if (typeof cmdOpts.password === "string") {
+      console.error(
+        "Error: --password takes no value. A password on the command line is visible in `ps`, " +
+        "in shell history and in CI logs; run `asset protect <id> --password` and type it at the prompt.",
+      );
+      process.exit(1);
+    }
+    if (!!cmdOpts.password === !!cmdOpts.off) {
+      console.error("Error: pass exactly one of --password or --off");
+      process.exit(1);
+    }
+
+    const body = cmdOpts.off
+      ? { access: "public" as const }
+      : { access: "password" as const, password: await promptPasswordTwice() };
+
+    const data = await apiPatch<{ asset: AssetMetadata }>(opts.endpoint, PATHS.asset(id), body);
+    if (opts.json) {
+      output(data, true);
+    } else if (cmdOpts.off) {
+      console.log("Protection removed: the asset is public again.");
+    } else {
+      console.log("Protected. Visitors now get a password page; tools can send HTTP Basic.");
+      console.log("Changing the password signs every existing visitor out.");
     }
   });
 

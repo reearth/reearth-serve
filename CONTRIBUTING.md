@@ -57,7 +57,10 @@ E2E_ENDPOINT=http://localhost:5173 npm run test:e2e
 
 `npm run test:e2e:node` starts `runtime/node` instead of wrangler and sets
 `E2E_PRESIGNED=false`, `E2E_CONTAINER=false` and `E2E_THUMBNAILS=false`, since
-that runtime has none of those three features. Everything else runs unchanged.
+that runtime has none of those three features. It also sets `SIGNING_SECRET`,
+without which the password-protection suite (`e2e/access.test.ts`) would be
+exercising the missing-secret path rather than the feature. Everything else
+runs unchanged.
 
 ### Container Tests (Go)
 
@@ -146,6 +149,7 @@ Set via `npx wrangler secret put <NAME>`:
 | `OIDC_ISSUER_URL` | No | OIDC Issuer URL for JWT authentication |
 | `OIDC_AUDIENCE` | No | JWT audience claim for token validation |
 | `CERBOS_ENDPOINT` | No | Cerbos PDP endpoint URL for authorization |
+| `SIGNING_SECRET` | No‡ | HMAC key for the viewer-authentication cookie of password-protected sites (ADR-013 B7), and the key ADR-014 §4 reserves for signed URLs. A secret (`wrangler secret put SIGNING_SECRET`), not a var |
 | `SITE_HOST_SUFFIX` | No | Wildcard suffix site hosts live under, e.g. `.serve.reearth.land` (ADR-013 B1). Unset ⇒ site hosts and custom domains are off. Set in `wrangler.toml` once the zone is ready |
 | `CF_API_TOKEN` | No† | Cloudflare API token with `Zone → SSL and Certificates: Edit` on the site-host zone, for Cloudflare for SaaS custom hostnames (ADR-013 B5) |
 | `CF_ZONE_ID` | No† | The zone the custom hostnames are registered on (ADR-013 B5) |
@@ -153,6 +157,10 @@ Set via `npx wrangler secret put <NAME>`:
 | `SITE_DNS_RESOLVER_URL` | No | DNS-over-HTTPS endpoint used for the custom-domain TXT check. Default `https://cloudflare-dns.com/dns-query` |
 
 \* Required for presigned URL uploads and archive extraction containers.
+
+‡ Required only to protect a site. Unset, an asset cannot be given a password
+(`503` on the PATCH) and one that already has one answers `503` instead of
+serving its bytes — fail closed, the same rule `INTERNAL_API_SECRET` follows.
 
 † Both or neither. With both, a verified custom domain is registered on the
 zone and gets a DV certificate automatically; with neither, the customer is

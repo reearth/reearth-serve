@@ -58,7 +58,15 @@ export function createApp(deps: Deps) {
   // the OIDC middleware there would try to verify that secret as a JWT and
   // reject every container callback with 401 as soon as an issuer is
   // configured — i.e. in production.
-  app.use("*", exceptInternalApi(authMiddleware(deps.auth)));
+  //
+  // `/files/*` is excluded for a second reason (ADR-013 B7): since password
+  // protection, `Authorization: Basic` is a meaningful credential there, and
+  // the OIDC middleware rejects every Authorization header that is not a
+  // Bearer token with 401 — so a `curl -u` against a protected asset would
+  // never reach the file handler that knows what to do with it. The same
+  // requests already bypass this middleware on a site host (B1: a hosted page
+  // is pure file delivery), and the apex path form should not differ.
+  app.use("*", exceptAuthless(authMiddleware(deps.auth)));
 
   // Anonymous session tracking (for unauthenticated users). Internal callers
   // are machines with their own credential; minting a demo session per
@@ -160,6 +168,7 @@ function injectDeps(deps: Deps, opts: { siteHost: boolean }): MiddlewareHandler<
     c.set("customHostnames", deps.customHostnames);
     c.set("siteFallbackOrigin", deps.siteFallbackOrigin);
     c.set("cache", deps.cache);
+    c.set("signingSecret", deps.signingSecret);
     c.set("siteHost", opts.siteHost);
     await next();
   };
@@ -179,6 +188,7 @@ function timingSafeEqual(a: string, b: string): boolean {
 }
 
 const INTERNAL_API_PREFIX = "/api/internal/";
+const FILES_PREFIX = "/files";
 
 /**
  * Run `mw` for every request except `/api/internal/*`. Internal callers
@@ -187,8 +197,25 @@ const INTERNAL_API_PREFIX = "/api/internal/";
  * have set are filled with `null` so the rest of the app can still read them.
  */
 function exceptInternalApi(mw: MiddlewareHandler<AppEnv>): MiddlewareHandler<AppEnv> {
+  return exceptPrefixes([INTERNAL_API_PREFIX], mw);
+}
+
+/**
+ * The same, plus `/files/*`: neither the internal API nor file delivery
+ * carries an end-user identity this middleware could establish.
+ */
+function exceptAuthless(mw: MiddlewareHandler<AppEnv>): MiddlewareHandler<AppEnv> {
+  return exceptPrefixes([INTERNAL_API_PREFIX, FILES_PREFIX], mw);
+}
+
+function exceptPrefixes(prefixes: string[], mw: MiddlewareHandler<AppEnv>): MiddlewareHandler<AppEnv> {
+  // A prefix must end at a segment boundary: `/files` exempts `/files` and
+  // `/files/…` but never a future `/filestore`, which would otherwise inherit
+  // an exemption nobody meant to give it.
+  const matches = (path: string, prefix: string) =>
+    path === prefix || path.startsWith(prefix.endsWith("/") ? prefix : `${prefix}/`);
   return async (c, next) => {
-    if (!c.req.path.startsWith(INTERNAL_API_PREFIX)) return mw(c, next);
+    if (!prefixes.some((prefix) => matches(c.req.path, prefix))) return mw(c, next);
     if (c.get("user") === undefined) c.set("user", null);
     if (c.get("sessionId") === undefined) c.set("sessionId", null);
     await next();

@@ -138,7 +138,7 @@ the procurement conversations in ROADMAP Phase 6). The extractor writes
 nothing to local disk, so non-root needs no volume. Image size is ~12.6 MB,
 essentially the binary.
 
-## Part B — Site hosts (B1–B5 implemented; B6 apart from its event log; B7 proposed)
+## Part B — Site hosts (B1–B5 implemented; B6 apart from its event log; B7's `password` mode implemented, `members` deferred)
 
 Part B introduces one new concept, the **site host**: a hostname under the
 service's wildcard suffix (or a customer's own domain) that serves exactly
@@ -615,7 +615,7 @@ is the kind of thing an audit asks about.
 - No events: `core/` has no event store yet. The two emit points are marked
   with `// ADR-007:` comments in `core/site/usecase.ts`.
 
-### B7. Viewer authentication: password-protected sites
+### B7. Viewer authentication: password-protected sites (`password` implemented; `members` deferred)
 
 "Put a password on it, like Basic auth" is the first thing a staging site
 or an internal dashboard needs. The requirement has three parts that are
@@ -735,6 +735,99 @@ and grants also cover purchasers of sold datasets.
 The pieces B7 fixes now — access mode as an asset property enforced on
 every URL form, cookie/Basic proof, `private` caching, credentialed CORS
 — are written so that ADR can add modes without redesigning the check.
+
+**Implementation notes.**
+
+- **The field is flat `access`, not `hosting.access`.** ADR-014 §1 declares
+  the flat field canonical and says the two names are the same field; it is
+  implemented as `access` on the asset row and on `AssetMetadata`, with
+  `PATCH /api/v1/assets/:id {"access": "password", "password": "…"}`. Nesting
+  it under `hosting` would have to be undone when ADR-014's `restricted`
+  lands, which applies to assets that are not sites at all.
+- **Limited to archive assets for now; general asset protection is deferred
+  to ADR-014 by decision on 2026-09-11.** Setting `password` on a single-file
+  asset is `400 "protection is available for site (archive) assets only"` —
+  the same rule named sites already apply (B2). Unprotecting is always
+  allowed, whatever the type. The field and the `resolveAccess` seam are
+  general, so lifting the restriction is one condition in
+  `core/asset/usecase/set-access.ts`.
+- **Project assets only**, as specified: a demo asset is `400 "protection
+  requires a project asset"`. Authorization is the existing asset `update`
+  action, so `owner`/`admin`/`editor` may protect and a `viewer` may not.
+- **`resolveAccess(asset, request, deps)`** lives in `core/access/resolve.ts`
+  and is called from `core/file/handler.ts` before any storage I/O, once, for
+  every path that serves bytes — files, index resolution, directory
+  redirects, thumbnails (`_thumbs/` and `?thumb=`), ranges, `HEAD` — and
+  therefore for every host form, since they all end in that handler. `public`
+  costs one string comparison on a row already loaded and no extra store
+  read; the unit suite asserts that with a counting fake.
+- **The browser heuristic.** A request whose `Accept` contains `text/html` is
+  treated as a browser navigation: it gets the `401` HTML page and
+  *deliberately no* `WWW-Authenticate`, so the browser renders our page
+  instead of stacking its native credential dialog on it. Everything else
+  gets `401` JSON `{"error":"authentication required"}` with
+  `WWW-Authenticate: Basic realm="reearth-serve", charset="UTF-8"`, which is
+  what makes `curl -u`, QGIS and `file cp --password` work. It fails in the
+  harmless direction: a client that sends `Accept: text/html` sees a form it
+  can ignore in favour of Basic.
+- **Cookie `rs_site_auth`**, value
+  `base64url(assetId · passwordVersion · exp · HMAC-SHA256(secret, the same three))`,
+  `HttpOnly; SameSite=Lax; Max-Age` 7 days, `Secure` except on plain-http
+  loopback (where a browser would drop it and local development would be
+  impossible). `Path=/` on a site host, `Path=/files/{assetId}` on the apex.
+- **`POST /_serve/auth`** on a site host, `POST /files/{assetId}/_serve/auth`
+  on the apex — the same route, because the site middleware rewrites the
+  former into the latter. It is registered ahead of the catch-all and for
+  `POST` only, so an archive containing a real file named `_serve/auth`
+  cannot shadow it: that file is still served on `GET`, and file lookup never
+  sees a `POST`. `next` is honoured only when it is a rooted same-origin path
+  (an absolute URL, `//host` and the backslash forms fall back), since an
+  open redirect on a password form is the classic phishing primitive. The
+  middleware now carries a request body through the rewrite, capped at 64 KB.
+- **Which requests are "on a site host"** is read from the context variable
+  the composition root sets when it builds the file-only router, never from a
+  request header — the same discipline the middleware applies to
+  `x-reearth-site-preview`, which it deletes off every incoming request
+  before setting it. A visitor cannot claim to be on a site host and move the
+  cookie's `Path` to `/`.
+- **`SIGNING_SECRET`** is the secret's name — the one ADR-014 §4 reserves for
+  signed URLs, so cookie and future signed URLs share one secret and one
+  rotation. It is set in both composition roots. Unset, `PATCH` to `password`
+  is `503` and a protected asset answers `503 "SIGNING_SECRET not
+  configured"` rather than serving its bytes.
+- **Password storage.** PBKDF2-SHA256 via WebCrypto, 600 000 iterations,
+  16-byte random salt, both base64. The work factor is encoded *inside* the
+  stored hash (`pbkdf2-sha256$600000$…`) so it can be raised without a
+  migration and old hashes still verify; the unit suite injects a low count
+  for speed and therefore exercises the same code path. The hash and salt are
+  deliberately **not** on `AssetMetadata` — they are read by their own
+  statement, for protected assets only — which makes "never in an API
+  response" a property of the store rather than a rule to remember at each
+  route. `password_version` starts at 0 and is incremented by the store's own
+  statement, so a rotation cannot hand back a version an outstanding cookie
+  still names.
+- **Rate limiting** counts failures per `(assetId, client IP)` in the
+  `KeyValue` port over 15 minutes; the eleventh attempt in a window is `429`
+  with `Retry-After`, for the form and for Basic alike, and the check runs
+  *before* the PBKDF2. The IP is `CF-Connecting-IP`, else the first hop of
+  `X-Forwarded-For`. With neither, all visitors of the asset share one bucket
+  with a deliberately looser limit (100), so one anonymous client cannot lock
+  a site's form for everyone.
+- **The OIDC middleware no longer runs on `/files/*`.** It rejects every
+  `Authorization` header that is not a Bearer token with `401`, so `curl -u`
+  against a protected asset never reached the file handler. Those requests
+  already bypassed it on a site host (B1: a hosted page is pure file
+  delivery) and the apex path form should not differ.
+- **CORS moved into the handler.** The blanket `cors()` middleware could not
+  express a policy that depends on the asset, because it runs before the row
+  is read. Public assets keep `Access-Control-Allow-Origin: *`; protected
+  ones echo `Origin` with `Access-Control-Allow-Credentials: true` and
+  `Vary: Origin`. Preflight is answered without an access check (it carries
+  no credentials) but announces the mode's policy, which costs one metadata
+  read.
+- **Not implemented here:** the ADR-007 event on a mode or password change
+  (there is still no event store — same gap as B6), and `upload --site
+  --password`. `members` mode waits on the OIDC integration as specified.
 
 ## Part C — Site behaviour and tooling (proposed)
 

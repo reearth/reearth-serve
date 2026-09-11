@@ -47,6 +47,11 @@ payment. A partner sells; Serve enforces what was sold.
 `access` on the asset (the `hosting.access` field of ADR-013 B7 is this
 field; B7 names it from the hosting side):
 
+> **Implemented since ADR-013 B7:** the flat `access` field exists on the
+> asset row and the API with `public` and `password`; `restricted` is still
+> this ADR's to add. Setting `password` is currently limited to archive
+> (site) assets — general asset protection is this ADR's work.
+
 | Mode | Who may read | Proof accepted |
 |------|--------------|----------------|
 | `public` (default) | anyone with the URL | none |
@@ -171,6 +176,11 @@ token = base64url( exp · scope · [grantee] · HMAC-SHA256(secret, id · scope 
 ### 5. Enforcement in the file handler
 
 One function, `resolveAccess(asset, request)`, before any storage I/O:
+
+> **Implemented since ADR-013 B7:** `resolveAccess` exists in
+> `core/access/resolve.ts`, is called from the file handler before any
+> storage I/O, and decides steps 1 and 2 below. Step 3 is this ADR's to add
+> to the same switch.
 
 1. `public` → allow. Zero extra I/O; the common path is untouched.
 2. `password` → ADR-013 B7 (cookie, then Basic).

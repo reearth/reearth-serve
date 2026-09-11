@@ -113,6 +113,7 @@ export function buildNodeRuntime(env: Env = process.env): NodeRuntime {
     sessions: new KeyValueSessionStore(kv),
     sessionTtlSeconds: SESSION_TTL_SECONDS,
     internalApiSecret: config.internalApiSecret,
+    signingSecret: config.signingSecret,
     auth: {
       issuer: config.oidcIssuerUrl,
       audience: config.oidcAudience,

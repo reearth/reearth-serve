@@ -9,6 +9,14 @@ describe("loadConfig", () => {
     expect(config.sqlitePath).toBe(":memory:");
     expect(config.objectStore).toBeNull();
     expect(config.containerLauncher).toBe("none");
+    // No secret by default: protected sites (ADR-013 B7) fail closed until an
+    // operator sets one, rather than running on a guessable default.
+    expect(config.signingSecret).toBeUndefined();
+  });
+
+  test("SIGNING_SECRET is read, and an empty value is no secret at all", () => {
+    expect(loadConfig({ SIGNING_SECRET: "s3cret" }).signingSecret).toBe("s3cret");
+    expect(loadConfig({ SIGNING_SECRET: "" }).signingSecret).toBeUndefined();
   });
 
   test("BASE_URL defaults to the configured port, not the default one", () => {

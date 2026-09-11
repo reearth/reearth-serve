@@ -19,6 +19,13 @@ export type NodeConfig = {
   baseUrl: string;
   sqlitePath: string;
   internalApiSecret: string | undefined;
+  /**
+   * `SIGNING_SECRET` — HMAC key for the viewer-authentication cookie of
+   * password-protected sites (ADR-013 B7), and the secret ADR-014 §4 reserves
+   * for signed URLs. Unset ⇒ protected assets answer 503 and protecting one is
+   * refused.
+   */
+  signingSecret: string | undefined;
   anonymousUploadEnabled: boolean;
   assetTtlSeconds: number;
   oidcIssuerUrl: string | undefined;
@@ -63,6 +70,7 @@ export function loadConfig(env: Env): NodeConfig {
     // losing state on restart.
     sqlitePath: env.SQLITE_PATH || ":memory:",
     internalApiSecret: env.INTERNAL_API_SECRET || undefined,
+    signingSecret: env.SIGNING_SECRET || undefined,
     // Same fail-closed rule as Cloudflare: off unless explicitly "true".
     anonymousUploadEnabled: env.ANONYMOUS_UPLOAD_ENABLED === "true",
     assetTtlSeconds: intOr(env.ASSET_TTL_SECONDS, DEFAULT_ASSET_TTL_SECONDS),

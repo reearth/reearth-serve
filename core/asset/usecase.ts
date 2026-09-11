@@ -9,5 +9,6 @@ export { listVersions } from "./usecase/list-versions";
 export { getVersion } from "./usecase/get-version";
 export { deleteVersion } from "./usecase/delete-version";
 export { updateAsset } from "./usecase/update-asset";
+export { setAssetAccess } from "./usecase/set-access";
 export { updateVersion } from "./usecase/update-version";
 export { resolveAssetVersion, enrichAssetWithVersion } from "./usecase/resolve-version";

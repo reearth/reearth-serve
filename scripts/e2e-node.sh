@@ -12,6 +12,10 @@ MOCK_OIDC_PORT="${MOCK_OIDC_PORT:-18998}"
 # not own.
 MOCK_DOH_PORT="${MOCK_DOH_PORT:-18997}"
 INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-e2e-internal-secret}"
+# Password-protected sites (ADR-013 B7). Without it a protected asset is
+# fail-closed 503 and the PATCH that protects one is refused, so the access
+# suite would be testing the missing-secret path rather than the feature.
+SIGNING_SECRET="${SIGNING_SECRET:-e2e-signing-secret}"
 # Site hosts (ADR-013 B1). The suffix carries the port because it is compared
 # against the Host header verbatim; the apex ("localhost:PORT") does not end
 # with it, so every other test is unaffected.
@@ -77,6 +81,7 @@ PORT="${PORT}" \
 BASE_URL="${ENDPOINT}" \
 SQLITE_PATH=":memory:" \
 INTERNAL_API_SECRET="${INTERNAL_API_SECRET}" \
+SIGNING_SECRET="${SIGNING_SECRET}" \
 ANONYMOUS_UPLOAD_ENABLED="true" \
 OIDC_ISSUER_URL="${OIDC_ISSUER}" \
 OIDC_AUDIENCE="e2e-audience" \

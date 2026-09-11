@@ -1,5 +1,6 @@
 // Re-export shared API types
 export type {
+  AssetAccess,
   AssetType,
   AssetStatus,
   ArchiveFormat,

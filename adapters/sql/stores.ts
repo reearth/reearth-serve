@@ -8,7 +8,7 @@
  * `adapters/sql/` rather than under a provider directory.
  */
 import type { AssetMetadata, AssetVersion } from "../../core/asset/model";
-import type { MetadataStore, StorageUsage, StorageUsageStore, VersionStore } from "../../core/asset/repository";
+import type { AssetProtection, MetadataStore, StorageUsage, StorageUsageStore, VersionStore } from "../../core/asset/repository";
 import type { ListResult } from "../../core/asset/repository";
 import type { Job } from "../../core/job/model";
 import type { JobStore } from "../../core/job/repository";
@@ -321,13 +321,31 @@ export class SqlJobStore implements JobStore {
 // SqlMetadataStore
 // ---------------------------------------------------------------------------
 
-/** The `INSERT OR REPLACE INTO assets` statement, shared with the batch writer. */
+/**
+ * The `INSERT OR REPLACE INTO assets` statement, shared with the batch writer.
+ *
+ * The four access columns (ADR-013 B7) are carried over from the existing row
+ * by subquery rather than bound from the model. `INSERT OR REPLACE` deletes and
+ * re-inserts, so any column the statement does not name would be reset to its
+ * default — and this statement runs again on every job-status change, which
+ * would have quietly unprotected an asset the moment its extraction finished.
+ * SQLite evaluates the `VALUES` expressions before the replace, so the
+ * subqueries see the row being replaced.
+ *
+ * Protection is therefore written by exactly one statement,
+ * `SqlMetadataStore.setProtection`, and nothing else can move it by accident.
+ */
 export const ASSET_UPSERT_SQL =
   `INSERT OR REPLACE INTO assets
          (id, filename, content_type, size, created_at, expires_at,
           type, status, session_id, project_id, meta,
-          active_version_id, description, user_meta)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)`;
+          active_version_id, description, user_meta,
+          access, password_hash, password_salt, password_version)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                 (SELECT access FROM assets WHERE id = ?1),
+                 (SELECT password_hash FROM assets WHERE id = ?1),
+                 (SELECT password_salt FROM assets WHERE id = ?1),
+                 COALESCE((SELECT password_version FROM assets WHERE id = ?1), 0))`;
 
 export function assetUpsertArgs(asset: AssetMetadata): SqlValue[] {
   const { userMeta, currentVersion: _cv, versionCount: _vc, ...rest } =
@@ -385,6 +403,43 @@ export class SqlMetadataStore implements MetadataStore {
     await this.db.execute(sql, binds);
   }
 
+  async findProtection(id: string): Promise<AssetProtection | null> {
+    const row = await queryFirst(
+      this.db,
+      "SELECT password_hash, password_salt, password_version FROM assets WHERE id = ?1",
+      [id],
+    );
+    if (!row) return null;
+    const hash = row.password_hash as string | null;
+    const salt = row.password_salt as string | null;
+    if (!hash || !salt) return null;
+    return { hash, salt, version: Number(row.password_version ?? 0) };
+  }
+
+  async setProtection(
+    id: string,
+    value: { access: "public" } | { access: "password"; hash: string; salt: string },
+  ): Promise<void> {
+    if (value.access === "public") {
+      // The counter survives: a cookie minted at version N must not become
+      // valid again when the asset is protected a second time.
+      await this.db.execute(
+        "UPDATE assets SET access = 'public', password_hash = NULL, password_salt = NULL WHERE id = ?1",
+        [id],
+      );
+      return;
+    }
+    // The increment happens in the statement, so two concurrent rotations both
+    // move the counter and neither can hand back a version the other issued.
+    await this.db.execute(
+      `UPDATE assets
+          SET access = 'password', password_hash = ?1, password_salt = ?2,
+              password_version = password_version + 1
+        WHERE id = ?3`,
+      [value.hash, value.salt, id],
+    );
+  }
+
   async delete(id: string): Promise<void> {
     await this.db.execute("DELETE FROM assets WHERE id = ?1", [id]);
   }
@@ -437,12 +492,26 @@ export class SqlMetadataStore implements MetadataStore {
   }
 }
 
+/**
+ * A row of `assets` as the domain sees it.
+ *
+ * `rowToModel` copies every column it is given, so the two secret columns are
+ * removed here — once, in the one function every read goes through — instead of
+ * being stripped again at each route that serialises an asset. `access` itself
+ * stays: it is public information, and the caller needs it to know that a
+ * credentialed fetch is required (ADR-013 B7).
+ */
 function parseAssetRow(row: Record<string, unknown>): AssetMetadata {
   const userMetaStr = row.user_meta as string | null;
-  const model = rowToModel<AssetMetadata>(row, ASSET_META_KEYS);
+  const model = rowToModel<AssetMetadata & Record<string, unknown>>(row, ASSET_META_KEYS);
   if (userMetaStr) {
     try { model.userMeta = JSON.parse(userMetaStr); } catch { /* ignore */ }
   }
+  delete model.passwordHash;
+  delete model.passwordSalt;
+  delete model.passwordVersion;
+  // NULL is the default, and the default is public.
+  model.access = model.access === "password" ? "password" : "public";
   return model;
 }
 

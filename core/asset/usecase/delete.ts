@@ -66,6 +66,8 @@ if (import.meta.vitest) {
       update: vi.fn(async () => {}),
       delete: vi.fn(async (id: string) => { store.delete(id); }),
       list: vi.fn(async () => ({ items: [], cursor: undefined })),
+      findProtection: vi.fn(async () => null),
+      setProtection: vi.fn(async () => {}),
     };
   }
 

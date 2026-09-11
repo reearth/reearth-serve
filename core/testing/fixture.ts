@@ -12,7 +12,8 @@ import { gzipSync } from "node:zlib";
 import { createApp } from "../app";
 import type { Deps } from "../types";
 import type { AssetMetadata, AssetVersion } from "../asset/model";
-import type { ListResult, MetadataStore, VersionStore } from "../asset/repository";
+import type { AssetProtection, ListResult, MetadataStore, VersionStore } from "../asset/repository";
+import { hashPassword } from "../access/password";
 import type { Session, SessionStore } from "../session/repository";
 import type { SiteHost, SiteHostPatch, SiteHostStore } from "../site/repository";
 import { MemoryFileStorage } from "../../adapters/memory/storage";
@@ -33,15 +34,49 @@ export const APP_JS = "console.log('hello from a bundle that is long enough to m
 
 export class MemoryMetadataStore implements MetadataStore {
   readonly assets = new Map<string, AssetMetadata>();
+  /**
+   * Password material, held apart from the asset rows exactly as the SQL store
+   * holds it apart from `AssetMetadata` (ADR-013 B7) — so a test that asserts
+   * "no hash in the JSON" is testing the real arrangement, not a fake that
+   * could never have leaked one.
+   */
+  readonly protection = new Map<string, AssetProtection>();
+  /** How many times `find` was called: the "public costs nothing" assertion. */
+  findCalls = 0;
+  /** How many times `findProtection` was called. */
+  protectionCalls = 0;
+
   async save(asset: AssetMetadata): Promise<void> {
     this.assets.set(asset.id, asset);
   }
   async find(id: string): Promise<AssetMetadata | null> {
+    this.findCalls++;
     return this.assets.get(id) ?? null;
+  }
+  async findProtection(id: string): Promise<AssetProtection | null> {
+    this.protectionCalls++;
+    const found = this.protection.get(id);
+    return found && found.hash ? found : null;
+  }
+  async setProtection(
+    id: string,
+    value: { access: "public" } | { access: "password"; hash: string; salt: string },
+  ): Promise<void> {
+    const asset = this.assets.get(id);
+    if (!asset) return;
+    this.assets.set(id, { ...asset, access: value.access });
+    const version = this.protection.get(id)?.version ?? 0;
+    if (value.access === "public") {
+      // The counter outlives the hash, as it does in SQL.
+      this.protection.set(id, { hash: "", salt: "", version });
+      return;
+    }
+    this.protection.set(id, { hash: value.hash, salt: value.salt, version: version + 1 });
   }
   async update(): Promise<void> {}
   async delete(id: string): Promise<void> {
     this.assets.delete(id);
+    this.protection.delete(id);
   }
   async list(): Promise<{ items: AssetMetadata[]; cursor?: string }> {
     return { items: [...this.assets.values()] };
@@ -158,6 +193,29 @@ export class MemorySiteHostStore implements SiteHostStore {
   }
 }
 
+/** The `SIGNING_SECRET` the fixture's app is built with (ADR-013 B7). */
+export const SIGNING_SECRET = "test-signing-secret-at-least-32-bytes-long";
+
+/**
+ * PBKDF2 iterations for tests.
+ *
+ * Production is 600 000, which is a few hundred milliseconds per check — fine
+ * once per login, ruinous across a suite that does it dozens of times. The
+ * count travels inside the stored hash, so a test hash verifies through exactly
+ * the same code path as a production one.
+ */
+export const TEST_ITERATIONS = 1000;
+
+/** Protect a seeded asset with `password`, the way the PATCH endpoint would. */
+export async function protect(
+  metadata: MemoryMetadataStore,
+  id: string,
+  password: string,
+): Promise<void> {
+  const { hash, salt } = await hashPassword(password, { iterations: TEST_ITERATIONS });
+  await metadata.setProtection(id, { access: "password", hash, salt });
+}
+
 /** A dependency the test does not expect to be touched; calling it fails loudly. */
 export function unused<T>(name: string): T {
   return new Proxy({} as object, {
@@ -258,6 +316,7 @@ export async function fixture(overrides?: Partial<Deps>) {
     customHostnames,
     siteFallbackOrigin: undefined,
     cache,
+    signingSecret: SIGNING_SECRET,
     sessions: new MemorySessionStore(),
     sessionTtlSeconds: 60,
     internalApiSecret: undefined,

@@ -86,6 +86,13 @@ export function buildDeps(env: Env): Deps {
     customHostnames: customHostnames(env),
     siteFallbackOrigin: env.SITE_FALLBACK_ORIGIN || undefined,
     cache: kv,
+    // Password-protected sites (ADR-013 B7): the key their auth cookie is
+    // signed with, and the secret ADR-014 §4 reserves for signed URLs.
+    // A wrangler secret, not a [vars] entry — `wrangler secret put
+    // SIGNING_SECRET`. Unset ⇒ protected assets answer 503 and the PATCH that
+    // would protect one is refused, rather than minting cookies nobody can
+    // verify.
+    signingSecret: env.SIGNING_SECRET || undefined,
 
     sessions: new KeyValueSessionStore(kv),
     sessionTtlSeconds: SESSION_TTL_SECONDS,

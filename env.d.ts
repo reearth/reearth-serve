@@ -23,6 +23,11 @@ interface Env {
   // Shared secret for /api/internal/* (container ↔ worker callbacks).
   // Required in production; without it the internal API rejects every request.
   INTERNAL_API_SECRET?: string;
+  // HMAC key for the viewer-authentication cookie of password-protected sites
+  // (ADR-013 B7), and the secret ADR-014 §4 reserves for signed URLs. A
+  // wrangler secret. Unset ⇒ protected assets answer 503 and protecting one is
+  // refused.
+  SIGNING_SECRET?: string;
   // Extraction settings
   EXTRACTION_STUCK_THRESHOLD_SECONDS?: string;
   // Anonymous (demo-mode) upload toggle. Set to "false" to require login for uploads.
