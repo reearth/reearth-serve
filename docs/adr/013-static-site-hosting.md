@@ -30,13 +30,14 @@ was:
 | Content types from a `FROM scratch` container | Go's `mime` package had no `/etc/mime.types` to read; fonts, source maps, `.webmanifest`, `.txt`, `.ico` came out as `application/octet-stream`. |
 | Sites live under `/files/{id}/` on the API's origin | Root-relative references (`/assets/app.js`, the default output of every bundler) break, and any hosted page runs same-origin with the API and with every other hosted page. |
 | Sites have no name and no publish state | An ID-shaped URL is not something a city prints on a poster; the only way to take a site down is to delete the asset. |
+| No way to restrict who can view a site | File delivery is URL-as-capability with no request-time check; the "public/private toggle" ROADMAP Phase 2 lists applies to the management API, not to `/files/`. A staging site or an internal dashboard cannot be password-protected. |
 | No SPA fallback | Client-side routes (`/files/{id}/about`) 404 on reload. |
 | CLI uploads one file | The user zips `dist/` by hand. |
 
 This ADR is in three parts. **Part A** records the delivery semantics that
 make an extracted archive behave like a static site; it is implemented.
 **Part B** designs site hosts — per-asset origins, user-chosen names,
-publish state, previews, custom domains. **Part C** covers behaviour inside
+publish state, previews, custom domains, viewer authentication. **Part C** covers behaviour inside
 a site and the tooling around it. B and C are proposed and ordered in
 "Follow-ups".
 
@@ -189,7 +190,10 @@ https://{versionId}.serve.reearth.land/         → /files/{versionId}/   (pinne
   access.
 - **ID hosts are always on.** An ID host exposes exactly what
   `/files/{id}/` already exposes, under the same URL-as-capability model,
-  so it has no publish switch. Publish state belongs to names (B3).
+  so it has no publish switch. Publish state belongs to names (B3). What
+  ID hosts *do* honour is the asset's access mode (B7): a
+  password-protected asset is protected on every URL form, or it is not
+  protected at all.
 - **Upload response** gains a `siteUrl` next to `url`; the CLI prints it
   for archive uploads. IDs are 16 lowercase hex characters and therefore
   valid DNS labels as-is.
@@ -375,6 +379,108 @@ must be 3–63 lowercase letters, digits or hyphens and may not contain
 events (ADR-007) with actor attribution — a name change on a public site
 is the kind of thing an audit asks about.
 
+### B7. Viewer authentication: password-protected sites
+
+"Put a password on it, like Basic auth" is the first thing a staging site
+or an internal dashboard needs. The requirement has three parts that are
+easy to conflate: *who* may view (a shared secret vs. named accounts),
+*how the browser proves it* (a challenge vs. a form and a cookie), and
+*where the check applies* (one hostname vs. the asset).
+
+**Where: the asset, not the name.** Protection is a property of the asset
+(`hosting.access`), enforced by the file handler on every URL form —
+`/files/{id}/…`, `{id}.serve…`, `{name}.serve…`, `v{n}--name`, thumbnails.
+Protecting only the named host while `/files/{id}/` stays open would be
+theatre; the ID is in every `siteUrl` we print. This is the first
+request-time access check on file delivery, and it replaces the handler's
+"URL-as-capability, do not add access checks" note with: capability by
+default, access mode when the asset asks for it.
+
+**Modes.**
+
+| `hosting.access` | Who | Proof |
+|------------------|-----|-------|
+| `public` (default) | anyone with the URL | none |
+| `password` | anyone with the shared password | password form → signed cookie (browsers); `Authorization: Basic` (tools) |
+| `members` (later) | signed-in members of the asset's project | OIDC login → signed cookie |
+
+**How: a form and a cookie, with Basic accepted as a fallback.** Pure
+HTTP Basic is what people ask for by name, and it works in `curl` and in
+Cesium's `Resource` headers; but in a browser it means a native dialog
+with no branding, no logout, credentials retransmitted on every request,
+and `401` pages that cannot be styled. Netlify, Vercel and Cloudflare
+Pages all use a password page that sets a cookie. We do both:
+
+1. A browser request without a valid cookie gets a `401` HTML page (a
+   minimal branded form, `Cache-Control: no-store`, `X-Robots-Tag:
+   noindex`) that `POST`s the password to `/_serve/auth` on the same host.
+   On success the response sets the cookie and `303`s back to the
+   requested path.
+2. A request carrying `Authorization: Basic <any-user>:<password>` is
+   accepted without a cookie. The user part is ignored. This is what
+   makes `curl`, QGIS, and `file cp` work, and it is why the mode is
+   still honestly called "Basic auth" to users.
+3. Any request with a valid cookie is served normally.
+
+**Cookie.** `HttpOnly; Secure; SameSite=Lax`, value =
+`HMAC(secret, assetId · passwordVersion · exp)`, lifetime 7 days. On a
+site host (B1) the cookie is `Path=/` and scoped to that origin — one
+site's cookie cannot reach another's. On the path form
+(`serve.reearth.land/files/{id}/…`) the cookie is `Path=/files/{id}`; path
+scoping is a weaker boundary than origin scoping, which is one more
+reason B1 comes first. `passwordVersion` increments on every password
+change, so rotating the password logs everyone out without server-side
+session state. The HMAC secret is a deployment secret alongside
+`INTERNAL_API_SECRET`.
+
+**Password storage.** `hosting.passwordHash` on the asset as PBKDF2-SHA256
+(WebCrypto, available on every runtime per ADR-012) with a per-asset salt
+and ≥ 600k iterations — checked once per form submit or Basic header, not
+per file; the cookie carries the result. The hash is stripped from every
+API response.
+
+**Rate limiting.** Failed submits counted per `(assetId, client IP)` in
+KV with a 15-minute window; over 10 failures the form answers `429` for
+the rest of the window. Shared passwords are low-entropy by nature; the
+limiter is what keeps them from being guessable.
+
+**Caching.** Responses from a protected asset carry `private` in
+`Cache-Control` (A2 policies otherwise unchanged) so no shared cache
+stores them, and `Vary: Cookie, Authorization`. Cloudflare does not cache
+Worker responses by default, so this is defence in depth.
+
+**CORS.** `Access-Control-Allow-Origin: *` cannot be combined with
+credentials. For protected assets the handler echoes the request's
+`Origin` and sets `Access-Control-Allow-Credentials: true`; a viewer
+embedding a protected tileset must fetch with `credentials: "include"` (or
+send Basic). Public assets keep `*`. This is the one place protection
+changes how an asset is consumed, and the API response says so
+(`hosting.access` is visible to the caller).
+
+**API and CLI.**
+
+```
+PATCH /api/v1/assets/:id   {"hosting": {"access": "password", "password": "…"}}
+PATCH /api/v1/assets/:id   {"hosting": {"access": "public"}}
+```
+
+`asset protect <id> --password` (prompts; never on the command line),
+`asset protect <id> --off`, `upload --site --password`. Changing the mode
+or password is an event (ADR-007). Requires `editor` on the project.
+
+**`members` mode** is the real answer for "internal to the city" and is
+deferred until the OIDC integration listed open in ROADMAP Phase 2 lands:
+the `401` page becomes a redirect into the IdP with the site host as the
+return URL, and the cookie is minted after `canAccessAsset` passes. The
+cookie, caching and CORS rules are identical, which is why they are
+specified here rather than per mode.
+
+**What this does not do.** It does not hide the asset's *existence*: a
+protected URL answers `401`, not `404`. It does not protect the
+management API, which already has its own checks. And it is not a
+substitute for not publishing: a shared password is a speed bump for
+staging, not a control for sensitive data.
+
 ## Part C — Site behaviour and tooling (proposed)
 
 ### C1. SPA fallback and `404.html`
@@ -466,6 +572,24 @@ unguessable ID-form previews remain for the review workflow.
 **L. Second-level preview hosts (`v3.name.serve.reearth.land`).** Needs a
 certificate per site. `--` costs nothing.
 
+**N. HTTP Basic auth only.** Works everywhere, but the browser experience
+is a native dialog with no branding or logout, and `401` bodies cannot be
+styled. Accepted *as well as* the cookie flow, not instead of it.
+
+**O. Protect the named host only, leave `/files/{id}/` open.** The ID is
+printed in every upload response and `siteUrl`; protecting one door of
+two is no protection. Access is an asset property.
+
+**P. Cloudflare Access / Zero Trust in front of site hosts.** Per-seat
+pricing, Cloudflare-only (ADR-012), and it authenticates against an IdP
+rather than a shared password — it is the `members` mode by another
+route, and it cannot do the `password` mode at all.
+
+**Q. Signed URLs (token in the query string) instead of cookies.** Fine
+for one file, unusable for a site: every relative link in the HTML would
+need the token appended. Kept in mind for embedding a single protected
+file elsewhere.
+
 ### Site behaviour (Part C)
 
 **M. Default SPA fallback for every archive.** Breaks the primary use
@@ -500,6 +624,13 @@ case: tile viewers and data consumers rely on `404` for missing entries.
 - A hosted page can no longer reach the API or another site's storage
   same-origin. Anything in the future Web UI that assumed same-origin file
   access must use CORS reads instead — which file responses already allow.
+- B7 introduces the first request-time access check on file delivery.
+  The handler's note that file URLs are pure capabilities becomes
+  "capabilities unless the asset sets an access mode"; the check is one
+  HMAC verification per request for protected assets and nothing for
+  public ones.
+- Protected assets lose `Access-Control-Allow-Origin: *`; consumers must
+  send credentials. Documented on the asset (`hosting.access`).
 - Name governance (reserved list, cooldown, quota) is product surface that
   will need occasional human decisions (a disputed name). The event log
   gives those decisions a record.
@@ -516,6 +647,10 @@ case: tile viewers and data consumers rely on `404` for missing entries.
    API and `asset host` CLI, event-log entries.
 3. **B4** preview hosts — `v{n}--` / `latest--`, `previews` flag,
    `noindex`.
-4. **C1** SPA fallback / `404.html`; **C2** CLI `upload <dir>`.
-5. **B5** custom domains; **C3** `_headers` / `_redirects`.
-6. Migrate `S3FileStorage` (when it exists) to return `etag`.
+4. **B7** `password` access mode — form + cookie, Basic fallback, PBKDF2
+   hash, rate limiter, `private` caching, credentialed CORS. Depends on B1
+   for origin-scoped cookies.
+5. **C1** SPA fallback / `404.html`; **C2** CLI `upload <dir>`.
+6. **B5** custom domains; **C3** `_headers` / `_redirects`.
+7. **B7** `members` access mode, once OIDC integration lands.
+8. Migrate `S3FileStorage` (when it exists) to return `etag`.

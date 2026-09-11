@@ -208,6 +208,7 @@ Municipal and enterprise users increasingly generate frontend apps with AI but h
 - [ ] B4 Preview hosts — `v<n>--<name>` (pinned) and `latest--<name>`, `noindex`, per-name `previews` flag, **off by default**
 - [ ] B5 Custom domains — the `custom` kind of `site_hosts`: TXT verification + Cloudflare for SaaS certificate
 - [ ] B6 Hosts API (`/api/v1/assets/:id/hosts`) and `asset host add|list|remove|disable|enable|update` CLI, event-log entries
+- [ ] B7 Viewer authentication — `hosting.access: password` on the asset, enforced on every URL form: password page + signed cookie for browsers, `Authorization: Basic` for tools, PBKDF2 hash, rate limit, `private` caching, credentialed CORS; `members` mode after OIDC integration
 
 **Part C — site behaviour & tooling**
 
@@ -224,7 +225,7 @@ Introduce user identity, project scoping, and persistent assets.
 - [x] **Auth**: API key or OAuth (Re:Earth Dashboard integration)
 - [x] **Projects**: logical grouping of assets with per-project settings
 - [x] **Asset settings**: public/private toggle, custom metadata, configurable TTL or permanent storage
-- [x] **Access control**: file-layer access control (URL visibility) — distinct from service-layer
+- [x] **Access control**: file-layer access control (URL visibility) — distinct from service-layer. Note: `/files/` itself performs no request-time check today; viewer authentication for hosted sites is ADR-013 B7
 - [ ] **OIDC server integration**: connection to external OIDC server for authentication (not yet implemented)
 - [ ] **Account server integration**: connection to Re:Earth account platform (not yet implemented)
 - [ ] **Cerbos integration**: `CerbosAuthorizer` adapter is implemented behind the `Authorizer` interface and enabled by setting `CERBOS_ENDPOINT` (falls back to in-process `SimpleAuthorizer`); deploying a Cerbos PDP and authoring the policy bundle are not yet done
