@@ -396,6 +396,13 @@ request-time access check on file delivery, and it replaces the handler's
 "URL-as-capability, do not add access checks" note with: capability by
 default, access mode when the asset asks for it.
 
+**Project assets only.** `hosting.access` can be set only on project
+assets. Demo-mode assets (anonymous, one-hour TTL) are always `public`:
+there is no accountable owner to hold a password, no project to rate
+limit against, and nothing that lives long enough to be worth protecting.
+The API rejects the field on a demo asset with `400`, and the CLI says
+"protection requires a project (`project use <id>`)".
+
 **Modes.**
 
 | `hosting.access` | Who | Proof |
@@ -480,6 +487,17 @@ protected URL answers `401`, not `404`. It does not protect the
 management API, which already has its own checks. And it is not a
 substitute for not publishing: a shared password is a speed bump for
 staging, not a control for sensitive data.
+
+**Scope boundary.** B7 specifies the *hosting* flavour of file-delivery
+access control: a shared password for a site a person opens in a browser.
+The general requirement — private datasets consumed by Re:Earth
+Visualizer, untiled and CLI pipelines, with member identity or machine
+credentials rather than a shared secret — changes the delivery model for
+every asset, not just hosted sites, and is deliberately left to a
+separate ADR (working title: *Asset access control for file delivery*).
+The pieces B7 fixes now — access mode as an asset property enforced on
+every URL form, cookie/Basic proof, `private` caching, credentialed CORS
+— are written so that ADR can add modes without redesigning the check.
 
 ## Part C — Site behaviour and tooling (proposed)
 

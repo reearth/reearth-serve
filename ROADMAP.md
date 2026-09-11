@@ -208,7 +208,7 @@ Municipal and enterprise users increasingly generate frontend apps with AI but h
 - [ ] B4 Preview hosts — `v<n>--<name>` (pinned) and `latest--<name>`, `noindex`, per-name `previews` flag, **off by default**
 - [ ] B5 Custom domains — the `custom` kind of `site_hosts`: TXT verification + Cloudflare for SaaS certificate
 - [ ] B6 Hosts API (`/api/v1/assets/:id/hosts`) and `asset host add|list|remove|disable|enable|update` CLI, event-log entries
-- [ ] B7 Viewer authentication — `hosting.access: password` on the asset, enforced on every URL form: password page + signed cookie for browsers, `Authorization: Basic` for tools, PBKDF2 hash, rate limit, `private` caching, credentialed CORS; `members` mode after OIDC integration
+- [ ] B7 Viewer authentication — `hosting.access: password` on the asset (project assets only; demo assets are always public), enforced on every URL form: password page + signed cookie for browsers, `Authorization: Basic` for tools, PBKDF2 hash, rate limit, `private` caching, credentialed CORS; `members` mode after OIDC integration
 
 **Part C — site behaviour & tooling**
 
