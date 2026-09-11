@@ -1,7 +1,7 @@
 FROM golang:1.25-alpine AS builder
 
 # mailcap provides /etc/mime.types; Go's mime package reads it at runtime
-# for extensions outside DetectContentType's explicit table (ADR-013 §4).
+# for extensions outside DetectContentType's explicit table (ADR-013 A4).
 RUN apk add --no-cache mailcap
 
 WORKDIR /app

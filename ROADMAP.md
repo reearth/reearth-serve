@@ -191,18 +191,29 @@ Upload a `.zip` archive; the server extracts it and serves the contents as a dir
 
 ### Phase 1.5 — Frontend Hosting (AI-generated apps, one zip → one site)
 
-Municipal and enterprise users increasingly generate frontend apps with AI but have no Netlify / Cloudflare Pages to put them on. Serve already extracts and serves archives; this phase closes the gap to "upload a zip, get a working site". See [ADR-013](./docs/adr/013-static-site-hosting.md).
+Municipal and enterprise users increasingly generate frontend apps with AI but have no Netlify / Cloudflare Pages to put them on. Serve already extracts and serves archives; this phase closes the gap to "upload a zip, get a working site". Design: [ADR-013](./docs/adr/013-static-site-hosting.md) (Part A implemented, Parts B–C proposed).
 
-- [x] **Index resolution & directory redirects** — `/files/:id/` serves `index.html`
-- [x] **HEAD** on file URLs
-- [x] **Cache policy** — `ETag` / `If-None-Match` → 304; HTML at asset-ID URLs revalidates every load, other files 1 h, version-ID URLs immutable; `Vary: Accept-Encoding`
-- [x] **Web content types** — fonts, source maps, web manifests, media, plain text in the extractor's table, plus `/etc/mime.types` in the (now distroless, non-root) container image for the long tail
-- [ ] **Per-asset origin** — `https://<id>.serve.reearth.land/` so root-relative paths (`/assets/app.js`) resolve and hosted pages are origin-isolated from the API and from each other
-- [ ] **User-chosen subdomains** — `https://<slug>.serve.reearth.land/` via a `site_hosts` table: reserved names, ID-shape exclusion, 30-day release cooldown against takeover, `asset host add/list/remove`
-- [ ] **SPA fallback** — serve `index.html` (200) for unmatched paths when the asset opts in; `404.html` support
-- [ ] **CLI directory upload** — `upload ./dist` zips and uploads in one step
-- [ ] **Custom domains** — the `custom` kind of `site_hosts`: TXT verification + Cloudflare for SaaS certificate
-- [ ] **`_headers` / `_redirects`** — Netlify-style per-site header (CSP) and redirect rules
+**Part A — delivery semantics** ✅
+
+- [x] Index resolution & directory redirects — `/files/:id/` serves `index.html`; `dir` → 301 `dir/`
+- [x] `HEAD` on file URLs
+- [x] Cache policy — `ETag` / `If-None-Match` → 304; HTML at asset-ID URLs revalidates every load, other files 1 h, version-ID URLs immutable; `Vary: Accept-Encoding`
+- [x] Web content types — fonts, source maps, web manifests, media, plain text in the extractor's table, plus `/etc/mime.types` in the (now distroless, non-root) container image for the long tail
+
+**Part B — site hosts**
+
+- [ ] B1 Per-asset origin — `https://<id>.serve.reearth.land/` so root-relative paths resolve and hosted pages are origin-isolated from the API and from each other; site hosts serve nothing but files
+- [ ] B2 Named sites — `https://<name>.serve.reearth.land/` via a `site_hosts` table: DNS-label validation, no `--`, not ID-shaped, reserved list, editor-only, project assets only, per-project quota
+- [ ] B3 Publish state — disable (503, name held) / enable / release (410 for 30 days against takeover; asset deletion releases rather than cascades)
+- [ ] B4 Preview hosts — `v<n>--<name>` (pinned) and `latest--<name>`, `noindex`, per-name `previews` flag, **off by default**
+- [ ] B5 Custom domains — the `custom` kind of `site_hosts`: TXT verification + Cloudflare for SaaS certificate
+- [ ] B6 Hosts API (`/api/v1/assets/:id/hosts`) and `asset host add|list|remove|disable|enable|update` CLI, event-log entries
+
+**Part C — site behaviour & tooling**
+
+- [ ] C1 SPA fallback — root `index.html` (200) for unmatched paths when the asset opts in; `404.html`
+- [ ] C2 CLI directory upload — `upload ./dist [--site --name <slug>]` zips, uploads and claims in one step
+- [ ] C3 `_headers` / `_redirects` — Netlify-style per-site header (CSP) and redirect rules
 
 ---
 
