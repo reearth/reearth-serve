@@ -218,6 +218,19 @@ Municipal and enterprise users increasingly generate frontend apps with AI but h
 
 ---
 
+### Phase 1.6 — Asset Access Control & Data Sales
+
+Private datasets, password-protected sites (ADR-013 B7) and partner data marketplaces are one mechanism: an access mode on the asset, a proof on the request, a grant table in between. Serve enforces what was sold; the storefront, catalogue and payments stay with the partner. Design: [ADR-014](./docs/adr/014-asset-access-control.md).
+
+- [ ] `access` mode on project assets (`public` / `password` / `restricted`); `resolveAccess` in the file handler with zero cost for public assets
+- [ ] Grants — `asset_grants` for `user` / `email` / `api_key` principals on an asset or a whole project, with expiry, revocation, `source`/`ref` for the partner's order, events and webhooks
+- [ ] Signed URLs — prefix-scoped HMAC tokens (`?rs_sig=`) so a viewer loads a whole restricted tileset with one token and CORS stays `*`; optional grant binding for revocation
+- [ ] API keys — workspace-scoped machine credentials (`rs_live_…`, hashed at rest) for pipelines, partner storefronts and the untiled service account
+- [ ] Grants/keys/signed-URL API and CLI (`asset access`, `asset grant`, `asset sign`, `workspace api-key`); `file cp` / `file sync` with a key or login
+- [ ] Marketplace flow — batch grants, project-level grants, `email` principals matched on verified claims, per-principal transfer metering hook (Phase 6)
+
+---
+
 ### Phase 2 — Authentication, Projects & Asset Management ✅
 
 Introduce user identity, project scoping, and persistent assets.

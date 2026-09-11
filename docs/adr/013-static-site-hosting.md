@@ -3,6 +3,7 @@
 - **Status:** Accepted — Part A implemented; Parts B and C proposed
 - **Date:** 2026-09-11
 - **Deciders:** @rot1024
+- **Related:** ADR-014 (asset access control: `restricted` mode, grants, signed URLs, API keys)
 
 ## Context
 
@@ -494,7 +495,8 @@ The general requirement — private datasets consumed by Re:Earth
 Visualizer, untiled and CLI pipelines, with member identity or machine
 credentials rather than a shared secret — changes the delivery model for
 every asset, not just hosted sites, and is deliberately left to a
-separate ADR (working title: *Asset access control for file delivery*).
+separate ADR, [ADR-014](./014-asset-access-control.md), whose `restricted` mode
+and grants also cover purchasers of sold datasets.
 The pieces B7 fixes now — access mode as an asset property enforced on
 every URL form, cookie/Basic proof, `private` caching, credentialed CORS
 — are written so that ADR can add modes without redesigning the check.
