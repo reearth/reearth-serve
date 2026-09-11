@@ -196,7 +196,7 @@ Municipal and enterprise users increasingly generate frontend apps with AI but h
 - [x] **Index resolution & directory redirects** — `/files/:id/` serves `index.html`
 - [x] **HEAD** on file URLs
 - [x] **Cache policy** — `ETag` / `If-None-Match` → 304; HTML at asset-ID URLs revalidates every load, other files 1 h, version-ID URLs immutable; `Vary: Accept-Encoding`
-- [x] **Web content types** — fonts, source maps, web manifests, media, plain text in the extractor's table (the container image has no `/etc/mime.types`)
+- [x] **Web content types** — fonts, source maps, web manifests, media, plain text in the extractor's table, plus `/etc/mime.types` in the (now distroless, non-root) container image for the long tail
 - [ ] **Per-asset origin** — `https://<id>.serve.reearth.land/` so root-relative paths (`/assets/app.js`) resolve and hosted pages are origin-isolated from the API and from each other
 - [ ] **SPA fallback** — serve `index.html` (200) for unmatched paths when the asset opts in; `404.html` support
 - [ ] **CLI directory upload** — `upload ./dist` zips and uploads in one step

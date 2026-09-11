@@ -99,15 +99,34 @@ gone from them.
 
 ### 4. Content types for web payloads
 
-The extractor container is `FROM scratch`, so `mime.TypeByExtension` only
-knows Go's built-in table (`.html .css .js .mjs .json .svg .wasm .pdf` and a
-few image types). `DetectContentType` in `manifest.go` gains explicit
-entries for fonts (`woff woff2 ttf otf eot`), `.map`, `.webmanifest`,
-`.ico`, `.txt`, `.md`, `.csv`, `.yaml/.yml`, `.xhtml`, `.bmp`, `.apng` and
-common media (`mp4 webm mp3 ogg wav`). Text types carry
-`charset=utf-8`. Installing a `mime.types` file into the image was rejected:
-it is a distro-dependent 2,000-line file whose behaviour would silently
-differ between local Go and the container.
+The extractor container used to be `FROM scratch`, so `mime.TypeByExtension`
+only knew Go's built-in table (`.html .css .js .mjs .json .svg .wasm .pdf`
+and a few image types). Two layers fix that:
+
+1. **Explicit table.** `DetectContentType` in `manifest.go` gains entries
+   for fonts (`woff woff2 ttf otf eot`), `.map`, `.webmanifest`, `.ico`,
+   `.txt`, `.md`, `.csv`, `.yaml/.yml`, `.xhtml`, `.bmp`, `.apng` and common
+   media (`mp4 webm mp3 ogg wav`). Text types carry `charset=utf-8`. This
+   table is the source of truth for every type Serve promises, and the
+   unit test pins it; it is consulted before any system table.
+2. **`/etc/mime.types` in the image.** The builder installs Alpine's
+   `mailcap` package and the final stage copies its `mime.types`
+   (~2,300 lines). Go's `mime` package reads it lazily on first use, so
+   the long tail (`.ktx2`, `.glsl`, `.epub`, …) resolves without growing
+   the table. Extensions in neither the table nor the file remain
+   `application/octet-stream`. Note that for extensions only the file
+   knows, the value is the distribution's choice, not ours — e.g. `.ico`
+   would be `image/vnd.microsoft.icon` there, which is why the table pins
+   `image/x-icon` to match the CLI.
+
+The final stage also moves from `scratch` to
+`gcr.io/distroless/static-debian12:nonroot`: CA certificates and tzdata
+maintained upstream instead of copied from the builder, a non-root UID,
+`/tmp`, and a Debian package database that vulnerability scanners can read
+(a scan reports "0 findings" rather than "nothing to scan" — relevant to
+the procurement conversations in ROADMAP Phase 6). The extractor writes
+nothing to local disk, so non-root needs no volume. Image size is ~12.6 MB,
+essentially the binary.
 
 ### 5. Per-asset origin (proposed)
 
@@ -201,9 +220,18 @@ user content.
 Breaks the primary use case: tile viewers and data consumers rely on `404`
 for missing entries. Opt-in.
 
-### F. Ship `/etc/mime.types` in the container image
+### F. Rely on `/etc/mime.types` alone, without the explicit table
 
-See §4.
+The file covers more, but its values are whatever the distribution chose
+and differ between Alpine, Debian and the macOS table local `go test`
+reads. Types Serve documents and tests stay in code; the file is the
+fallback. See §4.
+
+### G. `distroless/base` for the thumbnail container too
+
+That image needs libvips and its shared-library tree; copying it into a
+libc-only base is fragile for no size win. It stays on
+`debian:bookworm-slim`.
 
 ## Consequences
 
