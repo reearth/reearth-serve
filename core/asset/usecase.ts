@@ -10,5 +10,6 @@ export { getVersion } from "./usecase/get-version";
 export { deleteVersion } from "./usecase/delete-version";
 export { updateAsset } from "./usecase/update-asset";
 export { setAssetAccess } from "./usecase/set-access";
+export { checkSpaChange } from "./usecase/set-spa";
 export { updateVersion } from "./usecase/update-version";
 export { resolveAssetVersion, enrichAssetWithVersion } from "./usecase/resolve-version";

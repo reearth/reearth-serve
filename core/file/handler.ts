@@ -21,6 +21,25 @@ import {
 } from "../thumbnail/sizes";
 
 const INDEX_FILE = "index.html";
+const NOT_FOUND_FILE = "404.html";
+
+/**
+ * Does this missing path name a file rather than a client-side route?
+ *
+ * A 200 HTML body in place of a missing `.js` chunk, `.json` manifest or
+ * `.b3dm` tile is worse than the 404 it replaces: a bundler's dynamic import
+ * fails with a syntax error and a 3D Tiles viewer tries to parse HTML as a tile.
+ * SPA routes, by contrast, are extensionless (`/about`, `/map/kawasaki`) or end
+ * in a slash. So the fallback is withheld from anything whose last segment ends
+ * in a short, file-like extension.
+ *
+ * This is a refinement of ADR-013 C1, which described the fallback without it.
+ * The `404.html` branch is unaffected — it answers *with* status 404, so it
+ * cannot mislead a loader the way a 200 can.
+ */
+export function looksLikeAssetPath(filePath: string): boolean {
+  return /\.[a-z0-9]{1,8}$/.test(filePath.toLowerCase());
+}
 
 /** Read the site middleware's preview marker; anything else is not one. */
 function sitePreview(value: string | undefined): SitePreview | null {
@@ -158,6 +177,66 @@ async function hasIndex(storage: FileStorage, layouts: Layout[], path: string): 
     if (await storage.head(layout.entryKey(`${path}/${INDEX_FILE}`))) return true;
   }
   return false;
+}
+
+/** Locate a file at the archive root, in whichever layout holds it. */
+async function locateRootFile(
+  storage: FileStorage,
+  layouts: Layout[],
+  name: string,
+): Promise<Located | null> {
+  for (const layout of layouts) {
+    if (!layout.archive) continue;
+    const found = await locate(storage, layout, name);
+    if (found) return found;
+  }
+  return null;
+}
+
+/**
+ * What an archive miss falls back to (ADR-013 C1), after the A1 lookup and the
+ * directory-redirect probe have both missed.
+ *
+ * At most **one** extra storage read: `spa` is checked first and, when it is on
+ * and the path is not file-shaped, `404.html` is never looked for. A hit costs
+ * nothing new — this runs only on a miss.
+ */
+async function archiveFallback(
+  storage: FileStorage,
+  layouts: Layout[],
+  filePath: string,
+  spa: boolean,
+): Promise<{ kind: "spa" | "notFound"; located: Located } | null> {
+  if (!layouts.some((l) => l.archive)) return null;
+
+  if (spa && !looksLikeAssetPath(filePath)) {
+    const index = await locateRootFile(storage, layouts, INDEX_FILE);
+    if (index) return { kind: "spa", located: index };
+    return null;
+  }
+
+  const page = await locateRootFile(storage, layouts, NOT_FOUND_FILE);
+  return page ? { kind: "notFound", located: page } : null;
+}
+
+/**
+ * The archive's own `404.html`, served with status 404 (ADR-013 C1).
+ *
+ * No `ETag` and no `Cache-Control` but `no-store`: a 404 body is not a
+ * representation of the requested URL, so caching or revalidating it would
+ * attach the error page's identity to a path that may exist tomorrow.
+ */
+function serve404Page(located: Located): Response {
+  const isGzipStored = located.contentEncoding === "gzip";
+  const headers: Record<string, string> = {
+    "Content-Type": located.contentType,
+    "Cache-Control": "no-store",
+  };
+  if (!isGzipStored) headers["Content-Length"] = String(located.file.size);
+  return new Response(
+    isGzipStored ? decompressStream(located.file.body) : located.file.body,
+    { status: 404, headers },
+  );
 }
 
 // File delivery is **capability by default, access mode when the asset asks
@@ -308,7 +387,19 @@ fileRoutes.on("GET", ["/:id", "/:id/", "/:id/:path{.+}"], async (c) => {
       url.pathname = `${url.pathname}/`;
       return decorate(c.redirect(url.toString(), 301));
     }
-    return decorate(c.json({ error: "File not found" }, 404));
+
+    // SPA fallback and `404.html` (ADR-013 C1). Both sit here: after the access
+    // check, after the A1 lookup and after the directory-redirect probe, so a
+    // protected asset is challenged before anything is served and a real
+    // directory still redirects rather than rendering the app shell.
+    const fallback = await archiveFallback(storage, layouts, filePath, asset.spa === true);
+    if (!fallback) return decorate(c.json({ error: "File not found" }, 404));
+    if (fallback.kind === "notFound") return decorate(serve404Page(fallback.located));
+    // The SPA case rejoins the normal path below, so the index is served by
+    // exactly the code a direct hit on `/index.html` takes: gzip passthrough,
+    // ETag, conditional requests, the A2 cache policy and `noindex` on a
+    // preview host all come from there rather than being restated here.
+    located = fallback.located;
   }
 
   const res = await serveFile(located, {

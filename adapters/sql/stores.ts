@@ -324,7 +324,8 @@ export class SqlJobStore implements JobStore {
 /**
  * The `INSERT OR REPLACE INTO assets` statement, shared with the batch writer.
  *
- * The four access columns (ADR-013 B7) are carried over from the existing row
+ * The four access columns (ADR-013 B7) and `spa` (ADR-013 C1) are carried over
+ * from the existing row
  * by subquery rather than bound from the model. `INSERT OR REPLACE` deletes and
  * re-inserts, so any column the statement does not name would be reset to its
  * default — and this statement runs again on every job-status change, which
@@ -340,12 +341,13 @@ export const ASSET_UPSERT_SQL =
          (id, filename, content_type, size, created_at, expires_at,
           type, status, session_id, project_id, meta,
           active_version_id, description, user_meta,
-          access, password_hash, password_salt, password_version)
+          access, password_hash, password_salt, password_version, spa)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
                  (SELECT access FROM assets WHERE id = ?1),
                  (SELECT password_hash FROM assets WHERE id = ?1),
                  (SELECT password_salt FROM assets WHERE id = ?1),
-                 COALESCE((SELECT password_version FROM assets WHERE id = ?1), 0))`;
+                 COALESCE((SELECT password_version FROM assets WHERE id = ?1), 0),
+                 COALESCE((SELECT spa FROM assets WHERE id = ?1), 0))`;
 
 export function assetUpsertArgs(asset: AssetMetadata): SqlValue[] {
   const { userMeta, currentVersion: _cv, versionCount: _vc, ...rest } =
@@ -374,7 +376,7 @@ export class SqlMetadataStore implements MetadataStore {
     return parseAssetRow(row);
   }
 
-  async update(id: string, patch: { activeVersionId?: string | null; expiresAt?: number; description?: string; userMeta?: Record<string, unknown> }): Promise<void> {
+  async update(id: string, patch: { activeVersionId?: string | null; expiresAt?: number; description?: string; userMeta?: Record<string, unknown>; spa?: boolean }): Promise<void> {
     const sets: string[] = [];
     const binds: SqlValue[] = [];
     let idx = 1;
@@ -394,6 +396,12 @@ export class SqlMetadataStore implements MetadataStore {
     if (patch.userMeta !== undefined) {
       sets.push(`user_meta = ?${idx++}`);
       binds.push(patch.userMeta ? JSON.stringify(patch.userMeta) : null);
+    }
+    // SQLite has no boolean type; the column is the 0/1 integer the migration
+    // declares (ADR-013 C1).
+    if (patch.spa !== undefined) {
+      sets.push(`spa = ?${idx++}`);
+      binds.push(patch.spa ? 1 : 0);
     }
 
     if (sets.length === 0) return;
@@ -512,6 +520,9 @@ function parseAssetRow(row: Record<string, unknown>): AssetMetadata {
   delete model.passwordVersion;
   // NULL is the default, and the default is public.
   model.access = model.access === "password" ? "password" : "public";
+  // SQLite stores the flag as 0/1 (ADR-013 C1); the domain sees a boolean, so
+  // nothing downstream has to remember that `0` is falsy but `"0"` would not be.
+  model.spa = Number(row.spa ?? 0) === 1;
   return model;
 }
 

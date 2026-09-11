@@ -45,7 +45,8 @@ export interface MetadataStore {
     id: string,
     value: { access: "public" } | { access: "password"; hash: string; salt: string },
   ): Promise<void>;
-  update(id: string, patch: { activeVersionId?: string | null; expiresAt?: number; description?: string; userMeta?: Record<string, unknown> }): Promise<void>;
+  /** `spa` is ADR-013 C1's SPA fallback flag; see `core/asset/usecase/set-spa.ts`. */
+  update(id: string, patch: { activeVersionId?: string | null; expiresAt?: number; description?: string; userMeta?: Record<string, unknown>; spa?: boolean }): Promise<void>;
   delete(id: string): Promise<void>;
   // scope exactly one of: sessionId, projectId, workspaceId (caller-verified
   // membership), or accessibleByUser (membership-driven across all workspaces).

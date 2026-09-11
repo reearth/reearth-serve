@@ -1,6 +1,6 @@
 # ADR-013: Static Site Hosting from Archive Assets
 
-- **Status:** Accepted — Part A, B1–B5 and the resolution/API/CLI of B6 implemented; B7 and Part C proposed
+- **Status:** Accepted — Part A, B1–B5, the resolution/API/CLI of B6, B7's `password` mode and C1 implemented; B7's `members` mode, C2 and C3 proposed
 - **Date:** 2026-09-11
 - **Deciders:** @rot1024
 - **Related:** ADR-014 (asset access control: `restricted` mode, grants, signed URLs, API keys)
@@ -829,9 +829,9 @@ every URL form, cookie/Basic proof, `private` caching, credentialed CORS
   (there is still no event store — same gap as B6), and `upload --site
   --password`. `members` mode waits on the OIDC integration as specified.
 
-## Part C — Site behaviour and tooling (proposed)
+## Part C — Site behaviour and tooling (C1 implemented; C2 and C3 proposed)
 
-### C1. SPA fallback and `404.html`
+### C1. SPA fallback and `404.html` (implemented)
 
 An archive asset may opt in via a system-recognised key in `userMeta`,
 e.g. `{"hosting": {"spa": true}}`, set at upload or with `asset update`.
@@ -843,6 +843,71 @@ serves it with status `404` before falling back to the JSON error.
 Opt-in rather than default: a 3D Tiles viewer requesting a missing tile
 must see `404`, not a `200` HTML body. `_redirects` (C3) is the more
 general mechanism and is not a prerequisite.
+
+**Implementation notes.**
+
+- **The field is a flat `spa` column, not a key in `userMeta`.** The ADR
+  proposed `userMeta.hosting.spa`; B7 had already chosen a flat `access`
+  column over `hosting.access` and the same argument applies with more
+  force here. `userMeta` is **caller-owned**: `PATCH {userMeta}` replaces
+  the whole object, so any client that round-trips its own metadata would
+  silently turn a system flag off, and nothing in the API contract would
+  say it had. Migration `0007_asset_spa.sql` adds
+  `spa INTEGER NOT NULL DEFAULT 0`; it surfaces as `spa: boolean` on
+  `AssetMetadata` and is set with `PATCH /api/v1/assets/:id {"spa": true}`
+  under the asset `update` action — the same authorization as any other
+  field of that route. Like `access`, it is carried through
+  `ASSET_UPSERT_SQL` by subquery, so a job-status mirror write cannot reset
+  it.
+- **Archive assets in a project only**, the rule named sites (B2) and
+  protection (B7) already apply: `400 "SPA fallback is available for site
+  (archive) assets only"` and `400 "SPA fallback requires a project
+  asset"`. A single-file asset has no root `index.html` to fall back to,
+  and a demo asset that expires in an hour has no owner for a hosting
+  decision. **Turning it off is always allowed**, whatever the asset — a
+  row must never be stuck with a flag because it fails a check the on-path
+  applies. The rule lives in `core/asset/usecase/set-spa.ts`.
+- **A refinement of the rule above: file-shaped paths never fall back.**
+  A missing path whose last segment matches `\.[a-z0-9]{1,8}$` (`.js`,
+  `.json`, `.png`, `.b3dm`, …) keeps its `404` even with the flag on. The
+  opt-in alone is not enough, because the *same site* that wants `/about`
+  to render also loads hashed chunks and, often, tiles: a `200` HTML body
+  in place of a missing chunk fails inside a bundler's loader with a syntax
+  error rather than the network error it knows how to report, and a tile
+  viewer parses the shell as geometry. Client-side routes are extensionless
+  or end in a slash, so nothing the fallback exists for is lost. The check
+  is case-insensitive (`/Logo.PNG` is a file too).
+- **`404.html` answers with status `404`,** which is why it is *not* subject
+  to that refinement: an error page cannot mislead a loader the way a `200`
+  can, so a missing `.js` gets the archive's page rather than the JSON
+  error. It is sent with `Cache-Control: no-store` and **no `ETag`** — a
+  `404` body is not a representation of the URL that was asked for, so
+  neither storing it nor revalidating against it is meaningful, and a path
+  that does not exist today may exist after the next upload.
+- **Order and cost.** Both probes live in the file handler after
+  `resolveAccess` (so a protected asset is challenged before any fallback
+  is considered — the shell is content too), after the A1 lookup, and after
+  the directory-redirect probe (so a real directory still redirects rather
+  than rendering the app shell). `spa` is checked *first*, so at most one
+  extra storage read happens on a miss: `index.html` **or** `404.html`,
+  never both. A hit costs nothing new.
+- **The SPA case rejoins the normal serving path** rather than building its
+  own response, so gzip passthrough, the `ETag`, `If-None-Match`, the A2
+  cache policy (moving at an asset URL, pinned at a version URL) and B4's
+  `noindex` on a preview host all come from the code a direct hit on
+  `/index.html` already takes. No robots header is added: the shell is the
+  app's real content, not a soft error.
+- **One implementation covers every host form**, because they all end in
+  this handler: `/files/{id}/about`, `{id}.serve…/about`,
+  `{name}.serve…/about`. A preview host (`v{n}--`, `latest--`) resolves to
+  a version ID, so it falls back to *that* version's `index.html`.
+- **Tested in unit, not e2e.** The Node e2e runtime has no extraction
+  container (`CONTAINER_LAUNCHER=none`), so no archive there ever has an
+  `index.html` inside it to fall back to — which is also why
+  `e2e/site-host.test.ts` serves the archive itself. Delivery is therefore
+  covered in `core/file/spa.test.ts` against the real app and the real
+  handler; `e2e/spa.test.ts` covers what unit tests cannot — the column
+  through real SQL, the route's validation rules and the CLI flag.
 
 ### C2. CLI directory upload
 
@@ -1001,7 +1066,10 @@ case: tile viewers and data consumers rely on `404` for missing entries.
 4. **B7** `password` access mode — form + cookie, Basic fallback, PBKDF2
    hash, rate limiter, `private` caching, credentialed CORS. Depends on B1
    for origin-scoped cookies.
-5. **C1** SPA fallback / `404.html`; **C2** CLI `upload <dir>`.
+5. ~~**C1** SPA fallback / `404.html`~~ — done: a flat `spa` column
+   (`0007_asset_spa.sql`), the extensionless-miss rule, the root `404.html`
+   with `no-store`, and `asset update --spa on|off`. **C2** CLI
+   `upload <dir>`.
 6. **B5** custom domains; **C3** `_headers` / `_redirects`.
 7. **B7** `members` access mode, once OIDC integration lands.
 8. Migrate `S3FileStorage` (when it exists) to return `etag`.

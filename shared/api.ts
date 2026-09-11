@@ -119,6 +119,17 @@ export const assetMetadataSchema = z.object({
    * password hash, its salt and its version are never exposed.
    */
   access: assetAccessSchema.optional(),
+  /**
+   * SPA fallback (ADR-013 C1). When true, a miss inside the extracted archive
+   * that does not look like a request for an asset file is answered with the
+   * root `index.html` at status 200. Off by default — a tile viewer needs its
+   * 404s.
+   *
+   * A flat system field, like `access`: ADR-013 C1 proposed
+   * `userMeta.hosting.spa`, but `userMeta` is caller-owned and a client that
+   * PATCHes the whole object would silently turn the flag off.
+   */
+  spa: z.boolean().optional(),
 });
 
 export const assetUploadResultSchema = z.object({
@@ -313,6 +324,11 @@ export const updateAssetBodySchema = z.object({
    */
   access: assetAccessSchema.optional(),
   password: z.string().min(PASSWORD_MIN_LENGTH).max(PASSWORD_MAX_LENGTH).optional(),
+  /**
+   * Turn the SPA fallback on or off (ADR-013 C1). Site (archive) assets in a
+   * project only; turning it off is always allowed.
+   */
+  spa: z.boolean().optional(),
 }).refine(
   (body) => body.access !== "password" || body.password !== undefined,
   { message: "access \"password\" requires a password", path: ["password"] },

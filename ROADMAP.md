@@ -191,7 +191,7 @@ Upload a `.zip` archive; the server extracts it and serves the contents as a dir
 
 ### Phase 1.5 — Frontend Hosting (AI-generated apps, one zip → one site)
 
-Municipal and enterprise users increasingly generate frontend apps with AI but have no Netlify / Cloudflare Pages to put them on. Serve already extracts and serves archives; this phase closes the gap to "upload a zip, get a working site". Design: [ADR-013](./docs/adr/013-static-site-hosting.md) (Part A, B1–B5, most of B6 and B7's `password` mode implemented; B7's `members` mode and Part C proposed).
+Municipal and enterprise users increasingly generate frontend apps with AI but have no Netlify / Cloudflare Pages to put them on. Serve already extracts and serves archives; this phase closes the gap to "upload a zip, get a working site". Design: [ADR-013](./docs/adr/013-static-site-hosting.md) (Part A, B1–B5, most of B6, B7's `password` mode and C1 implemented; B7's `members` mode, C2 and C3 proposed).
 
 **Part A — delivery semantics** ✅
 
@@ -212,7 +212,7 @@ Municipal and enterprise users increasingly generate frontend apps with AI but h
 
 **Part C — site behaviour & tooling**
 
-- [ ] C1 SPA fallback — root `index.html` (200) for unmatched paths when the asset opts in; `404.html`
+- [x] C1 SPA fallback — `spa` on the asset (a flat 0/1 column, like `access`, not a key in caller-owned `userMeta`): an extensionless miss inside an extracted archive serves the root `index.html` at `200` with the moving HTML cache policy, on every URL form. Withheld from file-shaped paths (`\.[a-z0-9]{1,8}$`) so a missing tile or chunk still 404s, and it runs only after the access check and the directory-redirect probe. Independently, a root `404.html` answers any remaining miss with status `404`, `no-store` and no `ETag`. Archive assets in a project only. `PATCH /api/v1/assets/:id {spa}` and `asset update <id> --spa on|off`. **Ops:** migration `0007_asset_spa.sql` must be applied
 - [ ] C2 CLI directory upload — `upload ./dist [--site --name <slug>]` zips, uploads and claims in one step
 - [ ] C3 `_headers` / `_redirects` — Netlify-style per-site header (CSP) and redirect rules
 

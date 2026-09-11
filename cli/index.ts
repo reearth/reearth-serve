@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { PATHS } from "../shared/paths";
 import type { AssetMetadata, AssetVersion, Job } from "../shared/api";
-import { apiGet, apiPost, apiPatch, apiPut, apiDelete, output, formatAsset, formatJob, formatVersion, formatBytes, promptPasswordTwice } from "./helpers";
+import { apiGet, apiPost, apiPatch, apiPut, apiDelete, output, formatAsset, formatJob, formatVersion, formatBytes, parseOnOff, promptPasswordTwice } from "./helpers";
 import { doUpload } from "./upload";
 import { registerFileCommands } from "./file";
 import { registerHostCommands } from "./host";
@@ -183,11 +183,13 @@ asset
   .argument("<id>", "Asset ID")
   .option("--description <text>", "Description")
   .option("--user-meta <json>", "User metadata (JSON)")
-  .action(async (id: string, cmdOpts: { description?: string; userMeta?: string }) => {
+  .option("--spa <on|off>", "SPA fallback: serve the site's index.html for unknown routes (ADR-013 C1)")
+  .action(async (id: string, cmdOpts: { description?: string; userMeta?: string; spa?: string }) => {
     const opts = program.opts<{ endpoint: string; json: boolean }>();
     const body: Record<string, unknown> = {};
     if (cmdOpts.description !== undefined) body.description = cmdOpts.description;
     if (cmdOpts.userMeta !== undefined) body.userMeta = JSON.parse(cmdOpts.userMeta);
+    if (cmdOpts.spa !== undefined) body.spa = parseOnOff(cmdOpts.spa, "--spa");
     const data = await apiPatch<{ asset: AssetMetadata }>(opts.endpoint, PATHS.asset(id), body);
     if (opts.json) {
       output(data, true);

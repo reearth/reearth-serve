@@ -31,6 +31,8 @@ export const SINGLE_FILE_ID = "fedcba9876543210";
 export const INDEX_HTML = "<!doctype html><title>site</title>";
 export const DOCS_HTML = "<!doctype html><title>docs</title>";
 export const APP_JS = "console.log('hello from a bundle that is long enough to matter')";
+/** The archive's own error page, seeded on demand by {@link seedNotFoundPage}. */
+export const NOT_FOUND_HTML = "<!doctype html><title>not found</title><p>gone";
 
 export class MemoryMetadataStore implements MetadataStore {
   readonly assets = new Map<string, AssetMetadata>();
@@ -73,7 +75,33 @@ export class MemoryMetadataStore implements MetadataStore {
     }
     this.protection.set(id, { hash: value.hash, salt: value.salt, version: version + 1 });
   }
-  async update(): Promise<void> {}
+  /**
+   * The patch the SQL store applies, applied here too.
+   *
+   * It used to be a no-op, which was enough while nothing in the delivery path
+   * read a mutable field. ADR-013 C1's `spa` is read by the file handler on
+   * every miss, so a test that PATCHes it has to see it afterwards.
+   */
+  async update(
+    id: string,
+    patch: {
+      activeVersionId?: string | null;
+      expiresAt?: number;
+      description?: string;
+      userMeta?: Record<string, unknown>;
+      spa?: boolean;
+    },
+  ): Promise<void> {
+    const asset = this.assets.get(id);
+    if (!asset) return;
+    const next = { ...asset };
+    if (patch.activeVersionId !== undefined) next.activeVersionId = patch.activeVersionId ?? undefined;
+    if (patch.expiresAt !== undefined) next.expiresAt = patch.expiresAt;
+    if (patch.description !== undefined) next.description = patch.description;
+    if (patch.userMeta !== undefined) next.userMeta = patch.userMeta;
+    if (patch.spa !== undefined) next.spa = patch.spa;
+    this.assets.set(id, next);
+  }
   async delete(id: string): Promise<void> {
     this.assets.delete(id);
     this.protection.delete(id);
@@ -214,6 +242,24 @@ export async function protect(
 ): Promise<void> {
   const { hash, salt } = await hashPassword(password, { iterations: TEST_ITERATIONS });
   await metadata.setProtection(id, { access: "password", hash, salt });
+}
+
+/**
+ * Put `404.html` at the root of the seeded archive's active version (ADR-013 C1).
+ *
+ * Not seeded by default: "no error page" is the state most of the delivery
+ * suite asserts against, and a test that wants one says so.
+ */
+export async function seedNotFoundPage(
+  storage: MemoryFileStorage,
+  body = NOT_FOUND_HTML,
+): Promise<void> {
+  await storage.put(
+    `assets/${ASSET_ID}/v/${VERSION_ID}/files/404.html`,
+    stream(bytes(body)),
+    "text/html; charset=utf-8",
+    body.length,
+  );
 }
 
 /** A dependency the test does not expect to be touched; calling it fails loudly. */

@@ -206,6 +206,16 @@ Assets support **versioning** — uploading to an existing asset (`POST /api/v1/
 
 **Static site hosting.** Zip a built frontend (the `dist/` folder of a Vite/Next/Astro export — a single root folder is stripped automatically), upload it, and `/files/:id/` serves its `index.html`. Nested `index.html` files resolve on trailing-slash URLs, and a directory URL without the slash redirects to it so relative links keep working. The extractor assigns `Content-Type` for web payloads (HTML, JS/MJS, CSS, WASM, SVG, fonts, source maps, web manifests, media). Under `/files/:id/`, absolute-path references (`/assets/app.js`) do not resolve — build with a relative base (Vite `base: './'`), or enable site hosts below. See [ADR-013](./docs/adr/013-static-site-hosting.md).
 
+**SPA fallback and `404.html`.** A single-page app routes on the client, so `/about` only exists once its JavaScript has loaded — reloading that URL asks the server for a file that is not in the archive. Turn the fallback on and the miss is answered with the archive's root `index.html` at status `200` instead:
+
+```bash
+reearth-serve asset update <assetId> --spa on    # …--spa off to turn it back off
+```
+
+It is **opt-in**, because the default has to stay right for the other use case: a 3D Tiles viewer asking for a tile that is not there must see a `404`, not an HTML body. For the same reason the fallback is withheld from any path whose last segment looks like a file (`\.[a-z0-9]{1,8}$` — `.js`, `.json`, `.png`, `.b3dm`): a `200` HTML body in place of a missing chunk breaks a bundler's dynamic import far more confusingly than a `404` does, and client-side routes are extensionless anyway. Real directories still redirect to their slash form first, so nothing that exists is shadowed by the app shell.
+
+Independently of the flag, if the archive has a root **`404.html`** it is served — with status `404`, `Cache-Control: no-store` and no `ETag` — for any miss the SPA fallback did not take. The status stays `404`, so an error page cannot mislead a loader the way a `200` can. Site (archive) assets in a project only; the flag is a property of the asset, so it applies on every URL form (`/files/:id/…`, ID and named hosts, previews). See [ADR-013 C1](./docs/adr/013-static-site-hosting.md).
+
 **Site hosts.** With `SITE_HOST_SUFFIX` set (e.g. `.serve.reearth.land`), every asset also has its own hostname: `https://<assetId>.serve.reearth.land/` serves exactly what `/files/<assetId>/` serves, and a version ID in place of the asset ID gives a pinned, immutable preview (marked `X-Robots-Tag: noindex`). Root-relative paths resolve there, so the `base: './'` advice above is unnecessary once it is enabled, and each site is its own origin — a hosted page cannot reach the API, the UI or another asset same-origin. Nothing but files is reachable on a site host: `/api/v1/health` is looked up as a file inside the archive. Archive uploads get a `siteUrl` in the response and the CLI prints it. Enabling it needs zone-side setup (a wildcard DNS record, a certificate covering `*.serve.reearth.land`, and a Worker route) — see the comment in `wrangler.toml` and [ADR-013 B1](./docs/adr/013-static-site-hosting.md). Once a suffix is configured, **the apex is the only hostname that is not a site**: every other `Host` is looked up in the site-hosts table (custom domains cannot be recognised any other way) and answers a plain-text `404` if it has no row, so the UI, `/api/v1/health` and the docs are reachable on the apex alone.
 
 **Protecting a site.** A staging site or an internal dashboard can be put behind a shared password (ADR-013 B7):
@@ -293,6 +303,7 @@ npm run cli -- asset list
 npm run cli -- asset list --limit 50 --cursor <cursor>
 npm run cli -- asset show <id>
 npm run cli -- asset update <id> --description "My dataset" --user-meta '{"tag":"v1"}'
+npm run cli -- asset update <id> --spa on       # SPA fallback: unknown routes get index.html
 npm run cli -- asset delete <id>
 npm run cli -- asset protect <id> --password    # prompts twice; protects a site
 npm run cli -- asset protect <id> --off         # public again

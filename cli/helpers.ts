@@ -34,6 +34,10 @@ export function formatAsset(asset: AssetMetadata): string {
   if (asset.archiveFormat) lines.push(`Archive:      ${asset.archiveFormat}`);
   if (asset.fileCount) lines.push(`Files:        ${asset.fileCount}`);
   if (asset.jobId) lines.push(`Job:          ${asset.jobId}`);
+  // Hosting switches (ADR-013). Both are server-side defaults when absent, so
+  // they are only printed when the server actually reports them.
+  if (asset.access) lines.push(`Access:       ${asset.access}`);
+  if (asset.spa !== undefined) lines.push(`SPA:          ${asset.spa ? "on" : "off"}`);
   return lines.join("\n");
 }
 
@@ -84,6 +88,13 @@ export function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+/** `on` / `off`, the spelling every boolean switch in this CLI takes. */
+export function parseOnOff(value: string, flag: string): boolean {
+  if (value === "on") return true;
+  if (value === "off") return false;
+  throw new Error(`${flag} takes on or off`);
 }
 
 // --- HTTP helpers ---
