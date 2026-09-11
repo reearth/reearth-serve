@@ -1,6 +1,6 @@
 # ADR-013: Static Site Hosting from Archive Assets
 
-- **Status:** Accepted — Part A, B1–B3 and the resolution/API/CLI of B6 implemented; B4, B5, B7 and Part C proposed
+- **Status:** Accepted — Part A, B1–B4 and the resolution/API/CLI of B6 implemented; B5, B7 and Part C proposed
 - **Date:** 2026-09-11
 - **Deciders:** @rot1024
 - **Related:** ADR-014 (asset access control: `restricted` mode, grants, signed URLs, API keys)
@@ -138,7 +138,7 @@ the procurement conversations in ROADMAP Phase 6). The extractor writes
 nothing to local disk, so non-root needs no volume. Image size is ~12.6 MB,
 essentially the binary.
 
-## Part B — Site hosts (B1–B3 implemented; B4–B7 proposed)
+## Part B — Site hosts (B1–B4 implemented; B5–B7 proposed)
 
 Part B introduces one new concept, the **site host**: a hostname under the
 service's wildcard suffix (or a customer's own domain) that serves exactly
@@ -385,7 +385,7 @@ states: they are capability URLs and stay reachable while the asset exists.
 - Releasing frees a slot against the per-project quota immediately, even
   though the row is still held.
 
-### B4. Preview hosts: `v{n}--name` and `latest--name`
+### B4. Preview hosts: `v{n}--name` and `latest--name` (implemented)
 
 Netlify's `deploy-preview-12--site.netlify.app` uses `--` because a
 wildcard certificate covers one label; a second level
@@ -421,6 +421,39 @@ latest--kawasaki-flood-map.serve.reearth.land    newest version, ignoring the ac
   here, and `v{n}` names them. If labelled versions arrive later (e.g.
   from Re:Earth Flow), `{label}--name` is the natural extension.
 
+**Implementation notes.**
+
+- **Both forms resolve to a version ID**, not to the asset, so the file
+  handler serves exactly those bytes with the layout it already has.
+  `v{n}--` is then pinned for free (A2: an ID that is a version's ID is
+  immutable). `latest--` is the exception the contract had to grow for:
+  the bytes are one version's but the *host* follows the asset, so the
+  response must stay revalidatable. `SiteTarget` gained
+  `preview?: "pinned" | "latest"`, and the middleware passes it to the
+  file router in an internal request header (`x-reearth-site-preview`) —
+  the rewritten request is a fresh `Request` dispatched into a separate
+  Hono app, so there is no context to carry it on. The middleware deletes
+  that header off the incoming request before setting it, or a visitor
+  could choose their own cache policy by sending it.
+- **`noindex` covers every preview**, `latest--` included, which the
+  version-ID host's `pinned && siteHost` rule did not: the condition is now
+  `siteHost && (pinned || preview)`.
+- **The left side is checked before any I/O.** `v{n}` is
+  `^v([1-9][0-9]*)$` — `v0` is not a version (ADR-005 numbers from 1) and
+  `v01` would be a second hostname for the same page — and anything that is
+  neither that nor `latest` is `404` without touching the table, so a
+  made-up left side cannot probe it.
+- **A name and its previews share one row, one cache entry and one state.**
+  The cached resolution carries `previews`, so `v3--name` costs no read the
+  bare name has not already paid for, and the `PATCH` that toggles the flag
+  drops the single key both forms are answered from. A disabled name's
+  previews are `503` and a released name's `410`, the same as the name.
+- **`custom` rows never have previews**, whatever their flag says (B5: `v{n}--`
+  has no meaning on a customer's domain). The resolver folds `kind` into the
+  cached `previews` value rather than caching the kind separately.
+- `VersionStore` gained `findByAssetAndNumber(assetId, n)`; paging
+  `findByAssetId` to find version 1 would read every newer version first.
+
 ### B5. Custom domains
 
 The `custom` kind of `site_hosts`. Differences from `subdomain`:
@@ -438,7 +471,7 @@ The `custom` kind of `site_hosts`. Differences from `subdomain`:
 Resolution, publish state, quota, release cooldown, API and CLI are
 shared with B2–B3.
 
-### B6. Resolution order, API and CLI (partly implemented)
+### B6. Resolution order, API and CLI (implemented apart from the event log)
 
 The middleware decides in this order, before any I/O:
 
@@ -481,9 +514,9 @@ is the kind of thing an audit asks about.
 - The resolver is `core/site/resolver.ts`, composed once in `core/app.ts` and
   handed to B1's `SiteHostResolver` seam. `SiteTarget` grew a discriminant so
   it can say "gone" as well as "found"; a miss stays `null`.
-- **Step 2 is a stub.** A label containing `--` resolves to nothing (404)
-  until B4 implements previews. It deliberately does not fall through to step
-  3: without that, `v3--name` would serve the production site.
+- **Step 2 never falls through to step 3.** A `--` label that does not resolve
+  as a preview is a `404`, not a name lookup: without that rule `v3--name`
+  would serve the production site whenever the left side were unreadable.
 - The cache is the `KeyValue` port (ADR-012 §2), reached through a new
   `cache` dependency — Cloudflare KV on the Worker, the `kv` table on Node.
   Key `host:{hostname}`, 60 s, and **misses are cached too**, so an
@@ -493,11 +526,11 @@ is the kind of thing an audit asks about.
 - **`PATCH …/hosts/:hostname`** takes `{disabled?, previews?}` and requires at
   least one of them: an empty body is a no-op the caller did not mean, so it
   is a `400`. It answers `200 {host, siteUrl}`, the same envelope as `POST`.
-  `previews` is stored but has no effect until B4.
-- CLI: `asset host add|list|remove|disable|enable`, with `--json`.
-  `asset host list` prints the state (enabled / disabled / released) beside
-  the hostname. `asset host update --previews` is B4 and
-  `upload --site --name <slug>` is C2.
+  Both switches may be sent in one request.
+- CLI: `asset host add|list|remove|disable|enable|update`, with `--json`.
+  `asset host list` prints the state (enabled / disabled / released) and
+  whether previews are on beside the hostname. `upload --site --name <slug>`
+  is C2.
 - The API shows a row without `verified_at` (B5) or `created_by`, plus the
   site `url`; `POST` answers `201 { host, siteUrl }`.
 - No events: `core/` has no event store yet. The two emit points are marked
@@ -791,8 +824,8 @@ case: tile viewers and data consumers rely on `404` for missing entries.
    hosts API and `asset host` CLI. **B6** is done apart from the `--`
    preview branch (B4) and the event-log entries, which wait on an event
    store (ADR-007); the emit points are marked in `core/site/usecase.ts`.
-3. **B4** preview hosts — `v{n}--` / `latest--`, `previews` flag,
-   `noindex`.
+3. ~~**B4** preview hosts~~ — done: `v{n}--` / `latest--`, the per-name
+   `previews` flag (off by default), `noindex` on every preview.
 4. **B7** `password` access mode — form + cookie, Basic fallback, PBKDF2
    hash, rate limiter, `private` caching, credentialed CORS. Depends on B1
    for origin-scoped cookies.

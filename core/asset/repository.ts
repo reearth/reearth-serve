@@ -35,6 +35,12 @@ export interface VersionStore {
   find(id: string): Promise<AssetVersion | null>;
   findByAssetId(assetId: string, options?: { limit?: number; cursor?: string }): Promise<ListResult<AssetVersion>>;
   findLatest(assetId: string): Promise<AssetVersion | null>;
+  /**
+   * One version by its per-asset number (ADR-005's `version` column), which is
+   * what a `v{n}--` preview host names (ADR-013 B4). Paging `findByAssetId`
+   * would read every newer version to find it.
+   */
+  findByAssetAndNumber(assetId: string, version: number): Promise<AssetVersion | null>;
   update(id: string, patch: Partial<Pick<AssetVersion, 'status' | 'userMeta'>>): Promise<void>;
   delete(id: string): Promise<void>;
   deleteByAssetId(assetId: string): Promise<{ totalSize: number; count: number }>;

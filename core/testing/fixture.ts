@@ -62,6 +62,10 @@ export class MemoryVersionStore implements VersionStore {
     const all = (await this.findByAssetId(assetId)).items.sort((a, b) => b.version - a.version);
     return all[0] ?? null;
   }
+  async findByAssetAndNumber(assetId: string, version: number): Promise<AssetVersion | null> {
+    const all = (await this.findByAssetId(assetId)).items;
+    return all.find((v) => v.version === version) ?? null;
+  }
   async update(): Promise<void> {}
   async delete(id: string): Promise<void> {
     this.versions.delete(id);

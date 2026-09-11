@@ -535,6 +535,16 @@ export class SqlVersionStore implements VersionStore {
     return parseVersionRow(row);
   }
 
+  async findByAssetAndNumber(assetId: string, version: number): Promise<AssetVersion | null> {
+    const row = await queryFirst(
+      this.db,
+      "SELECT * FROM asset_versions WHERE asset_id = ?1 AND version = ?2",
+      [assetId, version],
+    );
+    if (!row) return null;
+    return parseVersionRow(row);
+  }
+
   async update(id: string, patch: Partial<Pick<AssetVersion, 'status' | 'userMeta'>>): Promise<void> {
     const sets: string[] = [];
     const binds: SqlValue[] = [];

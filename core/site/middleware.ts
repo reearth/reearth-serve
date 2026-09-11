@@ -20,7 +20,15 @@ import type { AppEnv } from "../types";
 /**
  * What a site host resolved to.
  *
- * - `asset` — serve this ID through the file router.
+ * - `asset` — serve this ID through the file router. `preview` says the host
+ *   was a `v{n}--` / `latest--` one (B4) and decides the cache policy the file
+ *   handler applies to it:
+ *   - absent — the ID host or the bare name: the handler decides on its own
+ *     (a version ID is pinned, an asset ID follows the asset).
+ *   - `"pinned"` — `v{n}--`: `id` is a version ID and never moves.
+ *   - `"latest"` — `latest--`: `id` is a version ID too, but the host follows
+ *     the asset, so the response must stay revalidatable even though it names
+ *     one version. Both forms are `noindex`.
  * - `disabled` — the name is claimed and held but its owner has taken the site
  *   down (B3): `503`, because "exists, not serving" is the true answer.
  * - `gone` — the name is held by a released row inside its cooldown (B3): the
@@ -29,10 +37,23 @@ import type { AppEnv } from "../types";
  * A `null` resolution is the fourth case (miss) and stays outside the union so
  * a resolver can express it without constructing anything.
  */
+export type SitePreview = "pinned" | "latest";
+
 export type SiteTarget =
-  | { kind: "asset"; id: string }
+  | { kind: "asset"; id: string; preview?: SitePreview }
   | { kind: "disabled" }
   | { kind: "gone" };
+
+/**
+ * How the middleware tells the file router that a request came from a preview
+ * host (ADR-013 B4). The rewritten request is a new `Request` dispatched into
+ * a separate Hono app, so there is no context to carry it on.
+ *
+ * The middleware always deletes the header before setting it: it copies the
+ * visitor's headers onto the rewritten request, and a visitor who sent this
+ * one themselves would otherwise choose their own cache policy.
+ */
+export const SITE_PREVIEW_HEADER = "x-reearth-site-preview";
 
 /** Resolves a host's leading label, or null for 404. */
 export type SiteHostResolver = (label: string) => Promise<SiteTarget | null>;
@@ -139,11 +160,13 @@ export function siteHostMiddleware(opts: SiteHostOptions): MiddlewareHandler<App
     // string rides along untouched.
     url.pathname = `${prefix}${url.pathname}`;
 
+    const headers = new Headers(c.req.raw.headers);
+    headers.delete(SITE_PREVIEW_HEADER);
+    if (target.preview) headers.set(SITE_PREVIEW_HEADER, target.preview);
+
     // No body is carried over: only GET/HEAD reach the file router, and any
     // other method 404s there, so re-streaming a body would be for nothing.
-    const res = await opts.serve(
-      new Request(url, { method: c.req.raw.method, headers: c.req.raw.headers }),
-    );
+    const res = await opts.serve(new Request(url, { method: c.req.raw.method, headers }));
 
     return unrewriteLocation(res, prefix);
   };

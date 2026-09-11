@@ -15,6 +15,8 @@ import type { ProjectStore } from "../project/repository";
 import type { Member } from "../member/model";
 import type { MemberStore } from "../member/repository";
 import { ASSET_ID, fixture, SINGLE_FILE_ID } from "../testing/fixture";
+import { ENTRY_CACHE_CONTROL, PINNED_CACHE_CONTROL } from "../file/caching";
+import { SITE_PREVIEW_HEADER } from "./middleware";
 import { NAME_ERRORS } from "./names";
 import { RELEASE_COOLDOWN_MS, SITE_HOST_ERRORS, SITE_HOST_QUOTA, purgeReleasedSiteHosts } from "./usecase";
 
@@ -476,6 +478,144 @@ describe("PATCH /assets/:id/hosts/:hostname", () => {
     const { app, auth } = await siteFixture();
     await claim(app, auth, { hostname: "kawasaki-flood-map" });
     expect((await patch(app, {}, { disabled: true })).status).toBe(404);
+  });
+});
+
+describe("preview hosts (ADR-013 B4)", () => {
+  const NAME = "kawasaki-flood-map";
+
+  /**
+   * The fixture's asset with a second version, both extracted, and previews
+   * turned on for its name. `index.html` differs per version so a response can
+   * be told apart by its body.
+   */
+  async function previewFixture(options: { previews?: boolean } = {}) {
+    const f = await siteFixture();
+    await claim(f.app, f.auth, { hostname: NAME });
+    if (options.previews ?? true) {
+      await f.app.request(`/api/v1/assets/${ASSET_ID}/hosts/${NAME}${SUFFIX}`, {
+        method: "PATCH",
+        headers: { ...f.auth, "Content-Type": "application/json" },
+        body: JSON.stringify({ previews: true }),
+      });
+    }
+
+    const v2 = "aaaabbbbccccdddd";
+    f.versions.versions.set(v2, {
+      id: v2, assetId: ASSET_ID, version: 2, filename: "site.zip",
+      contentType: "application/zip", size: 3, createdAt: 10,
+      type: "archive", status: "ready",
+    });
+    const html = "<!doctype html><title>v2</title>";
+    await f.storage.put(
+      `assets/${ASSET_ID}/v/${v2}/files/index.html`,
+      new ReadableStream({ start(c) { c.enqueue(new TextEncoder().encode(html)); c.close(); } }),
+      "text/html; charset=utf-8",
+      html.length,
+    );
+    // The asset has no active version pinned, so the file handler follows the
+    // latest — which is now v2.
+    return { ...f, v2, v2Html: html };
+  }
+
+  test("v1--, v2-- and latest-- each serve their own version", async () => {
+    const { app, v2Html } = await previewFixture();
+
+    const v1 = await app.request(...site(`v1--${NAME}`));
+    expect(v1.status).toBe(200);
+    expect(await v1.text()).toContain("<title>site</title>");
+
+    const v2 = await app.request(...site(`v2--${NAME}`));
+    expect(v2.status).toBe(200);
+    expect(await v2.text()).toBe(v2Html);
+
+    // `latest--` ignores nothing and simply follows the asset's newest version.
+    const latest = await app.request(...site(`latest--${NAME}`));
+    expect(latest.status).toBe(200);
+    expect(await latest.text()).toBe(v2Html);
+
+    // The bare name serves the same bytes as latest here, by a different route.
+    const bare = await app.request(...site(NAME));
+    expect(await bare.text()).toBe(v2Html);
+  });
+
+  test("the three forms get the three cache policies of A2", async () => {
+    const { app } = await previewFixture();
+
+    // `v{n}--` names a fixed version: immutable for a year.
+    const pinned = await app.request(...site(`v1--${NAME}`));
+    expect(pinned.headers.get("Cache-Control")).toBe(PINNED_CACHE_CONTROL);
+
+    // `latest--` names a version ID too, but the host moves on the next
+    // upload, so the HTML must be revalidated like any other entry document.
+    const latest = await app.request(...site(`latest--${NAME}`));
+    expect(latest.headers.get("Cache-Control")).toBe(ENTRY_CACHE_CONTROL);
+
+    const bare = await app.request(...site(NAME));
+    expect(bare.headers.get("Cache-Control")).toBe(ENTRY_CACHE_CONTROL);
+  });
+
+  test("every preview is noindex; the production name is not", async () => {
+    const { app } = await previewFixture();
+    expect((await app.request(...site(`v1--${NAME}`))).headers.get("X-Robots-Tag")).toBe("noindex");
+    expect((await app.request(...site(`latest--${NAME}`))).headers.get("X-Robots-Tag")).toBe("noindex");
+    expect((await app.request(...site(NAME))).headers.get("X-Robots-Tag")).toBeNull();
+  });
+
+  test("a visitor cannot pick their own cache policy with the internal header", async () => {
+    const { app, v2 } = await previewFixture();
+    // The header the middleware uses is stripped from the incoming request; a
+    // version-ID host stays pinned however the visitor asks.
+    const res = await app.request(`http://${v2}${SUFFIX}/`, {
+      headers: { Host: `${v2}${SUFFIX}`, [SITE_PREVIEW_HEADER]: "latest" },
+    });
+    expect(res.headers.get("Cache-Control")).toBe(PINNED_CACHE_CONTROL);
+  });
+
+  test("previews are off until the name's owner turns them on", async () => {
+    const { app } = await previewFixture({ previews: false });
+    expect((await app.request(...site(`v1--${NAME}`))).status).toBe(404);
+    expect((await app.request(...site(`latest--${NAME}`))).status).toBe(404);
+    // The production name is unaffected.
+    expect((await app.request(...site(NAME))).status).toBe(200);
+  });
+
+  test("turning previews off again takes the preview hosts down", async () => {
+    const { app, auth } = await previewFixture();
+    expect((await app.request(...site(`v1--${NAME}`))).status).toBe(200);
+
+    await app.request(`/api/v1/assets/${ASSET_ID}/hosts/${NAME}${SUFFIX}`, {
+      method: "PATCH",
+      headers: { ...auth, "Content-Type": "application/json" },
+      body: JSON.stringify({ previews: false }),
+    });
+    // The PATCH drops the shared cache entry, so this is immediate.
+    expect((await app.request(...site(`v1--${NAME}`))).status).toBe(404);
+  });
+
+  test("a disabled name's previews are 503 and a released name's are 410", async () => {
+    const { app, auth } = await previewFixture();
+
+    await app.request(`/api/v1/assets/${ASSET_ID}/hosts/${NAME}${SUFFIX}`, {
+      method: "PATCH",
+      headers: { ...auth, "Content-Type": "application/json" },
+      body: JSON.stringify({ disabled: true }),
+    });
+    expect((await app.request(...site(`v1--${NAME}`))).status).toBe(503);
+
+    await app.request(`/api/v1/assets/${ASSET_ID}/hosts/${NAME}${SUFFIX}`, {
+      method: "DELETE", headers: auth,
+    });
+    expect((await app.request(...site(`latest--${NAME}`))).status).toBe(410);
+  });
+
+  test("a version the asset does not have, and a left side that is not one, are 404", async () => {
+    const { app } = await previewFixture();
+    for (const label of [`v9--${NAME}`, `v0--${NAME}`, `v01--${NAME}`, `staging--${NAME}`, `--${NAME}`]) {
+      const res = await app.request(...site(label));
+      expect(res.status, label).toBe(404);
+      expect(res.headers.get("Cache-Control"), label).toBe("no-store");
+    }
   });
 });
 

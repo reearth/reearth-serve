@@ -7,6 +7,7 @@ import type { FileStorage } from "../asset/repository";
 import { resolveAssetVersion } from "../asset/usecase";
 import { legacyThumbKey, versionThumbKey } from "../asset/usecase/shared";
 import { cacheControlFor, etagMatches, representationEtag } from "./caching";
+import { SITE_PREVIEW_HEADER, type SitePreview } from "../site/middleware";
 import { parseRange, sliceStream } from "./stream";
 import {
   isThumbnailSize,
@@ -16,6 +17,11 @@ import {
 } from "../thumbnail/sizes";
 
 const INDEX_FILE = "index.html";
+
+/** Read the site middleware's preview marker; anything else is not one. */
+function sitePreview(value: string | undefined): SitePreview | null {
+  return value === "pinned" || value === "latest" ? value : null;
+}
 
 // Detect a thumbnail request. Returns the requested size on success, "invalid"
 // if the request explicitly named an unknown size (→ 400), or null if not a
@@ -196,8 +202,14 @@ fileRoutes.on("GET", ["/:id", "/:id/", "/:id/:path{.+}"], async (c) => {
 
   // A URL that names a version ID is pinned: its bytes can never change, so
   // the response may be cached forever. Asset-ID URLs follow the active
-  // version and must stay revalidatable (ADR-013).
-  const pinned = version !== null && id === version.id;
+  // version and must stay revalidatable (ADR-013 A2).
+  //
+  // `latest--name` is the exception: the site middleware resolved it to a
+  // version ID so the right bytes are served, but the host follows the asset
+  // and the version under it moves on the next upload. It says so with the
+  // preview header, and the response stays revalidatable (ADR-013 B4).
+  const preview = sitePreview(c.req.header(SITE_PREVIEW_HEADER));
+  const pinned = version !== null && id === version.id && preview !== "latest";
 
   // Versioned layout first; assets from before ADR-005 have no version row and
   // live under the legacy prefix, which is also the fallback when the
@@ -230,12 +242,12 @@ fileRoutes.on("GET", ["/:id", "/:id/", "/:id/:path{.+}"], async (c) => {
     storage,
   });
 
-  // A version-ID site host is a pinned preview of a page that is also served
-  // by the asset-ID host: same content, two URLs, only one of which should be
-  // indexed (ADR-013 B4). `pinned` is already known here, so the header costs
-  // no extra lookup. Asset-ID hosts and the `/files/…` path form are
-  // unaffected.
-  if (pinned && c.get("siteHost")) res.headers.set("X-Robots-Tag", "noindex");
+  // A preview host serves the same pages as the production name: same content,
+  // several URLs, only one of which should be indexed (ADR-013 B4). That covers
+  // the version-ID host (pinned), `v{n}--name` and `latest--name` — the last of
+  // which is not pinned and so needs saying separately. Asset-ID hosts and the
+  // `/files/…` path form are unaffected.
+  if (c.get("siteHost") && (pinned || preview)) res.headers.set("X-Robots-Tag", "noindex");
 
   return res;
 });

@@ -1,7 +1,8 @@
 import { describe, expect, test } from "vitest";
 import { MemoryKeyValue } from "../../adapters/memory/memory-kv";
-import { MemorySiteHostStore } from "../testing/fixture";
+import { MemorySiteHostStore, MemoryVersionStore } from "../testing/fixture";
 import { composeSiteHostResolver, hostCacheKey } from "./resolver";
+import type { AssetVersion } from "../asset/model";
 import type { SiteHost } from "./repository";
 
 // The resolution order of ADR-013 B6, in isolation from the middleware.
@@ -25,12 +26,29 @@ function row(over: Partial<SiteHost> = {}): SiteHost {
   };
 }
 
-function setup(rows: SiteHost[] = [], opts: { cache?: MemoryKeyValue } = {}) {
+/** Version `n` of {@link ASSET_ID}, with a distinguishable version ID. */
+function version(n: number): AssetVersion {
+  return {
+    id: `00000000000000${String(n).padStart(2, "0")}`,
+    assetId: ASSET_ID,
+    version: n,
+    filename: "site.zip",
+    contentType: "application/zip",
+    size: 3,
+    createdAt: n,
+    type: "archive",
+    status: "ready",
+  };
+}
+
+function setup(rows: SiteHost[] = [], opts: { cache?: MemoryKeyValue; versions?: number[] } = {}) {
   const hosts = new MemorySiteHostStore();
   for (const r of rows) hosts.hosts.set(r.hostname, r);
+  const versions = new MemoryVersionStore();
+  for (const n of opts.versions ?? []) versions.versions.set(version(n).id, version(n));
   const cache = opts.cache;
-  const resolve = composeSiteHostResolver({ hosts, cache, suffix: SUFFIX });
-  return { hosts, cache, resolve };
+  const resolve = composeSiteHostResolver({ hosts, versions, cache, suffix: SUFFIX });
+  return { hosts, versions, cache, resolve };
 }
 
 describe("composeSiteHostResolver", () => {
@@ -39,19 +57,19 @@ describe("composeSiteHostResolver", () => {
     // A store that throws if anything reads it: an ID host must cost no I/O.
     const resolve = composeSiteHostResolver({
       hosts: new Proxy(hosts, { get() { throw new Error("table read on an ID host"); } }),
+      versions: new MemoryVersionStore(),
       suffix: SUFFIX,
     });
     expect(await resolve(ASSET_ID)).toEqual({ kind: "asset", id: ASSET_ID });
     expect(await resolve("0123456789abcdef")).toEqual({ kind: "asset", id: "0123456789abcdef" });
   });
 
-  test("a `--` label is a miss until B4 implements previews", async () => {
+  test("a `--` label never falls through to a plain lookup", async () => {
+    // A row whose hostname is literally `v3--…` cannot be claimed (B2 forbids
+    // `--`), but if one existed the preview branch must still not serve it as
+    // a named site.
     const { resolve } = setup([row({ hostname: `v3--kawasaki-flood-map${SUFFIX}` })]);
-    // Even with a row of that exact name in the table: the preview seam must
-    // never fall through to a plain lookup, or `v3--name` would serve the
-    // production site.
     expect(await resolve("v3--kawasaki-flood-map")).toBeNull();
-    expect(await resolve("latest--kawasaki-flood-map")).toBeNull();
   });
 
   test("an active row resolves to its asset", async () => {
@@ -86,6 +104,112 @@ describe("composeSiteHostResolver", () => {
   });
 });
 
+describe("preview hosts (ADR-013 B4)", () => {
+  /** A name with previews on and versions 1–3 of its asset. */
+  function previewSetup(over: Partial<SiteHost> = {}) {
+    return setup([row({ previews: true, ...over })], { versions: [1, 2, 3] });
+  }
+
+  test("`v{n}--name` resolves to that version's ID, pinned", async () => {
+    const { resolve } = previewSetup();
+    expect(await resolve("v1--kawasaki-flood-map")).toEqual({
+      kind: "asset", id: version(1).id, preview: "pinned",
+    });
+    expect(await resolve("v3--kawasaki-flood-map")).toEqual({
+      kind: "asset", id: version(3).id, preview: "pinned",
+    });
+  });
+
+  test("`latest--name` resolves to the newest version, following the asset", async () => {
+    const { resolve } = previewSetup();
+    expect(await resolve("latest--kawasaki-flood-map")).toEqual({
+      kind: "asset", id: version(3).id, preview: "latest",
+    });
+  });
+
+  test("the split is on the FIRST `--`, so the name is what follows it", async () => {
+    const { resolve } = previewSetup();
+    // Names cannot contain `--` (B2), so everything after the first one is the
+    // name and this can only ever miss — never resolve to some other site.
+    expect(await resolve("v1--kawasaki--flood-map")).toBeNull();
+  });
+
+  test("a left side that is not a version is a 404, with no table read", async () => {
+    const hosts = new MemorySiteHostStore();
+    const versions = new MemoryVersionStore();
+    const resolve = composeSiteHostResolver({
+      hosts: new Proxy(hosts, { get() { throw new Error("table read on a bad preview label"); } }),
+      versions, suffix: SUFFIX,
+    });
+    for (const label of ["staging--kawasaki-flood-map", "--kawasaki-flood-map", "v--x", "3--x"]) {
+      expect(await resolve(label), label).toBeNull();
+    }
+  });
+
+  test("`v0` and `v01` are not versions", async () => {
+    const { resolve } = previewSetup();
+    // ADR-005 numbers versions from 1, and `v01` would be a second spelling of
+    // `v1` — two hostnames for one page.
+    expect(await resolve("v0--kawasaki-flood-map")).toBeNull();
+    expect(await resolve("v01--kawasaki-flood-map")).toBeNull();
+  });
+
+  test("a version number the asset does not have is a 404", async () => {
+    const { resolve } = previewSetup();
+    expect(await resolve("v4--kawasaki-flood-map")).toBeNull();
+  });
+
+  test("an asset with no versions has no `latest--` host", async () => {
+    const { resolve } = setup([row({ previews: true })], { versions: [] });
+    expect(await resolve("latest--kawasaki-flood-map")).toBeNull();
+  });
+
+  test("previews off is a 404: the name serves, its previews do not", async () => {
+    const { resolve } = setup([row({ previews: false })], { versions: [1, 2, 3] });
+    expect(await resolve("kawasaki-flood-map")).toEqual({ kind: "asset", id: ASSET_ID });
+    expect(await resolve("v1--kawasaki-flood-map")).toBeNull();
+    expect(await resolve("latest--kawasaki-flood-map")).toBeNull();
+  });
+
+  test("an unclaimed name has no previews", async () => {
+    const { resolve } = setup([], { versions: [1] });
+    expect(await resolve("v1--kawasaki-flood-map")).toBeNull();
+  });
+
+  test("a disabled name takes its previews down with it (503)", async () => {
+    const { resolve } = previewSetup({ disabledAt: 4000 });
+    expect(await resolve("v1--kawasaki-flood-map")).toEqual({ kind: "disabled" });
+    expect(await resolve("latest--kawasaki-flood-map")).toEqual({ kind: "disabled" });
+  });
+
+  test("a released name's previews are gone with it (410)", async () => {
+    const { resolve } = previewSetup({ releasedAt: 5000, assetId: null });
+    expect(await resolve("v1--kawasaki-flood-map")).toEqual({ kind: "gone" });
+  });
+
+  test("a custom-domain row never has previews, whatever the flag says", async () => {
+    // B5: `v{n}--` has no meaning on a customer's own domain.
+    const { resolve } = setup([row({ kind: "custom", previews: true })], { versions: [1] });
+    expect(await resolve("v1--kawasaki-flood-map")).toBeNull();
+  });
+
+  test("a name and its previews share one cache entry", async () => {
+    const cache = new MemoryKeyValue();
+    const { hosts, resolve } = setup([row({ previews: true })], { cache, versions: [1, 2, 3] });
+
+    expect(await resolve("kawasaki-flood-map")).toEqual({ kind: "asset", id: ASSET_ID });
+    expect(cache.size).toBe(1);
+
+    // The row is gone from the table; the preview is still answered, from the
+    // entry the bare name wrote.
+    hosts.hosts.clear();
+    expect(await resolve("v2--kawasaki-flood-map")).toEqual({
+      kind: "asset", id: version(2).id, preview: "pinned",
+    });
+    expect(cache.size).toBe(1);
+  });
+});
+
 describe("the resolution cache", () => {
   test("a hit is served from the cache on the second call", async () => {
     const cache = new MemoryKeyValue();
@@ -93,7 +217,8 @@ describe("the resolution cache", () => {
 
     expect(await resolve("kawasaki-flood-map")).toEqual({ kind: "asset", id: ASSET_ID });
     expect(await cache.get(hostCacheKey(`kawasaki-flood-map${SUFFIX}`))).toBe(
-      JSON.stringify({ t: "asset", id: ASSET_ID }),
+      // `previews` rides along so a preview host costs no second read (B4).
+      JSON.stringify({ t: "asset", id: ASSET_ID, previews: false }),
     );
 
     // Drop the row: the answer must still come back, from the cache.
@@ -142,7 +267,9 @@ describe("the resolution cache", () => {
       put: async () => { throw new Error("kv down"); },
       delete: async () => { throw new Error("kv down"); },
     };
-    const resolve = composeSiteHostResolver({ hosts, cache: broken, suffix: SUFFIX });
+    const resolve = composeSiteHostResolver({
+      hosts, versions: new MemoryVersionStore(), cache: broken, suffix: SUFFIX,
+    });
     expect(await resolve("kawasaki-flood-map")).toEqual({ kind: "asset", id: ASSET_ID });
   });
 

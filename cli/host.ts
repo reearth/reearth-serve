@@ -4,11 +4,10 @@ import type { SiteHost } from "../shared/api";
 import { apiGet, apiPost, apiPatch, apiDelete, output } from "./helpers";
 
 /**
- * `asset host add|list|remove|disable|enable` (ADR-013 B6).
+ * `asset host add|list|remove|disable|enable|update` (ADR-013 B6).
  *
- * Entity-verb grammar, like `asset version …`. `update --previews` (B4) joins
- * this group when that lands; `upload --site --name` (C2) is a different
- * command entirely.
+ * Entity-verb grammar, like `asset version …`. `upload --site --name` (C2) is
+ * a different command entirely.
  */
 export function registerHostCommands(program: Command, asset: Command) {
   const host = asset
@@ -50,7 +49,7 @@ export function registerHostCommands(program: Command, asset: Command) {
           return;
         }
         for (const h of data.hosts) {
-          console.log(`${h.hostname}  ${hostState(h)}  ${h.url}`);
+          console.log(`${h.hostname}  ${hostState(h)}${h.previews ? " previews" : ""}  ${h.url}`);
         }
       }
     });
@@ -71,8 +70,39 @@ export function registerHostCommands(program: Command, asset: Command) {
       }
     });
 
+  host
+    .command("update")
+    .description("Turn a name's preview hosts (v<n>--name, latest--name) on or off")
+    .argument("<id>", "Asset ID")
+    .argument("<name>", "Name or full host")
+    .requiredOption("--previews <on|off>", "Whether preview hosts resolve")
+    .action(async (id: string, name: string, cmdOpts: { previews: string }) => {
+      const opts = program.opts<{ endpoint: string; json: boolean }>();
+      const previews = parseSwitch(cmdOpts.previews);
+      const data = await apiPatch<{ host: SiteHost }>(
+        opts.endpoint,
+        PATHS.assetHost(id, name),
+        { previews },
+      );
+      if (opts.json) {
+        output(data, true);
+      } else {
+        console.log(`Previews ${previews ? "on" : "off"}: ${data.host.hostname}`);
+        if (previews) {
+          console.log("Preview hosts: v<n>--<name> (pinned) and latest--<name>.");
+        }
+      }
+    });
+
   registerPublishState(program, host, "disable", true);
   registerPublishState(program, host, "enable", false);
+}
+
+/** `on` / `off`, the only two spellings `--previews` takes. */
+function parseSwitch(value: string): boolean {
+  if (value === "on") return true;
+  if (value === "off") return false;
+  throw new Error("--previews takes on or off");
 }
 
 /**

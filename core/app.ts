@@ -40,7 +40,9 @@ export function createApp(deps: Deps) {
     suffix: deps.siteHostSuffix,
     serve: (req) => site.fetch(req),
     resolve: suffix
-      ? composeSiteHostResolver({ hosts: deps.siteHosts, cache: deps.cache, suffix })
+      ? composeSiteHostResolver({
+        hosts: deps.siteHosts, versions: deps.versions, cache: deps.cache, suffix,
+      })
       : undefined,
   }));
 

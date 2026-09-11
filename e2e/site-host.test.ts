@@ -16,11 +16,18 @@ const SUFFIX = process.env.E2E_SITE_HOST_SUFFIX;
  * different `Host`. `fetch` derives Host from the URL and DNS would have to
  * resolve the site host for that to work, so this drops to node:http.
  */
-function get(host: string, path: string): Promise<{ status: number; contentType: string; body: string }> {
+function get(
+  host: string,
+  path: string,
+  extraHeaders: Record<string, string> = {},
+): Promise<{ status: number; contentType: string; cacheControl: string; robots: string; body: string }> {
   const base = new URL(BASE);
   return new Promise((resolve, reject) => {
     const req = httpRequest(
-      { hostname: base.hostname, port: base.port, path, method: "GET", headers: { Host: host } },
+      {
+        hostname: base.hostname, port: base.port, path, method: "GET",
+        headers: { Host: host, ...extraHeaders },
+      },
       (res) => {
         let body = "";
         res.setEncoding("utf8");
@@ -28,6 +35,8 @@ function get(host: string, path: string): Promise<{ status: number; contentType:
         res.on("end", () => resolve({
           status: res.statusCode ?? 0,
           contentType: res.headers["content-type"] ?? "",
+          cacheControl: res.headers["cache-control"] ?? "",
+          robots: (res.headers["x-robots-tag"] as string | undefined) ?? "",
           body,
         }));
       },
@@ -225,6 +234,73 @@ describe.skipIf(!SUFFIX)("site hosts", () => {
     });
     expect(res.status).toBe(400);
     expect((await res.json() as { error: string }).error).toBe("names require a project asset");
+  });
+
+  // Preview hosts (ADR-013 B4).
+  test("v{n}-- and latest-- serve their versions once previews are on", async () => {
+    const token = await signToken();
+    const projectId = await createProjectForAuth(token, "e2e-site-previews");
+    const { assetId, name } = await claimedSite(token, projectId, "e2e-prev");
+
+    const uploadVersion = async (text: string) => {
+      const body = new TextEncoder().encode(text);
+      const res = await fetch(`${BASE}/api/v1/assets/${assetId}`, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/zip",
+          "Content-Length": String(body.byteLength),
+          "X-Filename": "site.zip",
+          "X-Skip-Extraction": "true",
+          Authorization: `Bearer ${token}`,
+        },
+        body: body as BodyInit,
+      });
+      expect(res.status).toBe(201);
+      return (await res.json() as { version: { id: string; version: number } }).version;
+    };
+    const first = await uploadVersion("PK\x03\x04 version one");
+    const second = await uploadVersion("PK\x03\x04 version two");
+    expect(second.version).toBe(first.version + 1);
+
+    // Off by default: the name serves, its previews do not.
+    expect((await get(`v${first.version}--${name}${suffix}`, "/site.zip")).status).toBe(404);
+
+    const patched = await fetch(`${BASE}/api/v1/assets/${assetId}/hosts/${name}${suffix}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ previews: true }),
+    });
+    expect(patched.status).toBe(200);
+    expect((await patched.json() as { host: { previews: boolean } }).host.previews).toBe(true);
+
+    const older = await get(`v${first.version}--${name}${suffix}`, "/site.zip");
+    expect(older.status).toBe(200);
+    expect(older.body).toContain("version one");
+    // A fixed version never moves, so it is cacheable forever (ADR-013 A2).
+    expect(older.cacheControl).toContain("immutable");
+    expect(older.robots).toBe("noindex");
+
+    const newer = await get(`v${second.version}--${name}${suffix}`, "/site.zip");
+    expect(newer.status).toBe(200);
+    expect(newer.body).toContain("version two");
+
+    // `latest--` is the newest version's bytes with the production name's
+    // cache policy: it moves on the next upload.
+    const latest = await get(`latest--${name}${suffix}`, "/site.zip");
+    expect(latest.status).toBe(200);
+    expect(latest.body).toBe(newer.body);
+    expect(latest.cacheControl).not.toContain("immutable");
+    expect(latest.robots).toBe("noindex");
+
+    // The production name serves the same bytes and stays indexable.
+    const production = await get(`${name}${suffix}`, "/site.zip");
+    expect(production.body).toBe(newer.body);
+    expect(production.cacheControl).toBe(latest.cacheControl);
+    expect(production.robots).toBe("");
+
+    // A left side that is not a version, and one the asset does not have.
+    expect((await get(`staging--${name}${suffix}`, "/site.zip")).status).toBe(404);
+    expect((await get(`v99--${name}${suffix}`, "/site.zip")).status).toBe(404);
   });
 
   // `asset host disable --all` is a loop over the asset's rows rather than an

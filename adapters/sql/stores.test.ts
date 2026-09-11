@@ -176,6 +176,22 @@ describe("SqlVersionStore", () => {
     expect(await store.count("a1")).toBe(2);
   });
 
+  test("findByAssetAndNumber picks one version by its per-asset number", async () => {
+    const store = new SqlVersionStore(db());
+    const base = { assetId: "a1", version: 0, filename: "f", contentType: "text/plain", size: 1, createdAt: 1 };
+    await store.save({ ...base, id: "v1" });
+    await store.save({ ...base, id: "v2" });
+    // Same number under a different asset: the number is per-asset (ADR-005),
+    // which is what `v{n}--name` addresses (ADR-013 B4).
+    await store.save({ ...base, id: "other", assetId: "a2" });
+
+    expect((await store.findByAssetAndNumber("a1", 1))?.id).toBe("v1");
+    expect((await store.findByAssetAndNumber("a1", 2))?.id).toBe("v2");
+    expect((await store.findByAssetAndNumber("a2", 1))?.id).toBe("other");
+    expect(await store.findByAssetAndNumber("a1", 3)).toBeNull();
+    expect(await store.findByAssetAndNumber("a1", 0)).toBeNull();
+  });
+
   test("findByAssetId, update, delete and deleteByAssetId", async () => {
     const store = new SqlVersionStore(db());
     const base = { assetId: "a1", version: 0, filename: "f", contentType: "text/plain", createdAt: 1 };
