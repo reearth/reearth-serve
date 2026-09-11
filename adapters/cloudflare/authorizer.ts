@@ -66,6 +66,12 @@ if (import.meta.vitest) {
     expect(await authorizer.check({ principal: { id: "u1", roles: ["admin"] }, ...base, action: "delete" })).toBe(false);
   });
 
+  test("editor can update assets, viewer cannot", async () => {
+    const base = { resource: { kind: "asset", id: "a1" }, action: "update" };
+    expect(await authorizer.check({ principal: { id: "u1", roles: ["editor"] }, ...base })).toBe(true);
+    expect(await authorizer.check({ principal: { id: "u1", roles: ["viewer"] }, ...base })).toBe(false);
+  });
+
   test("editor can create/delete assets but not projects", async () => {
     expect(await authorizer.check({
       principal: { id: "u1", roles: ["editor"] },

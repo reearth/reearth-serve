@@ -16,6 +16,10 @@ const permissions: Record<string, Record<string, Set<Role>>> = {
   asset: {
     read: new Set(["owner", "admin", "editor", "viewer"]),
     create: new Set(["owner", "admin", "editor"]),
+    // Metadata, user_meta, version metadata and the active-version switch
+    // (asset/handler/update-asset, update-version, set-active-version all
+    // check "update"). It was missing, so every update was denied.
+    update: new Set(["owner", "admin", "editor"]),
     delete: new Set(["owner", "admin", "editor"]),
     extract: new Set(["owner", "admin", "editor"]),
     // Claiming and releasing site names (ADR-013 B2/B3): the same bar as an
