@@ -8,7 +8,8 @@ import {
   createProjectBodySchema, createWorkspaceBodySchema,
   addMemberBodySchema, updateMemberBodySchema,
   updateAssetBodySchema, updateVersionBodySchema, setActiveVersionBodySchema,
-  siteHostSchema, claimSiteHostBodySchema, updateSiteHostBodySchema,
+  siteHostSchema, siteHostVerificationSchema, claimSiteHostBodySchema,
+  updateSiteHostBodySchema,
 } from "./api";
 
 // --- Response envelopes ---
@@ -48,8 +49,15 @@ export const siteHostResponseSchema = z.object({
   host: siteHostSchema,
   /** The same value as `host.url`, alongside the upload response's `siteUrl`. */
   siteUrl: z.string(),
-});
+}).extend(siteHostVerificationSchema.partial().shape);
 export const siteHostListResponseSchema = z.object({ hosts: z.array(siteHostSchema) });
+
+/**
+ * `409` from `POST …/hosts/:hostname/verify` (ADR-013 B5): the record was not
+ * found, so the body repeats what the customer has to publish.
+ */
+export const siteHostVerificationFailedSchema = errorResponseSchema
+  .extend(siteHostVerificationSchema.shape);
 
 export const healthResponseSchema = z.object({
   ok: z.boolean(),

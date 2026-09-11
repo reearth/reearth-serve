@@ -16,6 +16,8 @@ export const PATHS = {
   assetHosts: (id: string) => `${API_V1}/assets/${id}/hosts`,
   assetHost: (id: string, hostname: string) =>
     `${API_V1}/assets/${id}/hosts/${encodeURIComponent(hostname)}`,
+  assetHostVerify: (id: string, hostname: string) =>
+    `${API_V1}/assets/${id}/hosts/${encodeURIComponent(hostname)}/verify`,
   projectHosts: (id: string) => `${API_V1}/projects/${id}/hosts`,
   assetFiles: (id: string, prefix?: string) =>
     `${API_V1}/assets/${id}/files${prefix ? `?prefix=${encodeURIComponent(prefix)}` : ""}`,

@@ -23,6 +23,8 @@ function host(over: Partial<SiteHost> = {}): SiteHost {
     releasedAt: null,
     createdAt: 1000,
     createdBy: "u1",
+    verificationToken: null,
+    certificateStatus: null,
     ...over,
   };
 }
@@ -59,6 +61,36 @@ describe("SqlSiteHostStore", () => {
     // An empty patch issues no statement at all.
     await s.update(hostname, {});
     expect(await s.find(hostname)).toEqual(host({ previews: true }));
+  });
+
+  test("the B5 verification columns round-trip and patch independently", async () => {
+    const s = store();
+    const custom = {
+      hostname: "map.city.example.jp",
+      kind: "custom" as const,
+      verificationToken: "0123456789abcdef0123456789abcdef",
+    };
+    await s.insert(host(custom));
+    expect(await s.find("map.city.example.jp")).toEqual(host(custom));
+
+    // Verification writes both columns at once…
+    await s.update("map.city.example.jp", { verifiedAt: 7000, certificateStatus: "pending" });
+    expect(await s.find("map.city.example.jp")).toEqual(
+      host({ ...custom, verifiedAt: 7000, certificateStatus: "pending" }),
+    );
+
+    // …and the single-row GET refreshes only the certificate afterwards.
+    await s.update("map.city.example.jp", { certificateStatus: "active" });
+    expect(await s.find("map.city.example.jp")).toEqual(
+      host({ ...custom, verifiedAt: 7000, certificateStatus: "active" }),
+    );
+
+    // A subdomain keeps both columns null through a B3/B4 patch.
+    await s.insert(host());
+    await s.update(`kawasaki-flood-map${SUFFIX}`, { previews: true });
+    const row = await s.find(`kawasaki-flood-map${SUFFIX}`);
+    expect(row?.verificationToken).toBeNull();
+    expect(row?.certificateStatus).toBeNull();
   });
 
   test("update never revives a released row", async () => {

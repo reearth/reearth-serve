@@ -52,6 +52,8 @@ E2E_ENDPOINT=http://localhost:5173 npm run test:e2e
 | `E2E_PRESIGNED` | (unset) | Set to `true` to enable presigned upload tests |
 | `E2E_CONTAINER` | (unset) | Set to `true` to enable container extraction tests (requires Docker) |
 | `E2E_THUMBNAILS` | (unset) | Set to `false` to skip thumbnail tests on a runtime without the jSquash wasm codecs |
+| `E2E_SITE_HOST_SUFFIX` | (unset) | The suffix the server was started with; unset ⇒ the site-host suite is skipped |
+| `E2E_MOCK_DOH` | (unset) | Base URL of the mock DoH resolver (`e2e/mock-doh.ts`); unset ⇒ the custom-domain verification tests are skipped |
 
 `npm run test:e2e:node` starts `runtime/node` instead of wrangler and sets
 `E2E_PRESIGNED=false`, `E2E_CONTAINER=false` and `E2E_THUMBNAILS=false`, since
@@ -144,8 +146,18 @@ Set via `npx wrangler secret put <NAME>`:
 | `OIDC_ISSUER_URL` | No | OIDC Issuer URL for JWT authentication |
 | `OIDC_AUDIENCE` | No | JWT audience claim for token validation |
 | `CERBOS_ENDPOINT` | No | Cerbos PDP endpoint URL for authorization |
+| `SITE_HOST_SUFFIX` | No | Wildcard suffix site hosts live under, e.g. `.serve.reearth.land` (ADR-013 B1). Unset ⇒ site hosts and custom domains are off. Set in `wrangler.toml` once the zone is ready |
+| `CF_API_TOKEN` | No† | Cloudflare API token with `Zone → SSL and Certificates: Edit` on the site-host zone, for Cloudflare for SaaS custom hostnames (ADR-013 B5) |
+| `CF_ZONE_ID` | No† | The zone the custom hostnames are registered on (ADR-013 B5) |
+| `SITE_FALLBACK_ORIGIN` | No | What a customer CNAMEs their domain at — Cloudflare for SaaS's fallback origin. Unset ⇒ the host of `BASE_URL` |
+| `SITE_DNS_RESOLVER_URL` | No | DNS-over-HTTPS endpoint used for the custom-domain TXT check. Default `https://cloudflare-dns.com/dns-query` |
 
 \* Required for presigned URL uploads and archive extraction containers.
+
+† Both or neither. With both, a verified custom domain is registered on the
+zone and gets a DV certificate automatically; with neither, the customer is
+told to CNAME at the fallback origin and the operator terminates TLS
+themselves (which is what the Node runtime always does).
 
 ### Initial Setup
 

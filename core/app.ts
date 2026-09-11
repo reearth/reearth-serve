@@ -38,6 +38,10 @@ export function createApp(deps: Deps) {
   const suffix = normalizeSiteHostSuffix(deps.siteHostSuffix);
   app.use("*", siteHostMiddleware({
     suffix: deps.siteHostSuffix,
+    // The apex is the one host that is never a site (ADR-013 B5): a custom
+    // domain is unrecognisable from its name, so the rule had to become "every
+    // host but this one is a candidate".
+    baseUrl: deps.baseUrl,
     serve: (req) => site.fetch(req),
     resolve: suffix
       ? composeSiteHostResolver({
@@ -152,6 +156,9 @@ function injectDeps(deps: Deps, opts: { siteHost: boolean }): MiddlewareHandler<
     c.set("anonymousUploadEnabled", deps.anonymousUploadEnabled);
     c.set("siteHostSuffix", deps.siteHostSuffix);
     c.set("siteHosts", deps.siteHosts);
+    c.set("dns", deps.dns);
+    c.set("customHostnames", deps.customHostnames);
+    c.set("siteFallbackOrigin", deps.siteFallbackOrigin);
     c.set("cache", deps.cache);
     c.set("siteHost", opts.siteHost);
     await next();

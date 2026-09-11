@@ -5,105 +5,19 @@
  * rather than in e2e.
  */
 import { describe, expect, test } from "vitest";
-import { SignJWT } from "jose";
-import type { JWTVerifyGetKey } from "jose";
 // The API's view of a row (with `url`, without the internal columns), not the
 // store's — these assertions are about what a caller receives.
-import type { Role, SiteHost } from "../../shared/api";
-import type { Project } from "../project/model";
-import type { ProjectStore } from "../project/repository";
-import type { Member } from "../member/model";
-import type { MemberStore } from "../member/repository";
+import type { SiteHost } from "../../shared/api";
 import { ASSET_ID, fixture, SINGLE_FILE_ID } from "../testing/fixture";
+import {
+  PROJECT_ID, siteFixture, SUFFIX, token, USER, type SiteApp,
+} from "../testing/site-fixture";
 import { ENTRY_CACHE_CONTROL, PINNED_CACHE_CONTROL } from "../file/caching";
 import { SITE_PREVIEW_HEADER } from "./middleware";
 import { NAME_ERRORS } from "./names";
 import { RELEASE_COOLDOWN_MS, SITE_HOST_ERRORS, SITE_HOST_QUOTA, purgeReleasedSiteHosts } from "./usecase";
 
-const SUFFIX = ".serve.example.test";
-const PROJECT_ID = "p1";
-const WORKSPACE_ID = "ws1";
-const USER = "u1";
-const ISSUER = "https://issuer.example.test/";
-const AUDIENCE = "test-audience";
-const SECRET = new TextEncoder().encode("a-test-secret-that-is-long-enough-32");
-
-class MemoryProjectStore implements ProjectStore {
-  readonly projects = new Map<string, Project>();
-  async save(project: Project): Promise<void> { this.projects.set(project.id, project); }
-  async find(id: string): Promise<Project | null> { return this.projects.get(id) ?? null; }
-  async list(): Promise<Project[]> { return [...this.projects.values()]; }
-  async delete(id: string): Promise<void> { this.projects.delete(id); }
-}
-
-class MemoryMemberStore implements MemberStore {
-  readonly members = new Map<string, Member>();
-  async save(member: Member): Promise<void> { this.members.set(`${member.workspaceId}:${member.userId}`, member); }
-  async find(workspaceId: string, userId: string): Promise<Member | null> {
-    return this.members.get(`${workspaceId}:${userId}`) ?? null;
-  }
-  async list(): Promise<Member[]> { return [...this.members.values()]; }
-  async listByUser(): Promise<Member[]> { return [...this.members.values()]; }
-  async delete(): Promise<void> {}
-}
-
-async function token(sub = USER): Promise<string> {
-  return new SignJWT({})
-    .setProtectedHeader({ alg: "HS256" })
-    .setIssuer(ISSUER).setAudience(AUDIENCE).setSubject(sub)
-    .setExpirationTime("1h")
-    .sign(SECRET);
-}
-
-/**
- * The shared fixture, upgraded into a project world: the archive asset belongs
- * to a project in a workspace the caller is a member of, with `role` deciding
- * what they may do.
- */
-async function siteFixture(options: { role?: Role; suffix?: string | undefined } = {}) {
-  const projects = new MemoryProjectStore();
-  const members = new MemoryMemberStore();
-  await projects.save({
-    id: PROJECT_ID, name: "P", createdAt: 0, updatedAt: 0,
-    ownerId: "someone-else", workspaceId: WORKSPACE_ID,
-  });
-  await members.save({
-    workspaceId: WORKSPACE_ID, userId: USER,
-    role: options.role ?? "editor", createdAt: 0, updatedAt: 0,
-  });
-
-  const f = await fixture({
-    siteHostSuffix: "suffix" in options ? options.suffix : SUFFIX,
-    projects,
-    members,
-    // Deleting a project asset moves the storage counters.
-    storageUsage: {
-      async get() { return null; },
-      async increment() {},
-      async decrement() {},
-      async recalculate() {},
-    },
-    auth: {
-      issuer: ISSUER,
-      audience: AUDIENCE,
-      // A local verifier instead of a JWKS fetch; the middleware's contract is
-      // the same either way.
-      jwks: (async () => SECRET) as unknown as JWTVerifyGetKey,
-    },
-  });
-
-  // Both seeded assets become project assets; the single-file one stays
-  // single-file, which is the "not an archive" case.
-  for (const id of [ASSET_ID, SINGLE_FILE_ID]) {
-    const asset = f.metadata.assets.get(id)!;
-    f.metadata.assets.set(id, { ...asset, projectId: PROJECT_ID });
-  }
-
-  const auth = { Authorization: `Bearer ${await token()}` };
-  return { ...f, projects, members, auth };
-}
-
-type App = Awaited<ReturnType<typeof siteFixture>>["app"];
+type App = SiteApp;
 
 function claim(app: App, auth: Record<string, string>, body: unknown, id = ASSET_ID) {
   return app.request(`/api/v1/assets/${id}/hosts`, {
@@ -135,9 +49,15 @@ describe("POST /assets/:id/hosts", () => {
     // The scheme follows BASE_URL (https://example.test in the fixture).
     expect(body.siteUrl).toBe(`https://kawasaki-flood-map${SUFFIX}/`);
     expect(body.host.url).toBe(body.siteUrl);
-    // Internal-only columns stay out of the API.
+    // Internal-only columns stay out of the API. `verifiedAt` is shown since
+    // B5 — it is how a custom domain reports whether it resolves — but on a
+    // subdomain there is nothing to verify, so it is null.
     expect(body.host).not.toHaveProperty("createdBy");
-    expect(body.host).not.toHaveProperty("verifiedAt");
+    expect(body.host).not.toHaveProperty("verificationToken");
+    expect(body.host.verifiedAt).toBeNull();
+    expect(body.host.certificateStatus).toBeNull();
+    // Nothing to publish for a name under our own suffix.
+    expect(body).not.toHaveProperty("verification");
     expect(siteHosts.hosts.get(`kawasaki-flood-map${SUFFIX}`)?.createdBy).toBe(USER);
   });
 
@@ -189,13 +109,6 @@ describe("POST /assets/:id/hosts", () => {
     const res = await claim(app, auth, { hostname: "some-geojson" }, SINGLE_FILE_ID);
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: SITE_HOST_ERRORS.archiveRequired });
-  });
-
-  test("custom domains are refused until B5", async () => {
-    const { app, auth } = await siteFixture();
-    const res = await claim(app, auth, { hostname: "map.city.example.jp", kind: "custom" });
-    expect(res.status).toBe(400);
-    expect(await res.json()).toEqual({ error: SITE_HOST_ERRORS.customUnsupported });
   });
 
   test("claiming is unavailable where the server has no site-host suffix", async () => {
@@ -360,7 +273,8 @@ describe("the site host itself", () => {
     // editor-less API by seeding the store directly.
     viewer.siteHosts.hosts.set(`kawasaki-flood-map${SUFFIX}`, {
       hostname: `kawasaki-flood-map${SUFFIX}`, assetId: ASSET_ID, projectId: PROJECT_ID,
-      kind: "subdomain", verifiedAt: null, disabledAt: null, previews: false,
+      kind: "subdomain", verifiedAt: null, verificationToken: null,
+      certificateStatus: null, disabledAt: null, previews: false,
       releasedAt: null, createdAt: 0, createdBy: USER,
     });
     const res = await viewer.app.request(
@@ -466,7 +380,8 @@ describe("PATCH /assets/:id/hosts/:hostname", () => {
     const viewer = await siteFixture({ role: "viewer" });
     viewer.siteHosts.hosts.set(`kawasaki-flood-map${SUFFIX}`, {
       hostname: `kawasaki-flood-map${SUFFIX}`, assetId: ASSET_ID, projectId: PROJECT_ID,
-      kind: "subdomain", verifiedAt: null, disabledAt: null, previews: false,
+      kind: "subdomain", verifiedAt: null, verificationToken: null,
+      certificateStatus: null, disabledAt: null, previews: false,
       releasedAt: null, createdAt: 0, createdBy: USER,
     });
     const res = await patch(viewer.app, viewer.auth, { disabled: true });

@@ -7,6 +7,10 @@ set -euo pipefail
 PORT="${E2E_PORT:-8788}"
 ENDPOINT="http://localhost:${PORT}"
 MOCK_OIDC_PORT="${MOCK_OIDC_PORT:-18998}"
+# Mock DNS-over-HTTPS resolver, so custom-domain verification (ADR-013 B5) can
+# be driven end to end without asking a public resolver about a domain we do
+# not own.
+MOCK_DOH_PORT="${MOCK_DOH_PORT:-18997}"
 INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-e2e-internal-secret}"
 # Site hosts (ADR-013 B1). The suffix carries the port because it is compared
 # against the Host header verbatim; the apex ("localhost:PORT") does not end
@@ -23,6 +27,11 @@ cleanup() {
     echo "Stopping mock OIDC server (PID $OIDC_PID)..."
     kill "$OIDC_PID" 2>/dev/null || true
     wait "$OIDC_PID" 2>/dev/null || true
+  fi
+  if [ -n "${DOH_PID:-}" ]; then
+    echo "Stopping mock DoH server (PID $DOH_PID)..."
+    kill "$DOH_PID" 2>/dev/null || true
+    wait "$DOH_PID" 2>/dev/null || true
   fi
 }
 trap cleanup EXIT
@@ -45,6 +54,24 @@ done
 
 OIDC_ISSUER="http://localhost:${MOCK_OIDC_PORT}/"
 
+echo "Starting mock DoH resolver on port ${MOCK_DOH_PORT}..."
+MOCK_DOH_PORT="${MOCK_DOH_PORT}" npx tsx e2e/mock-doh.ts &
+DOH_PID=$!
+
+for _ in $(seq 1 20); do
+  if curl -sf "http://localhost:${MOCK_DOH_PORT}/dns-query?name=x&type=TXT" > /dev/null 2>&1; then
+    echo "Mock DoH resolver is ready."
+    break
+  fi
+  if ! kill -0 "$DOH_PID" 2>/dev/null; then
+    echo "Mock DoH resolver exited unexpectedly."
+    exit 1
+  fi
+  sleep 0.5
+done
+
+DOH_URL="http://localhost:${MOCK_DOH_PORT}/dns-query"
+
 echo "Starting Node runtime on port ${PORT}..."
 PORT="${PORT}" \
 BASE_URL="${ENDPOINT}" \
@@ -55,6 +82,7 @@ OIDC_ISSUER_URL="${OIDC_ISSUER}" \
 OIDC_AUDIENCE="e2e-audience" \
 CONTAINER_LAUNCHER="none" \
 SITE_HOST_SUFFIX="${SITE_HOST_SUFFIX}" \
+SITE_DNS_RESOLVER_URL="${DOH_URL}" \
   npm run start:node &
 SERVER_PID=$!
 
@@ -84,6 +112,7 @@ E2E_ENDPOINT="${ENDPOINT}" \
 E2E_MOCK_OIDC="http://localhost:${MOCK_OIDC_PORT}" \
 E2E_INTERNAL_API_SECRET="${INTERNAL_API_SECRET}" \
 E2E_SITE_HOST_SUFFIX="${SITE_HOST_SUFFIX}" \
+E2E_MOCK_DOH="http://localhost:${MOCK_DOH_PORT}" \
 E2E_PRESIGNED="false" \
 E2E_CONTAINER="false" \
 E2E_THUMBNAILS="false" \

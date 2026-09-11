@@ -108,16 +108,19 @@ describe("site hosts on", () => {
     expect(res.status).toBe(404);
   });
 
-  test("a multi-label host is not a site host", async () => {
+  test("a multi-label host under the suffix resolves to nothing", async () => {
     // The wildcard certificate covers one level, so `a.b.serve…` cannot be
-    // served and must not be mistaken for a site host either.
+    // served and must not be mistaken for the site `a.b` either. Since B5 it
+    // is not the apex, so it is looked up as a custom domain — which finds no
+    // row and answers the site middleware's plain-text 404. Either way the
+    // asset behind `{id}` is not served here.
     const { app } = await on();
     const res = await app.request(`http://a.${ASSET_ID}${SUFFIX}/`, {
       headers: { Host: `a.${ASSET_ID}${SUFFIX}` },
     });
     expect(res.status).toBe(404);
-    // The app's own 404, not the site middleware's.
-    expect(await res.text()).not.toBe("Not found");
+    expect(res.headers.get("Content-Type")).toContain("text/plain");
+    expect(await res.text()).toBe("Not found");
   });
 
   test("the API is not reachable on a site host", async () => {

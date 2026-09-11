@@ -24,7 +24,16 @@ export function createNodeHandler(runtime: NodeRuntime): (request: Request) => P
     // Site hosts (ADR-013 B1) serve files at every path, so they are decided
     // before the API-only guard below — and before /internal/cron, which must
     // not be reachable from a hosted origin.
-    if (isSiteHost(request.headers.get("Host") ?? url.host, runtime.deps.siteHostSuffix)) {
+    //
+    // The test is "not the apex", not "ends with SITE_HOST_SUFFIX" (B5): a
+    // custom domain is unrecognisable from its name, so every non-apex host
+    // goes to the app and the app's middleware does the `site_hosts` lookup. A
+    // host with no row gets the middleware's plain-text 404; the health check,
+    // the docs and the API stay reachable on the apex alone.
+    if (isSiteHost(request.headers.get("Host") ?? url.host, {
+      baseUrl: runtime.deps.baseUrl,
+      suffix: runtime.deps.siteHostSuffix,
+    })) {
       return app.fetch(request);
     }
 

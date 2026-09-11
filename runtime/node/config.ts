@@ -30,6 +30,17 @@ export type NodeConfig = {
    */
   siteHostSuffix: string | undefined;
   /**
+   * Custom domains (ADR-013 B5). `siteDnsResolverUrl` is the DNS-over-HTTPS
+   * endpoint the TXT verification is asked of — configurable so an operator
+   * can use their own resolver, and so the e2e run can point it at a mock.
+   * `siteFallbackOrigin` is what a customer CNAMEs at; unset ⇒ the apex.
+   *
+   * There is no certificate provisioner on this runtime: TLS for a customer's
+   * hostname is terminated by whatever sits in front of the process.
+   */
+  siteDnsResolverUrl: string | undefined;
+  siteFallbackOrigin: string | undefined;
+  /**
    * Parsed `OBJECT_STORE_*`. Reserved for the S3 adapter; until that exists the
    * runtime logs and falls back to in-process storage when it is set.
    */
@@ -58,6 +69,8 @@ export function loadConfig(env: Env): NodeConfig {
     oidcIssuerUrl: env.OIDC_ISSUER_URL || undefined,
     oidcAudience: env.OIDC_AUDIENCE || undefined,
     siteHostSuffix: env.SITE_HOST_SUFFIX || undefined,
+    siteDnsResolverUrl: env.SITE_DNS_RESOLVER_URL || undefined,
+    siteFallbackOrigin: env.SITE_FALLBACK_ORIGIN || undefined,
     objectStore: objectStore(env),
     containerLauncher: containerLauncher(env.CONTAINER_LAUNCHER),
   };

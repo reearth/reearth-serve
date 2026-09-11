@@ -30,10 +30,22 @@ export default {
     // API routes: /api/*, /files/* — plus every path on a site host, whose
     // whole surface is file delivery (ADR-013 B1). Without the host check the
     // React Router UI would answer at `{assetId}.serve.reearth.land/`.
+    //
+    // Since B5 the host test is "not the apex" rather than "ends with
+    // SITE_HOST_SUFFIX": a customer's own domain looks like any other
+    // hostname, so it cannot be recognised here — only a `site_hosts` lookup
+    // can, and that lookup lives in the app's middleware. Handing every
+    // non-apex host to the app costs an unknown hostname the middleware's
+    // plain-text 404 instead of the UI, which is the right answer anyway: a
+    // domain somebody pointed at us must not serve the dashboard. The UI, the
+    // API, the docs and the health check remain reachable on the apex only.
     if (
       url.pathname.startsWith("/api/") ||
       url.pathname.startsWith("/files") ||
-      isSiteHost(request.headers.get("Host") ?? url.host, env.SITE_HOST_SUFFIX)
+      isSiteHost(request.headers.get("Host") ?? url.host, {
+        baseUrl: env.BASE_URL,
+        suffix: env.SITE_HOST_SUFFIX,
+      })
     ) {
       const app = createApp(buildDeps(env));
       return app.fetch(request, env, ctx);

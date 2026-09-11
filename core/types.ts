@@ -13,6 +13,8 @@ import type { CleanupPendingStore } from "./cleanup/repository";
 import type { JobQueue } from "./queue/port";
 import type { KeyValue } from "./kv/port";
 import type { SiteHostStore } from "./site/repository";
+import type { DnsResolver } from "./site/dns";
+import type { CustomHostnameProvisioner } from "./site/provisioner";
 import type { ExtractionMessage } from "./extraction/handler";
 import type { ThumbnailMessage } from "./thumbnail/queue";
 
@@ -50,6 +52,24 @@ export type ContextDeps = {
   siteHostSuffix: string | undefined;
   /** Named sites: the `site_hosts` table (ADR-013 B2). */
   siteHosts: SiteHostStore;
+  /**
+   * TXT lookups for custom-domain verification (ADR-013 B5). DNS-over-HTTPS on
+   * both runtimes (`adapters/doh/dns.ts`), so `core/` needs no resolver of its
+   * own and the Worker and the Node process behave identically.
+   */
+  dns: DnsResolver;
+  /**
+   * Certificates for custom domains (ADR-013 B5). Cloudflare for SaaS where
+   * `CF_API_TOKEN` and `CF_ZONE_ID` are configured, `NoopProvisioner`
+   * everywhere else — including the whole Node runtime, where the operator
+   * terminates TLS themselves.
+   */
+  customHostnames: CustomHostnameProvisioner;
+  /**
+   * `SITE_FALLBACK_ORIGIN` — what a customer CNAMEs their domain at (ADR-013
+   * B5). Undefined ⇒ the apex host of `baseUrl`.
+   */
+  siteFallbackOrigin: string | undefined;
   /**
    * General-purpose short-lived cache over the `KeyValue` port (ADR-012 §2).
    * Today it holds site-host resolutions (`host:{hostname}`, 60 s) so a page

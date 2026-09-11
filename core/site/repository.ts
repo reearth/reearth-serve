@@ -19,6 +19,18 @@ export interface SiteHost {
   kind: SiteHostKind;
   /** Null for `subdomain` — nothing to verify; the TXT check for `custom` (B5). */
   verifiedAt: number | null;
+  /**
+   * The secret the customer publishes as `TXT _reearth-serve-verify.{hostname}`
+   * (B5). Issued when a `custom` row is created and compared on every verify
+   * attempt; null on `subdomain` rows.
+   */
+  verificationToken: string | null;
+  /**
+   * What the `CustomHostnameProvisioner` last reported for this hostname (B5).
+   * Null until the row is verified; a cache of the provider's state, never the
+   * source of truth.
+   */
+  certificateStatus: string | null;
   /** Non-null ⇒ held but not serving (B3 disable; unused until then). */
   disabledAt: number | null;
   /** Whether `v{n}--` / `latest--` hosts resolve (B4). Off by default. */
@@ -35,6 +47,10 @@ export interface SiteHostPatch {
   disabledAt?: number | null;
   /** Whether `v{n}--` / `latest--` hosts resolve (B4). */
   previews?: boolean;
+  /** Timestamp the TXT check passed at (B5). Never cleared once set. */
+  verifiedAt?: number | null;
+  /** The provisioner's latest word on the certificate (B5). */
+  certificateStatus?: string | null;
 }
 
 export interface SiteHostStore {

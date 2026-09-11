@@ -117,10 +117,14 @@ export const assetUploadResultSchema = z.object({
 
 export const siteHostKindSchema = z.enum(["subdomain", "custom"]);
 
+/** Whether a custom domain is serving TLS yet (ADR-013 B5). */
+export const certificateStatusSchema = z.enum(["pending", "active"]);
+
 /**
  * A row of `site_hosts` as the API shows it: the columns a caller can act on,
- * plus the URL the site is served from. `verifiedAt` (B5's TXT check) and
- * `createdBy` stay internal.
+ * plus the URL the site is served from. `createdBy` and the verification token
+ * stay internal — the token is only ever handed back inside the `verification`
+ * instructions of the row's own responses.
  */
 export const siteHostSchema = z.object({
   hostname: z.string(),
@@ -130,14 +134,41 @@ export const siteHostSchema = z.object({
   kind: siteHostKindSchema,
   /** Whether `v{n}--` / `latest--` hosts resolve (ADR-013 B4). */
   previews: z.boolean(),
+  /**
+   * When the TXT check passed (ADR-013 B5). Always null on `subdomain` rows —
+   * there is nothing to verify about a name under our own suffix — and null on
+   * a `custom` row that does not resolve yet.
+   */
+  verifiedAt: z.number().nullable().optional(),
+  /** The provisioner's last word on the certificate (ADR-013 B5). */
+  certificateStatus: z.string().nullable().optional(),
   disabledAt: z.number().nullable().optional(),
   releasedAt: z.number().nullable().optional(),
   createdAt: z.number(),
   url: z.string(),
 });
 
+/**
+ * What a customer must publish for a custom domain (ADR-013 B5): one TXT
+ * record proving they own it, and the CNAME that points it at us. Returned
+ * with the row while it is unverified, and by the claim itself.
+ */
+export const siteHostVerificationSchema = z.object({
+  verification: z.object({
+    /** `_reearth-serve-verify.<hostname>` */
+    record: z.string(),
+    type: z.literal("TXT"),
+    /** `reearth-serve-verify=<token>` */
+    value: z.string(),
+  }),
+  cname: z.object({ target: z.string() }),
+});
+
 export const claimSiteHostBodySchema = z.object({
-  /** Bare label (`kawasaki-flood-map`) or the full host; both are accepted. */
+  /**
+   * For `subdomain`: the bare label (`kawasaki-flood-map`) or the full host.
+   * For `custom`: the whole hostname the customer owns (`map.city.example.jp`).
+   */
   hostname: z.string(),
   kind: siteHostKindSchema.optional(),
 });
@@ -302,6 +333,8 @@ export type FileEntry = z.infer<typeof fileEntrySchema>;
 export type UpdateAssetBody = z.infer<typeof updateAssetBodySchema>;
 export type SiteHostKind = z.infer<typeof siteHostKindSchema>;
 export type SiteHost = z.infer<typeof siteHostSchema>;
+export type CertificateStatus = z.infer<typeof certificateStatusSchema>;
+export type SiteHostVerification = z.infer<typeof siteHostVerificationSchema>;
 export type ClaimSiteHostBody = z.infer<typeof claimSiteHostBodySchema>;
 export type UpdateSiteHostBody = z.infer<typeof updateSiteHostBodySchema>;
 export type UpdateVersionBody = z.infer<typeof updateVersionBodySchema>;

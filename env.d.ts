@@ -31,6 +31,19 @@ interface Env {
   // Wildcard suffix that per-asset site hosts live under, e.g.
   // ".serve.reearth.land" (ADR-013 B1). Unset ⇒ site hosts are off.
   SITE_HOST_SUFFIX?: string;
+  // Custom domains (ADR-013 B5).
+  // Cloudflare for SaaS credentials. Both or neither: with both, verified
+  // custom hostnames are registered on the zone and get a DV certificate;
+  // with neither, the no-op provisioner just tells the customer to CNAME at
+  // the fallback origin and treats the hostname as live. Wrangler secrets.
+  CF_API_TOKEN?: string;
+  CF_ZONE_ID?: string;
+  // What a customer CNAMEs their domain at. Cloudflare for SaaS issues a
+  // per-zone fallback origin; unset ⇒ the host of BASE_URL.
+  SITE_FALLBACK_ORIGIN?: string;
+  // DNS-over-HTTPS endpoint for the TXT verification lookup.
+  // Default: https://cloudflare-dns.com/dns-query
+  SITE_DNS_RESOLVER_URL?: string;
   // Cloudflare Containers
   ARCHIVE_EXTRACTOR?: DurableObjectNamespace;
   THUMBNAIL_GENERATOR?: DurableObjectNamespace;

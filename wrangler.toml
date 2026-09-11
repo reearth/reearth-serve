@@ -47,6 +47,17 @@ EXTRACTION_STUCK_THRESHOLD_SECONDS = "1800"
 # zone once (1)–(2) exist, so a half-configured wildcard never serves TLS
 # errors to visitors.
 # SITE_HOST_SUFFIX = ".serve.reearth.land"
+# Custom domains (ADR-013 B5) ride on the same switch: with no suffix the
+# site-host middleware is off entirely. Their own settings are secrets rather
+# than vars, since CF_API_TOKEN is one:
+#   wrangler secret put CF_API_TOKEN   # Zone → SSL and Certificates: Edit
+#   wrangler secret put CF_ZONE_ID     # the zone the hostnames are added to
+# Both or neither — with neither, a verified domain is treated as live and the
+# operator terminates TLS. SITE_FALLBACK_ORIGIN is the Cloudflare for SaaS
+# fallback origin customers CNAME at (default: the host of BASE_URL), and
+# SITE_DNS_RESOLVER_URL overrides the DoH endpoint the TXT check uses.
+# Zone-side prerequisite: Cloudflare for SaaS enabled, with a fallback origin
+# configured — without it no certificate is ever issued.
 
 [[r2_buckets]]
 binding = "STORAGE"

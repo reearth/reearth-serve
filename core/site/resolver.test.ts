@@ -22,6 +22,8 @@ function row(over: Partial<SiteHost> = {}): SiteHost {
     releasedAt: null,
     createdAt: 1000,
     createdBy: "u1",
+    verificationToken: null,
+    certificateStatus: null,
     ...over,
   };
 }
@@ -47,19 +49,24 @@ function setup(rows: SiteHost[] = [], opts: { cache?: MemoryKeyValue; versions?:
   const versions = new MemoryVersionStore();
   for (const n of opts.versions ?? []) versions.versions.set(version(n).id, version(n));
   const cache = opts.cache;
-  const resolve = composeSiteHostResolver({ hosts, versions, cache, suffix: SUFFIX });
-  return { hosts, versions, cache, resolve };
+  const resolver = composeSiteHostResolver({ hosts, versions, cache, suffix: SUFFIX });
+  // Almost every case here is a host under the suffix, so the helper takes the
+  // bare label; `resolveCustom` is the B5 form, whose key is the whole host.
+  const resolve = (label: string) => resolver({ form: "label", label });
+  const resolveCustom = (hostname: string) => resolver({ form: "custom", hostname });
+  return { hosts, versions, cache, resolve, resolveCustom };
 }
 
 describe("composeSiteHostResolver", () => {
   test("an ID-shaped label resolves without touching the table", async () => {
     const hosts = new MemorySiteHostStore();
     // A store that throws if anything reads it: an ID host must cost no I/O.
-    const resolve = composeSiteHostResolver({
+    const resolver = composeSiteHostResolver({
       hosts: new Proxy(hosts, { get() { throw new Error("table read on an ID host"); } }),
       versions: new MemoryVersionStore(),
       suffix: SUFFIX,
     });
+    const resolve = (label: string) => resolver({ form: "label", label });
     expect(await resolve(ASSET_ID)).toEqual({ kind: "asset", id: ASSET_ID });
     expect(await resolve("0123456789abcdef")).toEqual({ kind: "asset", id: "0123456789abcdef" });
   });
@@ -137,10 +144,11 @@ describe("preview hosts (ADR-013 B4)", () => {
   test("a left side that is not a version is a 404, with no table read", async () => {
     const hosts = new MemorySiteHostStore();
     const versions = new MemoryVersionStore();
-    const resolve = composeSiteHostResolver({
+    const resolver = composeSiteHostResolver({
       hosts: new Proxy(hosts, { get() { throw new Error("table read on a bad preview label"); } }),
       versions, suffix: SUFFIX,
     });
+    const resolve = (label: string) => resolver({ form: "label", label });
     for (const label of ["staging--kawasaki-flood-map", "--kawasaki-flood-map", "v--x", "3--x"]) {
       expect(await resolve(label), label).toBeNull();
     }
@@ -267,9 +275,10 @@ describe("the resolution cache", () => {
       put: async () => { throw new Error("kv down"); },
       delete: async () => { throw new Error("kv down"); },
     };
-    const resolve = composeSiteHostResolver({
+    const resolver = composeSiteHostResolver({
       hosts, versions: new MemoryVersionStore(), cache: broken, suffix: SUFFIX,
     });
+    const resolve = (label: string) => resolver({ form: "label", label });
     expect(await resolve("kawasaki-flood-map")).toEqual({ kind: "asset", id: ASSET_ID });
   });
 

@@ -11,6 +11,12 @@ import { BASE, createProjectForAuth, signToken, uploadFile } from "./helpers";
 // the feature is off (e.g. the Cloudflare dev run).
 const SUFFIX = process.env.E2E_SITE_HOST_SUFFIX;
 
+// The mock DNS-over-HTTPS resolver (e2e/mock-doh.ts) the Node runtime is
+// pointed at, so custom-domain verification (ADR-013 B5) can be driven without
+// owning a domain. Unset on runs that do not start it — the unverified half of
+// B5 needs no DNS and is checked regardless.
+const MOCK_DOH = process.env.E2E_MOCK_DOH;
+
 /**
  * A request that reaches the server over the real socket but claims a
  * different `Host`. `fetch` derives Host from the URL and DNS would have to
@@ -349,5 +355,156 @@ describe.skipIf(!SUFFIX)("site hosts", () => {
     cli(`asset host disable ${assetId} ${first}`);
     expect((await get(`${first}${suffix}`, "/site.zip")).status).toBe(503);
     expect((await get(`${second}${suffix}`, "/site.zip")).status).toBe(200);
+  });
+
+  // Custom domains (ADR-013 B5). The Node runtime uses the real DoH adapter,
+  // so the whole verification path is exercised against the mock resolver
+  // e2e/mock-doh.ts, which scripts/e2e-node.sh points SITE_DNS_RESOLVER_URL at.
+  // Without it (the Cloudflare dev run) only the unverified half is checked.
+  describe("custom domains", () => {
+    /** Publish TXT records at `name` on the mock resolver. */
+    async function publishTxt(name: string, ...values: string[]) {
+      const res = await fetch(`${MOCK_DOH}/test/txt`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, values }),
+      });
+      expect(res.status).toBe(200);
+    }
+
+    async function registerCustom(token: string, projectId: string, hostname: string) {
+      const { assetId } = await claimedSite(token, projectId, "e2e-custom-sub");
+      const res = await fetch(`${BASE}/api/v1/assets/${assetId}/hosts`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ hostname, kind: "custom" }),
+      });
+      expect(res.status).toBe(201);
+      const body = await res.json() as {
+        host: { hostname: string; kind: string; verifiedAt: number | null };
+        verification: { record: string; type: string; value: string };
+        cname: { target: string };
+      };
+      return { assetId, body };
+    }
+
+    test("a registered domain does not resolve until it is verified", async () => {
+      const token = await signToken();
+      const projectId = await createProjectForAuth(token, "e2e-custom-unverified");
+      const hostname = `unverified-${Date.now().toString(36)}.example.jp`;
+      const { body } = await registerCustom(token, projectId, hostname);
+
+      expect(body.host.kind).toBe("custom");
+      expect(body.host.verifiedAt).toBeNull();
+      expect(body.verification.record).toBe(`_reearth-serve-verify.${hostname}`);
+      expect(body.verification.type).toBe("TXT");
+      expect(body.verification.value).toMatch(/^reearth-serve-verify=[0-9a-f]{32}$/);
+      // No SITE_FALLBACK_ORIGIN in the e2e run, so the apex of BASE_URL.
+      expect(body.cname.target).toBe(new URL(BASE).host);
+
+      // On the wire the hostname is a plain-text 404 — not a 503, which would
+      // admit that somebody registered it here.
+      const res = await get(hostname, "/site.zip");
+      expect(res.status).toBe(404);
+      expect(res.contentType).toContain("text/plain");
+      expect(res.body).toBe("Not found");
+
+      // The apex is unaffected by any of this.
+      const apex = await get(new URL(BASE).host, "/api/v1/health");
+      expect(apex.status).toBe(200);
+    });
+
+    test.skipIf(!MOCK_DOH)("the TXT record verifies the domain and it starts serving", async () => {
+      const token = await signToken();
+      const projectId = await createProjectForAuth(token, "e2e-custom-verify");
+      const hostname = `verified-${Date.now().toString(36)}.example.jp`;
+      const { assetId, body } = await registerCustom(token, projectId, hostname);
+
+      const verify = () => fetch(
+        `${BASE}/api/v1/assets/${assetId}/hosts/${encodeURIComponent(hostname)}/verify`,
+        { method: "POST", headers: { Authorization: `Bearer ${token}` } },
+      );
+
+      // Nothing published yet: 409, with the record repeated.
+      const missing = await verify();
+      expect(missing.status).toBe(409);
+      const failure = await missing.json() as { error: string; verification: { record: string } };
+      expect(failure.error).toBe("verification record not found");
+      expect(failure.verification.record).toBe(body.verification.record);
+
+      // Publish it alongside an unrelated record, the way a real domain has.
+      await publishTxt(body.verification.record, "v=spf1 -all", body.verification.value);
+
+      const verified = await verify();
+      expect(verified.status).toBe(200);
+      const row = await verified.json() as {
+        host: { verifiedAt: number | null; certificateStatus: string | null };
+      };
+      expect(row.host.verifiedAt).toEqual(expect.any(Number));
+      // The Node runtime has no certificate API: the no-op provisioner.
+      expect(row.host.certificateStatus).toBe("active");
+
+      // And the customer's hostname now serves the asset.
+      const served = await get(hostname, "/site.zip");
+      expect(served.status).toBe(200);
+      expect(served.body).toContain("not really a zip");
+
+      // Previews are not available on a custom domain.
+      const previews = await fetch(
+        `${BASE}/api/v1/assets/${assetId}/hosts/${encodeURIComponent(hostname)}`,
+        {
+          method: "PATCH",
+          headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+          body: JSON.stringify({ previews: true }),
+        },
+      );
+      expect(previews.status).toBe(400);
+      expect((await previews.json() as { error: string }).error)
+        .toBe("previews are not available on custom domains");
+
+      // Release turns it into the 410 tombstone, as it does for a name.
+      const released = await fetch(
+        `${BASE}/api/v1/assets/${assetId}/hosts/${encodeURIComponent(hostname)}`,
+        { method: "DELETE", headers: { Authorization: `Bearer ${token}` } },
+      );
+      expect(released.status).toBe(204);
+      expect((await get(hostname, "/site.zip")).status).toBe(410);
+    });
+
+    test.skipIf(!MOCK_DOH)("the CLI registers, shows and verifies a domain", async () => {
+      const token = await signToken();
+      const projectId = await createProjectForAuth(token, "e2e-custom-cli");
+      const { assetId } = await claimedSite(token, projectId, "e2e-custom-cli");
+      const hostname = `cli-${Date.now().toString(36)}.example.jp`;
+
+      const configDir = mkdtempSync(join(tmpdir(), "serve-e2e-custom-config-"));
+      writeFileSync(
+        join(configDir, "credentials.json"),
+        JSON.stringify({ accessToken: token, expiresAt: Date.now() + 3600_000 }),
+        { mode: 0o600 },
+      );
+      writeFileSync(join(configDir, "config.json"), JSON.stringify({}));
+      const cli = (args: string) => execSync(
+        `npx tsx cli/index.ts --endpoint ${BASE} ${args}`,
+        { encoding: "utf-8", env: { ...process.env, REEARTH_SERVE_CONFIG_DIR: configDir } },
+      ).trim();
+
+      const added = cli(`asset host add ${assetId} ${hostname} --custom`);
+      expect(added).toContain(`Registered: ${hostname}`);
+      expect(added).toContain(`_reearth-serve-verify.${hostname}`);
+      expect(added).toContain("CNAME");
+
+      expect(cli(`asset host list ${assetId}`)).toContain("unverified");
+      const shown = JSON.parse(cli(`--json asset host show ${assetId} ${hostname}`)) as {
+        host: { kind: string; verifiedAt: number | null };
+        verification: { record: string; value: string };
+      };
+      expect(shown.host.kind).toBe("custom");
+      expect(shown.host.verifiedAt).toBeNull();
+
+      await publishTxt(shown.verification.record, shown.verification.value);
+      expect(cli(`asset host verify ${assetId} ${hostname}`)).toContain(`Verified: ${hostname}`);
+      expect((await get(hostname, "/site.zip")).status).toBe(200);
+    });
   });
 });

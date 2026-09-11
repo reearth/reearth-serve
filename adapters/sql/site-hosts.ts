@@ -12,7 +12,8 @@ import type { Row } from "../../core/sql/port";
 import { queryAll, queryFirst } from "./helpers";
 
 const COLUMNS =
-  "hostname, asset_id, project_id, kind, verified_at, disabled_at, previews, released_at, created_at, created_by";
+  "hostname, asset_id, project_id, kind, verified_at, disabled_at, previews, released_at, " +
+  "created_at, created_by, verification_token, certificate_status";
 
 export class SqlSiteHostStore implements SiteHostStore {
   constructor(private db: SqlClient) {}
@@ -46,11 +47,12 @@ export class SqlSiteHostStore implements SiteHostStore {
     // caller that loses the race is told the name is taken.
     const result = await this.db.execute(
       `INSERT OR IGNORE INTO site_hosts (${COLUMNS})
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)`,
       [
         host.hostname, host.assetId, host.projectId, host.kind,
         host.verifiedAt, host.disabledAt, host.previews ? 1 : 0,
         host.releasedAt, host.createdAt, host.createdBy,
+        host.verificationToken, host.certificateStatus,
       ] as SqlValue[],
     );
     return result.rowsAffected > 0;
@@ -67,6 +69,14 @@ export class SqlSiteHostStore implements SiteHostStore {
     if (patch.previews !== undefined) {
       binds.push(patch.previews ? 1 : 0);
       sets.push(`previews = ?${binds.length}`);
+    }
+    if (patch.verifiedAt !== undefined) {
+      binds.push(patch.verifiedAt);
+      sets.push(`verified_at = ?${binds.length}`);
+    }
+    if (patch.certificateStatus !== undefined) {
+      binds.push(patch.certificateStatus);
+      sets.push(`certificate_status = ?${binds.length}`);
     }
     if (sets.length === 0) return;
 
@@ -140,5 +150,7 @@ function parse(row: Row): SiteHost {
     releasedAt: (row.released_at as number | null) ?? null,
     createdAt: row.created_at as number,
     createdBy: (row.created_by as string | null) ?? null,
+    verificationToken: (row.verification_token as string | null) ?? null,
+    certificateStatus: (row.certificate_status as string | null) ?? null,
   };
 }

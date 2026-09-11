@@ -1,6 +1,6 @@
 # ADR-013: Static Site Hosting from Archive Assets
 
-- **Status:** Accepted — Part A, B1–B4 and the resolution/API/CLI of B6 implemented; B5, B7 and Part C proposed
+- **Status:** Accepted — Part A, B1–B5 and the resolution/API/CLI of B6 implemented; B7 and Part C proposed
 - **Date:** 2026-09-11
 - **Deciders:** @rot1024
 - **Related:** ADR-014 (asset access control: `restricted` mode, grants, signed URLs, API keys)
@@ -138,7 +138,7 @@ the procurement conversations in ROADMAP Phase 6). The extractor writes
 nothing to local disk, so non-root needs no volume. Image size is ~12.6 MB,
 essentially the binary.
 
-## Part B — Site hosts (B1–B4 implemented; B5–B7 proposed)
+## Part B — Site hosts (B1–B5 implemented; B6 apart from its event log; B7 proposed)
 
 Part B introduces one new concept, the **site host**: a hostname under the
 service's wildcard suffix (or a customer's own domain) that serves exactly
@@ -454,7 +454,7 @@ latest--kawasaki-flood-map.serve.reearth.land    newest version, ignoring the ac
 - `VersionStore` gained `findByAssetAndNumber(assetId, n)`; paging
   `findByAssetId` to find version 1 would read every newer version first.
 
-### B5. Custom domains
+### B5. Custom domains (implemented)
 
 The `custom` kind of `site_hosts`. Differences from `subdomain`:
 
@@ -470,6 +470,85 @@ The `custom` kind of `site_hosts`. Differences from `subdomain`:
 
 Resolution, publish state, quota, release cooldown, API and CLI are
 shared with B2–B3.
+
+**Implementation notes.**
+
+- **Two new ports, both in `core/`** (ADR-012 §2), because both answers are
+  platform-specific and neither belongs in the domain:
+  - `DnsResolver` (`core/site/dns.ts`), one method, `lookupTxt`. The adapter
+    is **DNS-over-HTTPS** (`adapters/doh/dns.ts`, `SITE_DNS_RESOLVER_URL`,
+    default `https://cloudflare-dns.com/dns-query`), not `node:dns`: DoH is a
+    `fetch` and a JSON body, so the identical implementation runs on Workers
+    and on Node, and there is no reason to carry two versions of one lookup.
+    `adapters/memory/dns.ts` is the fake.
+  - `CustomHostnameProvisioner` (`core/site/provisioner.ts`) — `provision`,
+    `status`, `deprovision`. `adapters/cloudflare/custom-hostnames.ts` is
+    Cloudflare for SaaS (`POST/GET/DELETE /zones/{zone}/custom_hostnames`,
+    `ssl: {method: "http", type: "dv"}`), built **only when both
+    `CF_API_TOKEN` and `CF_ZONE_ID` are set**: a half-configured provisioner
+    would fail every verification with a 403 that reads to the customer as
+    "my DNS is wrong". Otherwise the composition root injects
+    `NoopProvisioner`, which reports `active` and says to CNAME at the apex or
+    the fallback origin — the truth on a deployment that terminates TLS some
+    other way, which the **Node runtime always does**. The token lives only in
+    a per-call `Authorization` header and is never logged.
+- **HTTP DV, not TXT DV**, for the certificate: by the time issuance starts
+  the customer has already pointed their CNAME at us, so the challenge is
+  served by the very deployment the certificate is for and there is nothing
+  further for them to publish.
+- **Migration `0005_site_hosts_verification.sql`** adds `verification_token`
+  and `certificate_status` to `site_hosts`. 0004 is applied in production and
+  was not edited; SQLite adds a nullable column without rewriting the table.
+  `verified_at` was already there from 0004.
+- **The apex is now the only host that is never a site.** B1–B4 could
+  recognise a site host from the suffix; `map.city.example.jp` cannot be
+  recognised from its name at all, so the rule is inverted in both runtime
+  entrypoints and in the middleware: `Host` equal to the apex keeps today's
+  UI / API split, and **every other host goes to the app**, whose middleware
+  does the `site_hosts` lookup. A hostname with no row gets the middleware's
+  plain-text 404 rather than the UI — which is the right answer anyway: a
+  domain somebody pointed at us must not serve the dashboard. Three hostnames
+  count as the apex: the host of `BASE_URL`, the suffix without its leading
+  dot (the wildcard's own parent), and loopback (so a local run and the unit
+  suite are not site hosts). With no `SITE_HOST_SUFFIX` configured the whole
+  rule is off and the old path-based split applies unchanged.
+- **The apex must never pay for the lookup**, and a test asserts it with a
+  store that throws when read.
+- **An unverified `custom` row resolves to nothing — 404, not 503.** Until the
+  customer has proved they own the domain, the service must not admit that
+  anyone registered it here. The miss is cached like any other (60 s), and
+  verification drops the key so the domain comes up at once.
+- **Verification is idempotent**: an already-verified row answers `200` and
+  refreshes its certificate status, because "is it live yet?" is answered by
+  running verify again. **One matching TXT record among the domain's many is
+  the proof** — a real domain has SPF and other vendors' records at the same
+  name. Attempts are rate limited to 10 per hostname per hour through the
+  `KeyValue` port; a fixed-window counter, deliberately minimal, since the
+  port has no atomic increment to build anything stronger on.
+- **A provider outage never blocks the domain.** The TXT check is what
+  verification *means*, so a `provision` that throws stores `pending` and the
+  single-row `GET` retries `status` while it is not `active`; a `deprovision`
+  that throws is logged and the release proceeds.
+- **`POST …/hosts/:hostname/verify`** and **`GET …/hosts/:hostname`** are the
+  two new routes; the 409 from verify repeats the record to publish, since the
+  caller is standing at their DNS console. The instructions are withheld once
+  the row is verified — the token has served its purpose and echoing it back
+  on every read would spread a secret for nothing. `verified_at` and
+  `certificate_status` are now shown on the row (B6 said `verified_at` stayed
+  internal; it is how a custom domain reports whether it resolves, so it had
+  to come out). The token itself never appears as a column.
+- **`PATCH {previews: true}` on a `custom` row is `400`**, not a silently
+  ignored flag: the API would otherwise claim previews are on for hosts that
+  will never answer. `{previews: false}` is allowed — it is already the truth.
+  B4's resolver already forced `previews` off for `custom` rows.
+- **Deviations.** (1) Registering a custom domain still requires
+  `SITE_HOST_SUFFIX`, like B2's claim: the suffix is what the "not one of
+  ours" check and the CNAME target are derived from, and it is also the switch
+  that turns the middleware on at all. (2) Validation is its own rule set
+  (`core/site/custom.ts`), not `names.ts`: a label under our suffix is ours to
+  reserve words in and `api.city.example.jp` is not. (3) No events —
+  `core/` still has no event store, so the verify emit point is an
+  `// ADR-007:` comment beside the others.
 
 ### B6. Resolution order, API and CLI (implemented apart from the event log)
 

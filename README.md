@@ -111,7 +111,9 @@ SSR on Node is out of scope, and any other path returns 404 saying so.
 | `ANONYMOUS_UPLOAD_ENABLED` | (unset) | `"true"` to allow uploads without a token |
 | `ASSET_TTL_SECONDS` | `3600` | TTL for assets that belong to no project |
 | `OIDC_ISSUER_URL` / `OIDC_AUDIENCE` | (unset) | JWT verification; unset ⇒ demo mode |
-| `SITE_HOST_SUFFIX` | (unset) | Site-host suffix, e.g. `.localhost:8788` (must start with `.`, port included); unset ⇒ site hosts off |
+| `SITE_HOST_SUFFIX` | (unset) | Site-host suffix, e.g. `.localhost:8788` (must start with `.`, port included); unset ⇒ site hosts and custom domains off |
+| `SITE_DNS_RESOLVER_URL` | `https://cloudflare-dns.com/dns-query` | DNS-over-HTTPS endpoint the custom-domain TXT check is asked of |
+| `SITE_FALLBACK_ORIGIN` | (unset) | What a customer CNAMEs their domain at; unset ⇒ the host of `BASE_URL` |
 | `OBJECT_STORE_*` | (unset) | Reserved for the future S3 adapter; until then storage is in-process |
 | `CONTAINER_LAUNCHER` | `none` | Only `none` is implemented; any other value fails at startup |
 
@@ -152,8 +154,10 @@ not persisted.
 | `POST` | `/api/v1/assets/uploads` | Create presigned upload session |
 | `POST` | `/api/v1/assets/uploads/:id/complete` | Complete upload session |
 | `POST` | `/api/v1/assets/:id/extract` | Start archive extraction |
-| `GET` | `/api/v1/assets/:id/hosts` | List the asset's site hosts (named subdomains) |
-| `POST` | `/api/v1/assets/:id/hosts` | Claim a name (`{ hostname, kind? }`; bare label or full host) |
+| `GET` | `/api/v1/assets/:id/hosts` | List the asset's site hosts (named subdomains and custom domains) |
+| `GET` | `/api/v1/assets/:id/hosts/:hostname` | Get one host, with the DNS still to publish while a custom domain is unverified |
+| `POST` | `/api/v1/assets/:id/hosts` | Claim a name or register a custom domain (`{ hostname, kind? }`) |
+| `POST` | `/api/v1/assets/:id/hosts/:hostname/verify` | Check a custom domain's TXT record and publish it |
 | `PATCH` | `/api/v1/assets/:id/hosts/:hostname` | Disable/enable a name and toggle previews (`{ disabled?, previews? }`) |
 | `DELETE` | `/api/v1/assets/:id/hosts/:hostname` | Release a name (410 and held for 30 days) |
 | `GET` | `/api/v1/jobs` | List jobs (`?limit=&cursor=`) |
@@ -200,7 +204,7 @@ Assets support **versioning** — uploading to an existing asset (`POST /api/v1/
 
 **Static site hosting.** Zip a built frontend (the `dist/` folder of a Vite/Next/Astro export — a single root folder is stripped automatically), upload it, and `/files/:id/` serves its `index.html`. Nested `index.html` files resolve on trailing-slash URLs, and a directory URL without the slash redirects to it so relative links keep working. The extractor assigns `Content-Type` for web payloads (HTML, JS/MJS, CSS, WASM, SVG, fonts, source maps, web manifests, media). Under `/files/:id/`, absolute-path references (`/assets/app.js`) do not resolve — build with a relative base (Vite `base: './'`), or enable site hosts below. See [ADR-013](./docs/adr/013-static-site-hosting.md).
 
-**Site hosts.** With `SITE_HOST_SUFFIX` set (e.g. `.serve.reearth.land`), every asset also has its own hostname: `https://<assetId>.serve.reearth.land/` serves exactly what `/files/<assetId>/` serves, and a version ID in place of the asset ID gives a pinned, immutable preview (marked `X-Robots-Tag: noindex`). Root-relative paths resolve there, so the `base: './'` advice above is unnecessary once it is enabled, and each site is its own origin — a hosted page cannot reach the API, the UI or another asset same-origin. Nothing but files is reachable on a site host: `/api/v1/health` is looked up as a file inside the archive. Archive uploads get a `siteUrl` in the response and the CLI prints it. Enabling it needs zone-side setup (a wildcard DNS record, a certificate covering `*.serve.reearth.land`, and a Worker route) — see the comment in `wrangler.toml` and [ADR-013 B1](./docs/adr/013-static-site-hosting.md).
+**Site hosts.** With `SITE_HOST_SUFFIX` set (e.g. `.serve.reearth.land`), every asset also has its own hostname: `https://<assetId>.serve.reearth.land/` serves exactly what `/files/<assetId>/` serves, and a version ID in place of the asset ID gives a pinned, immutable preview (marked `X-Robots-Tag: noindex`). Root-relative paths resolve there, so the `base: './'` advice above is unnecessary once it is enabled, and each site is its own origin — a hosted page cannot reach the API, the UI or another asset same-origin. Nothing but files is reachable on a site host: `/api/v1/health` is looked up as a file inside the archive. Archive uploads get a `siteUrl` in the response and the CLI prints it. Enabling it needs zone-side setup (a wildcard DNS record, a certificate covering `*.serve.reearth.land`, and a Worker route) — see the comment in `wrangler.toml` and [ADR-013 B1](./docs/adr/013-static-site-hosting.md). Once a suffix is configured, **the apex is the only hostname that is not a site**: every other `Host` is looked up in the site-hosts table (custom domains cannot be recognised any other way) and answers a plain-text `404` if it has no row, so the UI, `/api/v1/health` and the docs are reachable on the apex alone.
 
 **Named sites.** An ID-shaped host is correct but not printable, so an archive asset in a project can also be given a name:
 
@@ -210,12 +214,49 @@ reearth-serve asset host list <assetId>                     # hostname, state, U
 reearth-serve asset host disable <assetId> kawasaki-flood-map   # or --all for every name
 reearth-serve asset host enable <assetId> --all
 reearth-serve asset host update <assetId> kawasaki-flood-map --previews on
+reearth-serve asset host show <assetId> kawasaki-flood-map    # state, kind, verification, URL
 reearth-serve asset host remove <assetId> kawasaki-flood-map
 ```
 
 Names are 3–63 characters of `[a-z0-9-]` with no leading or trailing hyphen and no `--` anywhere (`--` is reserved for preview hosts), are not ID-shaped, and are not on the reserved list (`www`, `api`, `admin`, `latest`, `v<n>`, … — also blocked as hyphen-delimited parts, so `api-v2` is out). Claiming requires **editor or above** on the asset's **project**: demo-mode assets cannot hold a name, and only archives can, since a single file has no site. Twenty active names per project; one asset may have several names. A name has three states: **enabled** (it serves the site), **disabled** (`asset host disable` — the host answers `503` with a "This site is temporarily unavailable" page, `Retry-After: 3600`, and the name stays held, so taking a site down no longer means deleting the asset), and **released**. Removing a name **releases** it rather than deleting it — for 30 days the host answers `410` with a plain "This site has moved or been removed" page and nobody can claim it, which closes the subdomain-takeover path where a stale link starts serving someone else's content. Deleting an asset releases its names the same way. ID hosts and `/files/:id/` are unaffected by any of this. See [ADR-013 B2–B3](./docs/adr/013-static-site-hosting.md).
 
 **Preview hosts.** A name can also serve its own version history, under `--` (a wildcard certificate covers one label, so `v3.name.serve…` would need a second one): `v3--kawasaki-flood-map.serve.reearth.land` is version 3, pinned and immutable, and `latest--kawasaki-flood-map.serve.reearth.land` is the newest version whatever the active one is — the same bytes as the production name but never cached as immutable, because it moves on the next upload. Every preview response is `X-Robots-Tag: noindex`, so only the production name is indexed. Version numbers are sequential and therefore guessable, so previews are **off by default** and are turned on per name (`asset host update <id> <name> --previews on`); the ID-form hosts (`<versionId>.serve.reearth.land`) stay available for review either way. `v0`, `v01` and anything else on the left of the `--` are `404`; a disabled name's previews are `503` and a released name's `410`, like the name itself. See [ADR-013 B4](./docs/adr/013-static-site-hosting.md).
+
+**Custom domains.** A site can also be served from a hostname the customer owns
+(`https://map.city.example.jp/`), as the `custom` kind of the same table. Three
+steps, and the domain does not resolve until the second one passes:
+
+```bash
+reearth-serve asset host add <assetId> map.city.example.jp --custom
+#   prints the two DNS records to publish:
+#     _reearth-serve-verify.map.city.example.jp  TXT    reearth-serve-verify=<token>
+#     map.city.example.jp                        CNAME  serve.reearth.land
+reearth-serve asset host verify <assetId> map.city.example.jp
+reearth-serve asset host show <assetId> map.city.example.jp   # certificate: pending | active
+```
+
+1. **Add the TXT record.** Registration issues a token and returns the record
+   name and value; the row is stored unverified, and until it is verified the
+   hostname answers a plain-text `404` — not a `503`, which would admit that
+   somebody had registered it here.
+2. **CNAME the domain** at the apex (or at `SITE_FALLBACK_ORIGIN`, the
+   Cloudflare for SaaS fallback origin, when one is configured). The `add`
+   output names the target.
+3. **Run `verify`.** The TXT record is read over DNS-over-HTTPS; one record at
+   the name carrying the token is the proof, so the domain's other TXT records
+   (SPF, other vendors') are no obstacle. Verification then starts certificate
+   issuance — a Cloudflare for SaaS custom hostname where `CF_API_TOKEN` and
+   `CF_ZONE_ID` are configured, nothing at all where they are not (the operator
+   terminates TLS, which is what the Node runtime always does) — and the
+   hostname starts serving. Verify attempts are rate limited per hostname.
+
+The hostname must be a real DNS name of at least two labels and may not be
+under `SITE_HOST_SUFFIX` or equal to the apex. Authorization, the per-project
+quota, disable/enable and the 30-day release cooldown are exactly as for a
+name; releasing a verified domain also gives its certificate up. **Previews are
+not available**: `v<n>--` has no meaning on a domain the customer owns, so
+`PATCH {previews: true}` is a `400` — use the subdomain form for review. See
+[ADR-013 B5](./docs/adr/013-static-site-hosting.md).
 
 **Caching.** Every file response carries an `ETag`; `If-None-Match` answers `304`. Asset-ID URLs follow the active version, so they stay revalidatable: HTML is `max-age=0, must-revalidate`, everything else `max-age=3600`. Version-ID URLs (`/files/:versionId/...`) are immutable and cached for a year. Gzip-stored files send `Vary: Accept-Encoding`.
 

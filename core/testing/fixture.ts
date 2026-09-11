@@ -17,6 +17,8 @@ import type { Session, SessionStore } from "../session/repository";
 import type { SiteHost, SiteHostPatch, SiteHostStore } from "../site/repository";
 import { MemoryFileStorage } from "../../adapters/memory/storage";
 import { MemoryKeyValue } from "../../adapters/memory/memory-kv";
+import { MemoryDnsResolver } from "../../adapters/memory/dns";
+import { MemoryCustomHostnames } from "../../adapters/memory/custom-hostnames";
 import { SimpleAuthorizer } from "../../adapters/cloudflare/authorizer";
 
 /** Archive asset, active version {@link VERSION_ID}. */
@@ -116,6 +118,8 @@ export class MemorySiteHostStore implements SiteHostStore {
       ...host,
       ...(patch.disabledAt !== undefined && { disabledAt: patch.disabledAt }),
       ...(patch.previews !== undefined && { previews: patch.previews }),
+      ...(patch.verifiedAt !== undefined && { verifiedAt: patch.verifiedAt }),
+      ...(patch.certificateStatus !== undefined && { certificateStatus: patch.certificateStatus }),
     });
   }
   async remove(hostname: string): Promise<void> {
@@ -182,6 +186,10 @@ export async function fixture(overrides?: Partial<Deps>) {
   const storage = new MemoryFileStorage();
   const siteHosts = new MemorySiteHostStore();
   const cache = new MemoryKeyValue();
+  // Custom domains (ADR-013 B5): a resolver with no records — a test publishes
+  // the one it wants found — and a provisioner that issues instantly.
+  const dns = new MemoryDnsResolver();
+  const customHostnames = new MemoryCustomHostnames();
 
   // Archive asset with an active version, extracted into the versioned layout.
   // app.js is stored gzip the way the extractor transmuxes deflate entries.
@@ -246,6 +254,9 @@ export async function fixture(overrides?: Partial<Deps>) {
     anonymousUploadEnabled: false,
     siteHostSuffix: undefined,
     siteHosts,
+    dns,
+    customHostnames,
+    siteFallbackOrigin: undefined,
     cache,
     sessions: new MemorySessionStore(),
     sessionTtlSeconds: 60,
@@ -256,5 +267,11 @@ export async function fixture(overrides?: Partial<Deps>) {
     limits: { subrequestBudget: 700 },
     ...overrides,
   };
-  return { app: createApp(deps), deps, metadata, versions, storage, siteHosts, cache, geojson };
+  return {
+    app: createApp(deps), deps, metadata, versions, storage, siteHosts, cache, geojson,
+    // The overridden instances when a test supplied its own, so a test can
+    // always assert against the ones the app actually uses.
+    dns: (deps.dns as MemoryDnsResolver),
+    customHostnames: (deps.customHostnames as MemoryCustomHostnames),
+  };
 }

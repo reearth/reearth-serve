@@ -1,7 +1,12 @@
 /**
  * The composed site-host resolver (ADR-013 B6).
  *
- * The order is fixed and cheapest-first:
+ * A custom domain (B5) skips the whole order: the Host *is* the row key, so
+ * there is one lookup and no label arithmetic. Its extra rule is that an
+ * unverified row does not resolve — it is a 404, the same as a name nobody
+ * ever claimed.
+ *
+ * For a host under `SITE_HOST_SUFFIX` the order is fixed and cheapest-first:
  *
  *   1. `^[0-9a-f]{16}$` → an asset or version ID (B1). No I/O at all; this is
  *      why B2 forbids ID-shaped names.
@@ -18,7 +23,7 @@
 import type { KeyValue } from "../kv/port";
 import { ID_LABEL } from "./names";
 import type { VersionStore } from "../asset/repository";
-import type { SiteHostResolver, SiteTarget } from "./middleware";
+import type { SiteHostQuery, SiteHostResolver, SiteTarget } from "./middleware";
 import type { SiteHostStore } from "./repository";
 
 /** How long a resolution may be served from cache. */
@@ -60,7 +65,13 @@ export interface ComposedResolverDeps {
 }
 
 export function composeSiteHostResolver(deps: ComposedResolverDeps): SiteHostResolver {
-  return async (label) => {
+  return async (query: SiteHostQuery) => {
+    // 0. A custom domain (B5) is its own row key: no label to strip, no ID
+    //    shape to test (an ID is not a DNS name), and no previews.
+    if (query.form === "custom") return resolveNamed(deps, query.hostname);
+
+    const label = query.label;
+
     // 1. ID host — no table read, no cache read.
     if (ID_LABEL.test(label)) return { kind: "asset", id: label };
 
@@ -136,10 +147,15 @@ async function resolveRow(deps: ComposedResolverDeps, hostname: string): Promise
       // an unclaimed name (ADR-013 B3).
       : row.disabledAt !== null
         ? { t: "disabled" }
-        // `kind` is folded into `previews` rather than cached separately:
-        // `v{n}--` has no meaning on a customer's own domain (B5), so a
-        // `custom` row never has preview hosts whatever its flag says.
-        : { t: "asset", id: row.assetId, previews: row.kind === "subdomain" && row.previews };
+        // A `custom` row that has not passed its TXT check does not resolve at
+        // all (B5) — and 404, not 503: until the customer has proved they own
+        // the domain, the service must not admit that anyone registered it.
+        : row.kind === "custom" && row.verifiedAt === null
+          ? { t: "miss" }
+          // `kind` is folded into `previews` rather than cached separately:
+          // `v{n}--` has no meaning on a customer's own domain (B5), so a
+          // `custom` row never has preview hosts whatever its flag says.
+          : { t: "asset", id: row.assetId, previews: row.kind === "subdomain" && row.previews };
 
   await writeCache(deps.cache, key, resolution);
   return resolution;
