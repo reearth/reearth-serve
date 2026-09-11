@@ -37,6 +37,8 @@ export interface StoredFile {
   size: number;
   contentType: string;
   contentEncoding?: string;
+  /** Entity tag of the stored object in HTTP form (quoted), when the store provides one. */
+  etag?: string;
   range?: { offset: number; length: number; totalSize: number };
 }
 

@@ -184,10 +184,17 @@ These endpoints require `Authorization: Bearer $INTERNAL_API_SECRET` — set it 
 |--------|------|-------------|
 | `GET` | `/files/:id/:filename` | Download file (CORS `*`, Range support) |
 | `GET` | `/files/:id/:filename/*` | Download extracted archive file |
+| `GET` | `/files/:id` / `/files/:id/` | Single-file asset: the file. Archive asset: its `index.html` |
+| `GET` | `/files/:id/dir/` | `dir/index.html` from an archive (`/files/:id/dir` redirects here with 301) |
+| `HEAD` | any of the above | Headers only |
 | `GET` | `/files/:id/_thumbs/:size.webp` | Image thumbnail (`xs`/`sm`/`md`/`lg`) |
 | `GET` | `/files/:id/:filename?thumb=:size` | Same thumbnail, accessed via query parameter |
 
 Assets support **versioning** — uploading to an existing asset (`POST /api/v1/assets/:id`) creates a new version while keeping the asset ID and URL stable. Each asset can have an explicit active version; if unset, the latest version is served. File URLs (`/files/:id/:filename`) resolve the active/latest version automatically. Version IDs can also be used directly in file URLs. Demo mode assets (no project) auto-expire after 1 hour. Project assets are permanent. See [ADR-005](./docs/adr/005-asset-versioning.md).
+
+**Static site hosting.** Zip a built frontend (the `dist/` folder of a Vite/Next/Astro export — a single root folder is stripped automatically), upload it, and `/files/:id/` serves its `index.html`. Nested `index.html` files resolve on trailing-slash URLs, and a directory URL without the slash redirects to it so relative links keep working. The extractor assigns `Content-Type` for web payloads (HTML, JS/MJS, CSS, WASM, SVG, fonts, source maps, web manifests, media). Absolute-path references (`/assets/app.js`) do not resolve under `/files/:id/` yet — build with a relative base (Vite `base: './'`) until per-asset origins land. See [ADR-013](./docs/adr/013-static-site-hosting.md).
+
+**Caching.** Every file response carries an `ETag`; `If-None-Match` answers `304`. Asset-ID URLs follow the active version, so they stay revalidatable: HTML is `max-age=0, must-revalidate`, everything else `max-age=3600`. Version-ID URLs (`/files/:versionId/...`) are immutable and cached for a year. Gzip-stored files send `Vary: Accept-Encoding`.
 
 Uploaded JPEG/PNG/WebP/GIF images get four WebP thumbnails generated automatically: `xs` (64 px), `sm` (128 px), `md` (512 px), `lg` (1280 px). `xs` is sized to fit comfortably inside Cesium's billboard TextureAtlas on mobile. Generation is asynchronous via a queue and serves static from R2 thereafter — see [ADR-009](./docs/adr/009-image-thumbnail-generation.md).
 

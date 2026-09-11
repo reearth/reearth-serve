@@ -183,8 +183,25 @@ TTL:   3600s (auto-expire)
 Upload a `.zip` archive; the server extracts it and serves the contents as a directory.
 
 - [x] Zip extraction via Cloudflare Containers or in-worker decompression
-- [x] Directory listing or index file resolution (`index.html`)
+- [x] Index file resolution (`/files/:id/` and `dir/` → `index.html`; `dir` → 301 to `dir/`)
 - [x] Enables uploading pre-built tile packages (XYZ directory structure, 3D Tiles tileset, etc.)
+- [ ] Directory listing (deliberately absent; see ADR-013)
+
+---
+
+### Phase 1.5 — Frontend Hosting (AI-generated apps, one zip → one site)
+
+Municipal and enterprise users increasingly generate frontend apps with AI but have no Netlify / Cloudflare Pages to put them on. Serve already extracts and serves archives; this phase closes the gap to "upload a zip, get a working site". See [ADR-013](./docs/adr/013-static-site-hosting.md).
+
+- [x] **Index resolution & directory redirects** — `/files/:id/` serves `index.html`
+- [x] **HEAD** on file URLs
+- [x] **Cache policy** — `ETag` / `If-None-Match` → 304; HTML at asset-ID URLs revalidates every load, other files 1 h, version-ID URLs immutable; `Vary: Accept-Encoding`
+- [x] **Web content types** — fonts, source maps, web manifests, media, plain text in the extractor's table (the container image has no `/etc/mime.types`)
+- [ ] **Per-asset origin** — `https://<id>.serve.reearth.land/` so root-relative paths (`/assets/app.js`) resolve and hosted pages are origin-isolated from the API and from each other
+- [ ] **SPA fallback** — serve `index.html` (200) for unmatched paths when the asset opts in; `404.html` support
+- [ ] **CLI directory upload** — `upload ./dist` zips and uploads in one step
+- [ ] **Custom domains** — CNAME onto an asset
+- [ ] **`_headers` / `_redirects`** — Netlify-style per-site header (CSP) and redirect rules
 
 ---
 

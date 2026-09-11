@@ -50,6 +50,7 @@ export class MemoryFileStorage implements FileStorage {
         size: entry.data.byteLength,
         contentType: entry.contentType,
         contentEncoding: entry.contentEncoding,
+        etag: entry.etag,
       };
     }
 
@@ -62,6 +63,7 @@ export class MemoryFileStorage implements FileStorage {
       size: entry.data.byteLength,
       contentType: entry.contentType,
       contentEncoding: entry.contentEncoding,
+      etag: entry.etag,
       range: { offset, length, totalSize: entry.data.byteLength },
     };
   }

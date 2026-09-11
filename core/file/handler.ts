@@ -2,8 +2,11 @@ import { Hono } from "hono";
 import { cors } from "hono/cors";
 import type { AppEnv } from "../types";
 import { decompressStream } from "../asset/compression";
+import type { AssetMetadata, AssetVersion, StoredFile } from "../asset/model";
+import type { FileStorage } from "../asset/repository";
 import { resolveAssetVersion } from "../asset/usecase";
 import { legacyThumbKey, versionThumbKey } from "../asset/usecase/shared";
+import { cacheControlFor, etagMatches, representationEtag } from "./caching";
 import { parseRange, sliceStream } from "./stream";
 import {
   isThumbnailSize,
@@ -11,6 +14,8 @@ import {
   THUMBNAIL_CONTENT_TYPE,
   type ThumbnailSize,
 } from "../thumbnail/sizes";
+
+const INDEX_FILE = "index.html";
 
 // Detect a thumbnail request. Returns the requested size on success, "invalid"
 // if the request explicitly named an unknown size (→ 400), or null if not a
@@ -29,6 +34,122 @@ function detectThumbRequest(
   return isThumbnailSize(match[1]) ? match[1] : "invalid";
 }
 
+/**
+ * One storage layout an asset's bytes may live under. Versioned assets use
+ * `assets/{asset}/v/{version}/…`; assets that predate ADR-005 use
+ * `assets/{asset}/…`. The two differ only in prefix and in where the main
+ * file's HTTP metadata comes from, so the delivery code works against this
+ * shape and never against the raw asset/version rows.
+ */
+interface Layout {
+  archive: boolean;
+  /** Filename of the uploaded object (the archive itself for archive assets). */
+  filename: string;
+  mainKey: string;
+  /** Storage key of an extracted entry. Only meaningful when `archive`. */
+  entryKey(path: string): string;
+  contentType: string;
+  contentEncoding?: string;
+  originalSize?: number;
+}
+
+function versionedLayout(asset: AssetMetadata, version: AssetVersion): Layout {
+  const prefix = `assets/${asset.id}/v/${version.id}`;
+  return {
+    archive: version.type === "archive",
+    filename: version.filename,
+    mainKey: `${prefix}/${version.filename}`,
+    entryKey: (path) => `${prefix}/files/${path}`,
+    contentType: version.contentType,
+    contentEncoding: version.contentEncoding,
+    originalSize: version.originalSize,
+  };
+}
+
+function legacyLayout(asset: AssetMetadata): Layout {
+  const prefix = `assets/${asset.id}`;
+  return {
+    archive: asset.type === "archive",
+    filename: asset.filename,
+    mainKey: `${prefix}/${asset.filename}`,
+    entryKey: (path) => `${prefix}/files/${path}`,
+    contentType: asset.contentType,
+    contentEncoding: asset.contentEncoding,
+    originalSize: asset.originalSize,
+  };
+}
+
+interface Located {
+  key: string;
+  file: StoredFile;
+  contentType: string;
+  contentEncoding?: string;
+  displayName: string;
+  originalSize?: number;
+}
+
+/**
+ * Map a request path onto an object in one layout.
+ *
+ * - Empty path or trailing slash → the directory's `index.html` (archives) or
+ *   the uploaded file itself (single-file assets).
+ * - The archive's own filename → the archive.
+ * - Anything else on an archive → the extracted entry at that path.
+ * - Anything else on a single-file asset → the uploaded file. The path after
+ *   the ID has never been checked for single-file assets, and links in the
+ *   wild depend on that.
+ */
+async function locate(storage: FileStorage, layout: Layout, filePath: string): Promise<Located | null> {
+  const wantsDirectory = filePath === "" || filePath.endsWith("/");
+
+  if (!layout.archive) {
+    const file = await storage.get(layout.mainKey);
+    if (!file) return null;
+    return {
+      key: layout.mainKey,
+      file,
+      contentType: layout.contentType,
+      contentEncoding: layout.contentEncoding,
+      displayName: layout.filename,
+      originalSize: layout.originalSize,
+    };
+  }
+
+  if (!wantsDirectory && filePath === layout.filename) {
+    const file = await storage.get(layout.mainKey);
+    if (!file) return null;
+    return {
+      key: layout.mainKey,
+      file,
+      contentType: layout.contentType,
+      contentEncoding: layout.contentEncoding,
+      displayName: layout.filename,
+      originalSize: layout.originalSize,
+    };
+  }
+
+  const entryPath = wantsDirectory ? `${filePath}${INDEX_FILE}` : filePath;
+  const key = layout.entryKey(entryPath);
+  const file = await storage.get(key);
+  if (!file) return null;
+  return {
+    key,
+    file,
+    contentType: file.contentType,
+    contentEncoding: file.contentEncoding,
+    displayName: entryPath.split("/").pop() || entryPath,
+  };
+}
+
+/** True when `path` names a directory that has an index file, in any layout. */
+async function hasIndex(storage: FileStorage, layouts: Layout[], path: string): Promise<boolean> {
+  for (const layout of layouts) {
+    if (!layout.archive) continue;
+    if (await storage.head(layout.entryKey(`${path}/${INDEX_FILE}`))) return true;
+  }
+  return false;
+}
+
 // File delivery uses a URL-as-capability model by design (ROADMAP "file-layer
 // access control (URL visibility) — distinct from service-layer"). Knowing
 // the asset ID grants download; confidentiality relies on ID unguessability
@@ -39,14 +160,17 @@ export const fileRoutes = new Hono<AppEnv>();
 // CORS only on file delivery routes
 fileRoutes.use("/*", cors({ origin: "*" }));
 
-// GET /files/:id/:filename — serve single-file asset
-// GET /files/:id/path/to/file — serve extracted file from archive asset
-fileRoutes.get("/:id/:path{.+}", async (c) => {
+// GET /files/:id                 — single-file asset, or an archive's index.html
+// GET /files/:id/:filename       — serve single-file asset
+// GET /files/:id/path/to/file    — serve extracted file from archive asset
+// GET /files/:id/path/to/dir/    — serve path/to/dir/index.html
+// HEAD is answered by Hono re-dispatching as GET and dropping the body.
+fileRoutes.on("GET", ["/:id", "/:id/", "/:id/:path{.+}"], async (c) => {
   const metadataStore = c.get("metadata");
   const versions = c.get("versions");
   const storage = c.get("storage");
   const id = c.req.param("id");
-  const filePath = c.req.param("path");
+  const filePath = c.req.param("path") ?? "";
   const rangeHeader = c.req.header("Range");
   const acceptEncoding = c.req.header("Accept-Encoding") ?? "";
   const clientAcceptsGzip = acceptEncoding.includes("gzip");
@@ -70,42 +194,45 @@ fileRoutes.get("/:id/:path{.+}", async (c) => {
     return serveThumbnail(storage, asset, version, thumb);
   }
 
-  // Determine storage key based on whether we have a version
-  let storageKeyPath: string;
-  let contentType: string;
-  let contentEncoding: string | undefined;
-  let displayName: string;
-  let originalSize: number | undefined;
+  // A URL that names a version ID is pinned: its bytes can never change, so
+  // the response may be cached forever. Asset-ID URLs follow the active
+  // version and must stay revalidatable (ADR-013).
+  const pinned = version !== null && id === version.id;
 
-  if (version) {
-    // Versioned layout
-    const isArchiveSubpath = version.type === "archive" && filePath !== version.filename;
-    if (isArchiveSubpath) {
-      storageKeyPath = `assets/${asset.id}/v/${version.id}/files/${filePath}`;
-    } else {
-      storageKeyPath = `assets/${asset.id}/v/${version.id}/${version.filename}`;
-    }
+  // Versioned layout first; assets from before ADR-005 have no version row and
+  // live under the legacy prefix, which is also the fallback when the
+  // versioned key is missing.
+  const layouts = version ? [versionedLayout(asset, version), legacyLayout(asset)] : [legacyLayout(asset)];
 
-    const file = await storage.get(storageKeyPath, undefined);
-    if (!file) {
-      // Legacy fallback: try old layout
-      return serveLegacy(c, storage, asset, filePath, range, clientAcceptsGzip, rangeHeader);
-    }
-
-    contentType = isArchiveSubpath ? file.contentType : version.contentType;
-    contentEncoding = isArchiveSubpath ? file.contentEncoding : version.contentEncoding;
-    displayName = isArchiveSubpath ? filePath.split("/").pop() || filePath : version.filename;
-    originalSize = version.originalSize;
-
-    return serveFile(file, contentType, contentEncoding, displayName, originalSize, range, clientAcceptsGzip, rangeHeader, storage, storageKeyPath);
+  let located: Located | null = null;
+  for (const layout of layouts) {
+    located = await locate(storage, layout, filePath);
+    if (located) break;
   }
 
-  // Legacy (no versions) — use the old layout
-  return serveLegacy(c, storage, asset, filePath, range, clientAcceptsGzip, rangeHeader);
+  if (!located) {
+    // `/files/:id/docs` where `docs/index.html` exists: redirect to the slash
+    // form so relative links inside the page resolve against the directory.
+    if (filePath !== "" && !filePath.endsWith("/") && (await hasIndex(storage, layouts, filePath))) {
+      const url = new URL(c.req.url);
+      url.pathname = `${url.pathname}/`;
+      return c.redirect(url.toString(), 301);
+    }
+    return c.json({ error: "File not found" }, 404);
+  }
+
+  return serveFile(located, {
+    range,
+    rangeHeader,
+    clientAcceptsGzip,
+    ifNoneMatch: c.req.header("If-None-Match"),
+    cacheControl: cacheControlFor({ pinned, contentType: located.contentType }),
+    storage,
+  });
 });
 
 async function serveThumbnail(
-  storage: any,
+  storage: FileStorage,
   asset: { id: string },
   version: { id: string } | null,
   size: ThumbnailSize,
@@ -132,89 +259,72 @@ async function serveThumbnail(
   });
 }
 
-async function serveLegacy(
-  c: any,
-  storage: any,
-  asset: any,
-  filePath: string,
-  range: { offset: number; length: number } | null,
-  clientAcceptsGzip: boolean,
-  rangeHeader: string | undefined,
-) {
-  const isArchiveSubpath = asset.type === "archive" && filePath !== asset.filename;
-  const storageKeyPath = isArchiveSubpath
-    ? `assets/${asset.id}/files/${filePath}`
-    : `assets/${asset.id}/${asset.filename}`;
-
-  const file = await storage.get(storageKeyPath, undefined);
-  if (!file) {
-    return c.json({ error: "File not found" }, 404);
-  }
-
-  const contentType = isArchiveSubpath ? file.contentType : asset.contentType;
-  const contentEncoding = isArchiveSubpath ? file.contentEncoding : asset.contentEncoding;
-  const displayName = isArchiveSubpath ? filePath.split("/").pop() || filePath : asset.filename;
-  const originalSize = asset.originalSize;
-
-  return serveFile(file, contentType, contentEncoding, displayName, originalSize, range, clientAcceptsGzip, rangeHeader, storage, storageKeyPath);
+interface ServeOptions {
+  range: { offset: number; length: number } | null;
+  rangeHeader: string | undefined;
+  clientAcceptsGzip: boolean;
+  ifNoneMatch: string | undefined;
+  cacheControl: string;
+  storage: FileStorage;
 }
 
-function serveFile(
-  file: { body: ReadableStream; size: number; contentType: string; contentEncoding?: string },
-  contentType: string,
-  contentEncoding: string | undefined,
-  displayName: string,
-  originalSize: number | undefined,
-  range: { offset: number; length: number } | null,
-  clientAcceptsGzip: boolean,
-  rangeHeader: string | undefined,
-  storage: any,
-  storageKeyPath: string,
-) {
+async function serveFile(located: Located, opts: ServeOptions): Promise<Response> {
+  const { file, key, contentType, contentEncoding, displayName, originalSize } = located;
+  const { range, rangeHeader, clientAcceptsGzip, storage } = opts;
   const isGzipStored = contentEncoding === "gzip";
+  // Pass the stored gzip bytes through untouched when the client can take
+  // them and asked for the whole file; every other path decodes.
+  const passthrough = isGzipStored && clientAcceptsGzip && !rangeHeader;
+
+  const etag = representationEtag(file.etag, { transformed: isGzipStored && !passthrough });
+
+  const common: Record<string, string> = {
+    "Content-Type": contentType,
+    "Cache-Control": opts.cacheControl,
+    "Content-Disposition": `inline; filename="${encodeURIComponent(displayName)}"`,
+  };
+  if (etag) common["ETag"] = etag;
+  // The body differs by Accept-Encoding whenever gzip is on disk.
+  if (isGzipStored) common["Vary"] = "Accept-Encoding";
+
+  if (etag && etagMatches(opts.ifNoneMatch, etag)) {
+    await file.body.cancel().catch(() => {});
+    return new Response(null, { status: 304, headers: common });
+  }
 
   // --- Non-gzip file ---
   if (!isGzipStored) {
+    const headers: Record<string, string> = { ...common, "Accept-Ranges": "bytes" };
     if (range) {
-      return (async () => {
-        const rangedFile = await storage.get(storageKeyPath, range);
-        if (!rangedFile) return new Response(JSON.stringify({ error: "File not found" }), { status: 404, headers: { "Content-Type": "application/json" } });
-
-        const headers: Record<string, string> = {
-          "Content-Type": contentType,
-          "Accept-Ranges": "bytes",
-          "Cache-Control": "public, max-age=3600, immutable",
-          "Content-Disposition": `inline; filename="${encodeURIComponent(displayName)}"`,
-        };
-
-        if (rangedFile.range) {
-          const { offset, length, totalSize } = rangedFile.range;
-          headers["Content-Range"] = `bytes ${offset}-${offset + length - 1}/${totalSize}`;
-          headers["Content-Length"] = String(length);
-          return new Response(rangedFile.body, { status: 206, headers });
-        }
-        return new Response(rangedFile.body, { status: 200, headers });
-      })();
+      // The first read fetched the whole object to learn its metadata; the
+      // range itself is a second, bounded read.
+      await file.body.cancel().catch(() => {});
+      const rangedFile = await storage.get(key, range);
+      if (!rangedFile) {
+        return new Response(JSON.stringify({ error: "File not found" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (rangedFile.range) {
+        const { offset, length, totalSize } = rangedFile.range;
+        headers["Content-Range"] = `bytes ${offset}-${offset + length - 1}/${totalSize}`;
+        headers["Content-Length"] = String(length);
+        return new Response(rangedFile.body, { status: 206, headers });
+      }
+      return new Response(rangedFile.body, { status: 200, headers });
     }
 
-    const headers: Record<string, string> = {
-      "Content-Type": contentType,
-      "Accept-Ranges": "bytes",
-      "Cache-Control": "public, max-age=3600, immutable",
-      "Content-Disposition": `inline; filename="${encodeURIComponent(displayName)}"`,
-      "Content-Length": String(file.size),
-    };
+    headers["Content-Length"] = String(file.size);
     return new Response(file.body, { status: 200, headers });
   }
 
   // --- Gzip-stored + client accepts gzip + no range → pass through ---
-  if (clientAcceptsGzip && !rangeHeader) {
-    const headers: Record<string, string> = {
-      "Content-Type": contentType,
+  if (passthrough) {
+    const headers = {
+      ...common,
       "Content-Encoding": "gzip",
       "Content-Length": String(file.size),
-      "Cache-Control": "public, max-age=3600, immutable",
-      "Content-Disposition": `inline; filename="${encodeURIComponent(displayName)}"`,
     };
     // encodeBody "manual" tells the runtime the body is ALREADY gzip. The
     // default ("automatic") treats the body as plain and re-encodes per
@@ -230,27 +340,15 @@ function serveFile(
 
   // --- Gzip-stored: decompress ---
   const decompressed = decompressStream(file.body);
+  const headers: Record<string, string> = { ...common, "Accept-Ranges": "bytes" };
 
   if (!range) {
-    const headers: Record<string, string> = {
-      "Content-Type": contentType,
-      "Accept-Ranges": "bytes",
-      "Cache-Control": "public, max-age=3600, immutable",
-      "Content-Disposition": `inline; filename="${encodeURIComponent(displayName)}"`,
-    };
     if (originalSize) headers["Content-Length"] = String(originalSize);
     return new Response(decompressed, { status: 200, headers });
   }
 
   // Range on gzip: decompress, skip to offset, stream the range
   const sliced = sliceStream(decompressed, range.offset, range.length, originalSize);
-  const headers: Record<string, string> = {
-    "Content-Type": contentType,
-    "Accept-Ranges": "bytes",
-    "Cache-Control": "public, max-age=3600, immutable",
-    "Content-Disposition": `inline; filename="${encodeURIComponent(displayName)}"`,
-  };
-
   if (originalSize) {
     const end = Math.min(range.offset + range.length, originalSize) - 1;
     const length = end - range.offset + 1;
