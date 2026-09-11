@@ -1,6 +1,6 @@
 # ADR-013: Static Site Hosting from Archive Assets
 
-- **Status:** Accepted — Part A, B1–B5, the resolution/API/CLI of B6, B7's `password` mode and C1 implemented; B7's `members` mode, C2 and C3 proposed
+- **Status:** Accepted — Part A, B1–B5, the resolution/API/CLI of B6, B7's `password` mode, C1 and C2 implemented; B7's `members` mode and C3 proposed
 - **Date:** 2026-09-11
 - **Deciders:** @rot1024
 - **Related:** ADR-014 (asset access control: `restricted` mode, grants, signed URLs, API keys)
@@ -826,10 +826,10 @@ every URL form, cookie/Basic proof, `private` caching, credentialed CORS
   no credentials) but announces the mode's policy, which costs one metadata
   read.
 - **Not implemented here:** the ADR-007 event on a mode or password change
-  (there is still no event store — same gap as B6), and `upload --site
-  --password`. `members` mode waits on the OIDC integration as specified.
+  (there is still no event store — same gap as B6). `upload --password`
+  landed with C2. `members` mode waits on the OIDC integration as specified.
 
-## Part C — Site behaviour and tooling (C1 implemented; C2 and C3 proposed)
+## Part C — Site behaviour and tooling (C1 and C2 implemented; C3 proposed)
 
 ### C1. SPA fallback and `404.html` (implemented)
 
@@ -909,13 +909,63 @@ general mechanism and is not a prerequisite.
   handler; `e2e/spa.test.ts` covers what unit tests cannot — the column
   through real SQL, the route's validation rules and the CLI flag.
 
-### C2. CLI directory upload
+### C2. CLI directory upload (implemented)
 
 `upload <dir>`: when the argument is a directory, the CLI zips it (stored,
 not deflated — the extractor transmuxes deflate anyway and the local step
 should stay fast) into a temp file and uploads that. `--site` sets
 `hosting.spa`; `--name <slug>` claims a name (B6). This is the "one
 command from `dist/` to URL" experience.
+
+**Implementation notes.**
+
+- **The writer is ours** (`cli/zip.ts`, ~250 lines): Node ships no zip, and
+  storing rather than deflating makes the format small enough that a
+  dependency would cost more than it saves. Local file headers plus a
+  central directory, CRC-32 from `zlib.crc32` where the runtime has it
+  (Node ≥ 22.2, which is what CI pins) and a 256-entry table otherwise, so
+  the command does not depend on a patch version.
+- **Each file is read twice** — once for its CRC, once for its bytes. A
+  local header carries the CRC *before* the data, and the alternative, a
+  trailing data descriptor, asks more of every reader (including the Go
+  extractor) for no benefit. Both passes stream in 1 MiB chunks, so peak
+  memory is one chunk however large a file is, and the second read is
+  served from the page cache.
+- **ZIP64 is refused, not attempted.** Past 4 GiB or 65 535 entries the
+  command errors with "zip it yourself and upload the zip" rather than
+  growing an end-of-central-directory locator for a case this command does
+  not exist for. The check runs on declared sizes, before a byte is
+  written.
+- **Skip list**: `.DS_Store`, `Thumbs.db`, `.git`, `node_modules`, matched
+  on the entry's own name at any depth. **Symbolic links are skipped and
+  reported**, never followed: a link out of the tree would upload something
+  the user did not mean to publish, and a link inside it would be silently
+  duplicated. Empty directories are dropped and no directory entries are
+  written at all — delivery looks paths up whole. Entries are sorted and
+  the DOS timestamp is fixed at the 1980 epoch, so the same directory
+  always produces the same bytes.
+- **The upload itself is unchanged.** The temp zip goes through the same
+  presigned-or-direct path as any other file, so the result is an ordinary
+  archive asset that extracts as usual. The temp directory is removed in a
+  `finally`.
+- **The filename is `<dirname>.zip`**, taken from the *resolved* path, so
+  `upload .` names the project directory rather than producing `..zip`.
+- **`--site`, `--password` and `--name` run after the upload**, and the
+  first two go in **one** `PATCH` — they are one write on the server and
+  two requests would leave a half-configured site behind if the second
+  failed. All three are project-only (C1, B7, B2), so a demo upload prints
+  a note naming the flags and the fix (`project use <id>`) instead of
+  relaying a 400 the user cannot act on. The upload is never rolled back
+  when a later step fails: the asset exists and its URL works, and deleting
+  it because a name was taken would throw away what the user just paid for.
+  API errors otherwise pass through verbatim (`name is reserved`, …).
+- **`--password` takes no value**, like `asset protect`: a password in
+  `argv` is visible in `ps`, in shell history and in CI logs. It prompts
+  twice, or reads `REEARTH_SERVE_SITE_PASSWORD` for unattended runs.
+- **The flags are registered once** and attached to both `upload` and its
+  `asset create` alias, so the alias cannot quietly lack one.
+- **`--site` sets the flat `spa` field**, not `hosting.spa` — see C1's
+  notes.
 
 ### C3. `_headers` and `_redirects`
 
@@ -1068,8 +1118,10 @@ case: tile viewers and data consumers rely on `404` for missing entries.
    for origin-scoped cookies.
 5. ~~**C1** SPA fallback / `404.html`~~ — done: a flat `spa` column
    (`0007_asset_spa.sql`), the extensionless-miss rule, the root `404.html`
-   with `no-store`, and `asset update --spa on|off`. **C2** CLI
-   `upload <dir>`.
+   with `no-store`, and `asset update --spa on|off`. ~~**C2** CLI
+   `upload <dir>`~~ — done: a dependency-free stored-zip writer
+   (`cli/zip.ts`), the skip list, symlinks skipped, ZIP64 refused, and
+   `--site` / `--name` / `--password` applied after the upload.
 6. **B5** custom domains; **C3** `_headers` / `_redirects`.
 7. **B7** `members` access mode, once OIDC integration lands.
 8. Migrate `S3FileStorage` (when it exists) to return `etag`.

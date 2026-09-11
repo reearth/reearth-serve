@@ -29,6 +29,17 @@ npm run cli -- upload myfile.geojson
 # → http://localhost:5173/files/abc123/myfile.geojson
 ```
 
+### Upload a folder as a site (CLI)
+
+```bash
+npm run cli -- upload ./dist --site --name my-map
+# → http://localhost:5173/files/abc123/dist.zip
+#   Site: https://abc123.serve.reearth.land/
+#   Named site: https://my-map.serve.reearth.land/
+```
+
+`upload <dir>` zips the directory (stored, not deflated) into a temp file and uploads that as `<dirname>.zip`, so the whole path from a build output to a URL is one command. `--site` turns on the SPA fallback, `--name <slug>` claims a named site host, and `--password` prompts for a shared password — all three need a project, so run `project use <id>` first.
+
 ### Upload a file (API)
 
 ```bash
@@ -206,6 +217,8 @@ Assets support **versioning** — uploading to an existing asset (`POST /api/v1/
 
 **Static site hosting.** Zip a built frontend (the `dist/` folder of a Vite/Next/Astro export — a single root folder is stripped automatically), upload it, and `/files/:id/` serves its `index.html`. Nested `index.html` files resolve on trailing-slash URLs, and a directory URL without the slash redirects to it so relative links keep working. The extractor assigns `Content-Type` for web payloads (HTML, JS/MJS, CSS, WASM, SVG, fonts, source maps, web manifests, media). Under `/files/:id/`, absolute-path references (`/assets/app.js`) do not resolve — build with a relative base (Vite `base: './'`), or enable site hosts below. See [ADR-013](./docs/adr/013-static-site-hosting.md).
 
+**Zipping is optional.** `reearth-serve upload ./dist` packs the directory itself and uploads `dist.zip`, so there is no manual zip step. The archive is **stored, not deflated** — the extractor transmuxes deflate into gzip on the way into storage anyway, so compressing locally would spend CPU on bytes the server immediately undoes. `.DS_Store`, `Thumbs.db`, `.git/` and `node_modules/` are left out at any depth, symbolic links are skipped with a warning rather than followed (a link out of the tree would publish something the user did not mean to), paths keep forward slashes, and the output is byte-for-byte reproducible for the same input. Directories over 4 GiB or 65 535 files need ZIP64 and are refused with a message saying to zip them by hand; sites are not that. See [ADR-013 C2](./docs/adr/013-static-site-hosting.md).
+
 **SPA fallback and `404.html`.** A single-page app routes on the client, so `/about` only exists once its JavaScript has loaded — reloading that URL asks the server for a file that is not in the archive. Turn the fallback on and the miss is answered with the archive's root `index.html` at status `200` instead:
 
 ```bash
@@ -297,6 +310,10 @@ The CLI (`npm run cli --`) provides subcommands for managing assets and files. S
 # Upload
 npm run cli -- upload myfile.geojson
 npm run cli -- upload --direct myfile.geojson   # skip presigned URLs
+npm run cli -- upload ./dist                    # zip a directory and upload it as <dirname>.zip
+npm run cli -- upload ./dist --site             # …and turn the SPA fallback on
+npm run cli -- upload ./dist --site --name my-map   # …and claim my-map.serve.reearth.land
+npm run cli -- upload ./dist --password         # …and protect it (prompts twice)
 
 # Asset management
 npm run cli -- asset list
