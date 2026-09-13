@@ -4,7 +4,8 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    # Stacked PRs target the branch below them, not main; run CI for those too.
+    branches: [main, "stack/**"]
 
 jobs:
   check:
@@ -31,6 +32,22 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run build
+
+  e2e-node:
+    name: E2E / Node runtime
+    runs-on: ubuntu-latest
+    # The suite runs with no cloud credentials at all: the Node runtime
+    # (runtime/node) on node:sqlite, in-process file storage and the SQL-backed
+    # kv/queue tables. Presigned, container and thumbnail tests are skipped —
+    # that runtime has none of those features.
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:e2e:node
 
   container-archive-extractor:
     name: Container / archive-extractor
@@ -89,8 +106,28 @@ jobs:
         uses: golangci/golangci-lint-action@9fae48acfc02a90574d7c304a1758ef9895495fa # v7
         with:
           working-directory: container/thumbnail
+      - name: Test
+        run: go test -v -race -count=1 ./...
       - name: Build
         run: go build -o /dev/null .
+
+  # Single required status check for branch rules. It aggregates every job
+  # above so the ruleset can require "CI" instead of tracking job names.
+  ci:
+    name: CI
+    needs: [check, build, e2e-node, container-archive-extractor, container-thumbnail]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check job results
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          echo "$RESULTS"
+          if echo "$RESULTS" | grep -Eq '"result": *"(failure|cancelled)"'; then
+            echo "One or more CI jobs failed." >&2
+            exit 1
+          fi
 
   deploy:
     name: Deploy
@@ -111,7 +148,9 @@ jobs:
         env:
           CI: "true"
           CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          # Optional: auto-selected from the token when it sees one account.
           CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+          CLOUDFLARE_ACCOUNT_NAME: ${{ vars.CLOUDFLARE_ACCOUNT_NAME }}
           CLOUDFLARE_KV_NAMESPACE_ID: ${{ secrets.CLOUDFLARE_KV_NAMESPACE_ID }}
           CLOUDFLARE_D1_DATABASE_ID: ${{ secrets.CLOUDFLARE_D1_DATABASE_ID }}
           CLOUDFLARE_R2_BUCKET_NAME: ${{ secrets.CLOUDFLARE_R2_BUCKET_NAME }}
