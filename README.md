@@ -322,7 +322,7 @@ not available**: `v<n>--` has no meaning on a domain the customer owns, so
 `PATCH {previews: true}` is a `400` — use the subdomain form for review. See
 [ADR-013 B5](./docs/adr/013-static-site-hosting.md).
 
-**Caching.** Every file response carries an `ETag`; `If-None-Match` answers `304`. Asset-ID URLs follow the active version, so they stay revalidatable: HTML is `max-age=0, must-revalidate`, everything else `max-age=3600`. Version-ID URLs (`/files/:versionId/...`) are immutable and cached for a year. Gzip-stored files send `Vary: Accept-Encoding`.
+**Caching.** Every file response carries an `ETag`; `If-None-Match` answers `304`. Asset-ID URLs follow the active version, so every file at them is `max-age=0, must-revalidate` — switching the active version is a blue/green cut-over that every file honours on its next request, and rolling back is switching again. Version-ID URLs (`/files/:versionId/...`) are immutable and cached for a year; use them where a long-lived cache matters (a tileset pulled by a viewer). Gzip-stored files send `Vary: Accept-Encoding`.
 
 Uploaded JPEG/PNG/WebP/GIF images get four WebP thumbnails generated automatically: `xs` (64 px), `sm` (128 px), `md` (512 px), `lg` (1280 px). `xs` is sized to fit comfortably inside Cesium's billboard TextureAtlas on mobile. Generation is asynchronous via a queue and serves static from R2 thereafter — see [ADR-009](./docs/adr/009-image-thumbnail-generation.md).
 

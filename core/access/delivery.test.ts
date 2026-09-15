@@ -131,13 +131,13 @@ describe("Authorization: Basic", () => {
     expect(vary).toContain("Origin");
   });
 
-  test("a non-HTML file keeps its one-hour lifetime, privately", async () => {
+  test("a non-HTML file revalidates every time, privately", async () => {
     const { app } = await protectedFixture();
     const res = await app.request(`/files/${ASSET_ID}/assets/app.js`, {
       headers: { ...basic(PASSWORD), "Accept-Encoding": "gzip" },
     });
     expect(res.status).toBe(200);
-    expect(res.headers.get("Cache-Control")).toBe("private, max-age=3600");
+    expect(res.headers.get("Cache-Control")).toBe("private, max-age=0, must-revalidate");
     // The gzip `Vary` survives the merge rather than being overwritten.
     const vary = res.headers.get("Vary") ?? "";
     expect(vary).toContain("Accept-Encoding");

@@ -79,7 +79,7 @@ Two kinds of URL reach the same bytes and get different policies
 |-----|-----------------|-----|
 | `/files/{versionId}/…` (pinned) | `public, max-age=31536000, immutable` | A version never changes. |
 | `/files/{assetId}/…`, `text/html` or `application/xhtml+xml` | `public, max-age=0, must-revalidate` | HTML is the entry point; a redeploy must show on the next load. |
-| `/files/{assetId}/…`, anything else | `public, max-age=3600` | Bundlers emit content-hashed filenames, so a stale copy within the hour is harmless; ETag revalidation takes over afterwards. |
+| `/files/{assetId}/…`, anything else | `public, max-age=0, must-revalidate` | Switching the active version is a blue/green cut-over only if every file moves with the HTML. A one-hour lifetime (the first draft of this row) let a non-hashed `app.js` keep running against the new `index.html`; Netlify's default for a whole deploy is exactly this revalidate-always policy. The cost is a conditional request per file per use, answered with `304` on the ETag. |
 | Thumbnails | unchanged (`immutable`, 1 year) | Derived, keyed by version. |
 
 The previous blanket `immutable` was simply wrong for asset-ID URLs —
@@ -87,6 +87,16 @@ The previous blanket `immutable` was simply wrong for asset-ID URLs —
 gone from them. The same two policies apply to the site hosts in Part B:
 a host that resolves to a fixed version is pinned, a host that follows the
 asset is not.
+
+A consumer that wants the year-long cache on a moving asset — a viewer
+pulling a tileset, say — pins the version ID in the URL. That is the pinned
+row, and it is what the `v{n}--` preview hosts (B4) resolve to.
+
+**Blue/green deploys** fall out of this table plus versioning (ADR-005):
+upload the new build to the same asset (a new version, not yet served),
+check it at its version-ID URL or `v{n}--` host, then set it as the active
+version. Every asset-ID URL cuts over on the next request, and rolling back
+is setting the previous version active again — no re-upload.
 
 ### A3. `ETag`, `If-None-Match`, `Vary`, `HEAD`
 

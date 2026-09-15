@@ -5,21 +5,24 @@
  *
  * - `/files/{versionId}/…` is pinned. A version is immutable, so the response
  *   can be cached for a year and never revalidated.
- * - `/files/{assetId}/…` follows the asset's active version. It must stay
- *   revalidatable or a new deploy is invisible for as long as the old copy
- *   sits in a cache. HTML is the entry point of a hosted site and is
- *   revalidated on every load; everything else keeps a one-hour lifetime and
- *   revalidates by ETag afterwards. Hashed asset filenames — what every
- *   frontend bundler emits — never need a fresh copy within that hour.
+ * - `/files/{assetId}/…` follows the asset's active version. Every file at
+ *   such a URL is revalidated on every use (`max-age=0, must-revalidate`, the
+ *   same default Netlify applies to a whole deploy): switching the active
+ *   version is a blue/green cut-over, and it is only one if *all* files move
+ *   together — a one-hour lifetime on a non-hashed `app.js` would have let an
+ *   old bundle run against the new `index.html`. Revalidation is a conditional
+ *   request answered by a `304` on the ETag, so the cost is a round trip, not
+ *   bytes. A consumer that wants the year-long cache — a tileset pulled by a
+ *   viewer — pins the version ID in the URL instead.
  */
 export const PINNED_CACHE_CONTROL = "public, max-age=31536000, immutable";
 export const ENTRY_CACHE_CONTROL = "public, max-age=0, must-revalidate";
-export const DEFAULT_CACHE_CONTROL = "public, max-age=3600";
+export const DEFAULT_CACHE_CONTROL = ENTRY_CACHE_CONTROL;
 
 /**
  * `protected` (ADR-013 B7) keeps the lifetimes above and only swaps `public`
- * for `private`, so a browser still caches a protected site's assets for an
- * hour while no shared cache stores them. On Cloudflare, Worker responses are
+ * for `private`, so a browser may still keep a protected site's files (and
+ * revalidate them) while no shared cache stores them. On Cloudflare, Worker responses are
  * not cached by default, which makes this defence in depth rather than the
  * whole mechanism — but a corporate proxy in front of a visitor is exactly the
  * shared cache `private` exists for.
@@ -87,17 +90,19 @@ if (import.meta.vitest) {
     expect(cacheControlFor({ pinned: false, contentType: "application/xhtml+xml" })).toBe(ENTRY_CACHE_CONTROL);
   });
 
-  test("other files at an asset URL keep the one-hour default without immutable", () => {
-    const value = cacheControlFor({ pinned: false, contentType: "application/javascript" });
-    expect(value).toBe(DEFAULT_CACHE_CONTROL);
-    expect(value).not.toContain("immutable");
+  test("other files at an asset URL revalidate every time too (blue/green cut-over)", () => {
+    for (const contentType of ["application/javascript", "text/css", "application/octet-stream"]) {
+      const value = cacheControlFor({ pinned: false, contentType });
+      expect(value).toBe("public, max-age=0, must-revalidate");
+      expect(value).not.toContain("immutable");
+    }
   });
 
   test("a protected asset keeps its lifetime but turns private (ADR-013 B7)", () => {
     const cc = (o: { pinned: boolean; contentType: string }) =>
       cacheControlFor({ ...o, protected: true });
     expect(cc({ pinned: false, contentType: "text/html" })).toBe("private, max-age=0, must-revalidate");
-    expect(cc({ pinned: false, contentType: "application/javascript" })).toBe("private, max-age=3600");
+    expect(cc({ pinned: false, contentType: "application/javascript" })).toBe("private, max-age=0, must-revalidate");
     expect(cc({ pinned: true, contentType: "text/html" })).toBe("private, max-age=31536000, immutable");
     // No shared cache may store any of them.
     for (const contentType of ["text/html", "application/javascript"]) {
