@@ -174,6 +174,33 @@ func DetectContentType(filename string) string {
 		".tif":      "image/tiff",
 		".tiff":     "image/tiff",
 		".webp":     "image/webp",
+
+		// Static-site payloads. The container image is FROM scratch, so there
+		// is no /etc/mime.types and mime.TypeByExtension only knows Go's
+		// built-in handful (html, css, js, mjs, json, svg, wasm, images). Fonts,
+		// source maps, manifests and plain text would otherwise be served as
+		// application/octet-stream.
+		".txt":         "text/plain; charset=utf-8",
+		".md":          "text/markdown; charset=utf-8",
+		".csv":         "text/csv; charset=utf-8",
+		".yaml":        "application/yaml",
+		".yml":         "application/yaml",
+		".xhtml":       "application/xhtml+xml",
+		".map":         "application/json",
+		".webmanifest": "application/manifest+json",
+		".ico":         "image/x-icon",
+		".bmp":         "image/bmp",
+		".apng":        "image/apng",
+		".woff":        "font/woff",
+		".woff2":       "font/woff2",
+		".ttf":         "font/ttf",
+		".otf":         "font/otf",
+		".eot":         "application/vnd.ms-fontobject",
+		".mp4":         "video/mp4",
+		".webm":        "video/webm",
+		".mp3":         "audio/mpeg",
+		".ogg":         "audio/ogg",
+		".wav":         "audio/wav",
 	}
 
 	if ct, ok := known[ext]; ok {

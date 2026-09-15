@@ -29,6 +29,17 @@ npm run cli -- upload myfile.geojson
 # → http://localhost:5173/files/abc123/myfile.geojson
 ```
 
+### Upload a folder as a site (CLI)
+
+```bash
+npm run cli -- upload ./dist --site --name my-map
+# → http://localhost:5173/files/abc123/dist.zip
+#   Site: https://abc123.serve.reearth.land/
+#   Named site: https://my-map.serve.reearth.land/
+```
+
+`upload <dir>` zips the directory (stored, not deflated) into a temp file and uploads that as `<dirname>.zip`, so the whole path from a build output to a URL is one command. `--site` turns on the SPA fallback, `--name <slug>` claims a named site host, and `--password` prompts for a shared password — all three need a project, so run `project use <id>` first.
+
 ### Upload a file (API)
 
 ```bash
@@ -108,9 +119,13 @@ SSR on Node is out of scope, and any other path returns 404 saying so.
 | `BASE_URL` | `http://localhost:$PORT` | Public base URL used in generated file links |
 | `SQLITE_PATH` | `:memory:` | SQLite database file; in-memory by default |
 | `INTERNAL_API_SECRET` | (unset) | Shared secret for `/api/internal/*` and `POST /internal/cron`; unset ⇒ both refuse every request |
+| `SIGNING_SECRET` | (unset) | HMAC key for the password cookie of protected sites (ADR-013 B7); unset ⇒ protected assets answer 503 and protecting one is refused |
 | `ANONYMOUS_UPLOAD_ENABLED` | (unset) | `"true"` to allow uploads without a token |
 | `ASSET_TTL_SECONDS` | `3600` | TTL for assets that belong to no project |
 | `OIDC_ISSUER_URL` / `OIDC_AUDIENCE` | (unset) | JWT verification; unset ⇒ demo mode |
+| `SITE_HOST_SUFFIX` | (unset) | Site-host suffix, e.g. `.localhost:8788` (must start with `.`, port included); unset ⇒ site hosts and custom domains off |
+| `SITE_DNS_RESOLVER_URL` | `https://cloudflare-dns.com/dns-query` | DNS-over-HTTPS endpoint the custom-domain TXT check is asked of |
+| `SITE_FALLBACK_ORIGIN` | (unset) | What a customer CNAMEs their domain at; unset ⇒ the host of `BASE_URL` |
 | `OBJECT_STORE_*` | (unset) | Reserved for the future S3 adapter; until then storage is in-process |
 | `CONTAINER_LAUNCHER` | `none` | Only `none` is implemented; any other value fails at startup |
 
@@ -151,6 +166,12 @@ not persisted.
 | `POST` | `/api/v1/assets/uploads` | Create presigned upload session |
 | `POST` | `/api/v1/assets/uploads/:id/complete` | Complete upload session |
 | `POST` | `/api/v1/assets/:id/extract` | Start archive extraction |
+| `GET` | `/api/v1/assets/:id/hosts` | List the asset's site hosts (named subdomains and custom domains) |
+| `GET` | `/api/v1/assets/:id/hosts/:hostname` | Get one host, with the DNS still to publish while a custom domain is unverified |
+| `POST` | `/api/v1/assets/:id/hosts` | Claim a name or register a custom domain (`{ hostname, kind? }`) |
+| `POST` | `/api/v1/assets/:id/hosts/:hostname/verify` | Check a custom domain's TXT record and publish it |
+| `PATCH` | `/api/v1/assets/:id/hosts/:hostname` | Disable/enable a name and toggle previews (`{ disabled?, previews? }`) |
+| `DELETE` | `/api/v1/assets/:id/hosts/:hostname` | Release a name (410 and held for 30 days) |
 | `GET` | `/api/v1/jobs` | List jobs (`?limit=&cursor=`) |
 | `GET` | `/api/v1/jobs/:id` | Get extraction job status |
 | `POST` | `/api/v1/jobs/:id/retry` | Retry a failed extraction job |
@@ -159,6 +180,7 @@ not persisted.
 | `POST` | `/api/v1/projects` | Create project |
 | `GET` | `/api/v1/projects/:id` | Get project |
 | `DELETE` | `/api/v1/projects/:id` | Delete project |
+| `GET` | `/api/v1/projects/:id/hosts` | List every site host in the project |
 | `POST` | `/api/v1/workspaces` | Create workspace |
 | `GET` | `/api/v1/workspaces/:id` | Get workspace |
 | `DELETE` | `/api/v1/workspaces/:id` | Delete workspace |
@@ -184,10 +206,123 @@ These endpoints require `Authorization: Bearer $INTERNAL_API_SECRET` — set it 
 |--------|------|-------------|
 | `GET` | `/files/:id/:filename` | Download file (CORS `*`, Range support) |
 | `GET` | `/files/:id/:filename/*` | Download extracted archive file |
+| `GET` | `/files/:id` / `/files/:id/` | Single-file asset: the file. Archive asset: its `index.html` |
+| `GET` | `/files/:id/dir/` | `dir/index.html` from an archive (`/files/:id/dir` redirects here with 301) |
+| `HEAD` | any of the above | Headers only |
 | `GET` | `/files/:id/_thumbs/:size.webp` | Image thumbnail (`xs`/`sm`/`md`/`lg`) |
 | `GET` | `/files/:id/:filename?thumb=:size` | Same thumbnail, accessed via query parameter |
+| `POST` | `/files/:id/_serve/auth` | Password form of a protected asset (`/_serve/auth` on a site host) — sets the cookie and redirects back |
 
 Assets support **versioning** — uploading to an existing asset (`POST /api/v1/assets/:id`) creates a new version while keeping the asset ID and URL stable. Each asset can have an explicit active version; if unset, the latest version is served. File URLs (`/files/:id/:filename`) resolve the active/latest version automatically. Version IDs can also be used directly in file URLs. Demo mode assets (no project) auto-expire after 1 hour. Project assets are permanent. See [ADR-005](./docs/adr/005-asset-versioning.md).
+
+**Static site hosting.** Zip a built frontend (the `dist/` folder of a Vite/Next/Astro export — a single root folder is stripped automatically), upload it, and `/files/:id/` serves its `index.html`. Nested `index.html` files resolve on trailing-slash URLs, and a directory URL without the slash redirects to it so relative links keep working. The extractor assigns `Content-Type` for web payloads (HTML, JS/MJS, CSS, WASM, SVG, fonts, source maps, web manifests, media). Under `/files/:id/`, absolute-path references (`/assets/app.js`) do not resolve — build with a relative base (Vite `base: './'`), or enable site hosts below. See [ADR-013](./docs/adr/013-static-site-hosting.md).
+
+**Zipping is optional.** `reearth-serve upload ./dist` packs the directory itself and uploads `dist.zip`, so there is no manual zip step. The archive is **stored, not deflated** — the extractor transmuxes deflate into gzip on the way into storage anyway, so compressing locally would spend CPU on bytes the server immediately undoes. `.DS_Store`, `Thumbs.db`, `.git/` and `node_modules/` are left out at any depth, symbolic links are skipped with a warning rather than followed (a link out of the tree would publish something the user did not mean to), paths keep forward slashes, and the output is byte-for-byte reproducible for the same input. Directories over 4 GiB or 65 535 files need ZIP64 and are refused with a message saying to zip them by hand; sites are not that. See [ADR-013 C2](./docs/adr/013-static-site-hosting.md).
+
+**SPA fallback and `404.html`.** A single-page app routes on the client, so `/about` only exists once its JavaScript has loaded — reloading that URL asks the server for a file that is not in the archive. Turn the fallback on and the miss is answered with the archive's root `index.html` at status `200` instead:
+
+```bash
+reearth-serve asset update <assetId> --spa on    # …--spa off to turn it back off
+```
+
+It is **opt-in**, because the default has to stay right for the other use case: a 3D Tiles viewer asking for a tile that is not there must see a `404`, not an HTML body. For the same reason the fallback is withheld from any path whose last segment looks like a file (`\.[a-z0-9]{1,8}$` — `.js`, `.json`, `.png`, `.b3dm`): a `200` HTML body in place of a missing chunk breaks a bundler's dynamic import far more confusingly than a `404` does, and client-side routes are extensionless anyway. Real directories still redirect to their slash form first, so nothing that exists is shadowed by the app shell.
+
+Independently of the flag, if the archive has a root **`404.html`** it is served — with status `404`, `Cache-Control: no-store` and no `ETag` — for any miss the SPA fallback did not take. The status stays `404`, so an error page cannot mislead a loader the way a `200` can. Site (archive) assets in a project only; the flag is a property of the asset, so it applies on every URL form (`/files/:id/…`, ID and named hosts, previews). See [ADR-013 C1](./docs/adr/013-static-site-hosting.md).
+
+**Headers and redirects.** Two Netlify-style control files at the root of the archive configure the site. They are read and parsed once, when extraction finishes, and stored on the version — so a redeploy replaces them and nothing is parsed per request. Neither file is ever served: `/_headers` and `/_redirects` answer `404` like any other miss.
+
+`_headers` attaches response headers to paths. A line starting with `/` opens a block; indented `Name: value` lines belong to it; `#` comments and blank lines are ignored. Patterns are an exact path, a trailing `/*` prefix wildcard, or `:placeholder` segments that match one segment each. Later rules override earlier ones for the same header.
+
+```
+/*
+  X-Frame-Options: DENY
+  Referrer-Policy: no-referrer
+/admin/*
+  Content-Security-Policy: default-src 'self'
+```
+
+`_redirects` is `from to [status]`, one rule per line, first match wins. The status is `301`, `302`, `307`, `308` or `200`; `200` is a **rewrite** — the other file's bytes are served at the requested URL, which is how a single-page app is routed (`/* /index.html 200` does the same job as `--spa on`, and the two can coexist). A trailing `!` makes a rule **forced**: without it the rule only fires when `from` is not a real file, so a catch-all rewrite never shadows the site's own assets. `:splat` in the target stands for whatever a trailing `*` matched, and `:name` for a `:name` segment.
+
+```
+/old-page   /new-page       301
+/blog/*     /news/:splat    301!
+/*          /index.html     200
+```
+
+Two things a rule may not do. It may not **redirect off the site**: targets must be paths inside the same archive (no `https://…`, no `//host`), because a site is served from a hostname Serve gave it and bouncing visitors elsewhere from that name is a phishing primitive. And it may not set a header delivery owns — `Cache-Control`, `ETag`, `Last-Modified`, `Vary`, `Content-Type`, `Content-Length`/`-Encoding`/`-Range`, `Accept-Ranges`, `Set-Cookie`, `WWW-Authenticate` or any `Access-Control-*` — since those are decided per request by the cache policy, the ETag machinery and the asset's access mode. `X-Robots-Tag` *is* allowed, though a preview host still forces `noindex`. Everything the files are actually for works: `Content-Security-Policy`, `X-Frame-Options`, `Referrer-Policy`, `Permissions-Policy`, `X-Content-Type-Options`, `Strict-Transport-Security`, `Link`.
+
+Limits: 64 KB per file, 100 header rules with at most 20 headers each, 2 KB per header value, 500 redirect rules, and 256 KB of parsed rules in total. Exceeding a size or count limit ignores that whole file (a half-applied rule set is worse than none); a single malformed or refused line only costs that line. Either way the reason is recorded and shown by `reearth-serve asset version show <assetId> <versionId>` and in `GET /api/v1/assets/:id/versions/:versionId` — a rule that was refused is invisible on the site itself, so that is where to look for it. See [ADR-013 C3](./docs/adr/013-static-site-hosting.md).
+
+**Site hosts.** With `SITE_HOST_SUFFIX` set (e.g. `.serve.reearth.land`), every asset also has its own hostname: `https://<assetId>.serve.reearth.land/` serves exactly what `/files/<assetId>/` serves, and a version ID in place of the asset ID gives a pinned, immutable preview (marked `X-Robots-Tag: noindex`). Root-relative paths resolve there, so the `base: './'` advice above is unnecessary once it is enabled, and each site is its own origin — a hosted page cannot reach the API, the UI or another asset same-origin. Nothing but files is reachable on a site host: `/api/v1/health` is looked up as a file inside the archive. Archive uploads get a `siteUrl` in the response and the CLI prints it. Enabling it needs zone-side setup (a wildcard DNS record, a certificate covering `*.serve.reearth.land`, and a Worker route) — see the comment in `wrangler.toml` and [ADR-013 B1](./docs/adr/013-static-site-hosting.md). Once a suffix is configured, **the apex is the only hostname that is not a site**: every other `Host` is looked up in the site-hosts table (custom domains cannot be recognised any other way) and answers a plain-text `404` if it has no row, so the UI, `/api/v1/health` and the docs are reachable on the apex alone.
+
+**Protecting a site.** A staging site or an internal dashboard can be put behind a shared password (ADR-013 B7):
+
+```bash
+reearth-serve asset protect <assetId> --password   # prompts twice, never echoes
+reearth-serve asset protect <assetId> --off        # remove it
+```
+
+- **What a visitor sees.** A branded password page (`401`, `no-store`, `noindex`) with a form that posts to `/_serve/auth` on the site host (or `/files/<id>/_serve/auth` on the apex). On success the response sets an `HttpOnly` cookie good for 7 days and sends the visitor back where they were. Changing the password signs everyone out — the cookie carries a version that the change increments.
+- **Tools use HTTP Basic.** `curl -u :<password> …`, QGIS, Cesium's `Resource` headers and `file cp --password` all work: the username is ignored and only the password is checked. A request that does not look like a browser navigation (no `text/html` in `Accept`) gets `401` with `WWW-Authenticate: Basic` and a JSON body instead of the page, so a client that knows what to do with the header sees it — and a browser does not, which is what keeps the native credential dialog from covering the branded page.
+- **It is a property of the asset, not of one hostname.** Every URL form is protected at once: `/files/<id>/…`, `<id>.serve…`, the named host, `v<n>--`/`latest--` previews, custom domains, thumbnails, `Range` requests and `HEAD`. Protecting only the pretty hostname would be theatre — the asset ID is printed in every `siteUrl`.
+- **CORS caveat.** `Access-Control-Allow-Origin: *` cannot be combined with credentials, so a protected asset echoes the request's `Origin` and sets `Access-Control-Allow-Credentials: true`. A page embedding a protected tileset must fetch with `credentials: "include"` (or send Basic). Public assets keep `*`. This is the one place protection changes how an asset is consumed, which is why `access` is visible in the API response.
+- **Caching.** Responses keep their usual lifetimes but become `private`, with `Vary: Cookie, Authorization`, so no shared cache stores them.
+- **Limits.** Site (archive) assets in a project only — demo assets are always public, and protecting a plain dataset is [ADR-014](./docs/adr/014-asset-access-control.md)'s job. Ten wrong passwords from one IP in 15 minutes gets `429`. And it does not hide the asset's *existence*: a protected URL answers `401`, not `404`. A shared password is a speed bump for staging, not a control for sensitive data.
+- **Operator setup.** Set `SIGNING_SECRET` (`wrangler secret put SIGNING_SECRET`, or the env var on Node). Until it is set, protecting an asset is refused with `503` and an already-protected asset answers `503` rather than serving its bytes.
+
+**Named sites.** An ID-shaped host is correct but not printable, so an archive asset in a project can also be given a name:
+
+```bash
+reearth-serve asset host add <assetId> kawasaki-flood-map   # → https://kawasaki-flood-map.serve.reearth.land/
+reearth-serve asset host list <assetId>                     # hostname, state, URL
+reearth-serve asset host disable <assetId> kawasaki-flood-map   # or --all for every name
+reearth-serve asset host enable <assetId> --all
+reearth-serve asset host update <assetId> kawasaki-flood-map --previews on
+reearth-serve asset host show <assetId> kawasaki-flood-map    # state, kind, verification, URL
+reearth-serve asset host remove <assetId> kawasaki-flood-map
+```
+
+Names are 3–63 characters of `[a-z0-9-]` with no leading or trailing hyphen and no `--` anywhere (`--` is reserved for preview hosts), are not ID-shaped, and are not on the reserved list (`www`, `api`, `admin`, `latest`, `v<n>`, … — also blocked as hyphen-delimited parts, so `api-v2` is out). Claiming requires **editor or above** on the asset's **project**: demo-mode assets cannot hold a name, and only archives can, since a single file has no site. Twenty active names per project; one asset may have several names. A name has three states: **enabled** (it serves the site), **disabled** (`asset host disable` — the host answers `503` with a "This site is temporarily unavailable" page, `Retry-After: 3600`, and the name stays held, so taking a site down no longer means deleting the asset), and **released**. Removing a name **releases** it rather than deleting it — for 30 days the host answers `410` with a plain "This site has moved or been removed" page and nobody can claim it, which closes the subdomain-takeover path where a stale link starts serving someone else's content. Deleting an asset releases its names the same way. ID hosts and `/files/:id/` are unaffected by any of this. See [ADR-013 B2–B3](./docs/adr/013-static-site-hosting.md).
+
+**Preview hosts.** A name can also serve its own version history, under `--` (a wildcard certificate covers one label, so `v3.name.serve…` would need a second one): `v3--kawasaki-flood-map.serve.reearth.land` is version 3, pinned and immutable, and `latest--kawasaki-flood-map.serve.reearth.land` is the newest version whatever the active one is — the same bytes as the production name but never cached as immutable, because it moves on the next upload. Every preview response is `X-Robots-Tag: noindex`, so only the production name is indexed. Version numbers are sequential and therefore guessable, so previews are **off by default** and are turned on per name (`asset host update <id> <name> --previews on`); the ID-form hosts (`<versionId>.serve.reearth.land`) stay available for review either way. `v0`, `v01` and anything else on the left of the `--` are `404`; a disabled name's previews are `503` and a released name's `410`, like the name itself. See [ADR-013 B4](./docs/adr/013-static-site-hosting.md).
+
+**Custom domains.** A site can also be served from a hostname the customer owns
+(`https://map.city.example.jp/`), as the `custom` kind of the same table. Three
+steps, and the domain does not resolve until the second one passes:
+
+```bash
+reearth-serve asset host add <assetId> map.city.example.jp --custom
+#   prints the two DNS records to publish:
+#     _reearth-serve-verify.map.city.example.jp  TXT    reearth-serve-verify=<token>
+#     map.city.example.jp                        CNAME  serve.reearth.land
+reearth-serve asset host verify <assetId> map.city.example.jp
+reearth-serve asset host show <assetId> map.city.example.jp   # certificate: pending | active
+```
+
+1. **Add the TXT record.** Registration issues a token and returns the record
+   name and value; the row is stored unverified, and until it is verified the
+   hostname answers a plain-text `404` — not a `503`, which would admit that
+   somebody had registered it here.
+2. **CNAME the domain** at the apex (or at `SITE_FALLBACK_ORIGIN`, the
+   Cloudflare for SaaS fallback origin, when one is configured). The `add`
+   output names the target.
+3. **Run `verify`.** The TXT record is read over DNS-over-HTTPS; one record at
+   the name carrying the token is the proof, so the domain's other TXT records
+   (SPF, other vendors') are no obstacle. Verification then starts certificate
+   issuance — a Cloudflare for SaaS custom hostname where `CF_API_TOKEN` and
+   `CF_ZONE_ID` are configured, nothing at all where they are not (the operator
+   terminates TLS, which is what the Node runtime always does) — and the
+   hostname starts serving. Verify attempts are rate limited per hostname.
+
+The hostname must be a real DNS name of at least two labels and may not be
+under `SITE_HOST_SUFFIX` or equal to the apex. Authorization, the per-project
+quota, disable/enable and the 30-day release cooldown are exactly as for a
+name; releasing a verified domain also gives its certificate up. **Previews are
+not available**: `v<n>--` has no meaning on a domain the customer owns, so
+`PATCH {previews: true}` is a `400` — use the subdomain form for review. See
+[ADR-013 B5](./docs/adr/013-static-site-hosting.md).
+
+**Caching.** Every file response carries an `ETag`; `If-None-Match` answers `304`. Asset-ID URLs follow the active version, so every file at them is `max-age=0, must-revalidate` — switching the active version is a blue/green cut-over that every file honours on its next request, and rolling back is switching again. Version-ID URLs (`/files/:versionId/...`) are immutable and cached for a year; use them where a long-lived cache matters (a tileset pulled by a viewer). Gzip-stored files send `Vary: Accept-Encoding`.
 
 Uploaded JPEG/PNG/WebP/GIF images get four WebP thumbnails generated automatically: `xs` (64 px), `sm` (128 px), `md` (512 px), `lg` (1280 px). `xs` is sized to fit comfortably inside Cesium's billboard TextureAtlas on mobile. Generation is asynchronous via a queue and serves static from R2 thereafter — see [ADR-009](./docs/adr/009-image-thumbnail-generation.md).
 
@@ -199,13 +334,20 @@ The CLI (`npm run cli --`) provides subcommands for managing assets and files. S
 # Upload
 npm run cli -- upload myfile.geojson
 npm run cli -- upload --direct myfile.geojson   # skip presigned URLs
+npm run cli -- upload ./dist                    # zip a directory and upload it as <dirname>.zip
+npm run cli -- upload ./dist --site             # …and turn the SPA fallback on
+npm run cli -- upload ./dist --site --name my-map   # …and claim my-map.serve.reearth.land
+npm run cli -- upload ./dist --password         # …and protect it (prompts twice)
 
 # Asset management
 npm run cli -- asset list
 npm run cli -- asset list --limit 50 --cursor <cursor>
 npm run cli -- asset show <id>
 npm run cli -- asset update <id> --description "My dataset" --user-meta '{"tag":"v1"}'
+npm run cli -- asset update <id> --spa on       # SPA fallback: unknown routes get index.html
 npm run cli -- asset delete <id>
+npm run cli -- asset protect <id> --password    # prompts twice; protects a site
+npm run cli -- asset protect <id> --off         # public again
 
 # Versioning
 npm run cli -- asset upload <id> ./updated-data.geojson   # upload new version
@@ -227,6 +369,8 @@ npm run cli -- file sync <id> ./local           # hash-based diff sync
 npm run cli -- file sync --delete <id> ./local  # sync + remove extra local files
 npm run cli -- file thumb <id> --size xs        # download xs thumbnail (default md)
 npm run cli -- file thumb <id> --size md --url  # print URL without downloading
+npm run cli -- file cp -r <id>:. ./out --password   # protected asset: prompts, then sends Basic
+REEARTH_SERVE_SITE_PASSWORD=… npm run cli -- file sync <id> ./local   # same, non-interactive
 
 # Job management
 npm run cli -- job list

@@ -1,4 +1,5 @@
 import { cleanupExpiredAssets, drainPendingCleanups, SubrequestBudget } from "./usecase";
+import { purgeReleasedSiteHosts } from "../site/usecase";
 import type { Job } from "../job/model";
 import type { JobStore } from "../job/repository";
 import type { AtomicWrites, MetadataStore } from "../asset/repository";
@@ -39,6 +40,14 @@ export async function handleScheduled(deps: Deps): Promise<void> {
   if (drainResult.drainedPrefixes.length > 0 || drainResult.budgetExhausted) {
     const suffix = drainResult.budgetExhausted ? " (budget exhausted — resuming next tick)" : "";
     console.log(`Cleanup: drained ${drainResult.drainedPrefixes.length} pending prefixes${suffix}`);
+  }
+
+  // Released site names whose 30-day cooldown has run out (ADR-013 B3). One
+  // indexed DELETE; the name becomes claimable again only here, which is what
+  // makes the cooldown a real window rather than a suggestion.
+  const purged = await purgeReleasedSiteHosts({ hosts: deps.siteHosts, cache: deps.cache, suffix: deps.siteHostSuffix });
+  if (purged.length > 0) {
+    console.log(`Cleanup: purged ${purged.length} released site hosts past their cooldown`);
   }
 
   // Self-heal: the job row and the asset row are written together now, but

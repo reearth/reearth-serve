@@ -46,6 +46,8 @@ runtime/
 | `JobQueue` (new) | Queues | SQL-backed outbox polled by cron | See §4 |
 | `ContainerLauncher` | Durable Object + Containers | ECS Fargate `RunTask` / Cloud Run Jobs | Container env vars renamed `R2_*` → `OBJECT_STORE_*` |
 | Scheduler | cron trigger | EventBridge / Cloud Scheduler → `POST /internal/cron` | `handleScheduled(deps)` unchanged |
+| `DnsResolver` (new) | DNS-over-HTTPS (`adapters/doh/`) | the same adapter | One `fetch`, so one implementation runs everywhere; `node:dns` would have been Node-only (ADR-013 B5) |
+| `CustomHostnameProvisioner` (new) | Cloudflare for SaaS custom hostnames | ACM / a Let's Encrypt companion, or `NoopProvisioner` where the operator terminates TLS | Certificates for customers' own domains — the most platform-specific thing in ADR-013 (B5) |
 | `Limits` (new) | `SubrequestBudget` = 1000 | effectively unbounded | Cloudflare-only constraint becomes configuration |
 | HTTP runtime | Workers | Hono on Node (Cloud Run / ECS / Lambda) | React Router SSR runs on Node unchanged |
 

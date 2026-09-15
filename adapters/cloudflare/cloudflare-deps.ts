@@ -14,6 +14,11 @@ import { KeyValueUploadSessionStore, KeyValueSessionStore } from "../../core/kv/
 import { CloudflareJobQueue } from "./queues";
 import { D1SqlClient } from "./sql";
 import { SqlAtomicWrites } from "../sql/writes";
+import { SqlSiteHostStore } from "../sql/site-hosts";
+import { DohDnsResolver } from "../doh/dns";
+import { CloudflareCustomHostnames } from "./custom-hostnames";
+import { NoopProvisioner, type CustomHostnameProvisioner } from "../../core/site/provisioner";
+import { apexHost } from "../../core/site/middleware";
 
 // Anonymous sessions are identity, not content — they must outlive the
 // demo asset TTL. A large multipart upload can take many hours between the
@@ -68,6 +73,26 @@ export function buildDeps(env: Env): Deps {
     // to close. Secrets survive deploys, and a forgotten flag shows up in
     // `wrangler secret list` instead of being silently re-enabled.
     anonymousUploadEnabled: env.ANONYMOUS_UPLOAD_ENABLED === "true",
+    // Site hosts (ADR-013 B1). Off until the zone carries the wildcard DNS
+    // record and a certificate for the suffix; see wrangler.toml.
+    siteHostSuffix: env.SITE_HOST_SUFFIX || undefined,
+    // Named sites (ADR-013 B2). The table is always wired up: reading and
+    // listing names works even where the suffix is unset, so enabling the
+    // feature later does not lose rows.
+    siteHosts: new SqlSiteHostStore(sql),
+    // Custom domains (ADR-013 B5). DNS-over-HTTPS rather than a Cloudflare
+    // binding, so the identical resolver runs on Node.
+    dns: new DohDnsResolver(env.SITE_DNS_RESOLVER_URL || undefined),
+    customHostnames: customHostnames(env),
+    siteFallbackOrigin: env.SITE_FALLBACK_ORIGIN || undefined,
+    cache: kv,
+    // Password-protected sites (ADR-013 B7): the key their auth cookie is
+    // signed with, and the secret ADR-014 §4 reserves for signed URLs.
+    // A wrangler secret, not a [vars] entry — `wrangler secret put
+    // SIGNING_SECRET`. Unset ⇒ protected assets answer 503 and the PATCH that
+    // would protect one is refused, rather than minting cookies nobody can
+    // verify.
+    signingSecret: env.SIGNING_SECRET || undefined,
 
     sessions: new KeyValueSessionStore(kv),
     sessionTtlSeconds: SESSION_TTL_SECONDS,
@@ -91,6 +116,23 @@ export function buildDeps(env: Env): Deps {
       parseInt(env.EXTRACTION_STUCK_THRESHOLD_SECONDS || "", 10) * 1000 || DEFAULT_STUCK_THRESHOLD_MS,
     limits: { subrequestBudget: CLEANUP_SUBREQUEST_BUDGET },
   };
+}
+
+/**
+ * Cloudflare for SaaS, but only when the zone is actually set up for it
+ * (ADR-013 B5).
+ *
+ * Both variables or neither: a half-configured provisioner would fail every
+ * verification with a 403 from the API, which reads to the customer as "my DNS
+ * is wrong". The no-op instead tells them to CNAME at the fallback origin (or
+ * the apex) and treats the hostname as live, which is the truth on a
+ * deployment that terminates TLS some other way.
+ */
+function customHostnames(env: Env): CustomHostnameProvisioner {
+  if (env.CF_API_TOKEN && env.CF_ZONE_ID) {
+    return new CloudflareCustomHostnames({ apiToken: env.CF_API_TOKEN, zoneId: env.CF_ZONE_ID });
+  }
+  return new NoopProvisioner(env.SITE_FALLBACK_ORIGIN || apexHost(env.BASE_URL ?? "") || "");
 }
 
 function r2Credentials(env: Env): ObjectStoreCredentials | null {

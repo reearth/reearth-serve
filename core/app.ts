@@ -9,6 +9,8 @@ import { workspaceRoutes } from "./workspace/handler";
 import { meRoutes } from "./me/handler";
 import { authMiddleware } from "./auth/middleware";
 import { sessionMiddleware } from "./session/middleware";
+import { normalizeSiteHostSuffix, siteHostMiddleware } from "./site/middleware";
+import { composeSiteHostResolver } from "./site/resolver";
 import type { AppEnv, Deps } from "./types";
 
 /**
@@ -21,6 +23,33 @@ import type { AppEnv, Deps } from "./types";
 export function createApp(deps: Deps) {
   const app = new Hono<AppEnv>();
 
+  // Site hosts (ADR-013 B1). First of all the middlewares and ahead of every
+  // route: a request whose Host is `{id}{SITE_HOST_SUFFIX}` must resolve
+  // through file delivery and nothing else, so it is dispatched into a
+  // file-only app instead of continuing down this router. It also runs before
+  // OIDC and session tracking — a hosted page is pure file delivery, and
+  // minting an anonymous session per page view would burn a KV write for an
+  // identity nothing reads.
+  const site = siteApp(deps);
+  // The resolver decides ID hosts, preview hosts and named hosts in that order
+  // (ADR-013 B6). It needs the normalised suffix to rebuild the full hostname
+  // a `site_hosts` row is keyed by; when site hosts are off the middleware
+  // never calls it.
+  const suffix = normalizeSiteHostSuffix(deps.siteHostSuffix);
+  app.use("*", siteHostMiddleware({
+    suffix: deps.siteHostSuffix,
+    // The apex is the one host that is never a site (ADR-013 B5): a custom
+    // domain is unrecognisable from its name, so the rule had to become "every
+    // host but this one is a candidate".
+    baseUrl: deps.baseUrl,
+    serve: (req) => site.fetch(req),
+    resolve: suffix
+      ? composeSiteHostResolver({
+        hosts: deps.siteHosts, versions: deps.versions, cache: deps.cache, suffix,
+      })
+      : undefined,
+  }));
+
   // Authentication middleware (JWKS cache comes from deps).
   //
   // `/api/internal/*` is excluded: it authenticates with the shared secret in
@@ -29,7 +58,15 @@ export function createApp(deps: Deps) {
   // the OIDC middleware there would try to verify that secret as a JWT and
   // reject every container callback with 401 as soon as an issuer is
   // configured — i.e. in production.
-  app.use("*", exceptInternalApi(authMiddleware(deps.auth)));
+  //
+  // `/files/*` is excluded for a second reason (ADR-013 B7): since password
+  // protection, `Authorization: Basic` is a meaningful credential there, and
+  // the OIDC middleware rejects every Authorization header that is not a
+  // Bearer token with 401 — so a `curl -u` against a protected asset would
+  // never reach the file handler that knows what to do with it. The same
+  // requests already bypass this middleware on a site host (B1: a hosted page
+  // is pure file delivery), and the apex path form should not differ.
+  app.use("*", exceptAuthless(authMiddleware(deps.auth)));
 
   // Anonymous session tracking (for unauthenticated users). Internal callers
   // are machines with their own credential; minting a demo session per
@@ -37,27 +74,7 @@ export function createApp(deps: Deps) {
   app.use("*", exceptInternalApi(sessionMiddleware(deps.sessions, deps.sessionTtlSeconds)));
 
   // Inject dependencies into all routes
-  app.use("*", async (c, next) => {
-    c.set("metadata", deps.metadata);
-    c.set("versions", deps.versions);
-    c.set("storage", deps.storage);
-    c.set("uploadSessions", deps.uploadSessions);
-    c.set("presignedUrls", deps.presignedUrls);
-    c.set("jobs", deps.jobs);
-    c.set("ttlSeconds", deps.ttlSeconds);
-    c.set("baseUrl", deps.baseUrl);
-    c.set("authorizer", deps.authorizer);
-    c.set("projects", deps.projects);
-    c.set("workspaces", deps.workspaces);
-    c.set("members", deps.members);
-    c.set("extractionQueue", deps.extractionQueue);
-    c.set("thumbnailQueue", deps.thumbnailQueue);
-    c.set("writes", deps.writes);
-    c.set("storageUsage", deps.storageUsage);
-    c.set("pendingCleanup", deps.pendingCleanup);
-    c.set("anonymousUploadEnabled", deps.anonymousUploadEnabled);
-    await next();
-  });
+  app.use("*", injectDeps(deps, { siteHost: false }));
 
   // Public API (versioned)
   app.get("/api/v1/health", (c) => c.json({ ok: true, anonymousUploadEnabled: deps.anonymousUploadEnabled }));
@@ -110,6 +127,54 @@ export function createApp(deps: Deps) {
 }
 
 /**
+ * The router a site host is served by (ADR-013 B1): file delivery and nothing
+ * else. It is a separate Hono instance rather than a path guard on the main
+ * app because "no API route can match here" is then a property of the router,
+ * not of a rule someone has to remember when adding a route.
+ */
+function siteApp(deps: Deps) {
+  const app = new Hono<AppEnv>();
+  // No auth and no session middleware: a hosted page is capability-URL file
+  // delivery, and the handlers below read neither `user` nor `sessionId`.
+  app.use("*", injectDeps(deps, { siteHost: true }));
+  app.route("/files", fileRoutes);
+  return app;
+}
+
+/** Request-independent collaborators, read off the context by every handler. */
+function injectDeps(deps: Deps, opts: { siteHost: boolean }): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
+    c.set("metadata", deps.metadata);
+    c.set("versions", deps.versions);
+    c.set("storage", deps.storage);
+    c.set("uploadSessions", deps.uploadSessions);
+    c.set("presignedUrls", deps.presignedUrls);
+    c.set("jobs", deps.jobs);
+    c.set("ttlSeconds", deps.ttlSeconds);
+    c.set("baseUrl", deps.baseUrl);
+    c.set("authorizer", deps.authorizer);
+    c.set("projects", deps.projects);
+    c.set("workspaces", deps.workspaces);
+    c.set("members", deps.members);
+    c.set("extractionQueue", deps.extractionQueue);
+    c.set("thumbnailQueue", deps.thumbnailQueue);
+    c.set("writes", deps.writes);
+    c.set("storageUsage", deps.storageUsage);
+    c.set("pendingCleanup", deps.pendingCleanup);
+    c.set("anonymousUploadEnabled", deps.anonymousUploadEnabled);
+    c.set("siteHostSuffix", deps.siteHostSuffix);
+    c.set("siteHosts", deps.siteHosts);
+    c.set("dns", deps.dns);
+    c.set("customHostnames", deps.customHostnames);
+    c.set("siteFallbackOrigin", deps.siteFallbackOrigin);
+    c.set("cache", deps.cache);
+    c.set("signingSecret", deps.signingSecret);
+    c.set("siteHost", opts.siteHost);
+    await next();
+  };
+}
+
+/**
  * Constant-time comparison so secret validation doesn't leak length/contents
  * via timing differences. Returns false on any length mismatch.
  */
@@ -123,6 +188,7 @@ function timingSafeEqual(a: string, b: string): boolean {
 }
 
 const INTERNAL_API_PREFIX = "/api/internal/";
+const FILES_PREFIX = "/files";
 
 /**
  * Run `mw` for every request except `/api/internal/*`. Internal callers
@@ -131,8 +197,25 @@ const INTERNAL_API_PREFIX = "/api/internal/";
  * have set are filled with `null` so the rest of the app can still read them.
  */
 function exceptInternalApi(mw: MiddlewareHandler<AppEnv>): MiddlewareHandler<AppEnv> {
+  return exceptPrefixes([INTERNAL_API_PREFIX], mw);
+}
+
+/**
+ * The same, plus `/files/*`: neither the internal API nor file delivery
+ * carries an end-user identity this middleware could establish.
+ */
+function exceptAuthless(mw: MiddlewareHandler<AppEnv>): MiddlewareHandler<AppEnv> {
+  return exceptPrefixes([INTERNAL_API_PREFIX, FILES_PREFIX], mw);
+}
+
+function exceptPrefixes(prefixes: string[], mw: MiddlewareHandler<AppEnv>): MiddlewareHandler<AppEnv> {
+  // A prefix must end at a segment boundary: `/files` exempts `/files` and
+  // `/files/…` but never a future `/filestore`, which would otherwise inherit
+  // an exemption nobody meant to give it.
+  const matches = (path: string, prefix: string) =>
+    path === prefix || path.startsWith(prefix.endsWith("/") ? prefix : `${prefix}/`);
   return async (c, next) => {
-    if (!c.req.path.startsWith(INTERNAL_API_PREFIX)) return mw(c, next);
+    if (!prefixes.some((prefix) => matches(c.req.path, prefix))) return mw(c, next);
     if (c.get("user") === undefined) c.set("user", null);
     if (c.get("sessionId") === undefined) c.set("sessionId", null);
     await next();

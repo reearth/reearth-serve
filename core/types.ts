@@ -11,6 +11,10 @@ import type { ContainerLauncher } from "./container/port";
 import type { StorageUsageStore } from "./asset/repository";
 import type { CleanupPendingStore } from "./cleanup/repository";
 import type { JobQueue } from "./queue/port";
+import type { KeyValue } from "./kv/port";
+import type { SiteHostStore } from "./site/repository";
+import type { DnsResolver } from "./site/dns";
+import type { CustomHostnameProvisioner } from "./site/provisioner";
 import type { ExtractionMessage } from "./extraction/handler";
 import type { ThumbnailMessage } from "./thumbnail/queue";
 
@@ -40,6 +44,51 @@ export type ContextDeps = {
   storageUsage: StorageUsageStore;
   pendingCleanup: CleanupPendingStore;
   anonymousUploadEnabled: boolean;
+  /**
+   * `SITE_HOST_SUFFIX` — the wildcard suffix site hosts live under, e.g.
+   * `.serve.reearth.land` (ADR-013 B1). Undefined ⇒ site hosts are off and
+   * upload responses carry no `siteUrl`.
+   */
+  siteHostSuffix: string | undefined;
+  /** Named sites: the `site_hosts` table (ADR-013 B2). */
+  siteHosts: SiteHostStore;
+  /**
+   * TXT lookups for custom-domain verification (ADR-013 B5). DNS-over-HTTPS on
+   * both runtimes (`adapters/doh/dns.ts`), so `core/` needs no resolver of its
+   * own and the Worker and the Node process behave identically.
+   */
+  dns: DnsResolver;
+  /**
+   * Certificates for custom domains (ADR-013 B5). Cloudflare for SaaS where
+   * `CF_API_TOKEN` and `CF_ZONE_ID` are configured, `NoopProvisioner`
+   * everywhere else — including the whole Node runtime, where the operator
+   * terminates TLS themselves.
+   */
+  customHostnames: CustomHostnameProvisioner;
+  /**
+   * `SITE_FALLBACK_ORIGIN` — what a customer CNAMEs their domain at (ADR-013
+   * B5). Undefined ⇒ the apex host of `baseUrl`.
+   */
+  siteFallbackOrigin: string | undefined;
+  /**
+   * General-purpose short-lived cache over the `KeyValue` port (ADR-012 §2).
+   * Today it holds site-host resolutions (`host:{hostname}`, 60 s) so a page
+   * view on a named site is not a database read. Everything in it must be
+   * reconstructible from the source of truth: entries expire, and a provider
+   * may evict one at any time.
+   */
+  cache: KeyValue;
+  /**
+   * `SIGNING_SECRET` — the HMAC key the viewer-authentication cookie is signed
+   * with (ADR-013 B7). The name is the one ADR-014 §4 reserves for signed URLs,
+   * so both proofs share one deployment secret and one rotation.
+   *
+   * Undefined ⇒ protected assets fail closed: serving them `503` is the only
+   * safe answer, because no cookie could be minted or trusted, and handing the
+   * bytes out anyway would silently unprotect every protected asset the moment
+   * the secret went missing from an environment.
+   */
+  signingSecret: string | undefined;
 };
 
 /**
@@ -80,5 +129,11 @@ export type AppEnv = {
   Variables: ContextDeps & {
     user: AuthUser | null;
     sessionId: string | null;
+    /**
+     * True when the request arrived on a site host and was rewritten into
+     * `/files/…` (ADR-013 B1). The file handler uses it to mark pinned
+     * (version-ID) hosts `noindex`.
+     */
+    siteHost: boolean;
   };
 };

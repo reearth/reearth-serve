@@ -6,10 +6,47 @@ export interface ListResult<T> {
   cursor?: string;
 }
 
+/**
+ * An asset's password material (ADR-013 B7).
+ *
+ * Deliberately *not* part of `AssetMetadata`: that type is what every asset
+ * response serialises, and a hash that is never on the object is a hash that
+ * cannot leak through a route somebody adds later. It is read on its own, and
+ * only for an asset whose `access` is already `password`, so a public asset
+ * pays nothing for the separation.
+ *
+ * `version` is ADR-013 B7's `passwordVersion`: it starts at 0, increments on
+ * every password change, and travels inside the auth cookie so a rotation logs
+ * every visitor out without server-side session state.
+ */
+export interface AssetProtection {
+  /** Encoded PBKDF2 hash — see `core/access/password.ts`. */
+  hash: string;
+  /** Base64 salt. */
+  salt: string;
+  version: number;
+}
+
 export interface MetadataStore {
   save(asset: AssetMetadata, ttlSeconds: number): Promise<void>;
   find(id: string): Promise<AssetMetadata | null>;
-  update(id: string, patch: { activeVersionId?: string | null; expiresAt?: number; description?: string; userMeta?: Record<string, unknown> }): Promise<void>;
+  /** Password material, or null when the asset is not password-protected. */
+  findProtection(id: string): Promise<AssetProtection | null>;
+  /**
+   * Set the access mode and, for `password`, its material.
+   *
+   * The store owns the version counter: setting a password increments it, and
+   * clearing to `public` drops the hash and the salt but leaves the counter
+   * where it is. Both halves of that matter — if the caller supplied the
+   * number, unprotecting and re-protecting would restart it at 1 and an
+   * outstanding cookie minted at version 1 would come back to life.
+   */
+  setProtection(
+    id: string,
+    value: { access: "public" } | { access: "password"; hash: string; salt: string },
+  ): Promise<void>;
+  /** `spa` is ADR-013 C1's SPA fallback flag; see `core/asset/usecase/set-spa.ts`. */
+  update(id: string, patch: { activeVersionId?: string | null; expiresAt?: number; description?: string; userMeta?: Record<string, unknown>; spa?: boolean }): Promise<void>;
   delete(id: string): Promise<void>;
   // scope exactly one of: sessionId, projectId, workspaceId (caller-verified
   // membership), or accessibleByUser (membership-driven across all workspaces).
@@ -35,7 +72,18 @@ export interface VersionStore {
   find(id: string): Promise<AssetVersion | null>;
   findByAssetId(assetId: string, options?: { limit?: number; cursor?: string }): Promise<ListResult<AssetVersion>>;
   findLatest(assetId: string): Promise<AssetVersion | null>;
-  update(id: string, patch: Partial<Pick<AssetVersion, 'status' | 'userMeta'>>): Promise<void>;
+  /**
+   * One version by its per-asset number (ADR-005's `version` column), which is
+   * what a `v{n}--` preview host names (ADR-013 B4). Paging `findByAssetId`
+   * would read every newer version to find it.
+   */
+  findByAssetAndNumber(assetId: string, version: number): Promise<AssetVersion | null>;
+  /**
+   * `hosting` is ADR-013 C3's parsed `_headers` / `_redirects`. It is *system*
+   * metadata, written only by the extraction-completion hook and never by the
+   * PATCH route, which is why it sits beside `userMeta` here rather than in it.
+   */
+  update(id: string, patch: Partial<Pick<AssetVersion, 'status' | 'userMeta' | 'hosting'>>): Promise<void>;
   delete(id: string): Promise<void>;
   deleteByAssetId(assetId: string): Promise<{ totalSize: number; count: number }>;
   count(assetId: string): Promise<number>;
