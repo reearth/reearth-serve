@@ -50,11 +50,14 @@ Serve is the **storage, versioning, and delivery** layer. It manages assets, the
 - Storage usage tracking
 - File serving (`/files/:id/:filename`) with version resolution
 
+**Serve also runs a small built-in derivation set** at upload time — archive extraction, image thumbnails, and candidates such as header metadata extraction, GeoTIFF → COG and GeoJSON → FGB. A derivation is admitted only if its output is determined by the input format alone, is deterministic and bounded, is one generation deep, and is structural rather than interpretive. See [ADR-015](./docs/adr/015-engine-boundary-and-built-in-derivations.md).
+
 **Serve does NOT do:**
-- Format conversion (GeoJSON → FGB, GeoTIFF → COG, etc.)
-- Tile rendering or generation
+- Interpretive transformation (anything with a model, a style, a colour map, or a parameter the user would choose)
+- Tile rendering or generation, including request-time tile extraction
 - Tile caching
-- Any GDAL / tippecanoe / py3dtiles processing
+- Multi-source outputs (bundling, compositing, reverse indexes)
+- Any GDAL / tippecanoe / py3dtiles processing beyond the admitted set
 
 ### Re:Earth Untiled — Tile Processing & Rendering
 
@@ -62,7 +65,7 @@ untiled is the **transformation and tile serving** engine. It subscribes to serv
 
 **untiled owns:**
 - On-demand tile rendering (COG, pre-tiled sources, terrain, compositing)
-- Format conversion (GeoJSON → FGB, GeoTIFF → COG, CityGML → 3D Tiles, etc.)
+- Interpretive format conversion (CityGML → 3D Tiles, etc.; structural conversions such as GeoTIFF → COG may move into Serve's built-in set per ADR-015)
 - Vector tile generation (tippecanoe)
 - 3D Tiles generation (py3dtiles, citygml-tools)
 - Tile response caching (KV/CDN, managed independently of serve)
@@ -271,6 +274,8 @@ Full version management — upload new content as a new Version, rollback to pre
 
 Introduce asset subtypes (uploaded, derived, composite, external) and a dependency DAG for tracking transformation lineage and cascading invalidation.
 
+> **Scope note ([ADR-015](./docs/adr/015-engine-boundary-and-built-in-derivations.md)):** the engine records lineage but never acts on it. A single-source result is registered as a **slot** on its source version (filled by the engine's built-in set or by an application such as untiled or Re:Earth Flow); a multi-source result is a new asset carrying a loose `derivedFrom` link. Edges, dirty propagation and the status state machine are application scope until a later ADR re-admits them; the internal write-back API stays, narrowed to slot registration and `derivedFrom`.
+
 - [ ] **Asset subtypes**: `type` field distinguishes uploaded / derived / composite / external
 - [ ] **Asset Edges**: directed dependency graph (DAG) between assets
 - [ ] **Dirty propagation**: parent update cascades `dirty` status to all descendants
@@ -354,8 +359,8 @@ Terrain tile delivery with geoid–ellipsoid height composition:
 
 Automated format conversion triggered by serve's webhook events:
 
-- GeoJSON / GeoPackage / Shapefile → FlatGeobuf (FGB)
-- GeoTIFF → Cloud-Optimized GeoTIFF (COG)
+- GeoPackage / Shapefile → FlatGeobuf (FGB)
+- GeoJSON → FGB and GeoTIFF → COG are candidates for Serve's built-in set ([ADR-015](./docs/adr/015-engine-boundary-and-built-in-derivations.md)); they stay here until admitted
 - Results uploaded back to serve as DerivedAsset versions
 - Dirty propagation drives re-conversion on source updates
 
