@@ -5,6 +5,16 @@ import { z } from "zod";
 export const assetTypeSchema = z.enum(["file", "archive"]);
 export const assetStatusSchema = z.enum(["pending", "ready", "extracting", "failed"]);
 export const archiveFormatSchema = z.enum(["zip", "tar", "tar.gz", "tar.bz2"]);
+/**
+ * How an asset's files are guarded (ADR-013 B7, ADR-014 §1).
+ *
+ * ADR-013 B7 writes the field as `hosting.access`; ADR-014 §1 declares the flat
+ * `access` field canonical and the two the same thing. The flat name is the one
+ * implemented — protection is a property of the asset, not of hosting, and
+ * ADR-014's `restricted` mode joins this enum without a shape change.
+ */
+export const assetAccessSchema = z.enum(["public", "password"]);
+
 export const jobTypeSchema = z.literal("archive-extraction");
 export const jobStatusSchema = z.enum(["pending", "running", "completed", "failed"]);
 
@@ -60,6 +70,41 @@ export const createProjectBodySchema = z.object({
   workspaceId: z.string().optional(),
 });
 
+// --- Site hosting rules (ADR-013 C3) ---
+
+/**
+ * One block of `_headers`: a path pattern and the headers it adds. Header
+ * names are lowercased at parse time; values are verbatim.
+ */
+export const siteHeaderRuleSchema = z.object({
+  pattern: z.string(),
+  headers: z.record(z.string(), z.string()),
+});
+
+/** One line of `_redirects`. `status` 200 is a rewrite, not a redirect. */
+export const siteRedirectRuleSchema = z.object({
+  from: z.string(),
+  to: z.string(),
+  status: z.number(),
+  /** `!` in the file: apply even when `from` exists as a file. */
+  force: z.boolean(),
+});
+
+/**
+ * The parsed contents of an archive's `_headers` and `_redirects`, stored as
+ * system metadata on the version the extraction produced (ADR-013 C3).
+ *
+ * System metadata, never `userMeta`: a caller that PATCHed its own metadata
+ * would otherwise silently delete the site's routing. `warnings` is why a rule
+ * the author wrote is not in the list, and is the whole reason this is visible
+ * in the API at all.
+ */
+export const siteHostingSchema = z.object({
+  headers: z.array(siteHeaderRuleSchema),
+  redirects: z.array(siteRedirectRuleSchema),
+  warnings: z.array(z.string()),
+});
+
 // --- Asset ---
 
 export const assetVersionSchema = z.object({
@@ -79,6 +124,12 @@ export const assetVersionSchema = z.object({
   extractedSize: z.number().optional(),
   jobId: z.string().optional(),
   userMeta: z.record(z.string(), z.unknown()).optional(),
+  /**
+   * `_headers` / `_redirects` as parsed at extraction time (ADR-013 C3).
+   * Read-only system metadata — it lives in the version's `meta` column, which
+   * is exactly what ADR-005's system/user split reserves for fields serve owns.
+   */
+  hosting: siteHostingSchema.optional(),
 });
 
 export const assetMetadataSchema = z.object({
@@ -103,12 +154,117 @@ export const assetMetadataSchema = z.object({
   userMeta: z.record(z.string(), z.unknown()).optional(),
   currentVersion: assetVersionSchema.optional(),
   versionCount: z.number().optional(),
+  /**
+   * Access mode (ADR-013 B7). Visible to the caller because it changes how the
+   * asset is consumed — a protected asset needs a credentialed fetch. The
+   * password hash, its salt and its version are never exposed.
+   */
+  access: assetAccessSchema.optional(),
+  /**
+   * SPA fallback (ADR-013 C1). When true, a miss inside the extracted archive
+   * that does not look like a request for an asset file is answered with the
+   * root `index.html` at status 200. Off by default — a tile viewer needs its
+   * 404s.
+   *
+   * A flat system field, like `access`: ADR-013 C1 proposed
+   * `userMeta.hosting.spa`, but `userMeta` is caller-owned and a client that
+   * PATCHes the whole object would silently turn the flag off.
+   */
+  spa: z.boolean().optional(),
+  /**
+   * `_headers` / `_redirects` for an archive that has no version row
+   * (ADR-013 C3). A first upload creates only the asset — versions start at the
+   * second — so the rules of a one-version site have nowhere else to live. When
+   * a version does carry them, the version's win.
+   */
+  hosting: siteHostingSchema.optional(),
 });
 
 export const assetUploadResultSchema = z.object({
   asset: assetMetadataSchema,
   url: z.string(),
+  // Site host of an archive asset (ADR-013 B1). Present only when the
+  // deployment has SITE_HOST_SUFFIX configured and the asset is an archive.
+  siteUrl: z.string().optional(),
 });
+
+// --- Site hosts (ADR-013 B2) ---
+
+export const siteHostKindSchema = z.enum(["subdomain", "custom"]);
+
+/** Whether a custom domain is serving TLS yet (ADR-013 B5). */
+export const certificateStatusSchema = z.enum(["pending", "active"]);
+
+/**
+ * A row of `site_hosts` as the API shows it: the columns a caller can act on,
+ * plus the URL the site is served from. `createdBy` and the verification token
+ * stay internal — the token is only ever handed back inside the `verification`
+ * instructions of the row's own responses.
+ */
+export const siteHostSchema = z.object({
+  hostname: z.string(),
+  /** Null once the name has been released and is living out its cooldown. */
+  assetId: z.string().nullable(),
+  projectId: z.string(),
+  kind: siteHostKindSchema,
+  /** Whether `v{n}--` / `latest--` hosts resolve (ADR-013 B4). */
+  previews: z.boolean(),
+  /**
+   * When the TXT check passed (ADR-013 B5). Always null on `subdomain` rows —
+   * there is nothing to verify about a name under our own suffix — and null on
+   * a `custom` row that does not resolve yet.
+   */
+  verifiedAt: z.number().nullable().optional(),
+  /** The provisioner's last word on the certificate (ADR-013 B5). */
+  certificateStatus: z.string().nullable().optional(),
+  disabledAt: z.number().nullable().optional(),
+  releasedAt: z.number().nullable().optional(),
+  createdAt: z.number(),
+  url: z.string(),
+});
+
+/**
+ * What a customer must publish for a custom domain (ADR-013 B5): one TXT
+ * record proving they own it, and the CNAME that points it at us. Returned
+ * with the row while it is unverified, and by the claim itself.
+ */
+export const siteHostVerificationSchema = z.object({
+  verification: z.object({
+    /** `_reearth-serve-verify.<hostname>` */
+    record: z.string(),
+    type: z.literal("TXT"),
+    /** `reearth-serve-verify=<token>` */
+    value: z.string(),
+  }),
+  cname: z.object({ target: z.string() }),
+});
+
+export const claimSiteHostBodySchema = z.object({
+  /**
+   * For `subdomain`: the bare label (`kawasaki-flood-map`) or the full host.
+   * For `custom`: the whole hostname the customer owns (`map.city.example.jp`).
+   */
+  hostname: z.string(),
+  kind: siteHostKindSchema.optional(),
+});
+
+/**
+ * `PATCH …/hosts/:hostname` (ADR-013 B6): the two switches a claimed name has.
+ *
+ * - `disabled` — B3's publish state. True takes the site down (`503`, name
+ *   held); false brings it back.
+ * - `previews` — B4's `v{n}--` / `latest--` hosts, off by default.
+ *
+ * Both are optional, but an empty body is a no-op the caller did not mean, so
+ * at least one must be present.
+ */
+export const updateSiteHostBodySchema = z.object({
+  disabled: z.boolean().optional(),
+  previews: z.boolean().optional(),
+}).refine(
+  (body) => body.disabled !== undefined || body.previews !== undefined,
+  { message: "at least one of disabled or previews is required" },
+);
 
 // --- Upload session ---
 
@@ -199,12 +355,35 @@ export const updateJobStatusBodySchema = z.object({
 
 // --- Asset update ---
 
+/** ADR-013 B7: the bounds a shared site password must fall within. */
+export const PASSWORD_MIN_LENGTH = 8;
+export const PASSWORD_MAX_LENGTH = 128;
+
 export const updateAssetBodySchema = z.object({
   description: z.string().optional(),
   userMeta: z.record(z.string(), z.unknown()).optional(),
   activeVersionId: z.string().nullable().optional(),
   expiresAt: z.number().optional(),
-});
+  /**
+   * Turn protection on or off (ADR-013 B7). `password` requires `password`;
+   * `public` forbids it, so "unprotect" cannot be typed as an accidental
+   * password change. Re-sending `password` with a new secret rotates it and
+   * bumps the version, which invalidates every outstanding cookie.
+   */
+  access: assetAccessSchema.optional(),
+  password: z.string().min(PASSWORD_MIN_LENGTH).max(PASSWORD_MAX_LENGTH).optional(),
+  /**
+   * Turn the SPA fallback on or off (ADR-013 C1). Site (archive) assets in a
+   * project only; turning it off is always allowed.
+   */
+  spa: z.boolean().optional(),
+}).refine(
+  (body) => body.access !== "password" || body.password !== undefined,
+  { message: "access \"password\" requires a password", path: ["password"] },
+).refine(
+  (body) => body.password === undefined || body.access === "password",
+  { message: "password is only accepted with access \"password\"", path: ["password"] },
+);
 
 // --- Version update ---
 
@@ -234,6 +413,10 @@ export type AddMemberBody = z.infer<typeof addMemberBodySchema>;
 export type UpdateMemberBody = z.infer<typeof updateMemberBodySchema>;
 export type Project = z.infer<typeof projectSchema>;
 export type CreateProjectBody = z.infer<typeof createProjectBodySchema>;
+export type AssetAccess = z.infer<typeof assetAccessSchema>;
+export type SiteHeaderRule = z.infer<typeof siteHeaderRuleSchema>;
+export type SiteRedirectRule = z.infer<typeof siteRedirectRuleSchema>;
+export type SiteHosting = z.infer<typeof siteHostingSchema>;
 export type AssetType = z.infer<typeof assetTypeSchema>;
 export type AssetStatus = z.infer<typeof assetStatusSchema>;
 export type ArchiveFormat = z.infer<typeof archiveFormatSchema>;
@@ -250,5 +433,11 @@ export type UpdateJobStatusBody = z.infer<typeof updateJobStatusBodySchema>;
 export type ErrorResponse = z.infer<typeof errorResponseSchema>;
 export type FileEntry = z.infer<typeof fileEntrySchema>;
 export type UpdateAssetBody = z.infer<typeof updateAssetBodySchema>;
+export type SiteHostKind = z.infer<typeof siteHostKindSchema>;
+export type SiteHost = z.infer<typeof siteHostSchema>;
+export type CertificateStatus = z.infer<typeof certificateStatusSchema>;
+export type SiteHostVerification = z.infer<typeof siteHostVerificationSchema>;
+export type ClaimSiteHostBody = z.infer<typeof claimSiteHostBodySchema>;
+export type UpdateSiteHostBody = z.infer<typeof updateSiteHostBodySchema>;
 export type UpdateVersionBody = z.infer<typeof updateVersionBodySchema>;
 export type SetActiveVersionBody = z.infer<typeof setActiveVersionBodySchema>;

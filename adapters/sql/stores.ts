@@ -8,7 +8,7 @@
  * `adapters/sql/` rather than under a provider directory.
  */
 import type { AssetMetadata, AssetVersion } from "../../core/asset/model";
-import type { MetadataStore, StorageUsage, StorageUsageStore, VersionStore } from "../../core/asset/repository";
+import type { AssetProtection, MetadataStore, StorageUsage, StorageUsageStore, VersionStore } from "../../core/asset/repository";
 import type { ListResult } from "../../core/asset/repository";
 import type { Job } from "../../core/job/model";
 import type { JobStore } from "../../core/job/repository";
@@ -22,8 +22,11 @@ import type { SqlClient, SqlValue } from "../../core/sql/port";
 import { rowToModel, modelToRow, encodeCursor, decodeCursor, queryAll, queryFirst } from "./helpers";
 
 // Meta keys: fields stored in the JSON `meta` column instead of dedicated columns.
-const ASSET_META_KEYS = ["contentEncoding", "originalSize", "archiveFormat", "fileCount", "extractedSize", "jobId"];
-const VERSION_META_KEYS = ["contentEncoding", "originalSize", "archiveFormat", "fileCount", "extractedSize", "jobId"];
+// `hosting` is ADR-013 C3's parsed `_headers` / `_redirects` — system metadata
+// in the ADR-005 sense, which is exactly what this column is for, so it needs
+// no migration and no new column.
+const ASSET_META_KEYS = ["contentEncoding", "originalSize", "archiveFormat", "fileCount", "extractedSize", "jobId", "hosting"];
+const VERSION_META_KEYS = ["contentEncoding", "originalSize", "archiveFormat", "fileCount", "extractedSize", "jobId", "hosting"];
 const JOB_META_KEYS = [
   "completedAt",
   "startedAt",
@@ -321,13 +324,33 @@ export class SqlJobStore implements JobStore {
 // SqlMetadataStore
 // ---------------------------------------------------------------------------
 
-/** The `INSERT OR REPLACE INTO assets` statement, shared with the batch writer. */
+/**
+ * The `INSERT OR REPLACE INTO assets` statement, shared with the batch writer.
+ *
+ * The four access columns (ADR-013 B7) and `spa` (ADR-013 C1) are carried over
+ * from the existing row
+ * by subquery rather than bound from the model. `INSERT OR REPLACE` deletes and
+ * re-inserts, so any column the statement does not name would be reset to its
+ * default — and this statement runs again on every job-status change, which
+ * would have quietly unprotected an asset the moment its extraction finished.
+ * SQLite evaluates the `VALUES` expressions before the replace, so the
+ * subqueries see the row being replaced.
+ *
+ * Protection is therefore written by exactly one statement,
+ * `SqlMetadataStore.setProtection`, and nothing else can move it by accident.
+ */
 export const ASSET_UPSERT_SQL =
   `INSERT OR REPLACE INTO assets
          (id, filename, content_type, size, created_at, expires_at,
           type, status, session_id, project_id, meta,
-          active_version_id, description, user_meta)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14)`;
+          active_version_id, description, user_meta,
+          access, password_hash, password_salt, password_version, spa)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
+                 (SELECT access FROM assets WHERE id = ?1),
+                 (SELECT password_hash FROM assets WHERE id = ?1),
+                 (SELECT password_salt FROM assets WHERE id = ?1),
+                 COALESCE((SELECT password_version FROM assets WHERE id = ?1), 0),
+                 COALESCE((SELECT spa FROM assets WHERE id = ?1), 0))`;
 
 export function assetUpsertArgs(asset: AssetMetadata): SqlValue[] {
   const { userMeta, currentVersion: _cv, versionCount: _vc, ...rest } =
@@ -356,7 +379,7 @@ export class SqlMetadataStore implements MetadataStore {
     return parseAssetRow(row);
   }
 
-  async update(id: string, patch: { activeVersionId?: string | null; expiresAt?: number; description?: string; userMeta?: Record<string, unknown> }): Promise<void> {
+  async update(id: string, patch: { activeVersionId?: string | null; expiresAt?: number; description?: string; userMeta?: Record<string, unknown>; spa?: boolean }): Promise<void> {
     const sets: string[] = [];
     const binds: SqlValue[] = [];
     let idx = 1;
@@ -377,12 +400,55 @@ export class SqlMetadataStore implements MetadataStore {
       sets.push(`user_meta = ?${idx++}`);
       binds.push(patch.userMeta ? JSON.stringify(patch.userMeta) : null);
     }
+    // SQLite has no boolean type; the column is the 0/1 integer the migration
+    // declares (ADR-013 C1).
+    if (patch.spa !== undefined) {
+      sets.push(`spa = ?${idx++}`);
+      binds.push(patch.spa ? 1 : 0);
+    }
 
     if (sets.length === 0) return;
 
     const sql = `UPDATE assets SET ${sets.join(", ")} WHERE id = ?${idx}`;
     binds.push(id);
     await this.db.execute(sql, binds);
+  }
+
+  async findProtection(id: string): Promise<AssetProtection | null> {
+    const row = await queryFirst(
+      this.db,
+      "SELECT password_hash, password_salt, password_version FROM assets WHERE id = ?1",
+      [id],
+    );
+    if (!row) return null;
+    const hash = row.password_hash as string | null;
+    const salt = row.password_salt as string | null;
+    if (!hash || !salt) return null;
+    return { hash, salt, version: Number(row.password_version ?? 0) };
+  }
+
+  async setProtection(
+    id: string,
+    value: { access: "public" } | { access: "password"; hash: string; salt: string },
+  ): Promise<void> {
+    if (value.access === "public") {
+      // The counter survives: a cookie minted at version N must not become
+      // valid again when the asset is protected a second time.
+      await this.db.execute(
+        "UPDATE assets SET access = 'public', password_hash = NULL, password_salt = NULL WHERE id = ?1",
+        [id],
+      );
+      return;
+    }
+    // The increment happens in the statement, so two concurrent rotations both
+    // move the counter and neither can hand back a version the other issued.
+    await this.db.execute(
+      `UPDATE assets
+          SET access = 'password', password_hash = ?1, password_salt = ?2,
+              password_version = password_version + 1
+        WHERE id = ?3`,
+      [value.hash, value.salt, id],
+    );
   }
 
   async delete(id: string): Promise<void> {
@@ -437,12 +503,29 @@ export class SqlMetadataStore implements MetadataStore {
   }
 }
 
+/**
+ * A row of `assets` as the domain sees it.
+ *
+ * `rowToModel` copies every column it is given, so the two secret columns are
+ * removed here — once, in the one function every read goes through — instead of
+ * being stripped again at each route that serialises an asset. `access` itself
+ * stays: it is public information, and the caller needs it to know that a
+ * credentialed fetch is required (ADR-013 B7).
+ */
 function parseAssetRow(row: Record<string, unknown>): AssetMetadata {
   const userMetaStr = row.user_meta as string | null;
-  const model = rowToModel<AssetMetadata>(row, ASSET_META_KEYS);
+  const model = rowToModel<AssetMetadata & Record<string, unknown>>(row, ASSET_META_KEYS);
   if (userMetaStr) {
     try { model.userMeta = JSON.parse(userMetaStr); } catch { /* ignore */ }
   }
+  delete model.passwordHash;
+  delete model.passwordSalt;
+  delete model.passwordVersion;
+  // NULL is the default, and the default is public.
+  model.access = model.access === "password" ? "password" : "public";
+  // SQLite stores the flag as 0/1 (ADR-013 C1); the domain sees a boolean, so
+  // nothing downstream has to remember that `0` is falsy but `"0"` would not be.
+  model.spa = Number(row.spa ?? 0) === 1;
   return model;
 }
 
@@ -535,7 +618,17 @@ export class SqlVersionStore implements VersionStore {
     return parseVersionRow(row);
   }
 
-  async update(id: string, patch: Partial<Pick<AssetVersion, 'status' | 'userMeta'>>): Promise<void> {
+  async findByAssetAndNumber(assetId: string, version: number): Promise<AssetVersion | null> {
+    const row = await queryFirst(
+      this.db,
+      "SELECT * FROM asset_versions WHERE asset_id = ?1 AND version = ?2",
+      [assetId, version],
+    );
+    if (!row) return null;
+    return parseVersionRow(row);
+  }
+
+  async update(id: string, patch: Partial<Pick<AssetVersion, 'status' | 'userMeta' | 'hosting'>>): Promise<void> {
     const sets: string[] = [];
     const binds: SqlValue[] = [];
     let idx = 1;
@@ -547,6 +640,22 @@ export class SqlVersionStore implements VersionStore {
     if (patch.userMeta !== undefined) {
       sets.push(`user_meta = ?${idx++}`);
       binds.push(patch.userMeta ? JSON.stringify(patch.userMeta) : null);
+    }
+    if (patch.hosting !== undefined) {
+      // `meta` holds several system fields at once, so the column is read,
+      // merged and written back rather than overwritten — a plain SET would
+      // drop `contentEncoding`, `fileCount` and the rest. Two statements on a
+      // path that runs once per extraction; `json_set` would save one but ties
+      // the store to SQLite's JSON1 build in both runtimes.
+      const row = await queryFirst(this.db, "SELECT meta FROM asset_versions WHERE id = ?1", [id]);
+      if (!row) return;
+      let meta: Record<string, unknown> = {};
+      if (typeof row.meta === "string") {
+        try { meta = JSON.parse(row.meta) as Record<string, unknown>; } catch { meta = {}; }
+      }
+      meta.hosting = patch.hosting;
+      sets.push(`meta = ?${idx++}`);
+      binds.push(JSON.stringify(meta));
     }
 
     if (sets.length === 0) return;

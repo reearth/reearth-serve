@@ -34,6 +34,10 @@ export function formatAsset(asset: AssetMetadata): string {
   if (asset.archiveFormat) lines.push(`Archive:      ${asset.archiveFormat}`);
   if (asset.fileCount) lines.push(`Files:        ${asset.fileCount}`);
   if (asset.jobId) lines.push(`Job:          ${asset.jobId}`);
+  // Hosting switches (ADR-013). Both are server-side defaults when absent, so
+  // they are only printed when the server actually reports them.
+  if (asset.access) lines.push(`Access:       ${asset.access}`);
+  if (asset.spa !== undefined) lines.push(`SPA:          ${asset.spa ? "on" : "off"}`);
   return lines.join("\n");
 }
 
@@ -55,7 +59,23 @@ export function formatVersion(v: AssetVersion): string {
   if (v.fileCount) lines.push(`Files:        ${v.fileCount}`);
   if (v.jobId) lines.push(`Job:          ${v.jobId}`);
   if (v.userMeta) lines.push(`User Meta:    ${JSON.stringify(v.userMeta)}`);
+  lines.push(...formatHosting(v.hosting));
   return lines.join("\n");
+}
+
+/**
+ * The `_headers` / `_redirects` summary (ADR-013 C3).
+ *
+ * Counts, then every warning on its own line: a rule the author wrote and the
+ * parser refused is invisible on the site itself, so the only place it can be
+ * noticed is here and in the API response this reads.
+ */
+function formatHosting(hosting: AssetVersion["hosting"]): string[] {
+  if (!hosting) return [];
+  const counts = `${hosting.headers.length} header rule(s), ${hosting.redirects.length} redirect rule(s)`;
+  const lines = [`Hosting:      ${counts}`];
+  for (const warning of hosting.warnings) lines.push(`  warning:    ${warning}`);
+  return lines;
 }
 
 export function formatJob(job: Job): string {
@@ -84,6 +104,13 @@ export function formatBytes(bytes: number): string {
   if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
   if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
   return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+/** `on` / `off`, the spelling every boolean switch in this CLI takes. */
+export function parseOnOff(value: string, flag: string): boolean {
+  if (value === "on") return true;
+  if (value === "off") return false;
+  throw new Error(`${flag} takes on or off`);
 }
 
 // --- HTTP helpers ---
@@ -222,11 +249,16 @@ export function parseSrc(src: string): { assetId: string; filePath: string | nul
   return { assetId: src.slice(0, colonIdx), filePath: src.slice(colonIdx + 1) };
 }
 
-export async function downloadFile(url: string, dest: string, force = false): Promise<boolean> {
+export async function downloadFile(
+  url: string,
+  dest: string,
+  force = false,
+  headers: Record<string, string> = {},
+): Promise<boolean> {
   if (!force && existsSync(dest)) {
     return false; // skipped
   }
-  const res = await fetch(url);
+  const res = await fetch(url, { headers });
   if (!res.ok) {
     throw new Error(`Download failed (${res.status}): ${url}`);
   }
@@ -262,9 +294,13 @@ export function listLocalFiles(dir: string): string[] {
   return results;
 }
 
-export async function* streamNdjson(endpoint: string, path: string): AsyncGenerator<FileEntry> {
+export async function* streamNdjson(
+  endpoint: string,
+  path: string,
+  extraHeaders: Record<string, string> = {},
+): AsyncGenerator<FileEntry> {
   const res = await fetch(`${endpoint}${path}`, {
-    headers: { ...(await commonHeaders()) },
+    headers: { ...extraHeaders, ...(await commonHeaders()) },
   });
   if (!res.ok) {
     const text = await res.text();
@@ -290,10 +326,91 @@ export async function* streamNdjson(endpoint: string, path: string): AsyncGenera
   }
 }
 
-export async function collectFiles(endpoint: string, path: string): Promise<FileEntry[]> {
+export async function collectFiles(
+  endpoint: string,
+  path: string,
+  extraHeaders: Record<string, string> = {},
+): Promise<FileEntry[]> {
   const files: FileEntry[] = [];
-  for await (const entry of streamNdjson(endpoint, path)) {
+  for await (const entry of streamNdjson(endpoint, path, extraHeaders)) {
     files.push(entry);
   }
   return files;
+}
+
+// --- Site passwords (ADR-013 B7) ---
+
+/**
+ * Where a site password may come from, in order: the environment (so a script
+ * or a CI job can set it once) and `--password`, which prompts.
+ *
+ * Never a command-line *value*: an argument is visible in `ps`, in shell
+ * history and in CI logs, which is exactly what a shared password must not be.
+ */
+export const SITE_PASSWORD_ENV = "REEARTH_SERVE_SITE_PASSWORD";
+
+/**
+ * Read a password without echoing it.
+ *
+ * `readline` is put in raw mode and the terminal is written to directly, so
+ * nothing lands in the scrollback. With no TTY (a pipe, a CI runner) the
+ * environment variable is the supported route and this refuses rather than
+ * silently reading a line from stdin.
+ */
+export async function promptPassword(label: string): Promise<string> {
+  const { createInterface } = await import("node:readline");
+  if (!process.stdin.isTTY) {
+    throw new Error(`${label} requires a terminal; set ${SITE_PASSWORD_ENV} instead`);
+  }
+  const rl = createInterface({ input: process.stdin, output: process.stdout, terminal: true });
+  try {
+    return await new Promise<string>((resolve) => {
+      const onKeypress = (chunk: Buffer | string) => {
+        // Re-print the prompt without the characters readline just echoed.
+        const text = String(chunk);
+        if (text !== "\r" && text !== "\n") {
+          process.stdout.write(`\r[2K${label}: `);
+        }
+      };
+      process.stdin.on("data", onKeypress);
+      rl.question(`${label}: `, (answer) => {
+        process.stdin.off("data", onKeypress);
+        process.stdout.write("\n");
+        resolve(answer);
+      });
+    });
+  } finally {
+    rl.close();
+  }
+}
+
+/** Ask twice and refuse a mismatch — a typo here locks a site out of itself. */
+export async function promptPasswordTwice(): Promise<string> {
+  const first = await promptPassword("Password");
+  const second = await promptPassword("Confirm password");
+  if (first !== second) throw new Error("Passwords do not match");
+  return first;
+}
+
+/**
+ * The `Authorization: Basic` header a protected site's files are fetched with,
+ * or `{}` when no password is configured.
+ *
+ * The user half is ignored by the server, so it is a fixed label rather than
+ * anything about the caller.
+ */
+export function basicAuthHeader(password: string | undefined): Record<string, string> {
+  if (!password) return {};
+  return { Authorization: `Basic ${Buffer.from(`viewer:${password}`).toString("base64")}` };
+}
+
+/**
+ * Resolve a site password for a download command: the environment first, then
+ * `--password`, which prompts.
+ */
+export async function resolveSitePassword(flag: boolean | undefined): Promise<string | undefined> {
+  const fromEnv = process.env[SITE_PASSWORD_ENV];
+  if (fromEnv) return fromEnv;
+  if (!flag) return undefined;
+  return promptPassword("Site password");
 }

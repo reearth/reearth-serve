@@ -5,6 +5,7 @@ import { PATHS } from "../shared/paths";
 import type { AssetMetadata } from "../shared/api";
 import {
   apiGet,
+  basicAuthHeader,
   collectFiles,
   downloadFile,
   formatBytes,
@@ -12,8 +13,23 @@ import {
   localMd5,
   output,
   parseSrc,
+  resolveSitePassword,
+  SITE_PASSWORD_ENV,
   streamNdjson,
 } from "./helpers";
+
+/**
+ * `--password` on the download commands (ADR-013 B7).
+ *
+ * A protected asset answers `401` to an unauthenticated fetch of its files;
+ * the CLI sends `Authorization: Basic`, which is the proof a tool uses. The
+ * flag takes no value — it prompts — and `REEARTH_SERVE_SITE_PASSWORD` is the
+ * non-interactive route.
+ */
+type PasswordOpt = { password?: boolean };
+
+const PASSWORD_FLAG_HELP =
+  `Prompt for the site password of a protected asset (or set ${SITE_PASSWORD_ENV})`;
 
 export function registerFileCommands(program: Command, file: Command) {
   file
@@ -22,18 +38,23 @@ export function registerFileCommands(program: Command, file: Command) {
     .argument("<asset-id>", "Asset ID")
     .argument("[prefix]", "Filter by path prefix")
     .option("-l, --long", "Show detailed output")
-    .action(async (assetId: string, prefix: string | undefined, cmdOpts: { long?: boolean }) => {
+    .option("--password", PASSWORD_FLAG_HELP)
+    .action(async (assetId: string, prefix: string | undefined, cmdOpts: { long?: boolean } & PasswordOpt) => {
       const opts = program.opts<{ endpoint: string; json: boolean }>();
+      // The listing itself is a management-API call and uses the caller's own
+      // credentials; the header only matters where the endpoint is reached
+      // without a login.
+      const auth = basicAuthHeader(await resolveSitePassword(cmdOpts.password));
       let count = 0;
 
       if (opts.json) {
-        for await (const entry of streamNdjson(opts.endpoint, PATHS.assetFiles(assetId, prefix))) {
+        for await (const entry of streamNdjson(opts.endpoint, PATHS.assetFiles(assetId, prefix), auth)) {
           console.log(JSON.stringify(entry));
           count++;
         }
       } else {
         if (cmdOpts.long) {
-          const files = await collectFiles(opts.endpoint, PATHS.assetFiles(assetId, prefix));
+          const files = await collectFiles(opts.endpoint, PATHS.assetFiles(assetId, prefix), auth);
           if (files.length === 0) {
             console.log("No files (extraction may be in progress)");
             return;
@@ -47,7 +68,7 @@ export function registerFileCommands(program: Command, file: Command) {
           console.log(`\n${files.length} file(s), ${formatBytes(totalSize)} total`);
           return;
         }
-        for await (const entry of streamNdjson(opts.endpoint, PATHS.assetFiles(assetId, prefix))) {
+        for await (const entry of streamNdjson(opts.endpoint, PATHS.assetFiles(assetId, prefix), auth)) {
           console.log(entry.path);
           count++;
         }
@@ -65,14 +86,16 @@ export function registerFileCommands(program: Command, file: Command) {
     .option("-r, --recursive", "Recursively download all files under the given prefix")
     .option("-f, --force", "Overwrite existing local files")
     .option("-c, --concurrency <n>", "Max concurrent downloads (with -r)", "4")
-    .action(async (src: string, dest: string, cmdOpts: { recursive?: boolean; force?: boolean; concurrency: string }) => {
+    .option("--password", PASSWORD_FLAG_HELP)
+    .action(async (src: string, dest: string, cmdOpts: { recursive?: boolean; force?: boolean; concurrency: string } & PasswordOpt) => {
       const opts = program.opts<{ endpoint: string; json: boolean }>();
       const { assetId, filePath } = parseSrc(src);
       const force = !!cmdOpts.force;
+      const auth = basicAuthHeader(await resolveSitePassword(cmdOpts.password));
 
       if (cmdOpts.recursive) {
         const prefix = filePath || undefined;
-        const files = await collectFiles(opts.endpoint, PATHS.assetFiles(assetId, prefix));
+        const files = await collectFiles(opts.endpoint, PATHS.assetFiles(assetId, prefix), auth);
         if (files.length === 0) {
           if (opts.json) {
             output({ ok: true, count: 0, skipped: 0 }, true);
@@ -92,7 +115,7 @@ export function registerFileCommands(program: Command, file: Command) {
             const relativePath = prefix ? entry.path.slice(prefix.length).replace(/^\//, "") || entry.path.split("/").pop()! : entry.path;
             const localPath = join(dest, relativePath);
             const url = `${opts.endpoint}${PATHS.file(assetId, entry.path)}`;
-            const ok = await downloadFile(url, localPath, force);
+            const ok = await downloadFile(url, localPath, force, auth);
             if (ok) {
               downloaded++;
             } else {
@@ -134,7 +157,7 @@ export function registerFileCommands(program: Command, file: Command) {
       }
 
       const url = `${opts.endpoint}${PATHS.file(assetId, downloadPath)}`;
-      await downloadFile(url, dest, true);
+      await downloadFile(url, dest, true, auth);
 
       if (opts.json) {
         output({ ok: true, src, dest }, true);
@@ -201,11 +224,13 @@ export function registerFileCommands(program: Command, file: Command) {
     .argument("<dest-dir>", "Local destination directory")
     .option("--delete", "Remove local files not present in the remote asset")
     .option("-c, --concurrency <n>", "Max concurrent downloads", "4")
-    .action(async (assetId: string, destDir: string, cmdOpts: { delete?: boolean; concurrency: string }) => {
+    .option("--password", PASSWORD_FLAG_HELP)
+    .action(async (assetId: string, destDir: string, cmdOpts: { delete?: boolean; concurrency: string } & PasswordOpt) => {
       const opts = program.opts<{ endpoint: string; json: boolean }>();
       const concurrency = parseInt(cmdOpts.concurrency, 10) || 4;
+      const auth = basicAuthHeader(await resolveSitePassword(cmdOpts.password));
 
-      const remoteFiles = await collectFiles(opts.endpoint, PATHS.assetFiles(assetId));
+      const remoteFiles = await collectFiles(opts.endpoint, PATHS.assetFiles(assetId), auth);
       if (remoteFiles.length === 0) {
         if (opts.json) {
           output({ ok: true, downloaded: 0, skipped: 0, deleted: 0 }, true);
@@ -255,7 +280,7 @@ export function registerFileCommands(program: Command, file: Command) {
           const entry = queue.shift()!;
           const localPath = join(destDir, entry.path);
           const url = `${opts.endpoint}${PATHS.file(assetId, entry.path)}`;
-          await downloadFile(url, localPath, true);
+          await downloadFile(url, localPath, true, auth);
           downloaded++;
           if (!opts.json) {
             process.stdout.write(`\r  ${downloaded + skipped}/${remoteFiles.length}`);

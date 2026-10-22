@@ -14,6 +14,26 @@ export function internalHeaders(extra: Record<string, string> = {}): Record<stri
   return { Authorization: `Bearer ${INTERNAL_API_SECRET}`, ...extra };
 }
 
+/**
+ * `fetch`, retried once when the connection itself fails.
+ *
+ * A test that shells out to the CLI leaves this process's keep-alive sockets
+ * idle for seconds while a child talks to the same server. The next `fetch`
+ * then races the server closing one of them and throws `ECONNRESET` before a
+ * byte is on the wire — the request never reached the application. `Connection:
+ * close` does not avoid it (undici pools regardless), so the retry is the fix.
+ *
+ * Only a *thrown* error is retried. Any response, including a `4xx` or `5xx`,
+ * comes straight back, so a real failure still fails.
+ */
+export async function fetchRetrying(url: string, init?: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init);
+  } catch {
+    return fetch(url, init);
+  }
+}
+
 export function rewriteUrl(url: string): string {
   const parsed = new URL(url);
   const base = new URL(BASE);

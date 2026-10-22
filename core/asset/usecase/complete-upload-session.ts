@@ -3,6 +3,7 @@ import { detectArchiveFormat } from "../model";
 import type { AtomicWrites, FileStorage, PresignedUrlGenerator, UploadSessionStore } from "../repository";
 import type { Job } from "../../job/model";
 import { storageKey } from "./shared";
+import { siteUrlFor } from "../../site/url";
 import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
 import type { JobQueue } from "../../queue/port";
@@ -17,7 +18,7 @@ export async function completeUploadSession(
   ttlSeconds: number,
   baseUrl: string,
   parts?: UploadPart[],
-  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[] },
+  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string },
 ): Promise<AssetUploadResult | null> {
   const session = await sessions.find(id);
   if (!session) return null;
@@ -116,9 +117,17 @@ export async function completeUploadSession(
   }
   await sessions.delete(id);
 
+  const siteUrl = siteUrlFor({
+    assetId: id,
+    baseUrl,
+    siteHostSuffix: options?.siteHostSuffix,
+    archive: Boolean(archiveFormat),
+  });
+
   return {
     asset,
     url: `${baseUrl}/files/${id}/${encodeURIComponent(session.filename)}`,
+    ...(siteUrl && { siteUrl }),
   };
 }
 

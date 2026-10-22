@@ -9,6 +9,7 @@ import {
   idParamSchema, scopedListQuerySchema,
 } from "../../shared/openapi";
 import { jobSchema } from "../../shared/api";
+import { hostingOnExtractionComplete } from "../site/hosting";
 
 function accessCtx(c: Context<AppEnv>): AccessContext {
   return {
@@ -209,7 +210,21 @@ jobInternalRoutes.post("/:id/status", async (c) => {
     asset.status = "failed";
   }
 
+  // `_headers` / `_redirects` (ADR-013 C3). The archive's control files only
+  // exist once extraction has written them, so this is the moment to read and
+  // parse them. The asset-row case joins the atomic write below; the version
+  // case follows it, since `saveJob` carries a job and an asset and nothing
+  // else.
+  const placement = body.status === "completed"
+    ? await hostingOnExtractionComplete(c.get("storage"), job, asset)
+    : null;
+  if (placement?.on === "asset" && asset) asset.hosting = placement.hosting;
+
   await c.get("writes").saveJob({ job, asset: asset ?? undefined });
+
+  if (placement?.on === "version") {
+    await c.get("versions").update(placement.versionId, { hosting: placement.hosting });
+  }
 
   return c.json({ ok: true });
 });

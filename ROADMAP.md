@@ -50,11 +50,14 @@ Serve is the **storage, versioning, and delivery** layer. It manages assets, the
 - Storage usage tracking
 - File serving (`/files/:id/:filename`) with version resolution
 
+**Serve also runs a small built-in derivation set** at upload time — archive extraction, image thumbnails, and candidates such as header metadata extraction, GeoTIFF → COG and GeoJSON → FGB. A derivation is admitted only if its output is determined by the input format alone, is deterministic and bounded, is one generation deep, and is structural rather than interpretive. See [ADR-015](./docs/adr/015-engine-boundary-and-built-in-derivations.md).
+
 **Serve does NOT do:**
-- Format conversion (GeoJSON → FGB, GeoTIFF → COG, etc.)
-- Tile rendering or generation
+- Interpretive transformation (anything with a model, a style, a colour map, or a parameter the user would choose)
+- Tile rendering or generation, including request-time tile extraction
 - Tile caching
-- Any GDAL / tippecanoe / py3dtiles processing
+- Multi-source outputs (bundling, compositing, reverse indexes)
+- Any GDAL / tippecanoe / py3dtiles processing beyond the admitted set
 
 ### Re:Earth Untiled — Tile Processing & Rendering
 
@@ -62,7 +65,7 @@ untiled is the **transformation and tile serving** engine. It subscribes to serv
 
 **untiled owns:**
 - On-demand tile rendering (COG, pre-tiled sources, terrain, compositing)
-- Format conversion (GeoJSON → FGB, GeoTIFF → COG, CityGML → 3D Tiles, etc.)
+- Interpretive format conversion (CityGML → 3D Tiles, etc.; structural conversions such as GeoTIFF → COG may move into Serve's built-in set per ADR-015)
 - Vector tile generation (tippecanoe)
 - 3D Tiles generation (py3dtiles, citygml-tools)
 - Tile response caching (KV/CDN, managed independently of serve)
@@ -183,8 +186,53 @@ TTL:   3600s (auto-expire)
 Upload a `.zip` archive; the server extracts it and serves the contents as a directory.
 
 - [x] Zip extraction via Cloudflare Containers or in-worker decompression
-- [x] Directory listing or index file resolution (`index.html`)
+- [x] Index file resolution (`/files/:id/` and `dir/` → `index.html`; `dir` → 301 to `dir/`)
 - [x] Enables uploading pre-built tile packages (XYZ directory structure, 3D Tiles tileset, etc.)
+- [ ] Directory listing (deliberately absent; see ADR-013)
+
+---
+
+### Phase 1.5 — Frontend Hosting (AI-generated apps, one zip → one site) ✅
+
+Municipal and enterprise users increasingly generate frontend apps with AI but have no Netlify / Cloudflare Pages to put them on. Serve already extracts and serves archives; this phase closes the gap to "upload a zip, get a working site". Design: [ADR-013](./docs/adr/013-static-site-hosting.md) (Parts A–C implemented).
+
+**One caveat on the tick:** B7's `members` mode is still open, and deliberately so — it waits on the OIDC integration listed in Phase 2. Everything else in Parts A, B and C is built; B6's event-log entries wait on an event store (ADR-007), which no phase has yet.
+
+**Part A — delivery semantics** ✅
+
+- [x] Index resolution & directory redirects — `/files/:id/` serves `index.html`; `dir` → 301 `dir/`
+- [x] `HEAD` on file URLs
+- [x] Cache policy — `ETag` / `If-None-Match` → 304; HTML at asset-ID URLs revalidates every load, other files 1 h, version-ID URLs immutable; `Vary: Accept-Encoding`
+- [x] Web content types — fonts, source maps, web manifests, media, plain text in the extractor's table, plus `/etc/mime.types` in the (now distroless, non-root) container image for the long tail
+
+**Part B — site hosts**
+
+- [x] B1 Per-asset origin — `https://<id>.serve.reearth.land/` so root-relative paths resolve and hosted pages are origin-isolated from the API and from each other; site hosts serve nothing but files. Enabled by `SITE_HOST_SUFFIX`; the zone-side wildcard DNS record, certificate and Worker route are an ops step, so the variable stays commented out in `wrangler.toml` until they exist
+- [x] B2 Named sites — `https://<name>.serve.reearth.land/` via a `site_hosts` table: DNS-label validation, no `--`, not ID-shaped, reserved list, editor-only, project assets only (archives only), per-project quota of 20. `custom` (B5) is rejected with 400 until that lands
+- [x] B3 Publish state — enabled / disabled / released. Disable answers `503` with a "temporarily unavailable" page (`no-store`, `noindex`, `Retry-After: 3600`) and keeps the name held; release answers `410` for 30 days against takeover, is purged by the cleanup cron, and asset deletion releases rather than cascades. `PATCH …/hosts/:hostname` and `asset host disable|enable <id> <name>|--all`; a released name cannot be patched (409)
+- [x] B4 Preview hosts — `v<n>--<name>` (resolves to the version ID: pinned, immutable) and `latest--<name>` (newest version, but revalidating because the host moves), both `noindex`; per-name `previews` flag, **off by default**, toggled with `PATCH …/hosts/:hostname {previews}` / `asset host update <id> <name> --previews on|off`
+- [x] B5 Custom domains — the `custom` kind of `site_hosts`. Registration issues a token and returns the `TXT _reearth-serve-verify.<host>` record plus the CNAME target; the hostname answers `404` until `POST …/hosts/:hostname/verify` finds the record over DNS-over-HTTPS, which then starts certificate issuance and makes it resolve. No previews (`PATCH {previews: true}` is a `400`); authorization, quota, disable and the 30-day release cooldown are shared with B2–B3, and releasing a verified domain deprovisions its certificate. `asset host add --custom|verify|show`. **Ops:** Cloudflare for SaaS must be enabled on the zone and `CF_API_TOKEN` + `CF_ZONE_ID` set (both or neither) for certificates to be issued at all, with `SITE_FALLBACK_ORIGIN` set to the zone's fallback origin so customers CNAME somewhere stable; without them the no-op provisioner treats a verified hostname as live and the operator terminates TLS — which is what the Node runtime always does. Migration `0005_site_hosts_verification.sql` must be applied
+- [ ] B6 Hosts API and CLI — resolution order (ID → `--` → `site_hosts`, with a 60 s KV cache in front) ✅, `GET`/`POST /api/v1/assets/:id/hosts`, `DELETE …/hosts/:hostname`, `GET /api/v1/projects/:id/hosts` ✅, `asset host add|list|show|remove|verify|disable|enable|update` ✅, `PATCH …/hosts/:hostname` ✅, `GET`/`POST …/hosts/:hostname[/verify]` ✅, the `--` preview branch ✅. Pending: event-log entries (ADR-007 has no event store yet — the two emit points are marked in `core/site/usecase.ts`)
+- [ ] B7 Viewer authentication — `password` ✅, `members` pending. **Sites only:** `access: "password"` on the asset (the flat field ADR-014 §1 makes canonical), settable on *archive* assets in a project — demo assets are always public, and protecting a plain dataset is deferred to ADR-014. Enforced by `resolveAccess` in the file handler before any storage I/O, on every URL form at once (`/files/:id/…`, ID and named hosts, `v<n>--`/`latest--`, custom domains, thumbnails, `Range`, `HEAD`): branded password page + `HttpOnly` signed cookie for browsers, `Authorization: Basic` for tools, PBKDF2-SHA256 at 600k iterations, 10 failures per IP per 15 minutes, `private` caching with `Vary: Cookie, Authorization`, credentialed CORS. `PATCH /api/v1/assets/:id {access, password}` and `asset protect <id> --password|--off`. **Ops:** migration `0006_asset_access.sql` must be applied and `SIGNING_SECRET` set — unset, protecting is refused and a protected asset answers `503`. `members` mode still waits on the OIDC integration in Phase 2
+
+**Part C — site behaviour & tooling**
+
+- [x] C1 SPA fallback — `spa` on the asset (a flat 0/1 column, like `access`, not a key in caller-owned `userMeta`): an extensionless miss inside an extracted archive serves the root `index.html` at `200` with the moving HTML cache policy, on every URL form. Withheld from file-shaped paths (`\.[a-z0-9]{1,8}$`) so a missing tile or chunk still 404s, and it runs only after the access check and the directory-redirect probe. Independently, a root `404.html` answers any remaining miss with status `404`, `no-store` and no `ETag`. Archive assets in a project only. `PATCH /api/v1/assets/:id {spa}` and `asset update <id> --spa on|off`. **Ops:** migration `0007_asset_spa.sql` must be applied
+- [x] C2 CLI directory upload — `upload ./dist [--site] [--name <slug>] [--password]` zips, uploads, configures and claims in one step. A dependency-free **stored** zip writer (`cli/zip.ts`): forward-slash paths, `.DS_Store` / `Thumbs.db` / `.git` / `node_modules` skipped at any depth, symbolic links skipped with a warning, reproducible output, ZIP64 refused with a "zip it yourself" message past 4 GiB or 65 535 files. Uploaded as `<dirname>.zip` through the existing presigned/direct path, so it is an ordinary archive asset. The three flags are project-only and a demo upload gets a note rather than a server error
+- [x] C3 `_headers` / `_redirects` — Netlify-style control files at the archive root, read and parsed by the **Worker** when extraction completes and stored on the version (or, for a one-version asset, the asset) as system `meta.hosting`. `_headers`: path blocks with indented `Name: value` lines, exact / `:placeholder` / trailing-`*` patterns, and a denylist (`Cache-Control`, `ETag`, `Vary`, `Content-Type`, `Set-Cookie`, `Access-Control-*`, …) so the handler's own headers always win. `_redirects`: `from to [status]` with `301/302/307/308/200`, `:splat`, first-match-wins, and `!` for Netlify's forced (non-shadowing) form; **targets must be paths inside the same site**. Caps: 64 KB per file, 100 header rules × 20 headers, 2 KB per value, 500 redirect rules, 256 KB of stored JSON — past any of them the file is ignored and a warning is recorded, visible in `GET /api/v1/assets/:id/versions/:vid` and in `asset version show`. No migration: `meta` already exists on both rows
+
+---
+
+### Phase 1.6 — Asset Access Control & Data Sales
+
+Private datasets, password-protected sites (ADR-013 B7) and partner data marketplaces are one mechanism: an access mode on the asset, a proof on the request, a grant table in between. Serve enforces what was sold; the storefront, catalogue and payments stay with the partner. Design: [ADR-014](./docs/adr/014-asset-access-control.md).
+
+- [ ] `access` mode on project assets (`public` / `password` / `restricted`); `resolveAccess` in the file handler with zero cost for public assets
+- [ ] Grants — `asset_grants` for `user` / `email` / `api_key` principals on an asset or a whole project, with expiry, revocation, `source`/`ref` for the partner's order, events and webhooks
+- [ ] Signed URLs — prefix-scoped HMAC tokens (`?rs_sig=`) so a viewer loads a whole restricted tileset with one token and CORS stays `*`; optional grant binding for revocation
+- [ ] API keys — workspace-scoped machine credentials (`rs_live_…`, hashed at rest) for pipelines, partner storefronts and the untiled service account
+- [ ] Grants/keys/signed-URL API and CLI (`asset access`, `asset grant`, `asset sign`, `workspace api-key`); `file cp` / `file sync` with a key or login
+- [ ] Marketplace flow — batch grants, project-level grants, `email` principals matched on verified claims, per-principal transfer metering hook (Phase 6)
 
 ---
 
@@ -195,7 +243,7 @@ Introduce user identity, project scoping, and persistent assets.
 - [x] **Auth**: API key or OAuth (Re:Earth Dashboard integration)
 - [x] **Projects**: logical grouping of assets with per-project settings
 - [x] **Asset settings**: public/private toggle, custom metadata, configurable TTL or permanent storage
-- [x] **Access control**: file-layer access control (URL visibility) — distinct from service-layer
+- [x] **Access control**: file-layer access control (URL visibility) — distinct from service-layer. Note: `/files/` itself performs no request-time check today; viewer authentication for hosted sites is ADR-013 B7
 - [ ] **OIDC server integration**: connection to external OIDC server for authentication (not yet implemented)
 - [ ] **Account server integration**: connection to Re:Earth account platform (not yet implemented)
 - [ ] **Cerbos integration**: `CerbosAuthorizer` adapter is implemented behind the `Authorizer` interface and enabled by setting `CERBOS_ENDPOINT` (falls back to in-process `SimpleAuthorizer`); deploying a Cerbos PDP and authoring the policy bundle are not yet done
@@ -225,6 +273,8 @@ Full version management — upload new content as a new Version, rollback to pre
 ### Phase 4 — Derived Assets & Dependency Graph
 
 Introduce asset subtypes (uploaded, derived, composite, external) and a dependency DAG for tracking transformation lineage and cascading invalidation.
+
+> **Scope note ([ADR-015](./docs/adr/015-engine-boundary-and-built-in-derivations.md)):** the engine records lineage but never acts on it. A single-source result is registered as a **slot** on its source version (filled by the engine's built-in set or by an application such as untiled or Re:Earth Flow); a multi-source result is a new asset carrying a loose `derivedFrom` link. Edges, dirty propagation and the status state machine are application scope until a later ADR re-admits them; the internal write-back API stays, narrowed to slot registration and `derivedFrom`.
 
 - [ ] **Asset subtypes**: `type` field distinguishes uploaded / derived / composite / external
 - [ ] **Asset Edges**: directed dependency graph (DAG) between assets
@@ -309,8 +359,8 @@ Terrain tile delivery with geoid–ellipsoid height composition:
 
 Automated format conversion triggered by serve's webhook events:
 
-- GeoJSON / GeoPackage / Shapefile → FlatGeobuf (FGB)
-- GeoTIFF → Cloud-Optimized GeoTIFF (COG)
+- GeoPackage / Shapefile → FlatGeobuf (FGB)
+- GeoJSON → FGB and GeoTIFF → COG are candidates for Serve's built-in set ([ADR-015](./docs/adr/015-engine-boundary-and-built-in-derivations.md)); they stay here until admitted
 - Results uploaded back to serve as DerivedAsset versions
 - Dirty propagation drives re-conversion on source updates
 

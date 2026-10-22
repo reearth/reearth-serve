@@ -3,6 +3,7 @@ import { detectArchiveFormat } from "../model";
 import type { AtomicWrites, FileStorage, MetadataStore } from "../repository";
 import type { Job } from "../../job/model";
 import { generateId, versionStorageKey } from "./shared";
+import { siteUrlFor } from "../../site/url";
 import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
 import type { JobQueue } from "../../queue/port";
@@ -11,6 +12,8 @@ import type { ExtractionMessage } from "../../extraction/handler";
 export interface UploadVersionResult {
   version: AssetVersion;
   url: string;
+  /** Site host of the asset when it is an archive (ADR-013 B1). */
+  siteUrl?: string;
 }
 
 export async function uploadVersion(
@@ -27,7 +30,7 @@ export async function uploadVersion(
     originalSize?: number;
   },
   baseUrl: string,
-  options?: { extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[] },
+  options?: { extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string },
 ): Promise<UploadVersionResult | null> {
   const asset = await metadata.find(assetId);
   if (!asset) return null;
@@ -124,8 +127,18 @@ export async function uploadVersion(
     throw e;
   }
 
+  // The site host follows the asset, not the new version: uploading a version
+  // is a redeploy behind the same hostname (ADR-013 B1).
+  const siteUrl = siteUrlFor({
+    assetId,
+    baseUrl,
+    siteHostSuffix: options?.siteHostSuffix,
+    archive: Boolean(archiveFormat),
+  });
+
   return {
     version: savedVersion,
     url: `${baseUrl}/files/${assetId}/${encodeURIComponent(file.name)}`,
+    ...(siteUrl && { siteUrl }),
   };
 }

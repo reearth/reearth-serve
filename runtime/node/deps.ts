@@ -12,6 +12,10 @@ import {
   SqlProjectStore, SqlStorageUsageStore, SqlVersionStore, SqlWorkspaceStore,
 } from "../../adapters/sql/stores";
 import { SqlAtomicWrites } from "../../adapters/sql/writes";
+import { SqlSiteHostStore } from "../../adapters/sql/site-hosts";
+import { DohDnsResolver } from "../../adapters/doh/dns";
+import { NoopProvisioner } from "../../core/site/provisioner";
+import { apexHost } from "../../core/site/middleware";
 import { SqlJobQueue } from "../../adapters/sql/queue";
 import { SqlKeyValue } from "../../adapters/sql/kv";
 import { MemoryFileStorage } from "../../adapters/memory/storage";
@@ -93,9 +97,23 @@ export function buildNodeRuntime(env: Env = process.env): NodeRuntime {
     storageUsage: new SqlStorageUsageStore(sql),
     pendingCleanup: new SqlCleanupPendingStore(sql),
     anonymousUploadEnabled: config.anonymousUploadEnabled,
+    siteHostSuffix: config.siteHostSuffix,
+    siteHosts: new SqlSiteHostStore(sql),
+    // Custom domains (ADR-013 B5). The same DNS-over-HTTPS resolver the Worker
+    // uses — `node:dns` would work here and nowhere else.
+    dns: new DohDnsResolver(config.siteDnsResolverUrl),
+    // Always the no-op: this runtime has no certificate API of its own, so the
+    // operator terminates TLS for a customer's hostname at whatever sits in
+    // front of the process, and the verified hostname is live at once.
+    customHostnames: new NoopProvisioner(
+      config.siteFallbackOrigin || apexHost(config.baseUrl) || "",
+    ),
+    siteFallbackOrigin: config.siteFallbackOrigin,
+    cache: kv,
     sessions: new KeyValueSessionStore(kv),
     sessionTtlSeconds: SESSION_TTL_SECONDS,
     internalApiSecret: config.internalApiSecret,
+    signingSecret: config.signingSecret,
     auth: {
       issuer: config.oidcIssuerUrl,
       audience: config.oidcAudience,

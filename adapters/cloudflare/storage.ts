@@ -28,6 +28,7 @@ export class R2FileStorage implements FileStorage {
       size: obj.size,
       contentType: obj.httpMetadata?.contentType ?? "application/octet-stream",
       contentEncoding: obj.httpMetadata?.contentEncoding,
+      etag: obj.httpEtag,
     };
 
     if (range) {
