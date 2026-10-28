@@ -5,6 +5,7 @@ import type { AppEnv } from "../../types";
 import { uploadAsset } from "../usecase";
 import { denyAnonymousUpload, resolveUploadProject, usageScopes } from "./shared";
 import { uploadResultResponseSchema, errorResponseSchema } from "../../../shared/openapi";
+import { isSafeFilename } from "../../../shared/api";
 
 export function registerUploadRoute(app: Hono<AppEnv>) {
   app.post("/",
@@ -40,6 +41,10 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
     const contentLength = c.req.header("Content-Length");
     if (!filename || !contentLength) {
       return c.json({ error: "Missing required headers: X-Filename, Content-Length" }, 400);
+    }
+
+    if (!isSafeFilename(filename)) {
+      return c.json({ error: "Invalid X-Filename" }, 400);
     }
 
     const size = parseInt(contentLength, 10);
@@ -84,6 +89,9 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
       return c.json(result, 201);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      if (msg.includes("exceeds storage capacity")) {
+        return c.json({ error: "Upload exceeds storage capacity" }, 413);
+      }
       // "declared Content-Length" is what a FileStorage adapter says when the
       // body does not match the header; "FixedLengthStream" is R2's own
       // wording, kept so the Cloudflare path keeps returning 400 as before.

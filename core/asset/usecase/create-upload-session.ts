@@ -122,6 +122,14 @@ if (import.meta.vitest) {
     };
   }
 
+  test("upload session body rejects filenames that escape the asset prefix", async () => {
+    const { createUploadSessionBodySchema } = await import("../../../shared/api");
+    for (const filename of ["../victim/data.geojson", "a/b.txt", "a\\b.txt", "..", ".", "", "x\u0000.txt"]) {
+      expect(createUploadSessionBodySchema.safeParse({ filename, size: 1 }).success, filename).toBe(false);
+    }
+    expect(createUploadSessionBodySchema.safeParse({ filename: "my file..v2.json", size: 1 }).success).toBe(true);
+  });
+
   test("createUploadSession returns presigned URL for single upload", async () => {
     const sessions = mockSessions();
     const presigned = mockPresignedUrls();

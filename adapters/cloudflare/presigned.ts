@@ -23,8 +23,13 @@ export class R2PresignedUrlGenerator implements PresignedUrlGenerator {
     this.bucket = config.bucket;
   }
 
+  // Each key segment is percent-encoded so the URL parser cannot reinterpret
+  // it: `%2e%2e` would otherwise resolve as `..`, and `?` or `#` would cut the
+  // key short. aws4fetch decodes the path once before signing, so the signed
+  // canonical path still names the literal key.
   private objectUrl(key: string): URL {
-    return new URL(`/${this.bucket}/${key}`, this.endpoint);
+    const path = key.split("/").map(encodeURIComponent).join("/");
+    return new URL(`/${this.bucket}/${path}`, this.endpoint);
   }
 
   async generatePutUrl(key: string, contentType: string, expiresInSeconds: number, options?: { contentEncoding?: string }): Promise<string> {

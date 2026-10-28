@@ -20,9 +20,16 @@ type Entry = {
  * It enforces the declared size the way R2's `FixedLengthStream` does: a body
  * that does not deliver exactly `size` bytes is a client error, and the upload
  * route turns the thrown message into a 400.
+ *
+ * Total bytes held are capped at `capacityBytes`, checked against the declared
+ * size before any byte is read, so one large Content-Length cannot exhaust the
+ * heap and cumulative uploads cannot grow it without bound.
  */
 export class MemoryFileStorage implements FileStorage {
   private readonly objects = new Map<string, Entry>();
+  private usedBytes = 0;
+
+  constructor(private readonly capacityBytes = DEFAULT_CAPACITY_BYTES) {}
 
   async put(
     key: string,
@@ -31,7 +38,20 @@ export class MemoryFileStorage implements FileStorage {
     size: number,
     options?: { contentEncoding?: string },
   ): Promise<void> {
-    const data = await collect(body, size);
+    if (this.usedBytes + size > this.capacityBytes) {
+      await body.cancel().catch(() => {});
+      throw new Error(`upload of ${size} bytes exceeds storage capacity (${this.usedBytes}/${this.capacityBytes} bytes used)`);
+    }
+    // Reserve before reading so concurrent uploads cannot overcommit together.
+    this.usedBytes += size;
+    let data: Uint8Array;
+    try {
+      data = await collect(body, size);
+    } catch (e) {
+      this.usedBytes -= size;
+      throw e;
+    }
+    this.release(key);
     this.objects.set(key, {
       data,
       contentType,
@@ -73,11 +93,18 @@ export class MemoryFileStorage implements FileStorage {
   }
 
   async delete(key: string): Promise<void> {
-    this.objects.delete(key);
+    this.release(key);
   }
 
   async deleteMany(keys: string[]): Promise<void> {
-    for (const key of keys) this.objects.delete(key);
+    for (const key of keys) this.release(key);
+  }
+
+  private release(key: string): void {
+    const entry = this.objects.get(key);
+    if (!entry) return;
+    this.usedBytes -= entry.data.byteLength;
+    this.objects.delete(key);
   }
 
   async list(prefix: string, options?: { limit?: number; cursor?: string }): Promise<{ keys: string[]; cursor?: string }> {
@@ -99,6 +126,8 @@ export class MemoryFileStorage implements FileStorage {
     return this.objects.size;
   }
 }
+
+const DEFAULT_CAPACITY_BYTES = 1024 * 1024 * 1024;
 
 async function collect(body: ReadableStream<Uint8Array>, size: number): Promise<Uint8Array> {
   const out = new Uint8Array(size);

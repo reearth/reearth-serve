@@ -203,4 +203,54 @@ describe("project API (requires auth)", { skip: !mockOidcAvailable }, () => {
       headers: { "Authorization": `Bearer ${ownerToken}` },
     });
   });
+
+  describe("workspace privilege boundaries", () => {
+    async function api(token: string, method: string, path: string, body?: unknown) {
+      return fetch(`${BASE}/api/v1${path}`, {
+        method,
+        headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+        body: body === undefined ? undefined : JSON.stringify(body),
+      });
+    }
+
+    async function workspaceWithAdmin() {
+      const suffix = crypto.randomUUID().slice(0, 8);
+      const ownerToken = await signToken({ sub: `ws-owner-${suffix}` });
+      const adminToken = await signToken({ sub: `ws-admin-${suffix}` });
+      const res = await api(ownerToken, "POST", "/workspaces", { name: `ws-${suffix}` });
+      const { workspace } = await res.json() as { workspace: { id: string } };
+      expect((await api(ownerToken, "POST", `/workspaces/${workspace.id}/members`, { userId: `ws-admin-${suffix}`, role: "admin" })).status).toBe(201);
+      return { ws: workspace.id, ownerId: `ws-owner-${suffix}`, adminId: `ws-admin-${suffix}`, ownerToken, adminToken, suffix };
+    }
+
+    test("an admin cannot promote themselves to owner", async () => {
+      const { ws, adminId, adminToken } = await workspaceWithAdmin();
+      expect((await api(adminToken, "PATCH", `/workspaces/${ws}/members/${adminId}`, { role: "owner" })).status).toBe(403);
+    });
+
+    test("an admin cannot add an owner, nor demote or remove the owner", async () => {
+      const { ws, ownerId, adminToken, suffix } = await workspaceWithAdmin();
+      expect((await api(adminToken, "POST", `/workspaces/${ws}/members`, { userId: `x-${suffix}`, role: "owner" })).status).toBe(403);
+      expect((await api(adminToken, "PATCH", `/workspaces/${ws}/members/${ownerId}`, { role: "viewer" })).status).toBe(403);
+      expect((await api(adminToken, "DELETE", `/workspaces/${ws}/members/${ownerId}`)).status).toBe(403);
+    });
+
+    test("an admin can still manage lower roles", async () => {
+      const { ws, adminToken, suffix } = await workspaceWithAdmin();
+      expect((await api(adminToken, "POST", `/workspaces/${ws}/members`, { userId: `ed-${suffix}`, role: "editor" })).status).toBe(201);
+      expect((await api(adminToken, "PATCH", `/workspaces/${ws}/members/ed-${suffix}`, { role: "viewer" })).status).toBe(200);
+    });
+
+    test("project creation requires project:create in the target workspace", async () => {
+      const { ws, ownerToken, suffix } = await workspaceWithAdmin();
+      const outsider = await signToken({ sub: `outsider-${suffix}` });
+      expect((await api(outsider, "POST", "/projects", { name: "planted", workspaceId: ws })).status).toBe(404);
+
+      const viewer = await signToken({ sub: `viewer-${suffix}` });
+      await api(ownerToken, "POST", `/workspaces/${ws}/members`, { userId: `viewer-${suffix}`, role: "viewer" });
+      expect((await api(viewer, "POST", "/projects", { name: "nope", workspaceId: ws })).status).toBe(403);
+
+      expect((await api(ownerToken, "POST", "/projects", { name: "ok", workspaceId: ws })).status).toBe(201);
+    });
+  });
 });

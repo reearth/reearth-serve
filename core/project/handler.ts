@@ -52,6 +52,8 @@ projectRoutes.post("/",
       201: { description: "Project created", content: { "application/json": { schema: resolver(projectResponseSchema) } } },
       400: { description: "Bad request", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
       401: { description: "Authentication required", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      403: { description: "Forbidden", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      404: { description: "Workspace not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
     },
   }),
   zValidator("json", createProjectBodySchema),
@@ -62,6 +64,22 @@ projectRoutes.post("/",
     }
 
     const body = c.req.valid("json");
+    if (body.workspaceId) {
+      // 404 for non-members so the response doesn't confirm the workspace exists.
+      const self = await c.get("members").find(body.workspaceId, user.sub);
+      if (!self) {
+        return c.json({ error: "Workspace not found" }, 404);
+      }
+      const allowed = await c.get("authorizer").check({
+        principal: { id: user.sub, roles: [self.role] },
+        resource: { kind: "project", id: body.workspaceId },
+        action: "create",
+      });
+      if (!allowed) {
+        return c.json({ error: "Forbidden" }, 403);
+      }
+    }
+
     const projects = c.get("projects");
     const project = await createProject(projects, body.name, user.sub, body.workspaceId);
     return c.json({ project }, 201);

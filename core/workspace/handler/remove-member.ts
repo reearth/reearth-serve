@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
 import { resolver, validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
+import { canManageRole } from "../../auth/roles";
 import { removeMember } from "../../member/usecase";
 import { errorResponseSchema, workspaceMemberParamSchema } from "../../../shared/openapi";
 
@@ -40,6 +41,14 @@ export function registerRemoveMemberRoute(app: Hono<AppEnv>) {
         action: "manage-members",
       });
       if (!allowed) {
+        return c.json({ error: "Forbidden" }, 403);
+      }
+
+      const target = await members.find(workspaceId, targetUserId);
+      if (!target) {
+        return c.json({ error: "Member not found" }, 404);
+      }
+      if (!canManageRole(self.role, target.role)) {
         return c.json({ error: "Forbidden" }, 403);
       }
 
