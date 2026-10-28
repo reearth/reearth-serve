@@ -56,7 +56,7 @@ export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
     const thumbnailQueue = c.get("thumbnailQueue");
     // Resolved up front so the counters ride along in the asset's batch.
     const scopes = await usageScopes(c, session.projectId);
-    const result = await completeUploadSession(sessions, writes, storage, presignedUrls, id, ttlSeconds, baseUrl, parts, { sessionId, extractionQueue, thumbnailQueue, usageScopes: scopes });
+    const result = await completeUploadSession(sessions, writes, c.get("metadata"), storage, presignedUrls, id, ttlSeconds, baseUrl, parts, { sessionId, extractionQueue, thumbnailQueue, usageScopes: scopes });
     if (!result) {
       return c.json({ error: "Upload session not found or file not yet uploaded" }, 404);
     }

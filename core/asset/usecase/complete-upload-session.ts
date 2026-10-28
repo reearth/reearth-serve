@@ -1,6 +1,6 @@
 import type { AssetMetadata, AssetUploadResult, UploadPart, UploadSession } from "../model";
 import { detectArchiveFormat } from "../model";
-import type { AtomicWrites, FileStorage, PresignedUrlGenerator, UploadSessionStore } from "../repository";
+import type { AtomicWrites, FileStorage, MetadataStore, PresignedUrlGenerator, UploadSessionStore } from "../repository";
 import type { Job } from "../../job/model";
 import { storageKey } from "./shared";
 import { enqueueThumbnail } from "../../thumbnail/queue";
@@ -11,6 +11,7 @@ import type { ExtractionMessage } from "../../extraction/handler";
 export async function completeUploadSession(
   sessions: UploadSessionStore,
   writes: AtomicWrites,
+  metadata: MetadataStore,
   storage: FileStorage,
   presignedUrls: PresignedUrlGenerator | null,
   id: string,
@@ -26,15 +27,27 @@ export async function completeUploadSession(
   if (session.sessionId && options?.sessionId && session.sessionId !== options.sessionId) return null;
 
   const key = storageKey(id, session.filename);
+  const url = `${baseUrl}/files/${id}/${encodeURIComponent(session.filename)}`;
 
-  // Complete multipart upload first if needed
-  if (session.s3UploadId) {
+  // The session outlives a completed call when its KV delete has not
+  // propagated yet, or when the row write committed but reported an error.
+  // Writing again would count usage twice and reset the asset and its job.
+  const existing = await metadata.find(id);
+  if (existing) {
+    await sessions.delete(id);
+    return { asset: existing, url };
+  }
+
+  // Complete the multipart upload unless a previous attempt already did and
+  // then failed on the metadata write: the session survives that failure so
+  // the client can retry, and the completed UploadId cannot be completed twice.
+  let head = await storage.head(key);
+  if (!head && session.s3UploadId) {
     if (!parts || parts.length === 0) return null;
     if (!presignedUrls) return null;
     await presignedUrls.completeMultipartUpload(key, session.s3UploadId, parts);
+    head = await storage.head(key);
   }
-
-  const head = await storage.head(key);
   if (!head) return null;
 
   const archiveFormat = detectArchiveFormat(session.filename);
@@ -79,47 +92,38 @@ export async function completeUploadSession(
     asset.jobId = id;
   }
 
-  try {
-    // Job row, asset row and storage-usage counters in one atomic write (ADR-012 §3).
-    await writes.createAsset({ asset, job, usageScopes: projectId ? options?.usageScopes : [] });
+  // Job row, asset row and storage-usage counters in one atomic write (ADR-012 §3).
+  // On failure the uploaded object and the session are both kept, so the
+  // client's retry of `complete` succeeds without re-uploading. Deleting the
+  // object here would destroy the only copy of a multi-GB upload, and would
+  // leave rows pointing at nothing when the batch committed but reported an error.
+  // ponytail: an upload whose client never retries leaves an object with no
+  // row; sweep keys with no asset row from cron if that ever shows up in R2 usage.
+  await writes.createAsset({ asset, job, usageScopes: projectId ? options?.usageScopes : [] });
 
-    // Enqueue only after the rows are committed: the consumer reads them.
-    if (job && archiveFormat && options?.extractionQueue) {
-      try {
-        await options.extractionQueue.send({
-          assetId: id,
-          archiveKey: key,
-          archiveFilename: session.filename,
-          archiveFormat,
-        });
-      } catch (e) {
-        console.error("Failed to enqueue extraction:", e);
-      }
-    }
-
-    await enqueueThumbnail(options?.thumbnailQueue ?? null, {
-      assetId: id,
-      sourceKey: key,
-      contentType: asset.contentType,
-      size: asset.size,
-    });
-  } catch (e) {
-    // R2 already holds the uploaded body but the D1 metadata row failed to
-    // persist. Cleanup is driven off D1, so without compensation the R2
-    // object would never be reclaimed.
+  // Enqueue only after the rows are committed: the consumer reads them.
+  if (job && archiveFormat && options?.extractionQueue) {
     try {
-      await storage.delete(key);
-    } catch (delErr) {
-      console.error("Failed to clean up R2 object after metadata save failure:", delErr);
+      await options.extractionQueue.send({
+        assetId: id,
+        archiveKey: key,
+        archiveFilename: session.filename,
+        archiveFormat,
+      });
+    } catch (e) {
+      console.error("Failed to enqueue extraction:", e);
     }
-    throw e;
   }
+
+  await enqueueThumbnail(options?.thumbnailQueue ?? null, {
+    assetId: id,
+    sourceKey: key,
+    contentType: asset.contentType,
+    size: asset.size,
+  });
   await sessions.delete(id);
 
-  return {
-    asset,
-    url: `${baseUrl}/files/${id}/${encodeURIComponent(session.filename)}`,
-  };
+  return { asset, url };
 }
 
 if (import.meta.vitest) {
@@ -133,9 +137,14 @@ if (import.meta.vitest) {
       createAsset: vi.fn(async (input: CreateAssetInput) => { calls.push(input); }),
       createVersion: vi.fn(async () => { throw new Error("not used"); }),
       saveJob: vi.fn(async () => { throw new Error("not used"); }),
+      deleteAsset: vi.fn(async () => { throw new Error("not used"); }),
     };
     return { writes, calls };
   }
+
+  const noAssets: MetadataStore = {
+    save: vi.fn(), find: vi.fn(async () => null), update: vi.fn(), delete: vi.fn(), list: vi.fn(),
+  };
 
   function mockStorage(headResult: { size: number; contentEncoding?: string } | null = null): FileStorage {
     return {
@@ -180,7 +189,7 @@ if (import.meta.vitest) {
       3600,
     );
 
-    const result = await completeUploadSession(sessions, writes, st, presigned, session.uploadId, 3600, "https://example.com");
+    const result = await completeUploadSession(sessions, writes, noAssets, st, presigned, session.uploadId, 3600, "https://example.com");
 
     expect(result).not.toBeNull();
     expect(result!.asset.id).toBe(session.uploadId);
@@ -193,11 +202,23 @@ if (import.meta.vitest) {
     expect(calls[0].job).toBeUndefined();
   });
 
+  // Storage whose object appears only once the multipart upload is completed.
+  function multipartFixture() {
+    let completed = false;
+    const st = mockStorage();
+    st.head = vi.fn(async () => (completed ? { size: 1000 } : null));
+    const presigned = mockPresignedUrls();
+    presigned.completeMultipartUpload = vi.fn(async () => {
+      if (completed) throw new Error("NoSuchUpload");
+      completed = true;
+    });
+    return { st, presigned };
+  }
+
   test("completeUploadSession finalizes multipart upload with parts", async () => {
     const sessions = mockSessions();
     const { writes, calls } = mockWrites();
-    const st = mockStorage({ size: 1000 });
-    const presigned = mockPresignedUrls();
+    const { st, presigned } = multipartFixture();
 
     const { createUploadSession } = await import("./create-upload-session");
     const session = await createUploadSession(
@@ -211,7 +232,7 @@ if (import.meta.vitest) {
       { partNumber: 2, etag: '"etag2"' },
     ];
 
-    const result = await completeUploadSession(sessions, writes, st, presigned, session.uploadId, 3600, "https://example.com", parts);
+    const result = await completeUploadSession(sessions, writes, noAssets, st, presigned, session.uploadId, 3600, "https://example.com", parts);
 
     expect(result).not.toBeNull();
     expect(result!.asset.filename).toBe("huge.tar");
@@ -226,9 +247,8 @@ if (import.meta.vitest) {
 
   test("completeUploadSession returns null for multipart without parts", async () => {
     const sessions = mockSessions();
-    const { writes, calls } = mockWrites();
-    const st = mockStorage({ size: 1000 });
-    const presigned = mockPresignedUrls();
+    const { writes } = mockWrites();
+    const { st, presigned } = multipartFixture();
 
     const { createUploadSession } = await import("./create-upload-session");
     const session = await createUploadSession(
@@ -237,7 +257,7 @@ if (import.meta.vitest) {
       3600,
     );
 
-    const result = await completeUploadSession(sessions, writes, st, presigned, session.uploadId, 3600, "https://example.com");
+    const result = await completeUploadSession(sessions, writes, noAssets, st, presigned, session.uploadId, 3600, "https://example.com");
     expect(result).toBeNull();
   });
 
@@ -246,7 +266,7 @@ if (import.meta.vitest) {
     const { writes, calls } = mockWrites();
     const st = mockStorage();
 
-    const result = await completeUploadSession(sessions, writes, st, null, "nonexistent", 3600, "https://example.com");
+    const result = await completeUploadSession(sessions, writes, noAssets, st, null, "nonexistent", 3600, "https://example.com");
     expect(result).toBeNull();
   });
 
@@ -263,7 +283,54 @@ if (import.meta.vitest) {
       3600,
     );
 
-    const result = await completeUploadSession(sessions, writes, st, presigned, session.uploadId, 3600, "https://example.com");
+    const result = await completeUploadSession(sessions, writes, noAssets, st, presigned, session.uploadId, 3600, "https://example.com");
     expect(result).toBeNull();
+  });
+
+  test("a failed metadata write keeps the object and session so a retry succeeds", async () => {
+    const sessions = mockSessions();
+    const { writes } = mockWrites();
+    const { st, presigned } = multipartFixture();
+    vi.mocked(writes.createAsset).mockRejectedValueOnce(new Error("D1 timeout"));
+
+    const { createUploadSession } = await import("./create-upload-session");
+    const session = await createUploadSession(
+      sessions, presigned,
+      { filename: "huge.tar", contentType: "application/x-tar", size: 10_000_000_000, partCount: 2 },
+      3600,
+    );
+    const parts = [{ partNumber: 1, etag: '"e1"' }, { partNumber: 2, etag: '"e2"' }];
+
+    await expect(
+      completeUploadSession(sessions, writes, noAssets, st, presigned, session.uploadId, 3600, "https://example.com", parts),
+    ).rejects.toThrow("D1 timeout");
+    expect(st.delete).not.toHaveBeenCalled();
+
+    const retry = await completeUploadSession(sessions, writes, noAssets, st, presigned, session.uploadId, 3600, "https://example.com", parts);
+    expect(retry?.asset.id).toBe(session.uploadId);
+    expect(presigned.completeMultipartUpload).toHaveBeenCalledOnce();
+    expect(sessions.delete).toHaveBeenCalledOnce();
+  });
+
+  test("a repeated complete after the asset exists returns it without writing again", async () => {
+    const sessions = mockSessions();
+    const { writes } = mockWrites();
+    const st = mockStorage({ size: 100 });
+    const presigned = mockPresignedUrls();
+
+    const { createUploadSession } = await import("./create-upload-session");
+    const session = await createUploadSession(
+      sessions, presigned, { filename: "data.bin", contentType: "application/octet-stream", size: 100 }, 3600,
+    );
+    const existing = {
+      id: session.uploadId, filename: "data.bin", contentType: "application/octet-stream",
+      size: 100, createdAt: 1, expiresAt: 0, status: "ready" as const,
+    };
+    const metadata: MetadataStore = { ...noAssets, find: vi.fn(async () => existing) };
+
+    const result = await completeUploadSession(sessions, writes, metadata, st, presigned, session.uploadId, 3600, "https://example.com");
+    expect(result?.asset).toBe(existing);
+    expect(writes.createAsset).not.toHaveBeenCalled();
+    expect(sessions.delete).toHaveBeenCalledOnce();
   });
 }

@@ -132,14 +132,18 @@ func (mw *ManifestWriter) Finalize(ctx context.Context, totalChunks int) error {
 		return fmt.Errorf("failed to write final manifest: %w", err)
 	}
 
-	// Only drop the chunk objects after the final manifest upload succeeded
-	// — keeping them lets Finalize be safely retried on upload failure.
+	return nil
+}
+
+// DeleteChunks removes the chunk objects Finalize merged. It is separate so
+// the caller can delete them only after recording that Finalize is done; a
+// crash in between would otherwise leave a checkpoint pointing at chunks that
+// no longer exist, and every retry of Finalize would fail.
+func (mw *ManifestWriter) DeleteChunks(ctx context.Context, totalChunks int) {
 	for i := range totalChunks {
 		key := fmt.Sprintf("assets/%s/_archive/_manifest_chunks/%06d.jsonl", mw.assetID, i)
 		_ = mw.storage.DeleteObject(ctx, key)
 	}
-
-	return nil
 }
 
 func encodeJSONL(entries []FileEntry) []byte {

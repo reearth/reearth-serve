@@ -55,12 +55,15 @@ Phase B: extracting
   Extract entries in parallel (goroutine + semaphore), upload each to R2
   Checkpoint every N entries (default: 100)
 
-Phase C: completing → completed
-  Merge manifest chunks into final _manifest.jsonl
-  Update job status via Worker API
+Phase C: completing → reporting → completed
+  Merge manifest chunks into final _manifest.jsonl (checkpoint: reporting)
+  Report "completed" via Worker API, retried with backoff
+  Delete the checkpoint only once the Worker acknowledged completion
 ```
 
 On timeout/crash, the container restarts and resumes from the last checkpoint. R2 PUT is idempotent, so re-processing up to 100 entries is safe.
+
+If the completion callback still fails after its retries, the container exits non-zero without reporting `failed` and keeps the `reporting` checkpoint. The job stays `running`, the cron re-enqueues it after `EXTRACTION_STUCK_THRESHOLD_SECONDS`, and the next container only repeats the callback. Every object-store connection carries a two-minute stall timeout (no bytes in either direction), since the extraction context itself has no deadline.
 
 ### ObjectStorage interface for testability
 

@@ -1,69 +1,48 @@
 import type { AssetMetadata } from "../model";
-import type { AtomicWrites, FileStorage, MetadataStore } from "../repository";
+import type { AtomicWrites, FileStorage } from "../repository";
 import type { CleanupPendingStore } from "../../cleanup/repository";
 import { deleteAllR2Objects, SubrequestBudget } from "../../cleanup/usecase";
 
 // Small inline budget so a DELETE doesn't monopolise the HTTP request's
 // subrequest cap. Archive assets with huge extractions overflow this and
-// fall through to the pending-cleanup queue drained by cron.
+// are left to the cron, which drains cleanup_pending.
 const INLINE_DELETE_BUDGET = 50;
 
 export async function deleteAsset(
-  metadata: MetadataStore,
+  writes: AtomicWrites,
   storage: FileStorage,
-  id: string,
-  options?: { pendingCleanup?: CleanupPendingStore; budget?: SubrequestBudget },
-): Promise<boolean> {
-  const asset = await metadata.find(id);
-  if (!asset) return false;
+  asset: AssetMetadata,
+  options?: { usageScopes?: string[]; pendingCleanup?: CleanupPendingStore; budget?: SubrequestBudget },
+): Promise<void> {
+  // Rows, usage counters and the cleanup_pending entry go out in one atomic
+  // write (ADR-012 §3). The R2 prefix is queued before any object is touched,
+  // so a failure below can no longer orphan the bytes or skip the decrements.
+  const prefix = `assets/${asset.id}/`;
+  await writes.deleteAsset({ asset, usageScopes: options?.usageScopes, cleanupPrefix: prefix });
 
-  // Drop the D1 row first so the asset is immediately unreachable via the
-  // API. R2 cleanup is best-effort inline; any leftover object under the
-  // prefix is picked up by the cron via cleanup_pending.
-  await metadata.delete(id);
-
-  const prefix = `assets/${id}/`;
-  const budget = options?.budget ?? new SubrequestBudget(INLINE_DELETE_BUDGET);
-  const r2Result = await deleteAllR2Objects(storage, prefix, budget);
-
-  if (!r2Result.done) {
-    if (options?.pendingCleanup) {
-      await options.pendingCleanup.add(prefix);
-    } else {
-      // No background cleanup wired up — this path should only happen in
-      // tests. Log so we notice if it ever happens in production.
-      console.warn(`deleteAsset: R2 cleanup incomplete and no pendingCleanup store provided for ${prefix}`);
-    }
+  try {
+    const budget = options?.budget ?? new SubrequestBudget(INLINE_DELETE_BUDGET);
+    const r2Result = await deleteAllR2Objects(storage, prefix, budget);
+    if (r2Result.done) await options?.pendingCleanup?.remove(prefix);
+  } catch (e) {
+    console.warn(`deleteAsset: inline R2 cleanup of ${prefix} failed; left to cron:`, e);
   }
-
-  return true;
 }
 
 if (import.meta.vitest) {
   const { test, expect, vi } = import.meta.vitest;
 
-  function mockMetadata(): MetadataStore {
-    const store = new Map<string, AssetMetadata>();
-    return {
-      save: vi.fn(async (asset: AssetMetadata, _ttl: number) => { store.set(asset.id, asset); }),
-      find: vi.fn(async (id: string) => store.get(id) ?? null),
-      update: vi.fn(async () => {}),
-      delete: vi.fn(async (id: string) => { store.delete(id); }),
-      list: vi.fn(async () => ({ items: [], cursor: undefined })),
-    };
-  }
+  const asset: AssetMetadata = {
+    id: "a1", filename: "f.zip", contentType: "application/zip", size: 10, createdAt: 1, expiresAt: 0,
+  };
 
-  function mockStorage(): FileStorage {
+  function mockWrites() {
     return {
-      put: vi.fn(async (_key: string, body: ReadableStream<Uint8Array>, _ct: string, _size: number) => {
-        const reader = body.getReader();
-        while (!(await reader.read()).done) {}
-      }),
-      get: vi.fn(async () => null),
-      head: vi.fn(async () => null),
-      delete: vi.fn(async () => {}),
-      list: vi.fn(async () => ({ keys: [], cursor: undefined })),
-    };
+      createAsset: vi.fn(),
+      createVersion: vi.fn(),
+      saveJob: vi.fn(),
+      deleteAsset: vi.fn(async () => {}),
+    } satisfies AtomicWrites;
   }
 
   function mockStorageWithKeys(keys: string[]): FileStorage {
@@ -81,63 +60,33 @@ if (import.meta.vitest) {
     };
   }
 
-  function mockPending(): { add: any; list: any; remove: any } {
+  function mockPending() {
     return {
       add: vi.fn(async () => {}),
       list: vi.fn(async () => []),
       remove: vi.fn(async () => {}),
-    };
+    } satisfies CleanupPendingStore;
   }
 
-  test("deleteAsset removes metadata and every R2 object under the asset prefix", async () => {
-    const md = mockMetadata();
-    // AtomicWrites over the metadata mock: uploadAsset writes through the port.
-    const writes: AtomicWrites = {
-      createAsset: async ({ asset }) => { await md.save(asset, 0); },
-      createVersion: async () => { throw new Error("not used"); },
-      saveJob: async () => {},
-    };
-    const { uploadAsset } = await import("./upload");
-    const data = new TextEncoder().encode("data");
-    const body = new ReadableStream<Uint8Array>({ start(c) { c.enqueue(data); c.close(); } });
-
-    const st = mockStorageWithKeys([]);
-    const { asset } = await uploadAsset(writes, st, { name: "f.bin", type: "application/octet-stream", body, size: 4 }, 3600, "https://example.com");
-    // Simulate that archive extraction left files under the prefix.
-    const stWithFiles = mockStorageWithKeys([
-      `assets/${asset.id}/f.bin`,
-      `assets/${asset.id}/files/a.txt`,
-      `assets/${asset.id}/files/b.txt`,
-    ]);
-
+  test("deleteAsset writes rows atomically, clears R2, then drops the pending entry", async () => {
+    const writes = mockWrites();
+    const st = mockStorageWithKeys(["assets/a1/f.zip", "assets/a1/files/a.txt", "assets/other/x"]);
     const pending = mockPending();
-    const deleted = await deleteAsset(md, stWithFiles, asset.id, { pendingCleanup: pending });
-    expect(deleted).toBe(true);
-    expect(md.delete).toHaveBeenCalledWith(asset.id);
-    expect(stWithFiles.deleteMany).toHaveBeenCalledWith([
-      `assets/${asset.id}/f.bin`,
-      `assets/${asset.id}/files/a.txt`,
-      `assets/${asset.id}/files/b.txt`,
-    ]);
-    expect(pending.add).not.toHaveBeenCalled();
+
+    await deleteAsset(writes, st, asset, { usageScopes: ["project:p1"], pendingCleanup: pending });
+
+    expect(writes.deleteAsset).toHaveBeenCalledWith({ asset, usageScopes: ["project:p1"], cleanupPrefix: "assets/a1/" });
+    expect(st.deleteMany).toHaveBeenCalledWith(["assets/a1/f.zip", "assets/a1/files/a.txt"]);
+    expect(pending.remove).toHaveBeenCalledWith("assets/a1/");
   });
 
-  test("deleteAsset stashes prefix in cleanup_pending when R2 budget runs out", async () => {
-    const md = mockMetadata();
-    // Pre-populate the D1 mock so find() returns something.
-    await md.save({
-      id: "big", filename: "big.zip", contentType: "application/zip",
-      size: 1, createdAt: 1, expiresAt: 0,
-    }, 0);
-
-    // Multi-page R2 list so the budget can't finish inline.
+  test("deleteAsset leaves the prefix queued when the R2 budget runs out", async () => {
     const pages = [
-      { keys: ["assets/big/a"], cursor: "c1" },
-      { keys: ["assets/big/b"], cursor: "c2" },
-      { keys: ["assets/big/c"], cursor: undefined as string | undefined },
+      { keys: ["assets/a1/a"], cursor: "c1" },
+      { keys: ["assets/a1/b"], cursor: undefined as string | undefined },
     ];
     let pageIdx = 0;
-    const storage: FileStorage = {
+    const st: FileStorage = {
       put: vi.fn(),
       get: vi.fn(async () => null),
       head: vi.fn(async () => null),
@@ -145,23 +94,29 @@ if (import.meta.vitest) {
       deleteMany: vi.fn(async () => {}),
       list: vi.fn(async () => pages[pageIdx++] ?? { keys: [], cursor: undefined }),
     };
-
     const pending = mockPending();
-    const budget = new SubrequestBudget(2); // enough for 1 cycle (list+deleteMany)
-    const deleted = await deleteAsset(md, storage, "big", { pendingCleanup: pending, budget });
-    expect(deleted).toBe(true);
-    expect(pending.add).toHaveBeenCalledWith("assets/big/");
-    // D1 row gone; R2 prefix queued for cron drain.
-    expect(md.delete).toHaveBeenCalledWith("big");
+
+    await deleteAsset(mockWrites(), st, asset, { pendingCleanup: pending, budget: new SubrequestBudget(2) });
+    expect(pending.remove).not.toHaveBeenCalled();
   });
 
-  test("deleteAsset returns false for non-existent asset", async () => {
-    const md = mockMetadata();
-    const st = mockStorage();
+  test("deleteAsset succeeds and leaves the prefix queued when R2 fails", async () => {
+    const st = mockStorageWithKeys(["assets/a1/f.zip"]);
+    st.list = vi.fn(async () => { throw new Error("R2 503"); });
     const pending = mockPending();
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
-    const deleted = await deleteAsset(md, st, "nonexistent", { pendingCleanup: pending });
-    expect(deleted).toBe(false);
-    expect(pending.add).not.toHaveBeenCalled();
+    await expect(deleteAsset(mockWrites(), st, asset, { pendingCleanup: pending })).resolves.toBeUndefined();
+    expect(pending.remove).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
+  test("deleteAsset propagates a failed row write without touching R2", async () => {
+    const writes = mockWrites();
+    writes.deleteAsset.mockRejectedValueOnce(new Error("D1 down"));
+    const st = mockStorageWithKeys(["assets/a1/f.zip"]);
+
+    await expect(deleteAsset(writes, st, asset)).rejects.toThrow("D1 down");
+    expect(st.list).not.toHaveBeenCalled();
   });
 }

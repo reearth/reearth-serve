@@ -8,6 +8,19 @@ export const archiveFormatSchema = z.enum(["zip", "tar", "tar.gz", "tar.bz2"]);
 export const jobTypeSchema = z.literal("archive-extraction");
 export const jobStatusSchema = z.enum(["pending", "running", "completed", "failed"]);
 
+// --- Filename ---
+
+// A filename becomes the last segment of an object key (`assets/<id>/<name>`).
+// Separators or dot segments would let it address another asset's key, since
+// URL resolution collapses `../` before a presigned URL is signed.
+export function isSafeFilename(name: string): boolean {
+  return name.length > 0 && name.length <= 255 &&
+    name !== "." && name !== ".." &&
+    !/[/\\\u0000-\u001f\u007f]/.test(name);
+}
+
+export const filenameSchema = z.string().refine(isSafeFilename, "Invalid filename");
+
 // --- Role ---
 
 export const roleSchema = z.enum(["owner", "admin", "editor", "viewer"]);
@@ -180,7 +193,7 @@ export const fileEntrySchema = z.object({
 export const MAX_UPLOAD_PARTS = 10000;
 
 export const createUploadSessionBodySchema = z.object({
-  filename: z.string(),
+  filename: filenameSchema,
   contentType: z.string().optional(),
   size: z.number(),
   partCount: z.number().int().positive().max(MAX_UPLOAD_PARTS).optional(),

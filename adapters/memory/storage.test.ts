@@ -107,4 +107,15 @@ describe("MemoryFileStorage", () => {
     expect(storage.size).toBe(1);
     expect(await storage.get("c")).not.toBeNull();
   });
+
+  test("rejects an upload beyond capacity before reading it, and frees space on delete", async () => {
+    const storage = new MemoryFileStorage(10);
+    await storage.put("a", stream(bytes("12345678")), "text/plain", 8);
+    await expect(storage.put("b", stream(bytes("123")), "text/plain", 3)).rejects.toThrow("exceeds storage capacity");
+    await expect(storage.put("huge", stream(), "text/plain", 4_000_000_000)).rejects.toThrow("exceeds storage capacity");
+
+    await storage.delete("a");
+    await storage.put("b", stream(bytes("123")), "text/plain", 3);
+    expect(await storage.head("b")).not.toBeNull();
+  });
 });

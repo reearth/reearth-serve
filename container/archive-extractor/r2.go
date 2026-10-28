@@ -3,12 +3,16 @@ package main
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
+	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
+	awshttp "github.com/aws/aws-sdk-go-v2/aws/transport/http"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/credentials"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -83,6 +87,7 @@ func NewR2Client(ctx context.Context, cfg R2Config) (*R2Client, error) {
 			cfg.AccessKeyID, cfg.SecretAccessKey, "",
 		)),
 		config.WithRegion(region),
+		config.WithHTTPClient(stallTimeoutHTTPClient()),
 	)
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
@@ -98,6 +103,51 @@ func NewR2Client(ctx context.Context, cfg R2Config) (*R2Client, error) {
 	})
 
 	return &R2Client{client: client, bucket: cfg.Bucket}, nil
+}
+
+// objectStoreStallTimeout bounds how long any single object-store connection
+// may go without moving a byte. Extraction runs for hours under a deadline-less
+// context, so an overall timeout cannot work; without this a connection that
+// stalls mid-body blocks its goroutine forever, checkpoints stop, and the job
+// sits in `extracting` until the cron's stuck-job threshold.
+const objectStoreStallTimeout = 2 * time.Minute
+
+func stallTimeoutHTTPClient() *awshttp.BuildableClient {
+	dialer := &net.Dialer{Timeout: 30 * time.Second, KeepAlive: 30 * time.Second}
+	return awshttp.NewBuildableClient().WithTransportOptions(func(tr *http.Transport) {
+		// Pin HTTP/1.1 so each connection carries one request. Over HTTP/2 the
+		// parallel uploads would share a connection, and one stalled stream
+		// would go unnoticed while the others keep it busy.
+		tr.ForceAttemptHTTP2 = false
+		tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+		tr.ResponseHeaderTimeout = objectStoreStallTimeout
+		tr.DialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			conn, err := dialer.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			return &stallTimeoutConn{Conn: conn, timeout: objectStoreStallTimeout}, nil
+		}
+	})
+}
+
+// stallTimeoutConn pushes the connection deadline forward on every read and
+// write, so it only fires when no progress is made for `timeout`. It sets both
+// directions at once: the transport's response reader blocks for the whole of a
+// long upload, and the writes must keep extending that pending read.
+type stallTimeoutConn struct {
+	net.Conn
+	timeout time.Duration
+}
+
+func (c *stallTimeoutConn) Read(b []byte) (int, error) {
+	_ = c.Conn.SetDeadline(time.Now().Add(c.timeout))
+	return c.Conn.Read(b)
+}
+
+func (c *stallTimeoutConn) Write(b []byte) (int, error) {
+	_ = c.Conn.SetDeadline(time.Now().Add(c.timeout))
+	return c.Conn.Write(b)
 }
 
 func (r *R2Client) GetObject(ctx context.Context, key string) (io.ReadCloser, error) {

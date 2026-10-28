@@ -115,11 +115,11 @@ Enqueue trigger: version creation in `worker/asset/usecase/{upload,upload-versio
 Consumer dispatch logic:
 
 ```
-size < 20 MiB  → Worker in-process (jSquash)
-size ≥ 20 MiB  → Cloudflare Container (Go + libvips)
+size ≤ 20 MiB and width × height ≤ 6 MP  → Worker in-process (jSquash)
+otherwise                                → Cloudflare Container (Go + libvips)
 ```
 
-The 20 MiB threshold is conservative: a 20 MiB JPEG typically decodes to <120 MiB of pixels, leaving headroom under the 128 MiB Worker limit. This boundary is a variable in `wrangler.toml` so it can be tuned without code changes.
+Decode memory follows pixel count, not file size. RGBA costs 4 bytes per pixel and the Worker pipeline holds about three copies at peak (decoder WASM heap, JS `ImageData`, resize WASM heap). The original rule assumed a 20 MiB file decodes to under 120 MiB; in practice a 4 MB, 12 MP phone JPEG peaks near 150 MiB and exceeds the 128 MiB isolate limit. The consumer therefore reads the dimensions from the image header (`core/thumbnail/dimensions.ts`) and sends anything over 6 MP, or with an unreadable header, to the container. Both thresholds are constants in `core/thumbnail/handler.ts`. The pixel limit applies only when `ContainerLauncher.thumbnailGeneratorAvailable` is true; a runtime without the container (Node, or a Worker missing the binding or R2 credentials) keeps every image under 20 MiB in-process rather than failing it.
 
 **Worker path** (`worker/thumbnail/`):
 - Packages: `@jsquash/jpeg`, `@jsquash/png`, `@jsquash/webp`, `@jsquash/resize`.
