@@ -6,6 +6,7 @@ import { getAssetMetadata, uploadVersion } from "../usecase";
 import { canAccessAsset } from "../access";
 import { accessCtx, denyAnonymousUpload, usageScopes } from "./shared";
 import { versionResponseSchema, errorResponseSchema, idParamSchema } from "../../../shared/openapi";
+import { isSafeFilename } from "../../../shared/api";
 
 export function registerUploadVersionRoute(app: Hono<AppEnv>) {
   app.post("/:id",
@@ -51,6 +52,10 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
         return c.json({ error: "Missing required headers: X-Filename, Content-Length" }, 400);
       }
 
+      if (!isSafeFilename(filename)) {
+        return c.json({ error: "Invalid X-Filename" }, 400);
+      }
+
       const size = parseInt(contentLength, 10);
       if (isNaN(size) || size <= 0) {
         return c.json({ error: "Invalid Content-Length" }, 400);
@@ -76,7 +81,13 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
         { name: filename, type: c.req.header("Content-Type") || "application/octet-stream", body, size, contentEncoding, originalSize },
         baseUrl,
         { extractionQueue, thumbnailQueue, skipExtraction, usageScopes: scopes },
-      );
+      ).catch((e: unknown) => {
+        if (e instanceof Error && e.message.includes("exceeds storage capacity")) return "over-capacity" as const;
+        throw e;
+      });
+      if (result === "over-capacity") {
+        return c.json({ error: "Upload exceeds storage capacity" }, 413);
+      }
 
       if (!result) {
         return c.json({ error: "Asset not found" }, 404);

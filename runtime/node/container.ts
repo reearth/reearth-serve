@@ -19,6 +19,7 @@ import type {
  */
 export class UnavailableContainerLauncher implements ContainerLauncher {
   readonly archiveExtractorAvailable = false;
+  readonly thumbnailGeneratorAvailable = false;
 
   async launchArchiveExtractor(params: ArchiveExtractorParams): Promise<void> {
     throw new Error(

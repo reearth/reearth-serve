@@ -10,6 +10,7 @@ vi.mock("../thumbnail/generator", () => ({
 }));
 
 import { MemoryJobQueue } from "../../adapters/memory/memory-queue";
+import { MemoryFileStorage } from "../../adapters/memory/storage";
 import { handleQueue, type ExtractionMessage } from "../extraction/handler";
 import { handleThumbnailQueue } from "../thumbnail/handler";
 import { enqueueThumbnail, type ThumbnailMessage } from "../thumbnail/queue";
@@ -28,6 +29,7 @@ function deps(partial: Partial<Deps>): Deps {
 function launcher(overrides: Partial<ContainerLauncher> = {}): ContainerLauncher {
   return {
     archiveExtractorAvailable: true,
+    thumbnailGeneratorAvailable: true,
     launchArchiveExtractor: async () => {},
     generateThumbnails: async () => {},
     ...overrides,
@@ -270,4 +272,58 @@ describe("handleThumbnailQueue (thumbnail consumer)", () => {
 
     vi.restoreAllMocks();
   });
+
+  test("sends a small file with a large pixel count to the container", async () => {
+    // A 4000x3000 PNG header: a few bytes on disk, 48 MB of RGBA once decoded.
+    const header = new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52,
+      0, 0, 0x0f, 0xa0, 0, 0, 0x0b, 0xb8,
+    ]);
+    const storage = new MemoryFileStorage();
+    await storage.put("assets/a1/photo.png", new Response(header).body!, "image/png", header.byteLength);
+    const small: ThumbnailMessage = { ...big, sourceKey: "assets/a1/photo.png", size: header.byteLength };
+    const queue = new MemoryJobQueue<ThumbnailMessage>();
+    await queue.send(small);
+    const calls: unknown[] = [];
+
+    await handleThumbnailQueue(
+      queue.receive(),
+      deps({
+        storage,
+        containers: launcher({ generateThumbnails: async (params) => { calls.push(params); } }),
+      }),
+    );
+
+    expect(calls).toHaveLength(1);
+    expect(queue.size).toBe(0);
+  });
+
+  test("without a thumbnail container, a large-pixel image stays in-process", async () => {
+    const header = new Uint8Array([
+      0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0, 0, 0, 13, 0x49, 0x48, 0x44, 0x52,
+      0, 0, 0x0f, 0xa0, 0, 0, 0x0b, 0xb8,
+    ]);
+    const storage = new MemoryFileStorage();
+    await storage.put("assets/a1/photo.png", new Response(header).body!, "image/png", header.byteLength);
+    const queue = new MemoryJobQueue<ThumbnailMessage>();
+    await queue.send({ ...big, sourceKey: "assets/a1/photo.png", size: header.byteLength });
+    const calls: unknown[] = [];
+    const errors = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await handleThumbnailQueue(
+      queue.receive(),
+      deps({
+        storage,
+        containers: launcher({
+          thumbnailGeneratorAvailable: false,
+          generateThumbnails: async (params) => { calls.push(params); },
+        }),
+      }),
+    );
+
+    expect(calls).toEqual([]);
+    expect(String(errors.mock.calls[0]?.[1])).toContain("in-Worker generation");
+    errors.mockRestore();
+  });
 });
+

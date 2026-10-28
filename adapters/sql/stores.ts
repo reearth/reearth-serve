@@ -599,14 +599,15 @@ function parseVersionRow(row: Record<string, unknown>): AssetVersion {
 
 import type { CleanupPendingStore, PendingCleanup } from "../../core/cleanup/repository";
 
+/** Shared with the batch writer's asset delete. */
+export const CLEANUP_PENDING_ADD_SQL =
+  "INSERT OR REPLACE INTO cleanup_pending (prefix, created_at) VALUES (?1, ?2)";
+
 export class SqlCleanupPendingStore implements CleanupPendingStore {
   constructor(private db: SqlClient) {}
 
   async add(prefix: string): Promise<void> {
-    await this.db.execute(
-      "INSERT OR REPLACE INTO cleanup_pending (prefix, created_at) VALUES (?1, ?2)",
-      [prefix, Date.now()],
-    );
+    await this.db.execute(CLEANUP_PENDING_ADD_SQL, [prefix, Date.now()]);
   }
 
   async list(limit: number): Promise<PendingCleanup[]> {

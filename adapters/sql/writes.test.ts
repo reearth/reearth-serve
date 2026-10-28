@@ -3,7 +3,7 @@
 import { describe, expect, test } from "vitest";
 import { createSqliteClient } from "../memory/sqlite-node";
 import { SqlAtomicWrites } from "./writes";
-import { SqlJobStore, SqlMetadataStore, SqlStorageUsageStore, SqlVersionStore } from "./stores";
+import { SqlCleanupPendingStore, SqlJobStore, SqlMetadataStore, SqlStorageUsageStore, SqlVersionStore } from "./stores";
 import type { AssetMetadata } from "../../core/asset/model";
 import type { AssetVersion } from "../../core/asset/model";
 import type { Job } from "../../core/job/model";
@@ -16,6 +16,7 @@ function fixture() {
     versions: new SqlVersionStore(sql),
     jobs: new SqlJobStore(sql),
     usage: new SqlStorageUsageStore(sql),
+    pending: new SqlCleanupPendingStore(sql),
   };
 }
 
@@ -131,5 +132,31 @@ describe("SqlAtomicWrites.saveJob", () => {
     await f.writes.saveJob({ job: { ...job, status: "failed" } });
     expect((await f.jobs.find("a1"))?.status).toBe("failed");
     expect(await f.assets.find("a1")).toBeNull();
+  });
+});
+
+describe("SqlAtomicWrites.deleteAsset", () => {
+  test("removes rows, decrements usage by asset plus versions, and queues the prefix", async () => {
+    const f = fixture();
+    await f.writes.createAsset({ asset, usageScopes: ["project:p1"] });
+    await f.writes.createVersion({ version: { ...version, size: 300 }, usageScopes: ["project:p1"] });
+
+    await f.writes.deleteAsset({ asset, usageScopes: ["project:p1"], cleanupPrefix: "assets/a1/" });
+
+    expect(await f.assets.find("a1")).toBeNull();
+    expect((await f.versions.findByAssetId("a1")).items).toEqual([]);
+    expect(await f.usage.get("project:p1")).toMatchObject({ totalSize: 0 });
+    expect((await f.pending.list(10)).map((p) => p.prefix)).toEqual(["assets/a1/"]);
+  });
+
+  test("a repeated delete does not decrement usage again", async () => {
+    const f = fixture();
+    await f.writes.createAsset({ asset: { ...asset, id: "a2" }, usageScopes: ["project:p1"] });
+    await f.writes.createAsset({ asset, usageScopes: ["project:p1"] });
+
+    await f.writes.deleteAsset({ asset, usageScopes: ["project:p1"], cleanupPrefix: "assets/a1/" });
+    await f.writes.deleteAsset({ asset, usageScopes: ["project:p1"], cleanupPrefix: "assets/a1/" });
+
+    expect(await f.usage.get("project:p1")).toMatchObject({ totalSize: 500, assetCount: 1 });
   });
 });

@@ -6,6 +6,7 @@ import (
 	"context"
 	"crypto/md5"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"hash/crc32"
 	"io"
@@ -98,7 +99,7 @@ func (w *ExtractionWorker) Run(ctx context.Context) error {
 		log.Printf("phase B complete: processedCount=%d processedBytes=%d errors=%d", cp.ProcessedCount, cp.ProcessedBytes, len(cp.Errors))
 	}
 
-	if cp.Phase == "completing" {
+	if cp.Phase == "completing" || cp.Phase == "reporting" {
 		if err := w.phaseC(ctx, cp); err != nil {
 			return fmt.Errorf("phase C (finalize): %w", err)
 		}
@@ -447,14 +448,25 @@ func (w *ExtractionWorker) phaseBSequential(ctx context.Context, cp *JobCheckpoi
 }
 
 func (w *ExtractionWorker) phaseC(ctx context.Context, cp *JobCheckpoint) error {
-	log.Println("phase C: finalizing manifest...")
+	// "reporting" marks that the manifest is final and only the completion
+	// callback is left. The inputs (chunks, entry list) are deleted only after
+	// that checkpoint is saved, so a crash anywhere here can rerun Finalize.
+	if cp.Phase == "completing" {
+		log.Println("phase C: finalizing manifest...")
 
-	if err := w.manifest.Finalize(ctx, cp.ManifestChunksWritten); err != nil {
-		return fmt.Errorf("failed to finalize manifest: %w", err)
+		if err := w.manifest.Finalize(ctx, cp.ManifestChunksWritten); err != nil {
+			return fmt.Errorf("failed to finalize manifest: %w", err)
+		}
+
+		cp.Phase = "reporting"
+		if err := w.checkpoint.Save(ctx, cp); err != nil {
+			return fmt.Errorf("failed to save checkpoint: %w", err)
+		}
+
+		w.manifest.DeleteChunks(ctx, cp.ManifestChunksWritten)
+		entryListKey := fmt.Sprintf("assets/%s/_archive/_entry_list.jsonl", w.cfg.AssetID)
+		_ = w.storage.DeleteObject(ctx, entryListKey)
 	}
-
-	entryListKey := fmt.Sprintf("assets/%s/_archive/_entry_list.jsonl", w.cfg.AssetID)
-	_ = w.storage.DeleteObject(ctx, entryListKey)
 
 	// Surface partial failures on the otherwise-completed job. Before this,
 	// entries that exhausted their retries were only visible in the R2 log —
@@ -464,8 +476,11 @@ func (w *ExtractionWorker) phaseC(ctx context.Context, cp *JobCheckpoint) error 
 		first := cp.Errors[0]
 		opts = append(opts, withError(fmt.Sprintf("%d of %d entries failed to extract; first: %s: %s", n, cp.TotalEntries, first.Path, first.Error)))
 	}
-	if err := w.updateJobStatus(ctx, "completed", cp.ProcessedCount, cp.ProcessedBytes, opts...); err != nil {
-		log.Printf("warning: failed to update job status: %v", err)
+	if err := w.updateJobStatusWithRetry(ctx, "completed", cp.ProcessedCount, cp.ProcessedBytes, opts...); err != nil {
+		// Keep the "reporting" checkpoint: when the cron re-enqueues the
+		// still-running job, the next container only retries this callback
+		// instead of extracting the whole archive again.
+		return fmt.Errorf("%w: %v", errCompletionNotReported, err)
 	}
 
 	cp.Phase = "completed"
@@ -596,6 +611,12 @@ func (w *ExtractionWorker) transmuxUpload(ctx context.Context, rde RawDeflateExt
 		return "", true, fmt.Errorf("upload: %w", putErr)
 	}
 	if res.err != nil {
+		// The object is already committed. File serving resolves by key, not
+		// through the manifest, so leaving it would serve a gzip body that
+		// fails its CRC. A missing file 404s cleanly instead.
+		if delErr := w.storage.DeleteObject(ctx, r2Key); delErr != nil {
+			log.Printf("warning: failed to delete unverified object %s: %v", r2Key, delErr)
+		}
 		return "", true, fmt.Errorf("verify deflate stream: %w", res.err)
 	}
 	return res.sum, true, nil
@@ -708,11 +729,38 @@ func (w *ExtractionWorker) setAuthHeader(req *http.Request) {
 	}
 }
 
+// errCompletionNotReported means every file is in place but the Worker never
+// acknowledged "completed". The caller must not report "failed" for it.
+var errCompletionNotReported = errors.New("completion not acknowledged by worker API")
+
+// statusRetryDelays spaces the attempts of a terminal status callback. A lost
+// "completed" or "failed" leaves the job running until the stuck-job threshold.
+var statusRetryDelays = []time.Duration{time.Second, 2 * time.Second, 4 * time.Second, 8 * time.Second, 16 * time.Second}
+
+func (w *ExtractionWorker) updateJobStatusWithRetry(ctx context.Context, status string, fileCount int, extractedBytes int64, opts ...jobStatusOption) error {
+	err := w.updateJobStatus(ctx, status, fileCount, extractedBytes, opts...)
+	for _, delay := range statusRetryDelays {
+		if err == nil {
+			return nil
+		}
+		log.Printf("warning: job status %q not delivered, retrying in %s: %v", status, delay, err)
+		select {
+		case <-ctx.Done():
+			return err
+		case <-time.After(delay):
+		}
+		err = w.updateJobStatus(ctx, status, fileCount, extractedBytes, opts...)
+	}
+	return err
+}
+
 type jobStatusPayload struct {
-	Status        string `json:"status"`
-	TotalFiles    int    `json:"totalFiles,omitempty"`
-	FileCount     int    `json:"fileCount"`
-	ExtractedSize int64  `json:"extractedSize"`
+	Status     string `json:"status"`
+	TotalFiles int    `json:"totalFiles,omitempty"`
+	// omitempty: a zero is "no report", never a reset. Posting 0 over the
+	// job's real progress defeats the cron's progress-based retry-budget reset.
+	FileCount     int    `json:"fileCount,omitempty"`
+	ExtractedSize int64  `json:"extractedSize,omitempty"`
 	Error         string `json:"error,omitempty"`
 }
 

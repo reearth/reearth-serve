@@ -27,4 +27,20 @@ describe("Error handling", () => {
     const res = await fetch(`${BASE}/api/v1/assets/nonexistent`, { method: "DELETE" });
     expect(res.status).toBe(404);
   });
+
+  test("filenames that would escape the asset prefix are rejected", async () => {
+    const session = await fetch(`${BASE}/api/v1/assets/uploads`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ filename: "../victim/data.geojson", size: 10 }),
+    });
+    expect(session.status).toBe(400);
+
+    const direct = await fetch(`${BASE}/api/v1/assets`, {
+      method: "POST",
+      headers: { "X-Filename": "../victim/data.geojson", "Content-Type": "text/plain" },
+      body: "x",
+    });
+    expect(direct.status).toBe(400);
+  });
 });

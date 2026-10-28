@@ -139,6 +139,10 @@ export class CloudflareContainerLauncher implements ContainerLauncher {
     }
   }
 
+  get thumbnailGeneratorAvailable(): boolean {
+    return Boolean(this.config.thumbnailGenerator && this.config.objectStore);
+  }
+
   async generateThumbnails(params: ThumbnailGeneratorParams): Promise<void> {
     const { thumbnailGenerator, objectStore } = this.config;
     if (!thumbnailGenerator) {

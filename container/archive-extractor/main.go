@@ -3,6 +3,7 @@ package main
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -78,12 +79,20 @@ func main() {
 	if err := worker.Run(ctx); err != nil {
 		log.Printf("extraction failed: %v", err)
 		flushLogs()
+		if errors.Is(err, errCompletionNotReported) {
+			// Extraction finished; only the callback failed. Reporting
+			// "failed" would be wrong, and the checkpoint lets the
+			// re-enqueued job finish phase C alone.
+			os.Exit(1)
+		}
 		// Send error with truncated log for debugging
 		logSummary := logBuf.String()
 		if len(logSummary) > 500 {
 			logSummary = logSummary[len(logSummary)-500:]
 		}
-		_ = worker.updateJobStatus(ctx, "failed", 0, 0, withError(err.Error()+"\n---LOG---\n"+logSummary))
+		if err := worker.updateJobStatusWithRetry(ctx, "failed", 0, 0, withError(err.Error()+"\n---LOG---\n"+logSummary)); err != nil {
+			log.Printf("warning: failed to report job failure: %v", err)
+		}
 		os.Exit(1)
 	}
 

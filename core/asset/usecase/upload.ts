@@ -129,6 +129,7 @@ if (import.meta.vitest) {
       createAsset: vi.fn(async (input: CreateAssetInput) => { calls.push(input); }),
       createVersion: vi.fn(async () => { throw new Error("not used"); }),
       saveJob: vi.fn(async () => { throw new Error("not used"); }),
+      deleteAsset: vi.fn(async () => { throw new Error("not used"); }),
     };
     return { writes, calls };
   }

@@ -63,6 +63,14 @@ export interface AtomicWrites {
   createVersion(input: { version: AssetVersion; job?: Job; usageScopes?: string[] }): Promise<AssetVersion>;
   /** A job row plus the asset row that mirrors its status. */
   saveJob(input: { job: Job; asset?: AssetMetadata }): Promise<void>;
+  /**
+   * Removes the asset row and all its version rows, decrements each usage
+   * scope by the asset's size plus its versions' sizes, and records
+   * `cleanupPrefix` in `cleanup_pending`, so the R2 objects are always
+   * reclaimed even if the inline delete that follows fails. Decrements apply
+   * only while the asset row still exists, so a repeated delete is a no-op.
+   */
+  deleteAsset(input: { asset: AssetMetadata; usageScopes?: string[]; cleanupPrefix: string }): Promise<void>;
 }
 
 /**
