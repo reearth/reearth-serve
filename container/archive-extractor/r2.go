@@ -141,12 +141,12 @@ type stallTimeoutConn struct {
 }
 
 func (c *stallTimeoutConn) Read(b []byte) (int, error) {
-	_ = c.Conn.SetDeadline(time.Now().Add(c.timeout))
+	_ = c.SetDeadline(time.Now().Add(c.timeout))
 	return c.Conn.Read(b)
 }
 
 func (c *stallTimeoutConn) Write(b []byte) (int, error) {
-	_ = c.Conn.SetDeadline(time.Now().Add(c.timeout))
+	_ = c.SetDeadline(time.Now().Add(c.timeout))
 	return c.Conn.Write(b)
 }
 
