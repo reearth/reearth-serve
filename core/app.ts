@@ -1,5 +1,5 @@
 import { Hono, type Context, type MiddlewareHandler } from "hono";
-import { openAPIRouteHandler } from "hono-openapi";
+import { generateSpecs, type GenerateSpecOptions } from "hono-openapi";
 import { Scalar } from "@scalar/hono-api-reference";
 import { assetRoutes } from "./asset/handler";
 import { fileRoutes } from "./file/handler";
@@ -86,48 +86,68 @@ export function createApp(deps: Deps) {
   app.route("/files", fileRoutes);
 
   // OpenAPI spec + Scalar UI
-  app.get("/api/v1/doc", openAPIRouteHandler(app, {
-    documentation: {
-      info: {
-        title: "Re:Earth Serve API",
-        version: "1.0.0",
-        description: "Spatial Data Delivery API",
-      },
-      servers: [{ url: "/" }],
-      tags: [
-        { name: "Assets", description: "Asset upload, metadata, and management" },
-        { name: "Jobs", description: "Background job tracking" },
-        { name: "Projects", description: "Project management" },
-        { name: "Workspaces", description: "Workspace and member management" },
-        { name: "Auth", description: "Authentication and user info" },
-        { name: "Files", description: "Public file delivery (permalink URLs)" },
-      ],
-      // Read by authMiddleware / sessionMiddleware on every non-internal
-      // route. Both are optional: no credentials means demo mode, so `{}` is
-      // listed too. Routes that ignore credentials override with `security: []`.
-      components: {
-        securitySchemes: {
-          bearerAuth: {
-            type: "http",
-            scheme: "bearer",
-            bearerFormat: "JWT",
-            description: "OIDC access token. Invalid or expired token → 401. Without it the caller is anonymous (demo mode).",
-          },
-          sessionId: {
-            type: "apiKey",
-            in: "header",
-            name: "X-Session-Id",
-            description: "Anonymous (demo-mode) session. Malformed ID → 401; unknown ID → a new session is minted and returned in the X-Session-Id response header. Ignored when bearerAuth is present.",
-          },
-        },
-      },
-      security: [{ bearerAuth: [] }, { sessionId: [] }, {}],
-    },
-  }));
+  app.get("/api/v1/doc", async (c) => c.json(await openApiSpec(app)));
 
   app.get("/api/v1/docs", Scalar({ url: "/api/v1/doc" }));
 
   return app;
+}
+
+const OPENAPI_DOCUMENTATION: GenerateSpecOptions["documentation"] = {
+  info: {
+    title: "Re:Earth Serve API",
+    version: "1.0.0",
+    description: "Spatial Data Delivery API",
+  },
+  servers: [{ url: "/" }],
+  tags: [
+    { name: "Assets", description: "Asset upload, metadata, and management" },
+    { name: "Jobs", description: "Background job tracking" },
+    { name: "Projects", description: "Project management" },
+    { name: "Workspaces", description: "Workspace and member management" },
+    { name: "Auth", description: "Authentication and user info" },
+    { name: "Files", description: "Public file delivery (permalink URLs)" },
+  ],
+  // Read by authMiddleware / sessionMiddleware on every non-internal
+  // route. Both are optional: no credentials means demo mode, so `{}` is
+  // listed too. Routes that ignore credentials override with `security: []`.
+  components: {
+    securitySchemes: {
+      bearerAuth: {
+        type: "http",
+        scheme: "bearer",
+        bearerFormat: "JWT",
+        description: "OIDC access token. Invalid or expired token → 401. Without it the caller is anonymous (demo mode).",
+      },
+      sessionId: {
+        type: "apiKey",
+        in: "header",
+        name: "X-Session-Id",
+        description: "Anonymous (demo-mode) session. Malformed ID → 401; unknown ID → a new session is minted and returned in the X-Session-Id response header. Ignored when bearerAuth is present.",
+      },
+    },
+  },
+  security: [{ bearerAuth: [] }, { sessionId: [] }, {}],
+};
+
+let cachedSpec: ReturnType<typeof generateSpecs> | undefined;
+
+/**
+ * Generate the OpenAPI document once per isolate.
+ *
+ * hono-openapi converts each route's `resolver()` schemas in place, and the
+ * route specs live on module-level routers shared by every `createApp`. A
+ * second generation therefore finds nothing left to resolve, drops
+ * `components.schemas` and leaves dangling `$ref`s. `createApp` runs per
+ * request on Workers, so the per-app cache of `openAPIRouteHandler` is not
+ * enough. Routes are identical across apps, so one cached document serves all.
+ */
+function openApiSpec(app: Hono<AppEnv>): ReturnType<typeof generateSpecs> {
+  cachedSpec ??= generateSpecs(app, { documentation: OPENAPI_DOCUMENTATION }).catch((e: unknown) => {
+    cachedSpec = undefined;
+    throw e;
+  });
+  return cachedSpec;
 }
 
 /**
