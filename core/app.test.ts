@@ -161,3 +161,84 @@ describe("createApp with hand-built deps", () => {
     expect(sessions.sessions.size).toBe(0);
   });
 });
+
+// External clients generate code from /api/v1/doc (Re:Earth CMS uses
+// oapi-codegen), so anything a handler reads or returns must be declared here.
+describe("OpenAPI document", () => {
+  type Operation = {
+    parameters?: { name: string; in: string; required?: boolean }[];
+    responses: Record<string, unknown>;
+    security?: unknown[];
+  };
+  type Spec = {
+    openapi: string;
+    paths: Record<string, Record<string, Operation>>;
+    components: { schemas: Record<string, unknown>; securitySchemes: Record<string, unknown> };
+    security: Record<string, unknown>[];
+  };
+
+  async function loadSpec(): Promise<Spec> {
+    const res = await createApp(fakeDeps()).request("/api/v1/doc");
+    expect(res.status).toBe(200);
+    return res.json();
+  }
+
+  function collectRefs(node: unknown, out: string[] = []): string[] {
+    if (Array.isArray(node)) node.forEach((n) => collectRefs(n, out));
+    else if (node && typeof node === "object") {
+      for (const [k, v] of Object.entries(node)) {
+        if (k === "$ref" && typeof v === "string") out.push(v);
+        else collectRefs(v, out);
+      }
+    }
+    return out;
+  }
+
+  test("is structurally sound OpenAPI 3.1", async () => {
+    const spec = await loadSpec();
+    expect(spec.openapi).toBe("3.1.0");
+
+    for (const ref of collectRefs(spec)) {
+      const name = ref.match(/^#\/components\/schemas\/(.+)$/)?.[1];
+      expect(name && spec.components.schemas[name], `unresolved $ref ${ref}`).toBeTruthy();
+    }
+
+    for (const requirement of spec.security) {
+      for (const scheme of Object.keys(requirement)) {
+        expect(spec.components.securitySchemes, `unknown scheme ${scheme}`).toHaveProperty(scheme);
+      }
+    }
+
+    // Every {param} in a path template must be declared as a required path parameter.
+    for (const [path, ops] of Object.entries(spec.paths)) {
+      const templated = [...path.matchAll(/\{([^}]+)\}/g)].map((m) => m[1]).sort();
+      for (const [method, op] of Object.entries(ops)) {
+        const declared = (op.parameters ?? []).filter((p) => p.in === "path");
+        expect(declared.map((p) => p.name).sort(), `${method} ${path}`).toEqual(templated);
+        expect(declared.every((p) => p.required), `${method} ${path}`).toBe(true);
+      }
+    }
+  });
+
+  test.each([
+    ["/api/v1/assets", "post"],
+    ["/api/v1/assets/uploads", "post"],
+  ])("%s %s declares X-Project-Id and the errors it produces", async (path, method) => {
+    const op = (await loadSpec()).paths[path][method];
+    expect(op.parameters).toContainEqual(
+      expect.objectContaining({ name: "X-Project-Id", in: "header", required: false }),
+    );
+    expect(op.responses).toHaveProperty("400");
+    expect(op.responses).toHaveProperty("404");
+  });
+
+  test("documents public file delivery without auth", async () => {
+    const op = (await loadSpec()).paths["/files/{id}/{path}"]?.get;
+    expect(op).toBeDefined();
+    expect(op.security).toEqual([]);
+    expect(op.parameters?.map((p) => `${p.in}:${p.name}`)).toEqual(
+      expect.arrayContaining(["path:id", "path:path", "query:thumb", "header:Range", "header:Accept-Encoding"]),
+    );
+    expect(Object.keys(op.responses).sort()).toEqual(["200", "206", "400", "404"]);
+  });
+});

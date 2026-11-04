@@ -5,7 +5,7 @@ import type { AppEnv } from "../../types";
 import { getAssetMetadata, uploadVersion } from "../usecase";
 import { canAccessAsset } from "../access";
 import { accessCtx, denyAnonymousUpload, usageScopes } from "./shared";
-import { versionResponseSchema, errorResponseSchema, idParamSchema } from "../../../shared/openapi";
+import { versionUploadResultResponseSchema, errorResponseSchema, idParamSchema } from "../../../shared/openapi";
 import { isSafeFilename } from "../../../shared/api";
 
 export function registerUploadVersionRoute(app: Hono<AppEnv>) {
@@ -22,12 +22,16 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
         { name: "X-Skip-Extraction", in: "header", required: false, schema: { type: "string", enum: ["true"] } },
       ],
       requestBody: {
-        content: { "application/octet-stream": { schema: { type: "string", format: "binary" } } },
+        required: true,
+        description: "Raw file bytes. Any Content-Type is accepted and stored as the asset's content type (default application/octet-stream).",
+        content: { "*/*": { schema: { type: "string", format: "binary" } } },
       },
       responses: {
-        201: { description: "Version created", content: { "application/json": { schema: resolver(versionResponseSchema) } } },
+        201: { description: "Version created", content: { "application/json": { schema: resolver(versionUploadResultResponseSchema) } } },
         400: { description: "Bad request", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        401: { description: "Anonymous upload disabled, or invalid token / session ID", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
         404: { description: "Asset not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        413: { description: "Upload exceeds storage capacity", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
       },
     }),
     zValidator("param", idParamSchema),

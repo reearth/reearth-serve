@@ -169,6 +169,8 @@ not persisted.
 | `GET` | `/api/v1/doc` | OpenAPI 3.1 JSON spec |
 | `GET` | `/api/v1/docs` | Scalar interactive API reference |
 
+The OpenAPI document also covers file delivery (`/files/{id}/{path}`, marked `security: []`) and declares the `bearerAuth` / `X-Session-Id` security schemes. When a handler starts reading a header or returning a new status, declare it in that route's `describeRoute`.
+
 ### Internal API (`/api/internal`)
 
 | Method | Path | Description |

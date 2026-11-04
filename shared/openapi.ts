@@ -43,6 +43,11 @@ export const versionListResponseSchema = z.object({
   cursor: z.string().optional(),
 });
 
+export const versionUploadResultResponseSchema = z.object({
+  version: assetVersionSchema,
+  url: z.string(),
+});
+
 export const healthResponseSchema = z.object({
   ok: z.boolean(),
   anonymousUploadEnabled: z.boolean(),

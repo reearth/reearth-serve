@@ -40,9 +40,18 @@ describe("OpenAPI", () => {
       "/api/v1/workspaces/{id}",
       "/api/v1/workspaces/{workspaceId}/members",
       "/api/v1/workspaces/{workspaceId}/members/{userId}",
+      "/files/{id}/{path}",
     ];
     for (const p of expectedPaths) {
       expect(paths, `missing path: ${p}`).toHaveProperty(p);
+    }
+
+    type Op = { parameters?: { name: string; in: string }[] };
+    const ops = paths as Record<string, Record<string, Op>>;
+    for (const p of ["/api/v1/assets", "/api/v1/assets/uploads"]) {
+      expect(ops[p].post.parameters, `${p} X-Project-Id`).toContainEqual(
+        expect.objectContaining({ name: "X-Project-Id", in: "header" }),
+      );
     }
   });
 
