@@ -1,11 +1,14 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
+import { describeRoute, resolver } from "hono-openapi";
 import type { AppEnv } from "../types";
 import { decompressStream } from "../asset/compression";
 import { resolveAssetVersion } from "../asset/usecase";
 import { legacyThumbKey, versionThumbKey } from "../asset/usecase/shared";
 import { parseRange, sliceStream } from "./stream";
+import { errorResponseSchema } from "../../shared";
 import {
+  THUMBNAIL_SIZES,
   isThumbnailSize,
   thumbnailFilename,
   THUMBNAIL_CONTENT_TYPE,
@@ -39,70 +42,128 @@ export const fileRoutes = new Hono<AppEnv>();
 // CORS only on file delivery routes
 fileRoutes.use("/*", cors({ origin: "*" }));
 
+const stringHeader = (description: string) => ({ description, schema: { type: "string" as const } });
+const fileHeaders = {
+  "Content-Type": stringHeader("Stored content type of the file (image/webp for thumbnails)"),
+  "Content-Length": stringHeader("Body length in bytes. Omitted when a gzip-stored file is decompressed and its original size is unknown"),
+  "Content-Encoding": stringHeader("`gzip` when a gzip-stored file is passed through to a client that accepts gzip"),
+  "Content-Disposition": stringHeader("`inline; filename=\"<name>\"`"),
+  "Accept-Ranges": stringHeader("`bytes`. Not sent on gzip pass-through responses or thumbnails"),
+  "Cache-Control": stringHeader("`public, max-age=3600, immutable` for files; `public, max-age=31536000, immutable` for thumbnails"),
+  "Access-Control-Allow-Origin": stringHeader("`*`"),
+};
+const jsonError = (description: string) => ({
+  description,
+  content: { "application/json": { schema: resolver(errorResponseSchema) } },
+});
+
 // GET /files/:id/:filename — serve single-file asset
 // GET /files/:id/path/to/file — serve extracted file from archive asset
-fileRoutes.get("/:id/:path{.+}", async (c) => {
-  const metadataStore = c.get("metadata");
-  const versions = c.get("versions");
-  const storage = c.get("storage");
-  const id = c.req.param("id");
-  const filePath = c.req.param("path");
-  const rangeHeader = c.req.header("Range");
-  const acceptEncoding = c.req.header("Accept-Encoding") ?? "";
-  const clientAcceptsGzip = acceptEncoding.includes("gzip");
-  const range = parseRange(rangeHeader);
+fileRoutes.get("/:id/:path{.+}",
+  describeRoute({
+    tags: ["Files"],
+    summary: "Download a file",
+    description: [
+      "Public permalink for an asset's file. `id` is an asset ID (serves the active version, or the latest when none is set) or a version ID (serves that version).",
+      "",
+      "For a single-file asset `path` is its filename; for an extracted archive it is the entry path inside the archive and may contain `/`.",
+      "`_thumbs/{size}.webp` (or `?thumb={size}` on any path) serves a generated WebP thumbnail.",
+      "",
+      "Gzip-stored files are sent as-is with `Content-Encoding: gzip` when the request has `Accept-Encoding: gzip` and no `Range`; otherwise they are decompressed on the fly.",
+      "",
+      "Conditional requests (`If-None-Match`, `If-Modified-Since`) are not supported: no `ETag` / `Last-Modified` is sent and `304` is never returned.",
+      "An unparseable `Range` header is ignored and the full file is returned with `200`.",
+    ].join("\n"),
+    // URL-as-capability: no credentials, see the comment above.
+    security: [],
+    parameters: [
+      { name: "id", in: "path", required: true, schema: { type: "string" }, description: "Asset ID or version ID" },
+      { name: "path", in: "path", required: true, schema: { type: "string" }, description: "Filename, or a path inside an extracted archive (may contain `/`, sent raw or escaped as `%2F`)" },
+      { name: "thumb", in: "query", required: false, schema: { type: "string", enum: [...THUMBNAIL_SIZES] }, description: "Serve the WebP thumbnail of this size instead of the file. Any other value → 400" },
+      { name: "Range", in: "header", required: false, schema: { type: "string", pattern: "^bytes=\\d+-\\d*$" }, description: "Single byte range, `bytes=<start>-` or `bytes=<start>-<end>`. Suffix (`bytes=-N`) and multi-range forms are ignored" },
+      { name: "Accept-Encoding", in: "header", required: false, schema: { type: "string" }, description: "If it contains `gzip`, gzip-stored files are passed through compressed (non-Range requests only)" },
+    ],
+    responses: {
+      200: {
+        description: "File content",
+        headers: fileHeaders,
+        content: { "*/*": { schema: { type: "string", format: "binary" } } },
+      },
+      206: {
+        description: "Partial content for a `Range` request",
+        headers: {
+          ...fileHeaders,
+          "Content-Range": stringHeader("`bytes <start>-<end>/<total>`. Omitted when a gzip-stored file's original size is unknown"),
+        },
+        content: { "*/*": { schema: { type: "string", format: "binary" } } },
+      },
+      400: jsonError("Invalid thumbnail size"),
+      404: jsonError("Asset, file, or thumbnail not found"),
+    },
+  }),
+  async (c) => {
+    const metadataStore = c.get("metadata");
+    const versions = c.get("versions");
+    const storage = c.get("storage");
+    const id = c.req.param("id");
+    const filePath = c.req.param("path");
+    const rangeHeader = c.req.header("Range");
+    const acceptEncoding = c.req.header("Accept-Encoding") ?? "";
+    const clientAcceptsGzip = acceptEncoding.includes("gzip");
+    const range = parseRange(rangeHeader);
 
-  // Thumbnail dispatch (query parameter or _thumbs/ path).
-  const thumb = detectThumbRequest(filePath, c.req.query("thumb"));
-  if (thumb === "invalid") {
-    return c.json({ error: "Invalid thumbnail size" }, 400);
-  }
-
-  // Resolve asset + version
-  const resolved = await resolveAssetVersion(metadataStore, versions, id);
-  if (!resolved) {
-    return c.json({ error: "File not found" }, 404);
-  }
-
-  const { asset, version } = resolved;
-
-  if (thumb) {
-    return serveThumbnail(storage, asset, version, thumb);
-  }
-
-  // Determine storage key based on whether we have a version
-  let storageKeyPath: string;
-  let contentType: string;
-  let contentEncoding: string | undefined;
-  let displayName: string;
-  let originalSize: number | undefined;
-
-  if (version) {
-    // Versioned layout
-    const isArchiveSubpath = version.type === "archive" && filePath !== version.filename;
-    if (isArchiveSubpath) {
-      storageKeyPath = `assets/${asset.id}/v/${version.id}/files/${filePath}`;
-    } else {
-      storageKeyPath = `assets/${asset.id}/v/${version.id}/${version.filename}`;
+    // Thumbnail dispatch (query parameter or _thumbs/ path).
+    const thumb = detectThumbRequest(filePath, c.req.query("thumb"));
+    if (thumb === "invalid") {
+      return c.json({ error: "Invalid thumbnail size" }, 400);
     }
 
-    const file = await storage.get(storageKeyPath, undefined);
-    if (!file) {
-      // Legacy fallback: try old layout
-      return serveLegacy(c, storage, asset, filePath, range, clientAcceptsGzip, rangeHeader);
+    // Resolve asset + version
+    const resolved = await resolveAssetVersion(metadataStore, versions, id);
+    if (!resolved) {
+      return c.json({ error: "File not found" }, 404);
     }
 
-    contentType = isArchiveSubpath ? file.contentType : version.contentType;
-    contentEncoding = isArchiveSubpath ? file.contentEncoding : version.contentEncoding;
-    displayName = isArchiveSubpath ? filePath.split("/").pop() || filePath : version.filename;
-    originalSize = version.originalSize;
+    const { asset, version } = resolved;
 
-    return serveFile(file, contentType, contentEncoding, displayName, originalSize, range, clientAcceptsGzip, rangeHeader, storage, storageKeyPath);
-  }
+    if (thumb) {
+      return serveThumbnail(storage, asset, version, thumb);
+    }
 
-  // Legacy (no versions) — use the old layout
-  return serveLegacy(c, storage, asset, filePath, range, clientAcceptsGzip, rangeHeader);
-});
+    // Determine storage key based on whether we have a version
+    let storageKeyPath: string;
+    let contentType: string;
+    let contentEncoding: string | undefined;
+    let displayName: string;
+    let originalSize: number | undefined;
+
+    if (version) {
+      // Versioned layout
+      const isArchiveSubpath = version.type === "archive" && filePath !== version.filename;
+      if (isArchiveSubpath) {
+        storageKeyPath = `assets/${asset.id}/v/${version.id}/files/${filePath}`;
+      } else {
+        storageKeyPath = `assets/${asset.id}/v/${version.id}/${version.filename}`;
+      }
+
+      const file = await storage.get(storageKeyPath, undefined);
+      if (!file) {
+        // Legacy fallback: try old layout
+        return serveLegacy(c, storage, asset, filePath, range, clientAcceptsGzip, rangeHeader);
+      }
+
+      contentType = isArchiveSubpath ? file.contentType : version.contentType;
+      contentEncoding = isArchiveSubpath ? file.contentEncoding : version.contentEncoding;
+      displayName = isArchiveSubpath ? filePath.split("/").pop() || filePath : version.filename;
+      originalSize = version.originalSize;
+
+      return serveFile(file, contentType, contentEncoding, displayName, originalSize, range, clientAcceptsGzip, rangeHeader, storage, storageKeyPath);
+    }
+
+    // Legacy (no versions) — use the old layout
+    return serveLegacy(c, storage, asset, filePath, range, clientAcceptsGzip, rangeHeader);
+  },
+);
 
 async function serveThumbnail(
   storage: any,

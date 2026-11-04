@@ -3,7 +3,7 @@ import { describeRoute } from "hono-openapi";
 import { resolver } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { uploadAsset } from "../usecase";
-import { denyAnonymousUpload, resolveUploadProject, usageScopes } from "./shared";
+import { denyAnonymousUpload, projectIdHeaderParam, resolveUploadProject, usageScopes } from "./shared";
 import { uploadResultResponseSchema, errorResponseSchema } from "../../../shared/openapi";
 import { isSafeFilename } from "../../../shared/api";
 
@@ -19,13 +19,19 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
         { name: "Content-Encoding", in: "header", required: false, schema: { type: "string", enum: ["gzip"] }, description: "Set to 'gzip' for pre-compressed uploads" },
         { name: "X-Original-Size", in: "header", required: false, schema: { type: "integer" }, description: "Original uncompressed size (when Content-Encoding: gzip)" },
         { name: "X-Skip-Extraction", in: "header", required: false, schema: { type: "string", enum: ["true"] }, description: "Skip archive extraction" },
+        projectIdHeaderParam,
       ],
       requestBody: {
-        content: { "application/octet-stream": { schema: { type: "string", format: "binary" } } },
+        required: true,
+        description: "Raw file bytes. Any Content-Type is accepted and stored as the asset's content type (default application/octet-stream).",
+        content: { "*/*": { schema: { type: "string", format: "binary" } } },
       },
       responses: {
         201: { description: "Upload result", content: { "application/json": { schema: resolver(uploadResultResponseSchema) } } },
-        400: { description: "Bad request", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        400: { description: "Bad request (missing/invalid headers, or X-Project-Id missing for an authenticated caller)", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        401: { description: "Anonymous upload disabled, or invalid token / session ID", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        404: { description: "Project not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        413: { description: "Upload exceeds storage capacity", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
       },
     }),
     async (c) => {

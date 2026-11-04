@@ -100,7 +100,28 @@ export function createApp(deps: Deps) {
         { name: "Projects", description: "Project management" },
         { name: "Workspaces", description: "Workspace and member management" },
         { name: "Auth", description: "Authentication and user info" },
+        { name: "Files", description: "Public file delivery (permalink URLs)" },
       ],
+      // Read by authMiddleware / sessionMiddleware on every non-internal
+      // route. Both are optional: no credentials means demo mode, so `{}` is
+      // listed too. Routes that ignore credentials override with `security: []`.
+      components: {
+        securitySchemes: {
+          bearerAuth: {
+            type: "http",
+            scheme: "bearer",
+            bearerFormat: "JWT",
+            description: "OIDC access token. Invalid or expired token → 401. Without it the caller is anonymous (demo mode).",
+          },
+          sessionId: {
+            type: "apiKey",
+            in: "header",
+            name: "X-Session-Id",
+            description: "Anonymous (demo-mode) session. Malformed ID → 401; unknown ID → a new session is minted and returned in the X-Session-Id response header. Ignored when bearerAuth is present.",
+          },
+        },
+      },
+      security: [{ bearerAuth: [] }, { sessionId: [] }, {}],
     },
   }));
 

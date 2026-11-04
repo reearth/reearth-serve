@@ -1,4 +1,5 @@
 import type { Context } from "hono";
+import type { DescribeRouteOptions } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { canAccessProject, type AccessContext } from "../access";
 
@@ -31,6 +32,22 @@ export function accessCtx(c: Context<AppEnv>): AccessContext {
     projects: c.get("projects"),
   };
 }
+
+type ParameterSpec = NonNullable<DescribeRouteOptions["parameters"]>[number];
+
+/**
+ * OpenAPI parameter for the header `resolveUploadProject` reads. Optional in
+ * the spec because anonymous uploads don't send it; routes using it must also
+ * declare the 400 / 404 it produces.
+ */
+export const projectIdHeaderParam: ParameterSpec = {
+  name: "X-Project-Id",
+  in: "header",
+  required: false,
+  schema: { type: "string" },
+  description:
+    "Project to upload into. Required for authenticated callers (missing → 400, unknown or inaccessible project → 404 \"Project not found\"). Ignored for anonymous (demo-mode) callers.",
+};
 
 /**
  * Resolve the project binding for an upload-like action.
