@@ -171,7 +171,10 @@ describe("OpenAPI document", () => {
     responses: Record<string, unknown>;
     security?: unknown[];
   };
-  type Spec = { paths: Record<string, Record<string, Operation>> };
+  type Spec = {
+    paths: Record<string, Record<string, Operation>>;
+    components: { schemas: Record<string, unknown> };
+  };
 
   async function loadSpec(): Promise<Spec> {
     const res = await createApp(fakeDeps()).request("/api/v1/doc");
@@ -193,6 +196,23 @@ describe("OpenAPI document", () => {
       .filter((p) => p.severity === "error")
       .map((p) => `${p.ruleId} at ${p.location[0]?.pointer}: ${p.message}`);
     expect(errors).toEqual([]);
+  });
+
+  test("keeps named components when the app is rebuilt (one createApp per request)", async () => {
+    // Regression: hono-openapi resolves schemas in place on module-level
+    // routes, so regenerating for a fresh app dropped components.schemas
+    // while the $refs stayed.
+    const first = await loadSpec();
+    const second = await loadSpec();
+    expect(Object.keys(second.components.schemas)).toEqual(Object.keys(first.components.schemas));
+    expect(second.components.schemas).toHaveProperty("Asset");
+  });
+
+  test("names the shared schemas as components", async () => {
+    const { components } = await loadSpec();
+    for (const name of ["Asset", "AssetVersion", "FileEntry", "Error", "Job", "Project", "Workspace", "Member"]) {
+      expect(components.schemas, name).toHaveProperty(name);
+    }
   });
 
   test.each([

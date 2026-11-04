@@ -53,6 +53,13 @@ describe("OpenAPI", () => {
         expect.objectContaining({ name: "X-Project-Id", in: "header" }),
       );
     }
+
+    // Fetched twice on purpose: the server builds a fresh app per request, and
+    // a regenerated spec once lost its named components.
+    for (let i = 0; i < 2; i++) {
+      const again = await (await fetch(`${BASE}/api/v1/doc`)).json() as { components: { schemas?: Record<string, unknown> } };
+      expect(again.components.schemas).toHaveProperty("Asset");
+    }
   });
 
   test("GET /api/v1/docs returns Scalar UI HTML", async () => {

@@ -21,6 +21,13 @@ export function isSafeFilename(name: string): boolean {
 
 export const filenameSchema = z.string().refine(isSafeFilename, "Invalid filename");
 
+// --- OpenAPI component names ---
+//
+// `.meta({ ref })` makes hono-openapi emit a schema as a named entry in
+// `components.schemas` and `$ref` it, so generated clients (e.g. oapi-codegen
+// in Re:Earth CMS) get `Asset` instead of `PostApiV1Assets201JSONResponseBodyAsset`.
+// The ref is not inherited by `.extend()`, so derived shapes stay inline.
+
 // --- Role ---
 
 export const roleSchema = z.enum(["owner", "admin", "editor", "viewer"]);
@@ -32,7 +39,7 @@ export const workspaceSchema = z.object({
   name: z.string(),
   createdAt: z.number(),
   updatedAt: z.number(),
-});
+}).meta({ ref: "Workspace" });
 
 export const createWorkspaceBodySchema = z.object({
   name: z.string().min(1).max(100),
@@ -46,7 +53,7 @@ export const memberSchema = z.object({
   role: roleSchema,
   createdAt: z.number(),
   updatedAt: z.number(),
-});
+}).meta({ ref: "Member" });
 
 export const addMemberBodySchema = z.object({
   userId: z.string(),
@@ -66,7 +73,7 @@ export const projectSchema = z.object({
   updatedAt: z.number(),
   ownerId: z.string(),
   workspaceId: z.string().optional(),
-});
+}).meta({ ref: "Project" });
 
 export const createProjectBodySchema = z.object({
   name: z.string().min(1).max(100),
@@ -92,7 +99,7 @@ export const assetVersionSchema = z.object({
   extractedSize: z.number().optional(),
   jobId: z.string().optional(),
   userMeta: z.record(z.string(), z.unknown()).optional(),
-});
+}).meta({ ref: "AssetVersion" });
 
 export const assetMetadataSchema = z.object({
   id: z.string(),
@@ -116,7 +123,7 @@ export const assetMetadataSchema = z.object({
   userMeta: z.record(z.string(), z.unknown()).optional(),
   currentVersion: assetVersionSchema.optional(),
   versionCount: z.number().optional(),
-});
+}).meta({ ref: "Asset" });
 
 export const assetUploadResultSchema = z.object({
   asset: assetMetadataSchema,
@@ -132,7 +139,7 @@ export const presignedUploadResultSchema = z.object({
   headers: z.record(z.string(), z.string()),
   contentEncoding: z.string().optional(),
   expiresAt: z.number(),
-});
+}).meta({ ref: "PresignedUploadSession" });
 
 export const multipartUploadResultSchema = z.object({
   uploadId: z.string(),
@@ -142,7 +149,7 @@ export const multipartUploadResultSchema = z.object({
   })),
   contentEncoding: z.string().optional(),
   expiresAt: z.number(),
-});
+}).meta({ ref: "MultipartUploadSession" });
 
 export const uploadPartSchema = z.object({
   partNumber: z.number(),
@@ -174,7 +181,7 @@ export const jobSchema = z.object({
   sessionId: z.string().optional(),
   projectId: z.string().optional(),
   versionId: z.string().optional(),
-});
+}).meta({ ref: "Job" });
 
 // --- File entry (archive manifest) ---
 
@@ -184,7 +191,7 @@ export const fileEntrySchema = z.object({
   contentType: z.string(),
   contentEncoding: z.string().optional(),
   hash: z.string().optional(),
-});
+}).meta({ ref: "FileEntry" });
 
 // --- Request bodies ---
 
@@ -235,7 +242,7 @@ export const setActiveVersionBodySchema = z.object({
 
 export const errorResponseSchema = z.object({
   error: z.string(),
-});
+}).meta({ ref: "Error" });
 
 // --- Inferred types ---
 
