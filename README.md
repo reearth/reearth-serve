@@ -169,7 +169,7 @@ not persisted.
 | `GET` | `/api/v1/doc` | OpenAPI 3.1 JSON spec |
 | `GET` | `/api/v1/docs` | Scalar interactive API reference |
 
-The OpenAPI document also covers file delivery (`/files/{id}/{path}`, marked `security: []`) and declares the `bearerAuth` / `X-Session-Id` security schemes. When a handler starts reading a header or returning a new status, declare it in that route's `describeRoute`.
+The OpenAPI document also covers file delivery (`/files/{id}/{path}`, marked `security: []`) and declares the `bearerAuth` / `X-Session-Id` security schemes. When a handler starts reading a header or returning a new status, declare it in that route's `describeRoute`. `npm run check` lints the generated document with Redocly's recommended OpenAPI 3.1 rules (`core/app.test.ts`) and fails on any error.
 
 ### Internal API (`/api/internal`)
 

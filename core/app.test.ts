@@ -1,4 +1,5 @@
 import { describe, expect, test } from "vitest";
+import { createConfig, lintFromString } from "@redocly/openapi-core";
 import { createApp } from "./app";
 import type { Deps } from "./types";
 import type { AssetMetadata } from "./asset/model";
@@ -170,12 +171,7 @@ describe("OpenAPI document", () => {
     responses: Record<string, unknown>;
     security?: unknown[];
   };
-  type Spec = {
-    openapi: string;
-    paths: Record<string, Record<string, Operation>>;
-    components: { schemas: Record<string, unknown>; securitySchemes: Record<string, unknown> };
-    security: Record<string, unknown>[];
-  };
+  type Spec = { paths: Record<string, Record<string, Operation>> };
 
   async function loadSpec(): Promise<Spec> {
     const res = await createApp(fakeDeps()).request("/api/v1/doc");
@@ -183,41 +179,20 @@ describe("OpenAPI document", () => {
     return res.json();
   }
 
-  function collectRefs(node: unknown, out: string[] = []): string[] {
-    if (Array.isArray(node)) node.forEach((n) => collectRefs(n, out));
-    else if (node && typeof node === "object") {
-      for (const [k, v] of Object.entries(node)) {
-        if (k === "$ref" && typeof v === "string") out.push(v);
-        else collectRefs(v, out);
-      }
-    }
-    return out;
-  }
-
-  test("is structurally sound OpenAPI 3.1", async () => {
-    const spec = await loadSpec();
-    expect(spec.openapi).toBe("3.1.0");
-
-    for (const ref of collectRefs(spec)) {
-      const name = ref.match(/^#\/components\/schemas\/(.+)$/)?.[1];
-      expect(name && spec.components.schemas[name], `unresolved $ref ${ref}`).toBeTruthy();
-    }
-
-    for (const requirement of spec.security) {
-      for (const scheme of Object.keys(requirement)) {
-        expect(spec.components.securitySchemes, `unknown scheme ${scheme}`).toHaveProperty(scheme);
-      }
-    }
-
-    // Every {param} in a path template must be declared as a required path parameter.
-    for (const [path, ops] of Object.entries(spec.paths)) {
-      const templated = [...path.matchAll(/\{([^}]+)\}/g)].map((m) => m[1]).sort();
-      for (const [method, op] of Object.entries(ops)) {
-        const declared = (op.parameters ?? []).filter((p) => p.in === "path");
-        expect(declared.map((p) => p.name).sort(), `${method} ${path}`).toEqual(templated);
-        expect(declared.every((p) => p.required), `${method} ${path}`).toBe(true);
-      }
-    }
+  test("passes Redocly's recommended OpenAPI 3.1 lint", async () => {
+    // Covers what codegen trips over: unresolved $refs, undefined security
+    // schemes, path templates without a matching path parameter, and schema
+    // shapes that are not valid OpenAPI. Warnings (e.g. no info.license) are
+    // allowed; errors fail the build.
+    const problems = await lintFromString({
+      source: JSON.stringify(await loadSpec()),
+      absoluteRef: "openapi.json",
+      config: await createConfig({ extends: ["recommended"] }),
+    });
+    const errors = problems
+      .filter((p) => p.severity === "error")
+      .map((p) => `${p.ruleId} at ${p.location[0]?.pointer}: ${p.message}`);
+    expect(errors).toEqual([]);
   });
 
   test.each([
