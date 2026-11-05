@@ -1,8 +1,19 @@
 # ADR-002: Authentication, Anonymous Sessions & Project Model
 
-- **Status:** Accepted (Revised 2026-04-17)
+- **Status:** Accepted (Revised 2026-04-17; amended 2026-11-05, the amendments are Proposed)
 - **Date:** 2026-03-12
 - **Deciders:** @rot1024
+
+## Amendment 2026-11-05: Policy table and tenancy middleware
+
+[ADR-016](016-accounts-authorization.md) replaces two parts of this ADR. The rest is unchanged.
+
+- Its `POLICY` table replaces "Role Model & Permission Table" below, and the permission map that section places in `worker/auth/roles.ts` is now `POLICY` in `core/auth/permissions.ts`. `workspace:update` is dropped, because no route uses it.
+- `tenancyMiddleware` runs between the auth middleware and the session middleware, so the order in "Middleware ordering" below becomes auth, tenancy, session, then dependency injection.
+
+## Amendment 2026-11-05: No session on `/files`
+
+The session middleware does not run on `/files` or `/files/*`. Anonymous ownership checks run only on `/api/v1/*`, so file delivery never reads or writes a session. Before this change every anonymous file read wrote a session to KV. A file response carries no `X-Session-Id`, and Serve ignores a request's `X-Session-Id` there, so a malformed value no longer turns a public read into `401`.
 
 ## Revision 2026-04-17 — Tenant scoping hardening
 
