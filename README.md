@@ -190,6 +190,8 @@ These endpoints require `Authorization: Bearer $INTERNAL_API_SECRET` — set it 
 | `GET` | `/files/:id/_thumbs/:size.webp` | Image thumbnail (`xs`/`sm`/`md`/`lg`) |
 | `GET` | `/files/:id/:filename?thumb=:size` | Same thumbnail, accessed via query parameter |
 
+File delivery never reads or mints an anonymous session. `/files` responses carry no `X-Session-Id`, and the request's `X-Session-Id` header is ignored.
+
 Assets support **versioning** — uploading to an existing asset (`POST /api/v1/assets/:id`) creates a new version while keeping the asset ID and URL stable. Each asset can have an explicit active version; if unset, the latest version is served. File URLs (`/files/:id/:filename`) resolve the active/latest version automatically. Version IDs can also be used directly in file URLs. Demo mode assets (no project) auto-expire after 1 hour. Project assets are permanent. See [ADR-005](./docs/adr/005-asset-versioning.md).
 
 Uploaded JPEG/PNG/WebP/GIF images get four WebP thumbnails generated automatically: `xs` (64 px), `sm` (128 px), `md` (512 px), `lg` (1280 px). `xs` is sized to fit comfortably inside Cesium's billboard TextureAtlas on mobile. Generation is asynchronous via a queue and serves static from R2 thereafter — see [ADR-009](./docs/adr/009-image-thumbnail-generation.md).

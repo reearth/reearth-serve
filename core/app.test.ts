@@ -3,9 +3,10 @@ import { createConfig, lintFromString } from "@redocly/openapi-core";
 import { createApp } from "./app";
 import type { Deps } from "./types";
 import type { AssetMetadata } from "./asset/model";
-import type { MetadataStore } from "./asset/repository";
+import type { MetadataStore, VersionStore } from "./asset/repository";
 import type { Session, SessionStore } from "./session/repository";
 import { SimpleAuthorizer } from "./auth/permissions";
+import { MemoryFileStorage } from "../adapters/memory/storage";
 
 // The point of this file: createApp must be constructible from hand-built
 // dependencies, with no Cloudflare bindings and no `Env` anywhere (ADR-012 §1).
@@ -40,11 +41,11 @@ class MemorySessionStore implements SessionStore {
   }
 }
 
-/** Anything the tests below don't exercise: present, typed, and never called. */
-function unused<T>(name: string): T {
-  return new Proxy({} as object, {
-    get() {
-      throw new Error(`fake dependency "${name}" was called unexpectedly`);
+function strictFake<T>(name: string, implemented: Partial<T> = {}): T {
+  return new Proxy(implemented as object, {
+    get(target, prop) {
+      if (prop in target) return Reflect.get(target, prop);
+      throw new Error(`fake dependency "${name}.${String(prop)}" was called unexpectedly`);
     },
   }) as T;
 }
@@ -52,28 +53,28 @@ function unused<T>(name: string): T {
 function fakeDeps(overrides: Partial<Deps> = {}): Deps {
   return {
     metadata: new MemoryMetadataStore(),
-    versions: unused("versions"),
-    writes: unused("writes"),
-    storage: unused("storage"),
-    uploadSessions: unused("uploadSessions"),
+    versions: strictFake("versions"),
+    writes: strictFake("writes"),
+    storage: strictFake("storage"),
+    uploadSessions: strictFake("uploadSessions"),
     presignedUrls: null,
-    jobs: unused("jobs"),
+    jobs: strictFake("jobs"),
     ttlSeconds: 3600,
     baseUrl: "https://example.test",
     authorizer: new SimpleAuthorizer(),
-    projects: unused("projects"),
-    workspaces: unused("workspaces"),
-    members: unused("members"),
+    projects: strictFake("projects"),
+    workspaces: strictFake("workspaces"),
+    members: strictFake("members"),
     extractionQueue: null,
     thumbnailQueue: null,
-    storageUsage: unused("storageUsage"),
-    pendingCleanup: unused("pendingCleanup"),
+    storageUsage: strictFake("storageUsage"),
+    pendingCleanup: strictFake("pendingCleanup"),
     anonymousUploadEnabled: false,
     sessions: new MemorySessionStore(),
     sessionTtlSeconds: 60,
     internalApiSecret: undefined,
     auth: {},
-    containers: unused("containers"),
+    containers: strictFake("containers"),
     extractionStuckThresholdMs: 1000,
     limits: { subrequestBudget: 700 },
     ...overrides,
@@ -94,6 +95,48 @@ describe("createApp with hand-built deps", () => {
     const app = createApp(fakeDeps({ sessions }));
 
     const res = await app.request("/api/v1/health");
+    const sessionId = res.headers.get("X-Session-Id");
+    expect(sessionId).toMatch(/^[0-9a-f]{16}$/);
+    expect(sessions.sessions.has(sessionId!)).toBe(true);
+  });
+
+  test("anonymous file reads neither mint nor validate a session", async () => {
+    const metadata = new MemoryMetadataStore();
+    metadata.assets.set("a1", {
+      id: "a1",
+      filename: "a.txt",
+      contentType: "text/plain",
+      size: 5,
+      createdAt: 0,
+      expiresAt: 0,
+    });
+    const storage = new MemoryFileStorage();
+    await storage.put("assets/a1/a.txt", new Blob(["hello"]).stream(), "text/plain", 5);
+    const sessions = new MemorySessionStore();
+    const app = createApp(
+      fakeDeps({
+        metadata,
+        storage,
+        sessions,
+        versions: strictFake<VersionStore>("versions", { find: async () => null, findLatest: async () => null }),
+      }),
+    );
+
+    const requests: Record<string, string>[] = [{}, { "X-Session-Id": "not-a-session" }];
+    for (const headers of requests) {
+      const res = await app.request("/files/a1/a.txt", { headers });
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe("hello");
+      expect(res.headers.get("X-Session-Id")).toBeNull();
+    }
+    expect(sessions.sessions.size).toBe(0);
+  });
+
+  test("anonymous API calls still get a session", async () => {
+    const sessions = new MemorySessionStore();
+    const app = createApp(fakeDeps({ sessions }));
+
+    const res = await app.request("/api/v1/assets", { method: "POST" });
     const sessionId = res.headers.get("X-Session-Id");
     expect(sessionId).toMatch(/^[0-9a-f]{16}$/);
     expect(sessions.sessions.has(sessionId!)).toBe(true);
