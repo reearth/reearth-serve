@@ -77,6 +77,7 @@ function fakeDeps(overrides: Partial<Deps> = {}): Deps {
     containers: strictFake("containers"),
     extractionStuckThresholdMs: 1000,
     limits: { subrequestBudget: 700 },
+    deliveryTokens: null,
     ...overrides,
   };
 }

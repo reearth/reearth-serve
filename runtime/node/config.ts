@@ -1,3 +1,5 @@
+import { parseDeliveryTokenKeys, type DeliveryKeyRing } from "../../core/access/token";
+
 /**
  * Environment parsing for the Node runtime, kept separate from the wiring so
  * it can be unit-tested without opening a database or a socket.
@@ -29,6 +31,7 @@ export type NodeConfig = {
    */
   objectStore: ObjectStoreConfig | null;
   containerLauncher: ContainerLauncherKind;
+  deliveryTokenKeys: DeliveryKeyRing | null;
 };
 
 const DEFAULT_PORT = 8788;
@@ -53,6 +56,7 @@ export function loadConfig(env: Env): NodeConfig {
     oidcAudience: env.OIDC_AUDIENCE || undefined,
     objectStore: objectStore(env),
     containerLauncher: containerLauncher(env.CONTAINER_LAUNCHER),
+    deliveryTokenKeys: env.DELIVERY_TOKEN_KEYS ? parseDeliveryTokenKeys(env.DELIVERY_TOKEN_KEYS) : null,
   };
 }
 

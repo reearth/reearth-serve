@@ -28,6 +28,7 @@ interface Env {
   // Anonymous (demo-mode) upload toggle. Set to "false" to require login for uploads.
   // Defaults to "true" — read & non-upload operations are not affected.
   ANONYMOUS_UPLOAD_ENABLED?: string;
+  DELIVERY_TOKEN_KEYS?: string;
   // Cloudflare Containers
   ARCHIVE_EXTRACTOR?: DurableObjectNamespace;
   THUMBNAIL_GENERATOR?: DurableObjectNamespace;

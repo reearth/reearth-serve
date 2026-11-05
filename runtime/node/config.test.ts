@@ -51,4 +51,15 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ CONTAINER_LAUNCHER: "docker" })).toThrow(/not supported/);
     expect(loadConfig({ CONTAINER_LAUNCHER: "none" }).containerLauncher).toBe("none");
   });
+
+  test("DELIVERY_TOKEN_KEYS is off when unset and refuses a short key at startup", () => {
+    expect(loadConfig({}).deliveryTokenKeys).toBeNull();
+    expect(() =>
+      loadConfig({ DELIVERY_TOKEN_KEYS: '{"active":"k1","keys":{"k1":"c2hvcnQ="}}' }),
+    ).toThrow("DELIVERY_TOKEN_KEYS: key k1 is shorter than 32 bytes");
+    const secret = Buffer.alloc(32, 7).toString("base64");
+    const ring = loadConfig({ DELIVERY_TOKEN_KEYS: JSON.stringify({ active: "k1", keys: { k1: secret } }) })
+      .deliveryTokenKeys;
+    expect(ring?.active.kid).toBe("k1");
+  });
 });

@@ -137,6 +137,7 @@ Set via `npx wrangler secret put <NAME>`:
 | `OIDC_ISSUER_URL` | No | OIDC Issuer URL for JWT authentication |
 | `OIDC_AUDIENCE` | No | JWT audience claim for token validation |
 | `CERBOS_ENDPOINT` | No | Cerbos PDP endpoint URL for authorization; starting policies in `docs/examples/cerbos/` |
+| `DELIVERY_TOKEN_KEYS` | No | Delivery token key ring, `{"active":"<kid>","keys":{"<kid>":"<base64 secret>"}}`, at most two keys of 32 bytes or more. Generate a secret with `openssl rand -base64 32`. An invalid value stops Node at startup; on Workers every `/api/` and `/files` request answers `500`. |
 
 \* Required for presigned URL uploads and archive extraction containers.
 

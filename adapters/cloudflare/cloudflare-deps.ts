@@ -14,6 +14,8 @@ import { KeyValueUploadSessionStore, KeyValueSessionStore } from "../../core/kv/
 import { CloudflareJobQueue } from "./queues";
 import { D1SqlClient } from "./sql";
 import { SqlAtomicWrites } from "../sql/writes";
+import { WebCryptoDeliveryTokenCodec } from "../webcrypto/delivery-token";
+import { parseDeliveryTokenKeys, type DeliveryTokenCodec } from "../../core/access/token";
 
 // Anonymous sessions are identity, not content — they must outlive the
 // demo asset TTL. A large multipart upload can take many hours between the
@@ -90,7 +92,18 @@ export function buildDeps(env: Env): Deps {
     extractionStuckThresholdMs:
       parseInt(env.EXTRACTION_STUCK_THRESHOLD_SECONDS || "", 10) * 1000 || DEFAULT_STUCK_THRESHOLD_MS,
     limits: { subrequestBudget: CLEANUP_SUBREQUEST_BUDGET },
+    deliveryTokens: codecForIsolate(env.DELIVERY_TOKEN_KEYS),
   };
+}
+
+let isolateCodec: { raw: string; codec: DeliveryTokenCodec } | null = null;
+
+function codecForIsolate(raw: string | undefined): DeliveryTokenCodec | null {
+  if (!raw) return null;
+  if (isolateCodec?.raw !== raw) {
+    isolateCodec = { raw, codec: new WebCryptoDeliveryTokenCodec(parseDeliveryTokenKeys(raw)) };
+  }
+  return isolateCodec.codec;
 }
 
 function r2Credentials(env: Env): ObjectStoreCredentials | null {

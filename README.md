@@ -70,6 +70,7 @@ The production endpoint is `https://serve.reearth.land`. Point the CLI at it via
 | `adapters/sql/` | Provider-independent SQL layer: repositories, atomic writes, `SqlKeyValue`, `SqlJobQueue` |
 | `adapters/sql/migrations/` | `kv` / `queue_messages` tables — applied only where Cloudflare KV and Queues do not exist |
 | `adapters/memory/` | In-memory and `node:sqlite` adapters (tests, local runtimes) |
+| `adapters/webcrypto/` | WebCrypto adapters shared by every runtime (delivery token HMAC) |
 | `runtime/cloudflare/` | Cloudflare Worker entrypoint (`wrangler.toml` `main`) |
 | `runtime/node/` | Plain Node entrypoint (API only) |
 | `shared/` | Shared types (Zod schemas) and API path constants |
@@ -114,6 +115,7 @@ SSR on Node is out of scope, and any other path returns 404 saying so.
 | `CERBOS_ENDPOINT` | (unset) | Cerbos PDP base URL; unset ⇒ the built-in policy table decides (see [Authorization](#authorization)) |
 | `OBJECT_STORE_*` | (unset) | Reserved for the future S3 adapter; until then storage is in-process |
 | `CONTAINER_LAUNCHER` | `none` | Only `none` is implemented; any other value fails at startup |
+| `DELIVERY_TOKEN_KEYS` | (unset) | Delivery token key ring, `{"active":"<kid>","keys":{"<kid>":"<base64 secret>"}}`: at most two keys of 32 bytes or more. Unset ⇒ delivery tokens are off; an invalid value fails at startup |
 
 Cloudflare drives the cron trigger and the queue consumers for you; on Node the
 operator does. One tick — cleanup, both queue drains, and the `kv` expiry sweep —
