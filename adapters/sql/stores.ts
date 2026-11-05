@@ -308,6 +308,7 @@ export class SqlJobStore implements JobStore {
       `SELECT j.* FROM jobs j
          JOIN assets a ON a.id = j.asset_id
          WHERE j.status = 'completed'
+           AND j.version_id IS NULL
            AND a.status IN ('pending', 'extracting')
          ORDER BY j.updated_at ASC
          LIMIT ?1`,
@@ -481,6 +482,15 @@ export function assignedVersion(rows: Record<string, unknown>[]): number {
     throw new Error("versions.save: no version returned from INSERT RETURNING");
   }
   return value;
+}
+
+/** The fields a version's extraction job mirrors onto it. */
+export const VERSION_EXTRACTION_UPDATE_SQL =
+  `UPDATE asset_versions SET status = ?2, meta = ?3 WHERE id = ?1`;
+
+export function versionExtractionUpdateArgs(version: AssetVersion): SqlValue[] {
+  const row = modelToRow(version as unknown as Record<string, unknown>, VERSION_META_KEYS);
+  return [row.id, row.status ?? null, row.meta ?? null] as SqlValue[];
 }
 
 export class SqlVersionStore implements VersionStore {

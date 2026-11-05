@@ -1,3 +1,5 @@
+import type { ArchiveExtractorParams } from "../../core/container/port";
+
 export interface ObjectStoreCredentials {
   endpoint: string;
   accessKeyId: string;
@@ -32,8 +34,45 @@ export function objectStoreEnv(
   };
 }
 
+/** The archive extractor's run parameters, addressed by job (ADR-005, amendment 2026-11-05). */
+export function archiveExtractorEnv(params: ArchiveExtractorParams): Record<string, string> {
+  return {
+    JOB_ID: params.jobId,
+    ASSET_ID: params.assetId,
+    ...(params.versionId && { VERSION_ID: params.versionId }),
+    ARCHIVE_KEY: params.archiveKey,
+    ARCHIVE_FILENAME: params.archiveFilename,
+    ARCHIVE_FORMAT: params.archiveFormat,
+  };
+}
+
 if (import.meta.vitest) {
   const { describe, expect, it } = import.meta.vitest;
+
+  describe("archiveExtractorEnv", () => {
+    const params: ArchiveExtractorParams = {
+      jobId: "j1",
+      assetId: "a1",
+      archiveKey: "assets/a1/v/v1/data.zip",
+      archiveFilename: "data.zip",
+      archiveFormat: "zip",
+    };
+
+    it("addresses a version's run by its job and version", () => {
+      expect(archiveExtractorEnv({ ...params, versionId: "v1" })).toEqual({
+        JOB_ID: "j1",
+        ASSET_ID: "a1",
+        VERSION_ID: "v1",
+        ARCHIVE_KEY: "assets/a1/v/v1/data.zip",
+        ARCHIVE_FILENAME: "data.zip",
+        ARCHIVE_FORMAT: "zip",
+      });
+    });
+
+    it("omits VERSION_ID for an asset's own job", () => {
+      expect(archiveExtractorEnv(params)).not.toHaveProperty("VERSION_ID");
+    });
+  });
 
   describe("objectStoreEnv", () => {
     const credentials: ObjectStoreCredentials = {

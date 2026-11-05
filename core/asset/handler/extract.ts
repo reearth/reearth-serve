@@ -73,6 +73,7 @@ export function registerExtractRoute(app: Hono<AppEnv>) {
     if (extractionQueue) {
       const key = `assets/${id}/${asset.filename}`;
       await extractionQueue.send({
+        jobId: id,
         assetId: id,
         archiveKey: key,
         archiveFilename: asset.filename,

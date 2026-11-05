@@ -6,6 +6,7 @@ import { CloudflareJobQueue, toQueueMessages } from "./queues";
 import type { ExtractionMessage } from "../../core/extraction/handler";
 
 const extraction: ExtractionMessage = {
+  jobId: "a1",
   assetId: "a1",
   archiveKey: "assets/a1/x.zip",
   archiveFilename: "x.zip",

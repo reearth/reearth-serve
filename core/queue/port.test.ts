@@ -37,6 +37,7 @@ function launcher(overrides: Partial<ContainerLauncher> = {}): ContainerLauncher
 }
 
 const extraction: ExtractionMessage = {
+  jobId: "a1",
   assetId: "a1",
   archiveKey: "assets/a1/x.zip",
   archiveFilename: "x.zip",
@@ -195,6 +196,59 @@ describe("handleQueue (extraction consumer)", () => {
     expect(saved.every((j) => j.updatedAt > 0)).toBe(true);
 
     vi.restoreAllMocks();
+  });
+
+  test("touches a version's own job, not the asset's, when the launch fails", async () => {
+    const queue = new MemoryJobQueue<ExtractionMessage>();
+    await queue.send({ ...extraction, jobId: "j1", versionId: "v1" });
+
+    const jobs = new Map<string, Job>([
+      ["a1", { id: "a1", assetId: "a1", status: "pending", updatedAt: 0 } as Job],
+      ["j1", { id: "j1", assetId: "a1", versionId: "v1", status: "pending", updatedAt: 0 } as Job],
+    ]);
+    vi.spyOn(console, "error").mockImplementation(() => {});
+
+    await handleQueue(
+      queue.receive(),
+      deps({
+        containers: launcher({
+          launchArchiveExtractor: async () => {
+            throw new Error("no capacity");
+          },
+        }),
+        jobs: {
+          find: async (id: string) => jobs.get(id) ?? null,
+          save: async (j: Job) => {
+            jobs.set(j.id, j);
+          },
+        } as unknown as Deps["jobs"],
+      }),
+    );
+
+    expect(jobs.get("j1")!.updatedAt).toBeGreaterThan(0);
+    expect(jobs.get("a1")!.updatedAt).toBe(0);
+
+    vi.restoreAllMocks();
+  });
+
+  test("launches a message from before jobId existed as the asset's own job", async () => {
+    const queue = new MemoryJobQueue<ExtractionMessage>();
+    const { jobId: _, ...legacy } = extraction;
+    await queue.send(legacy as ExtractionMessage);
+    const launched: string[] = [];
+
+    await handleQueue(
+      queue.receive(),
+      deps({
+        containers: launcher({
+          launchArchiveExtractor: async (params) => {
+            launched.push(params.jobId);
+          },
+        }),
+      }),
+    );
+
+    expect(launched).toEqual(["a1"]);
   });
 
   test("retries every message when the extractor is not configured at all", async () => {

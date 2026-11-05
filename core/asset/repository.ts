@@ -61,8 +61,12 @@ export interface AtomicWrites {
    * Returns the version with the number the store assigned (see `VersionStore.save`).
    */
   createVersion(input: { version: AssetVersion; job?: Job; usageScopes?: string[] }): Promise<AssetVersion>;
-  /** A job row plus the asset row that mirrors its status. */
-  saveJob(input: { job: Job; asset?: AssetMetadata }): Promise<void>;
+  /**
+   * A job row plus the row that mirrors its status: the version for a
+   * version's job, the asset otherwise. A version's job may still pass the
+   * asset to extend its expiry.
+   */
+  saveJob(input: { job: Job; asset?: AssetMetadata; version?: AssetVersion }): Promise<void>;
   /**
    * Removes the asset row and all its version rows, decrements each usage
    * scope by the asset's size plus its versions' sizes, and records

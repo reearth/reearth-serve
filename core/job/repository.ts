@@ -16,7 +16,8 @@ export interface JobStore {
   }): Promise<ListResult<Job>>;
   listRetriable?(stuckThresholdMs: number, maxRetries: number, limit?: number): Promise<Job[]>;
   /**
-   * Return jobs marked `completed` whose associated asset is still stuck
+   * Return assets' own jobs (not versions' jobs, which never mirror onto the
+   * asset) marked `completed` whose associated asset is still stuck
    * in `pending`/`extracting`. That drift happens when the internal
    * status callback successfully wrote the job row but then failed to
    * write the asset row (two separate D1 statements). Cron uses this to
