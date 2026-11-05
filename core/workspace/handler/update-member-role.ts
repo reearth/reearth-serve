@@ -5,6 +5,7 @@ import type { AppEnv } from "../../types";
 import { accessCtx, authorizeWorkspace, deniedResponse } from "../../auth/access";
 import { canManageRole } from "../../auth/permissions";
 import { updateMemberRole } from "../../member/usecase";
+import { requireTenancyAdmin } from "../../tenancy/middleware";
 import {
   memberResponseSchema, errorResponseSchema,
   workspaceMemberParamSchema, updateMemberBodySchema,
@@ -21,17 +22,21 @@ export function registerUpdateMemberRoleRoute(app: Hono<AppEnv>) {
         401: { description: "Authentication required", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
         403: { description: "Forbidden", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
         404: { description: "Member not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        405: { description: "Members are managed by an external directory", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
       },
     }),
     zValidator("param", workspaceMemberParamSchema),
     zValidator("json", updateMemberBodySchema),
     async (c) => {
+      const admin = requireTenancyAdmin(c);
+      if (admin instanceof Response) return admin;
+
       const user = c.get("user");
       if (!user) {
         return c.json({ error: "Authentication required" }, 401);
       }
 
-      const members = c.get("members");
+      const members = admin.members;
       const { workspaceId, userId: targetUserId } = c.req.valid("param");
 
       const access = await authorizeWorkspace(accessCtx(c), workspaceId, "manage_members");

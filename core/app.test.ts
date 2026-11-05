@@ -1,12 +1,14 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { createConfig, lintFromString } from "@redocly/openapi-core";
 import { createApp } from "./app";
 import type { Deps } from "./types";
 import type { AssetMetadata } from "./asset/model";
 import type { MetadataStore, VersionStore } from "./asset/repository";
 import type { Session, SessionStore } from "./session/repository";
-import { SimpleAuthorizer } from "./auth/permissions";
 import { MemoryFileStorage } from "../adapters/memory/storage";
+import type { Project } from "./project/model";
+import type { ProjectStore } from "./project/repository";
+import { TenancyUnavailableError, type Tenancy, type TenantScope } from "./tenancy/port";
 
 // The point of this file: createApp must be constructible from hand-built
 // dependencies, with no Cloudflare bindings and no `Env` anywhere (ADR-012 §1).
@@ -50,6 +52,33 @@ function strictFake<T>(name: string, implemented: Partial<T> = {}): T {
   }) as T;
 }
 
+const anonymousTenancy: Tenancy = {
+  async enter() {
+    return { user: null, scope: strictFake<TenantScope>("tenancy scope") };
+  },
+};
+
+function signedInTenancy(check: () => Promise<boolean>): Tenancy {
+  const member = { workspaceId: "ws1", userId: "u1", role: "editor" as const, createdAt: 0, updatedAt: 0 };
+  return {
+    async enter() {
+      return {
+        user: { id: "u1", sub: "u1" },
+        scope: {
+          workspaces: strictFake("workspaces"),
+          members: { find: async () => member, list: async () => [member], listForCaller: async () => [member] },
+          authorizer: { check },
+          admin: null,
+        },
+      };
+    },
+  };
+}
+
+function projectsWith(project: Project): ProjectStore {
+  return { save: async () => {}, list: async () => [project], delete: async () => {}, find: async () => project };
+}
+
 function fakeDeps(overrides: Partial<Deps> = {}): Deps {
   return {
     metadata: new MemoryMetadataStore(),
@@ -61,10 +90,7 @@ function fakeDeps(overrides: Partial<Deps> = {}): Deps {
     jobs: strictFake("jobs"),
     ttlSeconds: 3600,
     baseUrl: "https://example.test",
-    authorizer: new SimpleAuthorizer(),
     projects: strictFake("projects"),
-    workspaces: strictFake("workspaces"),
-    members: strictFake("members"),
     extractionQueue: null,
     thumbnailQueue: null,
     storageUsage: strictFake("storageUsage"),
@@ -74,6 +100,7 @@ function fakeDeps(overrides: Partial<Deps> = {}): Deps {
     sessionTtlSeconds: 60,
     internalApiSecret: undefined,
     auth: {},
+    tenancy: anonymousTenancy,
     containers: strictFake("containers"),
     extractionStuckThresholdMs: 1000,
     limits: { subrequestBudget: 700 },
@@ -137,6 +164,21 @@ describe("createApp with hand-built deps", () => {
     const app = createApp(fakeDeps({ sessions }));
 
     const res = await app.request("/api/v1/assets", { method: "POST" });
+    const sessionId = res.headers.get("X-Session-Id");
+    expect(sessionId).toMatch(/^[0-9a-f]{16}$/);
+    expect(sessions.sessions.has(sessionId!)).toBe(true);
+  });
+
+  test("a validator 400 keeps the minted session header", async () => {
+    const sessions = new MemorySessionStore();
+    const app = createApp(fakeDeps({ sessions }));
+
+    const res = await app.request("/api/v1/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: "{not json",
+    });
+    expect(res.status).toBe(400);
     const sessionId = res.headers.get("X-Session-Id");
     expect(sessionId).toMatch(/^[0-9a-f]{16}$/);
     expect(sessions.sessions.has(sessionId!)).toBe(true);
@@ -206,8 +248,46 @@ describe("createApp with hand-built deps", () => {
   });
 });
 
-// External clients generate code from /api/v1/doc (Re:Earth CMS uses
-// oapi-codegen), so anything a handler reads or returns must be declared here.
+describe("directory and decision failures", () => {
+  const project: Project = { id: "p1", name: "P", createdAt: 0, updatedAt: 0, ownerId: "u1", workspaceId: "ws1" };
+
+  test("a decision service outage answers 503 with Retry-After from a routed handler", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const app = createApp(fakeDeps({
+      projects: projectsWith(project),
+      tenancy: signedInTenancy(async () => { throw new TenancyUnavailableError("down"); }),
+    }));
+    const res = await app.request("/api/v1/projects/p1");
+    logged.mockRestore();
+    expect(res.status).toBe(503);
+    expect(res.headers.get("Retry-After")).toBe("5");
+    expect(await res.json()).toEqual({ error: "Authorization service unavailable" });
+  });
+
+  test("any other error keeps the plain 500", async () => {
+    const logged = vi.spyOn(console, "error").mockImplementation(() => {});
+    const app = createApp(fakeDeps({
+      projects: projectsWith(project),
+      tenancy: signedInTenancy(async () => { throw new Error("bug"); }),
+    }));
+    const res = await app.request("/api/v1/projects/p1");
+    logged.mockRestore();
+    expect(res.status).toBe(500);
+    expect(await res.text()).toBe("Internal Server Error");
+  });
+
+  test("workspace writes answer 405 when an external directory owns membership", async () => {
+    const app = createApp(fakeDeps({ tenancy: signedInTenancy(async () => true) }));
+    const res = await app.request("/api/v1/workspaces", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "W" }),
+    });
+    expect(res.status).toBe(405);
+    expect(await res.json()).toEqual({ error: "Workspaces and members are managed by an external directory" });
+  });
+});
+
 describe("OpenAPI document", () => {
   type Operation = {
     parameters?: { name: string; in: string; required?: boolean }[];
@@ -249,6 +329,31 @@ describe("OpenAPI document", () => {
     const second = await loadSpec();
     expect(Object.keys(second.components.schemas)).toEqual(Object.keys(first.components.schemas));
     expect(second.components.schemas).toHaveProperty("Asset");
+  });
+
+  test("names no product in its title", async () => {
+    const spec = await loadSpec() as Spec & { info: { title: string } };
+    expect(spec.info.title).toBe("Serve API");
+  });
+
+  test.each([
+    ["/api/v1/workspaces", "post"],
+    ["/api/v1/workspaces/{id}", "delete"],
+    ["/api/v1/workspaces/{workspaceId}/members", "post"],
+    ["/api/v1/workspaces/{workspaceId}/members/{userId}", "patch"],
+    ["/api/v1/workspaces/{workspaceId}/members/{userId}", "delete"],
+  ])("%s %s declares 405 for an external directory", async (path, method) => {
+    expect((await loadSpec()).paths[path][method].responses).toHaveProperty("405");
+  });
+
+  test("every route that binds the caller declares 503, and no other route does", async () => {
+    const { paths } = await loadSpec();
+    const declares = (path: string) =>
+      Object.values(paths[path]).every((op) => "503" in op.responses);
+    const bound = Object.keys(paths).filter((p) => p.startsWith("/api/v1/") && !["/api/v1/health", "/api/v1/doc", "/api/v1/docs"].includes(p));
+    expect(bound.length).toBeGreaterThan(0);
+    for (const path of bound) expect(declares(path), path).toBe(true);
+    expect(paths["/files/{id}/{path}"].get.responses).not.toHaveProperty("503");
   });
 
   test("names the shared schemas as components", async () => {

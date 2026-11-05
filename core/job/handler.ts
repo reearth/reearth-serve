@@ -51,7 +51,7 @@ jobRoutes.get("/",
       return c.json({ jobs: result.items, cursor: result.cursor });
     }
 
-    const result = await jobs.list({ limit, cursor, accessibleByUser: user.sub });
+    const result = await jobs.list({ limit, cursor, accessibleByUser: user.id });
     return c.json({ jobs: result.items, cursor: result.cursor });
   },
 );

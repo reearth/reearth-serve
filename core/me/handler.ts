@@ -21,10 +21,9 @@ meRoutes.get("/",
       return c.json({ error: "Authentication required" }, 401);
     }
 
-    const members = c.get("members");
-    const workspaceStore = c.get("workspaces");
+    const { members, workspaces: workspaceStore } = c.get("tenancy");
 
-    const memberEntries = await members.listByUser(user.sub);
+    const memberEntries = await members.listForCaller();
 
     // Fetch workspaces in parallel — sequential N+1 multiplied D1 round-trip
     // latency by the membership count, which got expensive for users in many

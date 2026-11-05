@@ -2,12 +2,11 @@ import type { Deps } from "../../core/types";
 import type { ExtractionMessage } from "../../core/extraction/handler";
 import type { ThumbnailMessage } from "../../core/thumbnail/queue";
 import { KeyValueSessionStore, KeyValueUploadSessionStore } from "../../core/kv/stores";
-import { CerbosAuthorizer } from "../../core/auth/authorizer";
-import { SimpleAuthorizer } from "../../core/auth/permissions";
 import {
-  SqlCleanupPendingStore, SqlJobStore, SqlMemberStore, SqlMetadataStore,
-  SqlProjectStore, SqlStorageUsageStore, SqlVersionStore, SqlWorkspaceStore,
+  SqlCleanupPendingStore, SqlJobStore, SqlMetadataStore,
+  SqlProjectStore, SqlStorageUsageStore, SqlVersionStore,
 } from "../../adapters/sql/stores";
+import { buildTenancy } from "../../adapters/tenancy";
 import { SqlAtomicWrites } from "../../adapters/sql/writes";
 import { SqlJobQueue } from "../../adapters/sql/queue";
 import { SqlKeyValue } from "../../adapters/sql/kv";
@@ -79,12 +78,7 @@ export function buildNodeRuntime(env: Env = process.env): NodeRuntime {
     jobs: new SqlJobStore(sql),
     ttlSeconds: config.assetTtlSeconds,
     baseUrl: config.baseUrl,
-    authorizer: env.CERBOS_ENDPOINT
-      ? new CerbosAuthorizer(env.CERBOS_ENDPOINT)
-      : new SimpleAuthorizer(),
     projects: new SqlProjectStore(sql),
-    workspaces: new SqlWorkspaceStore(sql),
-    members: new SqlMemberStore(sql),
     extractionQueue,
     thumbnailQueue,
     storageUsage: new SqlStorageUsageStore(sql),
@@ -98,6 +92,7 @@ export function buildNodeRuntime(env: Env = process.env): NodeRuntime {
       audience: config.oidcAudience,
       jwksCache: kv,
     },
+    tenancy: buildTenancy(config.tenancy, { sql }),
     containers: new UnavailableContainerLauncher(),
     extractionStuckThresholdMs: STUCK_THRESHOLD_MS,
     limits: { subrequestBudget: CLEANUP_SUBREQUEST_BUDGET },

@@ -15,7 +15,7 @@ describe("OpenAPI", () => {
     const spec = await res.json() as Record<string, unknown>;
     expect(spec.openapi).toBe("3.1.0");
     expect(spec.info).toMatchObject({
-      title: "Re:Earth Serve API",
+      title: "Serve API",
       version: "1.0.0",
     });
 

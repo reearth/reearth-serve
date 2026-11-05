@@ -36,7 +36,7 @@ projectRoutes.get("/",
       const list = await listProjects(projects, { workspaceId });
       return c.json({ projects: list });
     }
-    const list = await listProjects(projects, { ownerId: user.sub });
+    const list = await listProjects(projects, { ownerId: user.id });
     return c.json({ projects: list });
   },
 );
@@ -67,7 +67,7 @@ projectRoutes.post("/",
     }
 
     const projects = c.get("projects");
-    const project = await createProject(projects, body.name, user.sub, body.workspaceId);
+    const project = await createProject(projects, body.name, user.id, body.workspaceId);
     return c.json({ project }, 201);
   },
 );

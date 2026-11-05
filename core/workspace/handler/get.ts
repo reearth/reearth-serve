@@ -28,7 +28,7 @@ export function registerGetRoute(app: Hono<AppEnv>) {
       const access = await authorizeWorkspace(accessCtx(c), id, "read");
       if (!access.ok) return deniedResponse(c, access, { notFound: "Workspace not found" });
 
-      const workspace = await getWorkspace(c.get("workspaces"), id);
+      const workspace = await getWorkspace(c.get("tenancy").workspaces, id);
       if (!workspace) {
         return c.json({ error: "Workspace not found" }, 404);
       }
