@@ -67,6 +67,9 @@ projectRoutes.post("/",
     }
 
     const body = c.req.valid("json");
+    if (!body.workspaceId && !c.get("tenancy").admin) {
+      return c.json({ error: "workspaceId is required" }, 400);
+    }
     if (body.workspaceId) {
       const access = await authorizeWorkspace(accessCtx(c), body.workspaceId, "create_project");
       if (!access.ok) return deniedResponse(c, access, { notFound: "Workspace not found", forbiddenAs: 403 });

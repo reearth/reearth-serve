@@ -9,10 +9,12 @@ ACCOUNTS_PORT="${ACCOUNTS_PORT:-8090}"
 MOCK_OIDC_PORT="${MOCK_OIDC_PORT:-18997}"
 MONGO_PORT="${MONGO_PORT:-27018}"
 CERBOS_PORT="${CERBOS_PORT:-3593}"
+SERVE_PORT="${E2E_PORT:-8788}"
 MONGO="serve-rbac-mongo-${RUN_ID}"
 CERBOS="serve-rbac-cerbos-${RUN_ID}"
 ACCOUNTS="http://localhost:${ACCOUNTS_PORT}"
 ISSUER="http://localhost:${MOCK_OIDC_PORT}/"
+SERVE="http://localhost:${SERVE_PORT}"
 WORK="$(mktemp -d "${TMPDIR:-/tmp}/serve-e2e-accounts.XXXXXX")"
 NONCE="${RANDOM}${RANDOM}"
 JOBS=()
@@ -20,14 +22,18 @@ CONTAINERS=()
 
 cleanup() {
   local status=$?
-  if [ "${status}" -ne 0 ] && [ -s "${WORK}/accounts.log" ]; then tail -n 40 "${WORK}/accounts.log" >&2; fi
+  if [ "${status}" -ne 0 ]; then
+    for log in accounts serve; do
+      if [ -s "${WORK}/${log}.log" ]; then tail -n 40 "${WORK}/${log}.log" >&2; fi
+    done
+  fi
   if [ "${E2E_ACCOUNTS_KEEP:-}" = "1" ]; then
     local live=()
     for pid in "${JOBS[@]:+${JOBS[@]}}"; do
       if kill -0 "${pid}" 2>/dev/null; then live+=("-${pid}"); fi
     done
     echo "E2E_ACCOUNTS_KEEP=1: leaving the stack up."
-    echo "  accounts ${ACCOUNTS} (log ${WORK}/accounts.log), mock OIDC ${ISSUER}"
+    echo "  Serve ${SERVE}, accounts ${ACCOUNTS} (log ${WORK}/accounts.log), mock OIDC ${ISSUER}"
     echo "  teardown: kill -- ${live[*]:-} 2>/dev/null; docker rm -f ${CONTAINERS[*]:-}; rm -rf ${WORK}"
     return
   fi
@@ -143,15 +149,26 @@ migrate() {
   foreground env "${ACCOUNTS_ENV[@]}" RUN_MIGRATION=true "${ACCOUNTS_BIN}" >> "${WORK}/accounts.log" 2>&1
 }
 
+start_accounts() {
+  echo "Starting accounts on ${ACCOUNTS_PORT}..."
+  refuse_taken accounts "${ACCOUNTS_PORT}"
+  background env "${ACCOUNTS_ENV[@]}" "${ACCOUNTS_BIN}" >> "${WORK}/accounts.log" 2>&1
+  ACCOUNTS_PID="$!"
+  wait_until Accounts "${ACCOUNTS_PID}" curl -sf "${ACCOUNTS}/api/auth/config"
+}
+
 run_phase() {
   echo "Running the ${1} phase..."
   foreground env \
+    E2E_ENDPOINT="${SERVE}" \
     E2E_ACCOUNTS_URL="${ACCOUNTS}" \
+    E2E_ACCOUNTS_LOG="${WORK}/accounts.log" \
+    E2E_ACCOUNTS_PID="${ACCOUNTS_PID}" \
     E2E_MOCK_OIDC="http://localhost:${MOCK_OIDC_PORT}" \
     E2E_ACCOUNTS_PHASE="$1" \
     E2E_ACCOUNTS_NONCE="${NONCE}" \
-    npm run test:e2e -- --reporter=default --reporter=json --outputFile.json="${WORK}/$1.json" \
-      e2e/accounts-contract.test.ts "${@:2}"
+    npm run test:e2e -- --no-file-parallelism --reporter=default --reporter=json --outputFile.json="${WORK}/$1.json" \
+      "${@:2}"
   node -e '
     const { testResults } = JSON.parse(require("node:fs").readFileSync(process.argv[1], "utf8"));
     const idle = testResults.filter((file) => !file.assertionResults.some((test) => test.status === "passed"));
@@ -161,11 +178,26 @@ run_phase() {
 }
 
 migrate
-echo "Starting accounts on ${ACCOUNTS_PORT}..."
-refuse_taken accounts "${ACCOUNTS_PORT}"
-background env "${ACCOUNTS_ENV[@]}" "${ACCOUNTS_BIN}" >> "${WORK}/accounts.log" 2>&1
-wait_until Accounts "$!" curl -sf "${ACCOUNTS}/api/auth/config"
+start_accounts
 
-run_phase fresh "$@"
+echo "Starting Serve on ${SERVE_PORT} with ACCOUNTS_URL=${ACCOUNTS}..."
+refuse_taken Serve "${SERVE_PORT}"
+background env \
+  PORT="${SERVE_PORT}" \
+  BASE_URL="${SERVE}" \
+  SQLITE_PATH=":memory:" \
+  INTERNAL_API_SECRET=e2e-internal-secret \
+  ANONYMOUS_UPLOAD_ENABLED=true \
+  OIDC_ISSUER_URL="${ISSUER}" \
+  OIDC_AUDIENCE=e2e-audience \
+  CONTAINER_LAUNCHER=none \
+  ACCOUNTS_URL="${ACCOUNTS}" \
+  npm run start:node > "${WORK}/serve.log" 2>&1
+wait_until Serve "$!" curl -sf "${SERVE}/api/v1/health"
+
+SUITES=(e2e/accounts-contract.test.ts e2e/accounts.test.ts)
+run_phase fresh "${SUITES[@]}" "$@"
 migrate
-run_phase migrated "$@"
+run_phase migrated "${SUITES[@]}" "$@"
+run_phase down e2e/accounts.test.ts "$@"
+if [ "${E2E_ACCOUNTS_KEEP:-}" = "1" ]; then start_accounts; fi
