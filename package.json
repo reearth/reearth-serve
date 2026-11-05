@@ -19,6 +19,7 @@
     "test:e2e": "vitest run --project e2e",
     "test:e2e:dev": "bash scripts/e2e.sh",
     "test:e2e:node": "bash scripts/e2e-node.sh",
+    "test:e2e:accounts": "bash scripts/e2e-accounts.sh",
     "start:node": "NODE_OPTIONS=--experimental-sqlite tsx runtime/node/index.ts",
     "cli": "tsx cli/index.ts --"
   },
