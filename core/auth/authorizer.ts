@@ -1,47 +1,49 @@
-export interface AuthzRequest {
-  principal: { id: string; roles: string[] };
-  resource: { kind: string; id: string; attr?: Record<string, unknown> };
-  action: string;
+import type { Role } from "../../shared/api";
+import type { ProjectAction, WorkspaceAction } from "./permissions";
+
+type Principal = {
+  id: string;
+  role: Role;
+};
+
+export type AuthzRequest =
+  | {
+      principal: Principal;
+      workspaceId: string;
+      resource: { kind: "workspace" };
+      action: WorkspaceAction;
+    }
+  | {
+      principal: Principal;
+      workspaceId: string;
+      resource: { kind: "project"; projectId: string };
+      action: ProjectAction;
+    };
+
+export function isWorkspaceRequest(req: AuthzRequest): req is Extract<AuthzRequest, { resource: { kind: "workspace" } }> {
+  return req.resource.kind === "workspace";
 }
 
 export interface Authorizer {
   check(req: AuthzRequest): Promise<boolean>;
 }
 
-// Cerbos PDP runs in the request hot path. A short timeout makes us fail fast
-// when the PDP is degraded instead of stalling every authenticated request to
-// the 30s Worker subrequest cap.
 const CERBOS_TIMEOUT_MS = 3000;
 
-/**
- * CerbosAuthorizer sends authorization requests to an external Cerbos PDP.
- */
 export class CerbosAuthorizer implements Authorizer {
   constructor(private endpoint: string, private timeoutMs: number = CERBOS_TIMEOUT_MS) {}
 
   async check(req: AuthzRequest): Promise<boolean> {
-    const body = {
-      principal: {
-        id: req.principal.id,
-        roles: req.principal.roles,
-      },
-      resource: {
-        kind: req.resource.kind,
-        id: req.resource.id,
-        attr: req.resource.attr ?? {},
-      },
-      actions: [req.action],
-    };
-
+    const id = req.resource.kind === "workspace" ? req.workspaceId : req.resource.projectId;
     const res = await fetch(`${this.endpoint}/api/check/resources`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
-        principal: body.principal,
+        principal: { id: req.principal.id, roles: [req.principal.role] },
         resources: [
           {
-            resource: { kind: body.resource.kind, id: body.resource.id, attr: body.resource.attr },
-            actions: body.actions,
+            resource: { kind: req.resource.kind, id, attr: { workspaceId: req.workspaceId } },
+            actions: [req.action],
           },
         ],
       }),
@@ -58,7 +60,6 @@ export class CerbosAuthorizer implements Authorizer {
       }>;
     };
 
-    const result = data.results?.[0]?.actions?.[req.action];
-    return result === "EFFECT_ALLOW";
+    return data.results?.[0]?.actions?.[req.action] === "EFFECT_ALLOW";
   }
 }

@@ -1,0 +1,17 @@
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  resource: project
+  version: default
+  rules:
+    - actions: [read, read_asset, read_job]
+      effect: EFFECT_ALLOW
+      roles: [viewer, editor, admin, owner]
+    - actions: [create_asset, update_asset, delete_asset, extract_asset, retry_job]
+      effect: EFFECT_ALLOW
+      roles: [editor, admin, owner]
+    - actions: [manage_webhooks]
+      effect: EFFECT_ALLOW
+      roles: [admin, owner]
+    - actions: [delete]
+      effect: EFFECT_ALLOW
+      roles: [owner]

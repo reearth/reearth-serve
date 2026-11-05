@@ -1,7 +1,7 @@
 import type { Context } from "hono";
 import type { DescribeRouteOptions } from "hono-openapi";
 import type { AppEnv } from "../../types";
-import { canAccessProject, type AccessContext } from "../access";
+import { accessCtx, authorizeProject } from "../../auth/access";
 
 /**
  * Block uploads from unauthenticated callers when anonymous uploads are
@@ -21,16 +21,6 @@ export function denyAnonymousUpload(c: Context<AppEnv>): Response | null {
     },
     401,
   );
-}
-
-export function accessCtx(c: Context<AppEnv>): AccessContext {
-  return {
-    sessionId: c.get("sessionId"),
-    user: c.get("user"),
-    authorizer: c.get("authorizer"),
-    members: c.get("members"),
-    projects: c.get("projects"),
-  };
 }
 
 type ParameterSpec = NonNullable<DescribeRouteOptions["parameters"]>[number];
@@ -73,8 +63,8 @@ export async function resolveUploadProject(
       error: "Authenticated uploads require the X-Project-Id header",
     };
   }
-  const allowed = await canAccessProject(accessCtx(c), header, "upload");
-  if (!allowed) {
+  const access = await authorizeProject(accessCtx(c), header, "create_asset");
+  if (!access.ok) {
     return { ok: false, status: 404, error: "Project not found" };
   }
   return { ok: true, projectId: header };

@@ -41,7 +41,7 @@ curl -X POST http://localhost:5173/api/v1/assets \
 
 When calling with `Authorization: Bearer <jwt>`, add
 `X-Project-Id: <projectId>` — authenticated uploads must be project-scoped
-and the caller must be a member of the project's workspace. Anonymous
+and the caller needs `create_asset` on that project (see [Authorization](#authorization)). Anonymous
 (demo-mode) uploads omit both headers and are tracked by `X-Session-Id`.
 
 The production endpoint is `https://serve.reearth.land`. Point the CLI at it via `REEARTH_SERVE_ENDPOINT=https://serve.reearth.land` (or `--endpoint` per command).
@@ -111,6 +111,7 @@ SSR on Node is out of scope, and any other path returns 404 saying so.
 | `ANONYMOUS_UPLOAD_ENABLED` | (unset) | `"true"` to allow uploads without a token |
 | `ASSET_TTL_SECONDS` | `3600` | TTL for assets that belong to no project |
 | `OIDC_ISSUER_URL` / `OIDC_AUDIENCE` | (unset) | JWT verification; unset ⇒ demo mode |
+| `CERBOS_ENDPOINT` | (unset) | Cerbos PDP base URL; unset ⇒ the built-in policy table decides (see [Authorization](#authorization)) |
 | `OBJECT_STORE_*` | (unset) | Reserved for the future S3 adapter; until then storage is in-process |
 | `CONTAINER_LAUNCHER` | `none` | Only `none` is implemented; any other value fails at startup |
 
@@ -192,6 +193,39 @@ These endpoints require `Authorization: Bearer $INTERNAL_API_SECRET` — set it 
 Assets support **versioning** — uploading to an existing asset (`POST /api/v1/assets/:id`) creates a new version while keeping the asset ID and URL stable. Each asset can have an explicit active version; if unset, the latest version is served. File URLs (`/files/:id/:filename`) resolve the active/latest version automatically. Version IDs can also be used directly in file URLs. Demo mode assets (no project) auto-expire after 1 hour. Project assets are permanent. See [ADR-005](./docs/adr/005-asset-versioning.md).
 
 Uploaded JPEG/PNG/WebP/GIF images get four WebP thumbnails generated automatically: `xs` (64 px), `sm` (128 px), `md` (512 px), `lg` (1280 px). `xs` is sized to fit comfortably inside Cesium's billboard TextureAtlas on mobile. Generation is asynchronous via a queue and serves static from R2 thereafter — see [ADR-009](./docs/adr/009-image-thumbnail-generation.md).
+
+## Authorization
+
+One policy table, `POLICY` in `core/auth/permissions.ts`, gives each action on a workspace or a project the lowest role that may perform it. Assets and jobs take their project's permissions. A project outside any workspace belongs to its creator alone. The table decides each workspace route and each route on one project, asset, job or upload. Lists filtered by `?workspaceId` (projects, assets, jobs) and the unscoped asset and job lists are decided per workspace, by workspace `read` or workspace membership, never per project.
+
+| Kind | Action | viewer | editor | admin | owner |
+|------|--------|:---:|:---:|:---:|:---:|
+| `workspace` | `read` | ✓ | ✓ | ✓ | ✓ |
+| `workspace` | `delete` |  |  |  | ✓ |
+| `workspace` | `manage_members` |  |  | ✓ | ✓ |
+| `workspace` | `create_project` |  |  | ✓ | ✓ |
+| `project` | `read` | ✓ | ✓ | ✓ | ✓ |
+| `project` | `delete` |  |  |  | ✓ |
+| `project` | `read_asset` | ✓ | ✓ | ✓ | ✓ |
+| `project` | `create_asset` |  | ✓ | ✓ | ✓ |
+| `project` | `update_asset` |  | ✓ | ✓ | ✓ |
+| `project` | `delete_asset` |  | ✓ | ✓ | ✓ |
+| `project` | `extract_asset` |  | ✓ | ✓ | ✓ |
+| `project` | `read_job` | ✓ | ✓ | ✓ | ✓ |
+| `project` | `retry_job` |  | ✓ | ✓ | ✓ |
+| `project` | `manage_webhooks` |  |  | ✓ | ✓ |
+
+A denied caller gets 404 on asset, job, upload and project routes, so the answer does not confirm that the target exists. Project create, workspace delete and the member routes answer 403 to a member who lacks the role. Nobody can grant, change or remove a role above their own. Deleting a workspace that still has projects answers 409. Delete its projects first. No route uses `manage_webhooks` yet.
+
+Set `CERBOS_ENDPOINT` to send each decision to your own Cerbos PDP. Serve sends resource kind `workspace` or `project`, the workspace or project id as the resource id, `attr.workspaceId`, and the caller's workspace role as its one principal role. Serve refuses a role below the table's minimum without asking Cerbos, so a policy can deny more than the table but never allow more. A policy that denies one project does not hide that project's rows from the workspace-scoped or unscoped lists. [`docs/examples/cerbos/`](./docs/examples/cerbos/) holds policies that mirror the table, and `npm run check` fails if they drift from it. To run them:
+
+```bash
+docker run --rm -p 3592:3592 -v "$PWD/docs/examples/cerbos:/policies" \
+  ghcr.io/cerbos/cerbos:0.40.0 server --config=/policies/.cerbos.yaml
+CERBOS_ENDPOINT=http://localhost:3592 npm run start:node
+```
+
+**Upgrade note.** Earlier releases sent Cerbos the kinds `asset`, `job`, `project` and `workspace`, with actions such as `create` and `read`. A policy written for those names denies every check after this release. Replace it with the policies in `docs/examples/cerbos/`.
 
 ## CLI
 

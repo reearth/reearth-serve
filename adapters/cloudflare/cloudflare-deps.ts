@@ -7,7 +7,7 @@ import {
 } from "../sql/stores";
 import { R2PresignedUrlGenerator } from "./presigned";
 import { CerbosAuthorizer } from "../../core/auth/authorizer";
-import { SimpleAuthorizer } from "./authorizer";
+import { SimpleAuthorizer } from "../../core/auth/permissions";
 import { CloudflareContainerLauncher, type ObjectStoreCredentials } from "./container";
 import { CloudflareKeyValue } from "./kv";
 import { KeyValueUploadSessionStore, KeyValueSessionStore } from "../../core/kv/stores";

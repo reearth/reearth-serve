@@ -2,8 +2,7 @@ import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
 import { resolver, validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
-import { canAccessProject } from "../access";
-import { accessCtx } from "./shared";
+import { accessCtx, authorizeProject, authorizeWorkspace, deniedResponse } from "../../auth/access";
 import { assetListResponseSchema, errorResponseSchema, scopedListQuerySchema } from "../../../shared/openapi";
 
 export function registerListRoute(app: Hono<AppEnv>) {
@@ -32,17 +31,15 @@ export function registerListRoute(app: Hono<AppEnv>) {
       }
 
       if (projectId) {
-        if (!await canAccessProject(accessCtx(c), projectId, "read")) {
-          return c.json({ error: "Project not found" }, 404);
-        }
+        const access = await authorizeProject(accessCtx(c), projectId, "read_asset");
+        if (!access.ok) return deniedResponse(c, access, { notFound: "Project not found" });
         const result = await metadata.list({ limit, cursor, projectId });
         return c.json({ assets: result.items, cursor: result.cursor });
       }
 
       if (workspaceId) {
-        const members = c.get("members");
-        const member = await members.find(workspaceId, user.sub);
-        if (!member) return c.json({ error: "Workspace not found" }, 404);
+        const access = await authorizeWorkspace(accessCtx(c), workspaceId, "read");
+        if (!access.ok) return deniedResponse(c, access, { notFound: "Workspace not found" });
         const result = await metadata.list({ limit, cursor, workspaceId });
         return c.json({ assets: result.items, cursor: result.cursor });
       }

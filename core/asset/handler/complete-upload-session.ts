@@ -4,8 +4,8 @@ import { describeRoute } from "hono-openapi";
 import { resolver, validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { completeUploadSession } from "../usecase";
-import { canAccessProject } from "../access";
-import { accessCtx, usageScopes } from "./shared";
+import { accessCtx, authorizeProject } from "../../auth/access";
+import { usageScopes } from "./shared";
 import { uploadResultResponseSchema, errorResponseSchema, idParamSchema, completeUploadBodySchema } from "../../../shared/openapi";
 
 // hono-openapi only resolves `resolver()` in responses, and this route parses
@@ -47,8 +47,8 @@ export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
       return c.json({ error: "Upload session not found or file not yet uploaded" }, 404);
     }
     if (session.projectId) {
-      const allowed = await canAccessProject(accessCtx(c), session.projectId, "upload");
-      if (!allowed) {
+      const access = await authorizeProject(accessCtx(c), session.projectId, "create_asset");
+      if (!access.ok) {
         return c.json({ error: "Upload session not found or file not yet uploaded" }, 404);
       }
     }
