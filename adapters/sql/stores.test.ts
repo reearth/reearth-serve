@@ -85,7 +85,7 @@ describe("SqlProjectStore", () => {
     expect((await store.list({ workspaceId: "ws1" })).map((p) => p.id)).toEqual(["p1"]);
     expect(await store.list({})).toEqual([]);
 
-    await store.delete("p1", "u1");
+    await store.delete("p1");
     expect(await store.find("p1")).toBeNull();
   });
 });
