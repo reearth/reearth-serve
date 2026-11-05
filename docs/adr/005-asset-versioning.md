@@ -1,12 +1,12 @@
 # ADR-005: Asset Versioning
 
-- **Status:** Accepted (partially implemented — presigned overwrite and data migration pending)
+- **Status:** Accepted (partially implemented; presigned overwrite and data migration pending)
 - **Date:** 2026-03-25
 - **Deciders:** @rot1024
 
 ## Context
 
-Re:Earth Serve currently treats assets as immutable — once uploaded, an asset's file cannot be replaced. The only way to update content is to delete the old asset and upload a new one, which changes the asset ID and breaks any existing URLs.
+Re:Earth Serve currently treats assets as immutable. Once uploaded, an asset's file cannot be replaced. The only way to update content is to delete the old asset and upload a new one, which changes the asset ID and breaks any existing URLs.
 
 Users need the ability to "overwrite" an asset's content while keeping the same asset ID and public URL stable. This is critical for workflows such as:
 - Updating a tileset package (new tiles, same URL)
@@ -50,7 +50,7 @@ CREATE INDEX idx_versions_asset ON asset_versions(asset_id);
 
 #### Modified `assets` Table
 
-The `assets` table is simplified — file-level fields move to `asset_versions`:
+The `assets` table is simplified, and file-level fields move to `asset_versions`:
 
 ```sql
 -- Fields removed from assets: filename, content_type, size, type, status, meta (file-related fields)
@@ -65,7 +65,7 @@ ALTER TABLE assets ADD COLUMN description TEXT;  -- human-readable description f
 ALTER TABLE assets ADD COLUMN user_meta TEXT;     -- caller-defined key-value data
 ```
 
-`description` is a free-text field for UI display — distinct from `user_meta` (machine-readable KV) and `meta` (system-internal). It allows users to understand what an asset is for at a glance, even when the asset has no versions yet (e.g., an empty DerivedAsset showing "GeoJSON → FGB conversion output").
+`description` is a free-text field for UI display, distinct from `user_meta` (machine-readable KV) and `meta` (system-internal). It allows users to understand what an asset is for at a glance, even when the asset has no versions yet (e.g., an empty DerivedAsset showing "GeoJSON → FGB conversion output").
 
 #### Migration Strategy
 
@@ -93,7 +93,7 @@ This separation ensures that user updates can never accidentally overwrite syste
 
 **Rules:**
 - `user_meta` is a JSON object. Serve validates it is valid JSON but imposes no schema.
-- `user_meta` is fully replaceable on update (PUT semantics — the entire object is replaced, not merged).
+- `user_meta` is fully replaceable on update (PUT semantics; the entire object is replaced, not merged).
 - `meta` is managed exclusively by serve. The API exposes it as read-only in responses.
 
 ### R2 Key Layout
@@ -197,7 +197,7 @@ Creates a presigned upload session for a new version of an existing asset. Same 
 POST /api/v1/assets/uploads/:uploadId/complete
 ```
 
-The `UploadSession` model gains an optional `assetId` field. When `assetId` is present, completing the upload creates a new version under that asset instead of creating a new asset. This keeps the completion flow unified — the only difference is whether the session was created for a new asset or an existing one.
+The `UploadSession` model gains an optional `assetId` field. When `assetId` is present, completing the upload creates a new version under that asset instead of creating a new asset. This keeps the completion flow unified. The only difference is whether the session was created for a new asset or an existing one.
 
 Both streaming upload (`POST /api/v1/assets/:id`) and presigned upload (`POST /api/v1/assets/:id/uploads`) support overwrite. Large file overwrites benefit from presigned multipart upload the same way new uploads do.
 
@@ -270,7 +270,7 @@ Asset deletion is a two-phase process:
    - Return success to the client immediately.
 
 2. **Asynchronous (cleanup job)**:
-   - R2 objects under `assets/{assetId}/` are **not** deleted synchronously — deleting many files (multiple versions × extracted archives) could be slow and risk timeout.
+   - R2 objects under `assets/{assetId}/` are **not** deleted synchronously, because deleting many files (multiple versions × extracted archives) could be slow and risk timeout.
    - The existing scheduled cleanup job detects orphaned R2 prefixes (objects whose asset ID no longer exists in D1) and deletes them in the background.
 
 Individual version deletion (`DELETE /api/v1/assets/:id/versions/:versionId`) follows the same pattern: the `asset_versions` row is deleted synchronously, R2 objects for that version are cleaned up asynchronously. If the deleted version was the active version, `activeVersionId` is reset to `NULL` (falls back to latest).
@@ -283,7 +283,7 @@ Storage usage (ADR-004) counts bytes stored in R2. With versioning:
 - **On version delete**: decrement by the deleted version's `size`.
 - **On asset delete**: decrement by the sum of all versions' `size`.
 
-Each version's storage is counted independently — keeping old versions consumes additional storage.
+Each version's storage is counted independently, so keeping old versions consumes additional storage.
 
 ### Archive Extraction
 
@@ -293,6 +293,29 @@ Archive extraction works at the version level:
 - The extraction job references the version ID, not the asset ID.
 - Extracted files are stored under the version's R2 prefix.
 - The `jobs` table already has an `asset_id` column; a `version_id` column is added.
+
+#### Amendment (2026-11-05): extraction is addressed by job
+
+The first implementation addressed every extraction by asset ID. A version's
+archive was extracted into the asset root, its status callbacks landed on the
+asset's job, and the cron and `/jobs/:id/retry` re-enqueued the asset's
+original archive (eukarya-inc/compliance#258 REL-09). The contract is now:
+
+- The extraction message carries `jobId`, and `versionId` for a version job.
+  An asset's own job keeps `jobId == assetId`. The queue consumer reads a
+  message without `jobId` as the asset's job.
+- One function, `extractionMessageForJob`, rebuilds the message from a job
+  row: the version's archive key and format when `job.versionId` is set, the
+  asset's otherwise. Upload, re-enqueue and retry all go through it or match
+  it.
+- The launcher names the container instance by job ID and passes `JOB_ID`
+  and `VERSION_ID`. The extractor posts status to `/api/internal/jobs/{JOB_ID}/status`
+  and writes files, manifest, checkpoint and log under
+  `assets/{assetId}/v/{versionId}/` when `VERSION_ID` is set.
+- A version job's status mirrors onto its version row (`pending` →
+  `extracting` → `ready`/`failed`, plus `fileCount` and `extractedSize`),
+  never onto the asset. The asset row only gets its demo expiry extended.
+  Exhausting the retry budget fails the version, not the asset.
 
 ### Access Control
 
@@ -313,7 +336,7 @@ Version IDs use the same format as asset IDs (ULID or similar). The `version` fi
 Each version would be a full asset with a `parentAssetId` field. The file URL would use the parent's ID.
 
 Rejected because:
-- Pollutes the asset list — users see every version as a separate asset.
+- Pollutes the asset list. Users see every version as a separate asset.
 - Requires complex query logic to filter "root" vs "version" assets.
 - URL routing for "latest" requires scanning all child assets by `createdAt`.
 
@@ -323,7 +346,7 @@ Simply replace the file in R2 and update metadata. No version tracking.
 
 Rejected because:
 - Loses the ability to rollback to a previous version.
-- R2 overwrites are not atomic — a failed overwrite could leave the asset in a broken state.
+- R2 overwrites are not atomic, so a failed overwrite could leave the asset in a broken state.
 - No audit trail of what changed and when.
 
 ### External Versioning (Git-like Object Store)
@@ -331,7 +354,7 @@ Rejected because:
 Content-addressable storage where each file is stored by hash, and versions are pointers.
 
 Rejected because:
-- Over-engineered for the current use case — we need simple "replace file, keep URL stable" semantics.
+- Over-engineered for the current use case. We need simple "replace file, keep URL stable" semantics.
 - Adds deduplication complexity with minimal benefit (assets are typically unique binary files).
 
 ### Version Tags Instead of Active Version
@@ -379,10 +402,10 @@ Deferred. The current design uses a single `activeVersionId` which covers the pr
 
 ## Consequences
 
-- Asset URLs remain stable across version updates — downstream consumers are not affected.
+- Asset URLs remain stable across version updates, so downstream consumers are not affected.
 - Users can overwrite assets without losing previous versions, enabling rollback.
-- Storage usage increases with each version kept — a future retention policy or version limit may be needed.
-- The file serving path adds one extra D1 query (version resolution) — mitigated by caching the resolved version.
+- Storage usage increases with each version kept. A future retention policy or version limit may be needed.
+- The file serving path adds one extra D1 query (version resolution), mitigated by caching the resolved version.
 - Pre-migration assets continue to work via the legacy fallback path.
 - Archive extraction becomes version-scoped, so old extracted files remain accessible if the old version is still present.
 - The `jobs` table gains a `version_id` column to link extraction jobs to specific versions.
