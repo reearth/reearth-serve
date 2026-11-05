@@ -8,12 +8,13 @@
  * `adapters/sql/` rather than under a provider directory.
  */
 import type { AssetMetadata, AssetVersion } from "../../core/asset/model";
-import type { MetadataStore, StorageUsage, StorageUsageStore, VersionStore } from "../../core/asset/repository";
-import type { ListResult } from "../../core/asset/repository";
+import type {
+  ListOptions, ListResult, ListScope, MetadataStore, StorageUsage, StorageUsageStore, VersionStore,
+} from "../../core/asset/repository";
 import type { Job } from "../../core/job/model";
 import type { JobStore } from "../../core/job/repository";
 import type { Project } from "../../core/project/model";
-import type { ProjectStore } from "../../core/project/repository";
+import type { ProjectListScope, ProjectStore } from "../../core/project/repository";
 import type { Workspace } from "../../core/workspace/model";
 import type { WorkspaceAdmin, WorkspaceStore } from "../../core/workspace/repository";
 import type { Member } from "../../core/member/model";
@@ -41,37 +42,27 @@ const JOB_META_KEYS = [
 const MEMBER_LIST_LIMIT = 200;
 const PROJECT_LIST_LIMIT = 200;
 
-// Build the scope clause shared by assets/jobs listing. Returns null when no
-// scope is provided — callers must treat that as an empty result so we never
-// leak cross-tenant rows. Exactly one of the scope fields is honored, checked
-// in priority order (sessionId → projectId → workspaceId → accessibleByUser)
-// to keep behavior deterministic if a caller accidentally passes multiple.
-function buildScopeClause(
-  options: { sessionId?: string; projectId?: string; workspaceId?: string; accessibleByUser?: string } | undefined,
-  startIdx: number,
-): { clause: string; binds: SqlValue[] } | null {
-  if (!options) return null;
-  if (options.sessionId) {
-    return { clause: `session_id = ?${startIdx}`, binds: [options.sessionId] };
+// Workspace ids travel as one JSON parameter so D1's 100-parameter limit never
+// caps how many workspaces a caller may belong to.
+function buildScopeClause(scope: ListScope): { clause: string; binds: SqlValue[] } {
+  switch (scope.kind) {
+    case "session":
+      return { clause: "session_id = ?1", binds: [scope.sessionId] };
+    case "project":
+      return { clause: "project_id = ?1", binds: [scope.projectId] };
+    case "workspace":
+      return {
+        clause: "project_id IN (SELECT id FROM projects WHERE workspace_id = ?1)",
+        binds: [scope.workspaceId],
+      };
+    case "visible":
+      return {
+        clause:
+          "project_id IN (SELECT id FROM projects WHERE workspace_id IN (SELECT value FROM json_each(?1))" +
+          " OR (workspace_id IS NULL AND owner_id = ?2))",
+        binds: [JSON.stringify(scope.workspaceIds), scope.ownerId],
+      };
   }
-  if (options.projectId) {
-    return { clause: `project_id = ?${startIdx}`, binds: [options.projectId] };
-  }
-  if (options.workspaceId) {
-    // Caller is responsible for verifying the user is a member of this workspace.
-    return {
-      clause: `project_id IN (SELECT id FROM projects WHERE workspace_id = ?${startIdx})`,
-      binds: [options.workspaceId],
-    };
-  }
-  if (options.accessibleByUser) {
-    return {
-      clause:
-        `project_id IN (SELECT id FROM projects WHERE workspace_id IN (SELECT workspace_id FROM members WHERE user_id = ?${startIdx}))`,
-      binds: [options.accessibleByUser],
-    };
-  }
-  return null;
 }
 
 // ---------------------------------------------------------------------------
@@ -173,19 +164,20 @@ export class SqlProjectStore implements ProjectStore {
     return row ? rowToModel<Project>(row) : null;
   }
 
-  async list(params: { ownerId?: string; workspaceId?: string }): Promise<Project[]> {
-    let query: string;
-    let bindValue: string;
-    if (params.workspaceId) {
-      query = "SELECT * FROM projects WHERE workspace_id = ?1 ORDER BY created_at DESC LIMIT ?2";
-      bindValue = params.workspaceId;
-    } else if (params.ownerId) {
-      query = "SELECT * FROM projects WHERE owner_id = ?1 ORDER BY created_at DESC LIMIT ?2";
-      bindValue = params.ownerId;
-    } else {
-      return [];
-    }
-    const rows = await queryAll(this.db, query, [bindValue, PROJECT_LIST_LIMIT]);
+  async list(scope: ProjectListScope): Promise<Project[]> {
+    const rows = scope.kind === "workspace"
+      ? await queryAll(
+        this.db,
+        "SELECT * FROM projects WHERE workspace_id = ?1 ORDER BY created_at DESC LIMIT ?2",
+        [scope.workspaceId, PROJECT_LIST_LIMIT],
+      )
+      : await queryAll(
+        this.db,
+        `SELECT * FROM projects WHERE owner_id = ?1
+           AND (workspace_id IS NULL OR workspace_id IN (SELECT value FROM json_each(?2)))
+           ORDER BY created_at DESC LIMIT ?3`,
+        [scope.ownerId, JSON.stringify(scope.memberOf), PROJECT_LIST_LIMIT],
+      );
     return rows.map((r) => rowToModel<Project>(r));
   }
 
@@ -229,23 +221,13 @@ export class SqlJobStore implements JobStore {
     await this.db.execute("DELETE FROM jobs WHERE id = ?1", [id]);
   }
 
-  async list(options?: {
-    limit?: number;
-    cursor?: string;
-    sessionId?: string;
-    projectId?: string;
-    workspaceId?: string;
-    accessibleByUser?: string;
-  }): Promise<ListResult<Job>> {
-    const limit = options?.limit ?? 20;
-    const scope = buildScopeClause(options, 1);
-    if (!scope) return { items: [], cursor: undefined };
-
-    const { clause, binds } = scope;
+  async list(options: ListOptions): Promise<ListResult<Job>> {
+    const limit = options.limit ?? 20;
+    const { clause, binds } = buildScopeClause(options.scope);
     let bindIdx = binds.length + 1;
 
     let cursorClause = "";
-    if (options?.cursor) {
+    if (options.cursor) {
       const decoded = decodeCursor(options.cursor);
       if (decoded) {
         cursorClause = ` AND (created_at < ?${bindIdx} OR (created_at = ?${bindIdx} AND id < ?${bindIdx + 1}))`;
@@ -390,23 +372,13 @@ export class SqlMetadataStore implements MetadataStore {
     await this.db.execute("DELETE FROM assets WHERE id = ?1", [id]);
   }
 
-  async list(options?: {
-    limit?: number;
-    cursor?: string;
-    sessionId?: string;
-    projectId?: string;
-    workspaceId?: string;
-    accessibleByUser?: string;
-  }): Promise<ListResult<AssetMetadata>> {
-    const limit = options?.limit ?? 20;
-    const scope = buildScopeClause(options, 1);
-    if (!scope) return { items: [], cursor: undefined };
-
-    const { clause, binds } = scope;
+  async list(options: ListOptions): Promise<ListResult<AssetMetadata>> {
+    const limit = options.limit ?? 20;
+    const { clause, binds } = buildScopeClause(options.scope);
     let bindIdx = binds.length + 1;
 
     let cursorClause = "";
-    if (options?.cursor) {
+    if (options.cursor) {
       const decoded = decodeCursor(options.cursor);
       if (decoded) {
         cursorClause = ` AND (created_at < ?${bindIdx} OR (created_at = ?${bindIdx} AND id < ?${bindIdx + 1}))`;

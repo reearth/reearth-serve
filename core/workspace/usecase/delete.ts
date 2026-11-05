@@ -13,7 +13,7 @@ export async function deleteWorkspace(
 ): Promise<DeleteWorkspaceResult> {
   const ws = await workspaces.find(id);
   if (!ws) return "not_found";
-  if ((await projects.list({ workspaceId: id })).length > 0) return "has_projects";
+  if ((await projects.list({ kind: "workspace", workspaceId: id })).length > 0) return "has_projects";
 
   const memberList = await members.list(id);
   for (const m of memberList) {
@@ -54,7 +54,7 @@ if (import.meta.vitest) {
   test("deleteWorkspace removes workspace and all members", async () => {
     const { ws, ms, ps } = stores();
     expect(await deleteWorkspace(ws, ms, ps, "ws1")).toBe("deleted");
-    expect(ps.list).toHaveBeenCalledWith({ workspaceId: "ws1" });
+    expect(ps.list).toHaveBeenCalledWith({ kind: "workspace", workspaceId: "ws1" });
     expect(ws.delete).toHaveBeenCalledWith("ws1");
     expect(ms.delete).toHaveBeenCalledTimes(2);
   });

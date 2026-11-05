@@ -330,4 +330,95 @@ describe("project API (requires auth)", { skip: !mockOidcAvailable }, () => {
       expect((await api(tokens.owner, "DELETE", `/projects/${projectId}`)).status).toBe(204);
     });
   });
+
+  describe("list scopes", () => {
+    async function ids(token: string, path: string, key: "assets" | "jobs" | "projects"): Promise<string[]> {
+      const res = await api(token, "GET", path);
+      expect(res.status).toBe(200);
+      const body = await res.json() as Record<string, { id: string }[]>;
+      return body[key].map((item) => item.id);
+    }
+
+    async function upload(token: string, projectId: string): Promise<string> {
+      const { status, body } = await uploadFileWithAuth(new TextEncoder().encode("{}"), "a.json", "application/json", token, projectId);
+      expect(status).toBe(201);
+      return body.asset.id;
+    }
+
+    async function archiveJob(token: string, projectId: string): Promise<string> {
+      const { status, body } = await uploadFileWithAuth(new TextEncoder().encode("PK\x03\x04"), "a.zip", "application/zip", token, projectId);
+      expect(status).toBe(201);
+      return body.asset.jobId;
+    }
+
+    async function workspaceProject(token: string, name: string): Promise<{ workspaceId: string; projectId: string }> {
+      const { workspace } = await (await api(token, "POST", "/workspaces", { name })).json() as { workspace: { id: string } };
+      const res = await api(token, "POST", "/projects", { name, workspaceId: workspace.id });
+      expect(res.status).toBe(201);
+      const { project } = await res.json() as { project: { id: string } };
+      return { workspaceId: workspace.id, projectId: project.id };
+    }
+
+    test("assets include the caller's ownerless projects and workspace projects, not another user's", async () => {
+      const suffix = crypto.randomUUID().slice(0, 8);
+      const me = await signToken({ sub: `lister-${suffix}` });
+      const other = await signToken({ sub: `other-${suffix}` });
+      const { workspace } = await (await api(me, "POST", "/workspaces", { name: `list-${suffix}` })).json() as { workspace: { id: string } };
+      const created = await api(me, "POST", "/projects", { name: "ws", workspaceId: workspace.id });
+      const { project: wsProject } = await created.json() as { project: { id: string } };
+
+      const wsAsset = await upload(me, wsProject.id);
+      const soloAsset = await upload(me, await createProjectForAuth(me));
+      const foreignAsset = await upload(other, await createProjectForAuth(other));
+
+      const listed = await ids(me, "/assets?limit=100", "assets");
+      expect(listed.sort()).toEqual([soloAsset, wsAsset].sort());
+      expect(listed).not.toContain(foreignAsset);
+    });
+
+    test("a workspace-scoped asset list leaves out the caller's ownerless and other-workspace assets", async () => {
+      const suffix = crypto.randomUUID().slice(0, 8);
+      const me = await signToken({ sub: `ws-lister-${suffix}` });
+      const a = await workspaceProject(me, `a-${suffix}`);
+      const b = await workspaceProject(me, `b-${suffix}`);
+      const inA = await upload(me, a.projectId);
+      await upload(me, b.projectId);
+      await upload(me, await createProjectForAuth(me));
+
+      expect(await ids(me, `/assets?workspaceId=${a.workspaceId}&limit=100`, "assets")).toEqual([inA]);
+    });
+
+    test("unscoped jobs include the caller's workspace and ownerless jobs, not another user's", async () => {
+      const suffix = crypto.randomUUID().slice(0, 8);
+      const me = await signToken({ sub: `job-lister-${suffix}` });
+      const other = await signToken({ sub: `job-other-${suffix}` });
+      const { projectId } = await workspaceProject(me, `jobs-${suffix}`);
+      const wsJob = await archiveJob(me, projectId);
+      const soloJob = await archiveJob(me, await createProjectForAuth(me));
+      const foreignJob = await archiveJob(other, await createProjectForAuth(other));
+
+      const listed = await ids(me, "/jobs?limit=100", "jobs");
+      expect(listed.sort()).toEqual([soloJob, wsJob].sort());
+      expect(listed).not.toContain(foreignJob);
+    });
+
+    test("a creator removed from the workspace loses its project and assets from the lists", async () => {
+      const suffix = crypto.randomUUID().slice(0, 8);
+      const owner = await signToken({ sub: `ws-owner-${suffix}` });
+      const creator = await signToken({ sub: `creator-${suffix}` });
+      const { workspace } = await (await api(owner, "POST", "/workspaces", { name: `rm-${suffix}` })).json() as { workspace: { id: string } };
+      expect((await api(owner, "POST", `/workspaces/${workspace.id}/members`, { userId: `creator-${suffix}`, role: "admin" })).status).toBe(201);
+      const created = await api(creator, "POST", "/projects", { name: "left-behind", workspaceId: workspace.id });
+      const { project } = await created.json() as { project: { id: string } };
+      const assetId = await upload(creator, project.id);
+
+      expect(await ids(creator, "/projects", "projects")).toEqual([project.id]);
+      expect(await ids(creator, "/assets", "assets")).toEqual([assetId]);
+
+      expect((await api(owner, "DELETE", `/workspaces/${workspace.id}/members/creator-${suffix}`)).status).toBe(204);
+      expect((await api(creator, "GET", `/projects/${project.id}`)).status).toBe(404);
+      expect(await ids(creator, "/projects", "projects")).toEqual([]);
+      expect(await ids(creator, "/assets", "assets")).toEqual([]);
+    });
+  });
 });
