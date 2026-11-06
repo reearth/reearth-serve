@@ -1,30 +1,32 @@
 # ADR-014: Asset Access Control for File Delivery
 
 - **Status:** Proposed
-- **Date:** 2026-09-11
-- **Deciders:** @rot1024
-- **Related:** ADR-002 (auth, projects, roles), ADR-007 (events, webhooks),
-  ADR-013 B7 (password-protected sites)
+- **Date:** 2026-09-11 (revised 2026-11-06)
+- **Deciders:** @rot1024, @pyshx
+- **Related:** [ADR-002](002-auth-sessions-projects.md) (auth, sessions,
+  projects), ADR-007 (events, webhooks), [ADR-012](012-multi-cloud-portability.md)
+  (ports), ADR-013 B1 and B7 (site hosts, password-protected sites),
+  ADR-016 (accounts authorization)
 
 ## Context
 
 File delivery (`/files/{id}/…`) is URL-as-capability: knowing an asset ID
 grants download, and nothing is checked at request time. ROADMAP Phase 2
-calls this "file-layer access control (URL visibility)" and it has served
-the public-data use case well — PLATEAU tilesets, open GeoJSON, hosted
+calls this "file-layer access control (URL visibility)", and it has served
+the public-data use case well: PLATEAU tilesets, open GeoJSON, hosted
 sites anyone may open. Three demands now need something stronger, and they
 are one problem wearing three coats:
 
 1. **Private datasets.** A project uploads data that only its members, its
-   Re:Earth Visualizer scenes and its pipelines may read. Today the only
-   protection is that the ID is unguessable — which stops working the
-   moment a URL is pasted into a ticket.
+   viewer scenes and its pipelines may read. Today the only protection is
+   that the ID is unguessable, which stops working the moment a URL is
+   pasted into a ticket.
 2. **Password-protected sites.** A staging build or an internal dashboard
    behind a shared password. ADR-013 B7 designs this for browsers and
    leaves the general mechanism to this ADR.
-3. **Data sales.** Partner companies want to sell datasets: a purchaser —
-   who is not a member of the seller's workspace — is granted access to
-   specific assets for a period, and loses it on refund or expiry. The
+3. **Data sales.** Partner companies want to sell datasets: a purchaser,
+   who is not a member of the seller's workspace, is granted access to
+   specific assets for a period and loses it on refund or expiry. The
    seller's storefront is theirs; Serve must offer the grant, the proof,
    the revocation and the audit trail.
 
@@ -32,10 +34,24 @@ The common shape: an asset carries an **access mode**; a request carries a
 **proof**; the handler decides. What differs is *who* may be granted
 (members, arbitrary accounts, machines) and *how they prove it* (login,
 key, signed link, cookie). ADR-013 B7 already fixed the parts that must
-be identical for every mode — access as an asset property enforced on
-every URL form, `private` caching, credentialed CORS. This ADR fixes the
-rest and adds the marketplace-shaped pieces: grants to non-members,
-machine credentials, signed URLs, and an API a storefront can drive.
+be identical for every mode: access as an asset property enforced on
+every URL form, `private` caching, and CORS by proof (§8).
+
+Browser clients cannot attach a cookie across origins, and an `<img>` or
+a tile loader cannot set `Authorization`. Two client libraries settle how
+a link proof has to travel:
+
+- CesiumJS copies a resource's query parameters and headers to every
+  3D Tiles child request, including external tilesets and implicit tiling.
+- MapLibre's `transformRequest` does not reach PMTiles Range reads, but
+  the PMTiles source keeps the URL query on every Range request.
+
+So a token must work in the query string and in a header, and it must
+cover a path prefix, not one file.
+
+This ADR decides demand 1 for project members: the `restricted` mode and
+signed URLs. Grants to non-members, machine credentials and the storefront
+flow for demand 3 wait for a later ADR; Follow-ups keep their outline.
 
 What Serve is **not** becoming: a store. No catalogue, no pricing, no
 payment. A partner sells; Serve enforces what was sold.
@@ -50,128 +66,150 @@ field; B7 names it from the hosting side):
 > **Implemented since ADR-013 B7:** the flat `access` field exists on the
 > asset row and the API with `public` and `password`; `restricted` is still
 > this ADR's to add. Setting `password` is currently limited to archive
-> (site) assets — general asset protection is this ADR's work.
+> (site) assets; general asset protection is this ADR's work.
 
 | Mode | Who may read | Proof accepted |
 |------|--------------|----------------|
 | `public` (default) | anyone with the URL | none |
 | `password` | anyone with the shared password | cookie or `Authorization: Basic` (ADR-013 B7) |
-| `restricted` | principals holding a **grant** (§2), including project members by role | signed URL (§4), API key (§3), OIDC bearer, site cookie |
+| `restricted` | project members who hold `read_asset` under ADR-016's policy | delivery token (§4) or OIDC bearer |
 
-Modes are exclusive. `restricted` is the general mode; `password` is kept
-as its own mode rather than modelled as "a grant to whoever knows a
-secret" because its proof, threat model and audience are different and
-the simpler UI matters to the hosting use case.
+Modes are exclusive. `password` is kept as its own mode rather than
+modelled as "a grant to whoever knows a secret" because its proof, threat
+model and audience are different and the simpler UI matters to the
+hosting use case.
 
-Mode is settable on **project assets only**. Demo-mode assets are always
-`public` (no owner, no project, one-hour TTL). Changing the mode is an
+Mode is settable on **project assets only**: `PATCH /api/v1/assets/:id`
+refuses `restricted` elsewhere. Demo-mode assets are always `public` (no
+owner, no project, one-hour TTL). Changing the mode is an
 `asset.access.changed` event.
 
 **Derived assets** (ADR-006) default to the most restrictive mode among
 their sources at creation and record that they inherited it; an explicit
 override is allowed and logged. Thumbnails always follow their asset.
 
-### 2. Grants: who may read a restricted asset
+### 2. Grants (deferred)
 
-A **grant** is a row saying "this principal may read this target until
-this time". Project membership is an implicit grant — every member with
-`viewer` or above reads every asset in the project, as the role table in
-ADR-002 already says. Explicit grants exist for everyone else.
+Member-only delivery needs no grant table. Grants to non-members wait for
+a later ADR (Follow-up 3).
 
-```
-asset_grants
-  id            text pk
-  target_kind   'asset' | 'project'
-  target_id     text            -- asset ID or project ID
-  principal_kind 'user' | 'email' | 'api_key'
-  principal_id  text            -- OIDC subject, lowercase email, or key ID
-  expires_at    integer null    -- null = until revoked
-  source        text            -- 'manual' | 'purchase' | 'share' | …
-  ref           text null       -- caller's reference (order ID, contract ID)
-  granted_by    text            -- actor
-  created_at    integer
-  revoked_at    integer null
-unique (target_kind, target_id, principal_kind, principal_id) where revoked_at is null
-```
+### 3. Machine credentials (deferred)
 
-- **Targets.** An asset, or a project (= every asset in it, present and
-  future). A seller who organises one project per product grants the
-  project once per purchaser; a seller with mixed projects grants assets.
-  Serve does not model "products" or "bundles" — the storefront maps
-  product → targets and issues the grants (bulk endpoint, §6).
-- **Principals.**
-  - `user`: an OIDC subject on the configured IdP (the Re:Earth account).
-  - `email`: for purchasers who have not signed in yet. The grant is
-    matched against the verified `email` claim at request time; the first
-    login that matches converts nothing — the row simply keeps working.
-    Emails are lowercased and compared exactly.
-  - `api_key`: a machine credential (§3).
-- **Expiry and revocation** are separate: `expires_at` is planned,
-  `revoked_at` is an act (refund, contract ended, key leaked). Both are
-  events. Revoked rows are kept for the audit trail and purged with the
-  event-log cold archive (ADR-007).
-- **Evaluation** goes through the `Authorizer` port: `SimpleAuthorizer`
-  checks membership then grants; `CerbosAuthorizer` receives the grant
-  set as resource attributes so a policy bundle can add conditions
-  (region, time window) without code changes.
-
-### 3. Machine credentials: API keys
-
-Pipelines, untiled and a partner's backend are not people with browsers.
-
-- **Shape.** `rs_live_<24 random bytes, base32>`; the server stores only
-  `SHA-256(key)`, shows the plaintext once at creation. Sent as
-  `Authorization: Bearer rs_live_…`; the auth middleware tells keys from
-  JWTs by prefix, so both share one header.
-- **Scope.** A key belongs to a workspace and carries a role
-  (`viewer` by default; `editor` for pipelines that upload) and an
-  optional project list. Keys are principals: a `restricted` asset in the
-  key's projects is readable by role; an asset elsewhere needs an explicit
-  `api_key` grant.
-- **Lifecycle.** Created by workspace `admin`+, listed with last-used
-  time, rotated by create-then-revoke, revoked immediately (KV cache
-  invalidation, §5). Events for all four.
-- **untiled** reads Serve as a service account: one key per untiled
-  deployment, `viewer` on the projects it serves. Untiled applies its own
-  service-layer authorization to *its* callers (ROADMAP boundary); Serve
-  only needs to know untiled may read. Purchasers who consume tiles rather
-  than files are therefore untiled's concern, backed by the same grant
-  table if untiled chooses to consult it.
+API keys wait for a later ADR (Follow-up 4). ADR-016's service identity
+covers machine callers that hold an OIDC client.
 
 ### 4. Signed URLs: proof inside the link
 
 For a browser page or a Cesium scene that must load a restricted tileset,
 neither a cookie (wrong origin) nor a bearer header (not settable on
-`<img>`/`<script>`, awkward for tile requests) fits. A signed URL carries
-the proof in the query string.
+`<img>`/`<script>`, awkward for tile requests) fits. A **delivery token**
+carries the proof in the link.
 
-```
-GET /files/{id}/tiles/3/4/5.b3dm?rs_sig=<token>
-token = base64url( exp · scope · [grantee] · HMAC-SHA256(secret, id · scope · exp · grantee) )
+**Format.** `base64url(JSON claims) "." base64url(mac)`, with claims
+`{ v: 1, kid, assetId, versionId, prefix, exp }`. `versionId` is `null`
+for a token that follows the active version, or a version ID that pins
+it. `prefix` is a decoded path inside the asset with no leading slash; the
+empty prefix covers the whole asset. `exp` is Unix seconds. Both parts are
+canonical unpadded base64url and the claims are valid UTF-8, so a token
+has one valid string form. The MAC input is the label `serve-delivery-v1`,
+a newline, and the encoded claims. The access cookie has its own label
+(§8), so no other MAC Serve computes passes as a token.
+
+**Codec.** `core/access/token.ts` defines the `DeliveryTokenCodec` port
+with `sign(claims)` and `verify(token, now)`. `verify` returns the claims
+or the first failing reason, in the order `malformed`, `unknown_kid`,
+`bad_signature`, `expired`, so `expired` is reported only for an
+authentic token. A WebCrypto adapter implements it with HMAC-SHA256 and
+imports keys once per isolate; the composition roots supply the keys
+(ADR-012 §1). HMAC verifies in about 2 µs on local workerd and 10 µs on
+Node, against 40 µs and 108 µs for Ed25519, and Serve is the only
+verifier.
+
+**Keys.** `DELIVERY_TOKEN_KEYS` holds the ring as JSON:
+
+```json
+{"active":"k2","keys":{"k1":"<base64 secret>","k2":"<base64 secret>"}}
 ```
 
-- **Prefix-scoped.** `scope` is a path prefix inside the asset (`/` for
-  the whole asset). One token covers every tile under it, so a viewer
-  attaches it once (`Resource.queryParameters` in Cesium, `transformRequest`
-  in MapLibre) and the browser sends it with each tile. Per-file signing
-  would make tilesets unusable.
-- **Short-lived by default** (1 hour; maximum 7 days). Issued by
-  `POST /api/v1/assets/:id/signed-urls` to any caller who can read the
-  asset — a member, an API key, or a purchaser with a grant. A storefront
-  typically issues a 24-hour download link on the order page.
-- **Optional grantee binding.** A token may embed the grant ID it was
-  issued under; revoking the grant then invalidates outstanding tokens
-  without a blacklist (the handler re-checks the grant on tokens that name
-  one). Unbound tokens are pure bearer tokens and expire on schedule.
-- **Secret and rotation.** One deployment secret, `SIGNING_SECRET`, with a
-  key-ID byte in the token so two secrets can overlap during rotation.
-- **CORS stays `*`.** The proof is in the URL, not in credentials, so
-  signed-URL responses keep `Access-Control-Allow-Origin: *` — the one
-  proof that does not force consumers into credentialed fetches. This is
-  why signed URLs, not cookies, are the recommended integration for
-  Visualizer.
-- **Caching.** `private`; the token is part of the cache key anyway.
-  Version-pinned signed URLs may be `immutable` within their lifetime.
+Both composition roots parse it with one shared parser into
+`{ active, inactive | null }`, so a third key cannot be represented. The
+parser rejects malformed JSON, a secret shorter than 32 bytes, more than
+two keys, and an `active` ID missing from `keys`, each with a message that
+starts `DELIVERY_TOKEN_KEYS: `. A rejected ring is a config error under
+ADR-016 decision 8, so the change that adds the ring also makes the
+Worker catch a `buildDeps` throw. The codec signs with the active key and
+verifies with either. To rotate: add the new key, make it active, wait
+the longest token life, remove the old key. The cookie secret is separate,
+so tokens rotate without logging out password visitors.
+
+**Lifetime.** `expiresIn` is 60 to 604,800 seconds, 3,600 by default. The
+codec refuses to sign an `exp` more than 7 days ahead; exactly 7 days is
+allowed. `verify` accepts a token while `now - exp <= 30`, to absorb clock
+skew between the isolate that mints and the one that reads.
+
+**Paths.** `parseAssetPath(rawPathname)` turns the part of the request
+path after `/files/<id>/` into the asset path, or null to refuse it. Its
+input is the raw, still-encoded path from `new URL(request.url).pathname`,
+never `c.req.param("path")`: Hono already decodes a path parameter once,
+and decoding again would turn `a%252Fb` into `a/b`.
+
+- Each run of `%XX` escapes decodes once with `decodeURIComponent`, and a
+  run that is not valid UTF-8 is refused. A `%` that two hex digits do not
+  follow stays literal, so `100%.png` and `100%25.png` both mean
+  `100%.png`.
+- `.` and `..` segments, backslashes, NUL, and any `%2F` left after
+  decoding are refused. `a%2Fb` becomes `a/b`; `a%252Fb` is refused.
+- Empty segments stay. `a//b` names a different storage key from `a/b`.
+- The leading slash is stripped; the empty path is the whole asset.
+
+The storage key is built from this output, so the token match and the
+storage read use the same string. The mint route normalizes `prefix` with
+the same segment rules.
+
+**Off by default.** With `DELIVERY_TOKEN_KEYS` unset,
+`Deps.deliveryTokens` is `null` and the mint route answers `501`.
+
+**Mint.** `POST /api/v1/assets/{id}/signed-urls` with
+`{ prefix?, versionId?, expiresIn? }`. The caller must hold `read_asset`
+on the asset, the same check as a restricted read. The response is
+`{ token, expiresAt, urlTemplate }`, where `urlTemplate` is
+`<base>/files/<id>/{path}?serve_token=<token>` on the deployment's
+resolved base URL, with the version ID in place of the asset ID when the
+body pins one. A bad `prefix`, an out-of-range `expiresIn` or a
+`password` asset is `400`.
+
+**Carry.** The query parameter `serve_token` or the header
+`X-Serve-Token`. The query form needs no preflight and works with Cesium
+`queryParameters` and PMTiles URLs; the header form keeps the token out of
+URLs and logs. Both with different values is `400`.
+
+```http
+GET /files/01hx/tiles/3/4/5.b3dm HTTP/1.1
+Host: assets.example.com
+X-Serve-Token: <token>
+```
+
+**Match.** Serve allows the read when the token verifies, `assetId`
+matches, `versionId` is `null` or equals the resolved version, and
+`prefix` is a segment-boundary prefix of the parsed path: `tiles/` covers
+`tiles/3/4/5.b3dm` and not `tiles-old/a.b3dm`. A thumbnail maps to its
+source path before the match. A token for another asset counts as no
+token, and Serve goes on to the bearer. A matching `assetId` with the
+wrong version or prefix is `403`, because its holder already knows the
+asset exists. Tokens open `restricted` assets only; Serve ignores a token
+on a `password` asset.
+
+**Response.** `Access-Control-Allow-Origin: *` with no credentials
+header, `Cache-Control: private` with a `max-age` no longer than the
+token's remaining life (a pinned token may add `immutable`), and
+`Referrer-Policy: no-referrer`. Serve strips `serve_token` from the query
+before any other use and redacts it from logs. The OpenAPI document
+declares `serve_token` and `X-Serve-Token` as `apiKey` security schemes
+on `/files`.
+
+**Names.** Wire names, env vars, errors and examples name no product
+host: `serve_token`, `X-Serve-Token`, `ServeToken`, `serve_access`.
+Examples use `example.com` hosts, and `.test` hosts for local setups.
 
 ### 5. Enforcement in the file handler
 
@@ -186,25 +224,25 @@ One function, `resolveAccess(asset, request)`, before any storage I/O:
 2. `password` → ADR-013 B7 (cookie, then Basic).
 3. `restricted` → try proofs in this order, stop at the first that
    decides:
-   1. `rs_sig` query token — pure computation; grant re-check only if the
-      token is grantee-bound.
-   2. `Authorization: Bearer rs_live_…` — key lookup (KV-cached hash →
-      key row), then role/grant.
-   3. `Authorization: Bearer <jwt>` — existing OIDC middleware, then
-      membership → `user` grant → `email` grant.
-   4. Site cookie (ADR-013 B7 shape, minted after an OIDC login on the
-      site host) — for `members`-style browsing of a restricted hosted
-      site.
-   5. Nothing valid → `401` (no proof) or `403` (proof, no grant). Both
-      `Cache-Control: no-store`.
+   1. A delivery token (§4). Pure computation, with no table and no
+      storage read.
+   2. `Authorization: Bearer <jwt>`. The OIDC middleware verifies it, then
+      the handler calls `enterCaller(c, caller)` and
+      `authorizeAsset(ctx, asset, "read_asset")` (ADR-016). This is the only
+      branch on `/files` that binds a caller; public, password and token
+      reads make no directory call, and `/files` runs no session
+      (ADR-002, 2026-11-05 amendment).
+   3. Nothing valid → `401` with `WWW-Authenticate: Bearer, ServeToken`,
+      so a client knows a minted token would help. Every `/files`
+      response sends `Access-Control-Expose-Headers: WWW-Authenticate`.
 
-Grant and key lookups are D1 reads behind a KV cache
-(`grant:{target}:{principal}`, `key:{hash}`, 60 s TTL) invalidated on
-write; a revocation is visible within the TTL at worst and immediately
-for the writer's region. Responses from restricted assets carry
-`Cache-Control: private` (A2 policy otherwise unchanged) and, when the
-proof was a credential, `Vary: Authorization, Cookie` with the request
-`Origin` echoed and `Access-Control-Allow-Credentials: true` (ADR-013 B7).
+A denial answers `404` for both not-found and forbidden, through
+ADR-016's `deniedResponse`. A tenancy outage answers `503` with
+`Retry-After: 5`. Refusals send `Cache-Control: no-store`. Serve caches no
+access decision across requests. Responses from restricted assets carry
+`Cache-Control: private` (A2 policy otherwise unchanged), and token and
+bearer responses send `Access-Control-Allow-Origin: *` without
+credentials.
 
 The `/files/` handler's "no access checks" note becomes: *capability by
 default; `resolveAccess` when the asset's mode says so.*
@@ -212,67 +250,60 @@ default; `resolveAccess` when the asset's mode says so.*
 ### 6. API and CLI
 
 ```
-PATCH  /api/v1/assets/:id                         {"access": "restricted"}
-GET    /api/v1/assets/:id/grants
-POST   /api/v1/assets/:id/grants                  {principal, expiresAt?, source?, ref?}
-POST   /api/v1/projects/:id/grants                (project target; same body)
-POST   /api/v1/grants:batch                       [{target, principal, …}] up to 500
-DELETE /api/v1/grants/:grantId                    revoke
-GET    /api/v1/projects/:id/grants?principal=…    what does this buyer hold?
-POST   /api/v1/assets/:id/signed-urls             {scope?, expiresIn?, grantId?}
-GET    /api/v1/workspaces/:id/api-keys            list (hash, role, projects, lastUsedAt)
-POST   /api/v1/workspaces/:id/api-keys            create → plaintext once
-DELETE /api/v1/workspaces/:id/api-keys/:keyId     revoke
+PATCH  /api/v1/assets/:id                 {"access": "restricted"}
+POST   /api/v1/assets/:id/signed-urls     {prefix?, versionId?, expiresIn?}
 ```
 
-Grant management requires `editor` on the target's project; key
-management requires workspace `admin`. CLI: `asset access <id>
-public|password|restricted`, `asset grant add|list|revoke`, `asset
-sign <id> [path] [--expires 24h]`, `workspace api-key create|list|revoke`.
-`file cp` and `file sync` send the CLI's login JWT or a configured API
-key, so a purchaser with an account downloads with the same commands as a
-member.
+CLI: `asset access <id> public|password|restricted` and `asset sign <id>
+[prefix] [--expires 24h]`. `file cp` and `file sync` send the CLI's login
+JWT, so a member downloads a restricted asset with the same commands.
 
-### 7. The marketplace flow, end to end
+### 7. The marketplace flow (deferred)
 
-A partner runs a storefront (their own site, their own payments). The
-integration is four calls and two webhooks:
-
-1. **Setup.** Partner creates a workspace API key (`editor`, scoped to the
-   product projects). Their storefront holds it server-side.
-2. **Purchase.** Storefront `POST /api/v1/projects/{productProject}/grants`
-   with `{principal: {kind: "email", id: buyer@example.jp}, expiresAt:
-   <licence end>, source: "purchase", ref: <order id>}`. Serve emits
-   `asset.grant.created` (webhook to the partner if subscribed).
-3. **Delivery.** The order page shows either (a) "sign in with your
-   Re:Earth account to download" — the buyer logs in, `file cp`/Visualizer
-   work because the `email` grant matches their claim — or (b) a 24-hour
-   signed URL the storefront fetched via `POST …/signed-urls` bound to the
-   grant. For large datasets (a) is preferable: signed URLs are for
-   embedding and one-off downloads, not for 200 GB pulls.
-4. **Refund / expiry.** `DELETE /api/v1/grants/{id}` or the clock.
-   Grantee-bound signed URLs die with the grant; the buyer's next request
-   is `403`. `asset.grant.revoked` / `asset.grant.expired` events.
-5. **Reporting.** Per-grantee transfer volume rides on the usage metering
-   in ROADMAP Phase 6 (the handler already knows the principal at the
-   moment it serves bytes), enabling per-download or metered pricing on
-   the partner's side later. Not built here; the hook is that
-   `resolveAccess` returns the principal.
-
-Serve holds no money and no catalogue; the `ref` column is the only trace
-of the partner's order model.
+The storefront flow needs grants and waits with them (Follow-up 5).
 
 ### 8. Interaction with ADR-013
 
-- B7 `password` is mode two of this ADR; its cookie, Basic fallback,
-  rate limiter, `private` caching and credentialed CORS are unchanged.
-- B7's deferred `members` mode is `restricted` viewed from a site host:
-  the `401` page offers "sign in" instead of a password field, the OIDC
-  return lands on the site host, and proof 3.4 mints the cookie.
-- Named sites (B2) can be `restricted`: a purchaser who was granted the
-  asset opens `kawasaki-flood-map.serve.reearth.land`, signs in, and is
-  in. Preview hosts (B4) follow the asset's mode like every other URL
-  form.
+- B7 `password` is mode two of this ADR; its Basic fallback, rate limiter
+  and `private` caching are unchanged.
+- **CORS by proof.** Only a cookie proof gets credentialed CORS. Serve
+  echoes `Origin` with `Access-Control-Allow-Credentials: true` only when
+  it equals Serve's own origin or appears exactly in
+  `CREDENTIALED_ORIGINS`. The own origin is `BASE_URL` on the apex and the
+  request host on a site host, never `c.req.url`, which reads `http://`
+  behind a TLS proxy. Serve never echoes `null`. Every other proof, Basic
+  included, gets `*` with no credentials header. Protected responses send
+  `Vary: Origin`, and cookie-authorized ones add
+  `Cross-Origin-Resource-Policy: same-origin`, which stops no-cors loads
+  from sibling hosts. Preflights and refusals carry no proof, so whatever
+  the mode they answer an own or listed origin with credentials and every
+  other origin with `*`. Preflights allow the fixed headers `range`,
+  `if-none-match`, `if-modified-since`, `authorization` and
+  `x-serve-token`, with `Access-Control-Max-Age: 86400`. A
+  `CREDENTIALED_ORIGINS` entry with a path, a wildcard or `null` fails at
+  start.
+- **Cookies.** B7's `rs_site_auth` becomes `__Host-serve_access` on a
+  site host (`Path=/`, no `Domain`, `Secure` even on plain-http loopback)
+  and `serve_access` for the apex path form. The cookie MAC input gains
+  the label `serve-access-cookie-v1`, so cookies issued before the change
+  stop verifying. On the apex, every `/files` response served as an
+  attachment also sends `Content-Security-Policy: sandbox`, so a document
+  a browser renders anyway cannot read path-scoped cookies.
+- **Site isolation (B1).** Sibling site hosts under one registrable
+  domain are the same site, so cookie scope alone does not isolate one
+  site from another. When `SITE_HOST_SUFFIX` is set, Serve requires
+  `BASE_URL` and `SITE_REGISTRABLE_DOMAIN`. It refuses to start when the
+  suffix host does not end in `.` plus that domain, or when the
+  `BASE_URL` host equals the domain or ends in `.` plus it. Hosts compare
+  lowercased, without port or trailing dot. `SITE_DOMAIN_IS_PUBLIC_SUFFIX=true`
+  is the one override, for a domain on the Public Suffix List, and Serve
+  logs it at start. A valid setup puts the API on `api.example.com` and
+  sites under `.sites.example.net`.
+- B7's deferred `members` mode is `restricted` viewed from a site host. It
+  needs the restricted site cookie, which waits for a later ADR
+  (Follow-up 6).
+- Named sites (B2) can be `restricted`. Preview hosts (B4) follow the
+  asset's mode like every other URL form.
 
 ## Alternatives Considered
 
@@ -284,62 +315,96 @@ marketplace cannot pass on, IdP-only (no grants to arbitrary buyers
 without adding them to the tenant), and Cloudflare-only against
 ADR-012.
 
-**C. Per-file signed URLs only (S3 presigned style), no grants.** Works
-for one download, unusable for tilesets and for "the buyer may read this
-for a year": the storefront would become a URL-signing proxy. Prefix
-signing plus grants covers both.
+**C. Per-file signed URLs only (S3 presigned style).** Works for one
+download, unusable for tilesets: a viewer would need a URL per tile.
+Prefix signing covers both.
 
-**D. Model products and bundles in Serve.** One step from a catalogue,
-two from payments. The partner already has an order model; `target_kind`
-+ `ref` is enough to connect the two.
-
-**E. Grants only to registered users (no `email` principal).** Forces the
-buyer to create an account *before* checkout so the storefront can learn
-their subject. Email grants let the storefront sell first and let the
-account come later.
-
-**F. Encrypt restricted objects with per-buyer keys.** Real protection at
+**D. Encrypt restricted objects with per-buyer keys.** Real protection at
 rest but breaks Range, gzip passthrough, thumbnails and every
 zero-CPU delivery property in ADR-011. The threat this ADR addresses is
 access, not a compromised bucket.
 
-**G. Push all authorization to untiled (service layer).** Files that are
-not tiles — GeoJSON, glTF, CityGML, hosted sites — never pass through
-untiled. Both layers need it; untiled reads Serve as a service account
-(§3).
+**E. Push all authorization to the tile service layer.** Files that are
+not tiles (GeoJSON, glTF, CityGML, hosted sites) never pass through it.
+Both layers need it.
 
-**H. Session state for signed URLs (a token table).** Stateless HMAC
-tokens need no writes and no cleanup; grantee binding gives revocation
-for the cases that need it.
+**F. Session state for signed URLs (a token table, or a `signing_keys`
+table).** Stateless HMAC tokens need no writes, no cleanup and no read per
+token. Two keys in one secret cover rotation.
+
+**G. Ed25519 tokens now.** Verify costs about 20 times as much on
+workerd, and Serve is the only verifier today. It would let another
+service verify without holding a key that can mint. It changes only the
+adapter and the key format, so it stays open behind the port.
+
+**H. One `SIGNING_SECRET` for cookies and tokens.** The labels already
+separate the MACs, but one secret ties the two rotations together.
+
+**I. Credentialed CORS for token and bearer reads.** Those proofs travel
+in the query or a header and need no credentials mode, so `*` keeps every
+origin working.
+
+**J. A Public Suffix List entry instead of a separate site domain.** It
+needs maintainer review with no time commitment, and old browsers keep
+old lists. A separate domain works as soon as DNS and certificates exist.
+The override still supports a listed domain.
+
+**K. Tokens on `password` assets.** Any member could mint a 7-day URL that
+skips the password.
 
 ## Consequences
 
 - Public assets pay nothing: `resolveAccess` returns on the first branch
-  with no I/O. Restricted assets pay one KV read (or none for unbound
-  signed URLs).
-- Restricted assets served with credentials lose `Access-Control-Allow-
-  Origin: *`; signed URLs are the way to keep `*`, and the docs say so.
-- Two new tables (`asset_grants`, `api_keys`), one secret
-  (`SIGNING_SECRET`), one handler function, four event types, ~10
-  endpoints. The `Authorizer` port gains resource attributes but no new
-  method.
-- Serve gains the vocabulary a data marketplace needs (grant, principal,
-  expiry, revocation, signed link) without gaining a store.
-- The `email` principal makes the IdP's email verification a security
-  dependency: only verified `email` claims may match. The OIDC middleware
-  must check `email_verified`.
-- Auditing improves for everyone: who was granted what, by whom, and when
-  it ended is in the event log.
+  with no I/O. A token read adds one HMAC verify and no storage read
+  before the decision; a bearer read adds ADR-016's directory call.
+- A deployment that sets no new variable serves as before: the mint route
+  answers `501`, and site hosts and credentialed origins stay off.
+- Credentialed CORS answers only the response's own origin and
+  `CREDENTIALED_ORIGINS`. Delivery tokens keep `*`, so they are the
+  recommended integration for browser viewers, and the docs say so.
+- One secret (`DELIVERY_TOKEN_KEYS`), one optional allowlist
+  (`CREDENTIALED_ORIGINS`), one handler branch, one endpoint, no new
+  tables.
+- A `serve_token` in a URL can leak through logs, copy and paste, and
+  absolute child URIs, since Cesium sends the query to child requests on
+  other hosts. Asset and prefix binding, the 7-day cap, log redaction and
+  `no-referrer` bound a leak. The header form avoids it.
+- Revoking a token before `exp` means rotating its key, which revokes
+  every token signed with that key.
+- Cookies issued before the rename and the label stop verifying, so
+  password visitors enter the password once more.
+- Site hosts need a registrable domain separate from the API, or a Public
+  Suffix List entry. A configuration that shares the API's domain fails at
+  start.
+- Bearer- and cookie-authorized pinned files keep the year-long `private`
+  browser cache, so a member who loses access keeps what they already
+  fetched.
 
 ## Follow-ups
 
-1. `access` field, `restricted` mode, `resolveAccess` with OIDC bearer
-   and membership only (no new tables). Unlocks demand 1 for CLI users.
-2. `asset_grants` with `user` and `email` principals; grants API; events.
-3. Signed URLs (prefix-scoped, grantee-bound); `asset sign`; Visualizer
-   integration note.
-4. API keys; untiled service account; `file cp` with a key.
-5. Batch grants endpoint, project-level grants, webhook types — the
-   storefront integration (§7).
-6. ADR-013 B7 `members` mode on site hosts (proof 3.4).
-7. Per-principal transfer metering (with ROADMAP Phase 6).
+1. `restricted` with OIDC bearer and membership (§5 step 3.2). Unlocks
+   demand 1 for CLI users.
+2. Delivery tokens (§4), `asset sign`, and a viewer integration note.
+3. **Grants** (later ADR). An `asset_grants` row says "this principal may
+   read this target until this time". The target is an asset or a
+   project; the principal is an OIDC subject, a verified email (so the
+   OIDC middleware must check `email_verified`), or an API key.
+   `expires_at` is planned and `revoked_at` is an act, and both are
+   events. The `Authorizer` port evaluates grants, and `CerbosAuthorizer`
+   receives them as resource attributes. A grant-bound token names its
+   grant, and the handler re-checks it, so revoking the grant kills
+   outstanding tokens.
+4. **API keys** (later ADR). Workspace-scoped, with a role and an optional
+   project list, stored as `SHA-256(key)`, sent as a bearer and told from
+   a JWT by prefix, created and revoked by workspace `admin`+.
+5. **Storefront integration** (later ADR). Batch and project grants, the
+   purchase, delivery and refund flow, and grant webhook types. Serve holds
+   no money and no catalogue; a grant's `ref` column is the only trace of
+   the partner's order model.
+6. **Restricted site cookie.** B7's `members` mode on site hosts: the
+   `401` page offers sign-in, and the OIDC return on the site host mints
+   the cookie.
+7. Per-principal transfer metering (with ROADMAP Phase 6). `resolveAccess`
+   returns the principal for it.
+8. Open questions: Ed25519 instead of HMAC (§4), tokens on `password`
+   assets, and a Public Suffix List entry instead of a separate domain.
