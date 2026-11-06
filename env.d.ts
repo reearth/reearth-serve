@@ -40,6 +40,12 @@ interface Env {
   // Wildcard suffix that per-asset site hosts live under, e.g.
   // ".serve.reearth.land" (ADR-013 B1). Unset ⇒ site hosts are off.
   SITE_HOST_SUFFIX?: string;
+  // Required with SITE_HOST_SUFFIX: the registrable domain the site hosts live
+  // under, e.g. "example.net". The Worker refuses to serve when the suffix is
+  // not under it or when BASE_URL's host is (ADR-020 §9 item 7).
+  SITE_REGISTRABLE_DOMAIN?: string;
+  // "true" skips that check, for a domain on the Public Suffix List. Logged.
+  SITE_DOMAIN_IS_PUBLIC_SUFFIX?: string;
   // Custom domains (ADR-013 B5).
   // Cloudflare for SaaS credentials. Both or neither: with both, verified
   // custom hostnames are registered on the zone and get a DV certificate;

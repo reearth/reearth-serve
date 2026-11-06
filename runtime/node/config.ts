@@ -4,6 +4,7 @@
  */
 
 import { parseCredentialedOrigins } from "../../core/file/cors";
+import { checkSiteIsolation } from "../../core/site/isolation";
 
 export type ContainerLauncherKind = "none";
 
@@ -47,6 +48,12 @@ export type NodeConfig = {
    */
   siteHostSuffix: string | undefined;
   /**
+   * `SITE_DOMAIN_IS_PUBLIC_SUFFIX=true` skipped the site-isolation check, which
+   * the runtime logs at start. Without it, a suffix on the API's own
+   * registrable domain fails `loadConfig` (ADR-020 §9 item 7).
+   */
+  siteDomainIsPublicSuffix: boolean;
+  /**
    * Custom domains (ADR-013 B5). `siteDnsResolverUrl` is the DNS-over-HTTPS
    * endpoint the TXT verification is asked of — configurable so an operator
    * can use their own resolver, and so the e2e run can point it at a mock.
@@ -72,6 +79,7 @@ export type Env = Record<string, string | undefined>;
 
 export function loadConfig(env: Env): NodeConfig {
   const port = intOr(env.PORT, DEFAULT_PORT);
+  const isolation = checkSiteIsolation(env);
   return {
     port,
     baseUrl: env.BASE_URL || `http://localhost:${port}`,
@@ -89,6 +97,7 @@ export function loadConfig(env: Env): NodeConfig {
     oidcIssuerUrl: env.OIDC_ISSUER_URL || undefined,
     oidcAudience: env.OIDC_AUDIENCE || undefined,
     siteHostSuffix: env.SITE_HOST_SUFFIX || undefined,
+    siteDomainIsPublicSuffix: isolation.publicSuffixOverride,
     siteDnsResolverUrl: env.SITE_DNS_RESOLVER_URL || undefined,
     siteFallbackOrigin: env.SITE_FALLBACK_ORIGIN || undefined,
     objectStore: objectStore(env),

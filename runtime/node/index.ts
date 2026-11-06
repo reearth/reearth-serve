@@ -12,6 +12,7 @@
 import { serve, type HttpBindings } from "@hono/node-server";
 import { createApp } from "../../core/app";
 import { isSiteHost } from "../../core/site/middleware";
+import { PUBLIC_SUFFIX_OVERRIDE_NOTICE } from "../../core/site/isolation";
 import { buildNodeRuntime, type NodeRuntime } from "./deps";
 import { runCron } from "./cron";
 
@@ -110,6 +111,7 @@ function timingSafeEqual(a: string, b: string): boolean {
 
 export function main(): void {
   const runtime = buildNodeRuntime();
+  if (runtime.config.siteDomainIsPublicSuffix) console.warn(PUBLIC_SUFFIX_OVERRIDE_NOTICE);
   const handler = createNodeHandler(runtime);
   serve({ fetch: (request, env) => handler(request, env as HttpBindings), port: runtime.config.port }, (info) => {
     console.log(`reearth-serve (node runtime) listening on http://localhost:${info.port}`);

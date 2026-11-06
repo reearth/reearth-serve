@@ -35,18 +35,24 @@ BASE_URL = "https://serve.reearth.land"
 # The previous 24h default left orphaned extractions invisible for a day.
 EXTRACTION_STUCK_THRESHOLD_SECONDS = "1800"
 # Per-asset site hosts (ADR-013 B1): every request whose Host is
-# "{assetId|versionId}.serve.reearth.land" is served as /files/{id}/… and
-# nothing else is reachable on that hostname. Commented out on purpose —
+# "{assetId|versionId}.sites.example.net" is served as /files/{id}/… and
+# nothing else is reachable on that hostname. Commented out on purpose:
 # enabling it before the zone is ready would hand out siteUrls that do not
-# resolve. Zone-side prerequisites on reearth.land, both one-time ops steps:
-#   1. a proxied wildcard DNS record for *.serve
-#   2. a certificate covering *.serve.reearth.land (Advanced Certificate or
-#      Total TLS — the apex wildcard covers one level only)
-#   3. a Worker route for "*.serve.reearth.land/*" pointing at this Worker
+# resolve. Zone-side prerequisites on the sites' zone, one-time ops steps:
+#   1. a proxied wildcard DNS record for *.sites
+#   2. a certificate covering *.sites.example.net (Advanced Certificate or
+#      Total TLS; the apex wildcard covers one level only)
+#   3. a Worker route for "*.sites.example.net/*" pointing at this Worker
 # `routes` above deliberately stays apex-only; the wildcard is added on the
-# zone once (1)–(2) exist, so a half-configured wildcard never serves TLS
+# zone once (1) and (2) exist, so a half-configured wildcard never serves TLS
 # errors to visitors.
-# SITE_HOST_SUFFIX = ".serve.reearth.land"
+# The sites must live under a different registrable domain than BASE_URL:
+# hosts under one registrable domain are the same site to a browser, so the
+# Worker refuses to serve when BASE_URL's host is under SITE_REGISTRABLE_DOMAIN
+# or the suffix is not (ADR-020 §9 item 7). SITE_DOMAIN_IS_PUBLIC_SUFFIX = "true"
+# skips the check for a domain on the Public Suffix List.
+# SITE_HOST_SUFFIX = ".sites.example.net"
+# SITE_REGISTRABLE_DOMAIN = "example.net"
 # Custom domains (ADR-013 B5) ride on the same switch: with no suffix the
 # site-host middleware is off entirely. Their own settings are secrets rather
 # than vars, since CF_API_TOKEN is one:

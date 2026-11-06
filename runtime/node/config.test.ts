@@ -66,4 +66,16 @@ describe("loadConfig", () => {
       .toEqual(["https://a.example.com", "https://b.example.net"]);
     expect(() => loadConfig({ CREDENTIALED_ORIGINS: "https://a.example.com/app" })).toThrow(/CREDENTIALED_ORIGINS/);
   });
+
+  test("site hosts refuse to start on the API's own registrable domain", () => {
+    const sites = { SITE_HOST_SUFFIX: ".sites.example.net", SITE_REGISTRABLE_DOMAIN: "example.net" };
+    // The Node default BASE_URL does not count: the operator must say it.
+    expect(() => loadConfig(sites)).toThrow(/BASE_URL/);
+    expect(() => loadConfig({ ...sites, BASE_URL: "https://api.example.net" })).toThrow(/same site/);
+    expect(loadConfig({ ...sites, BASE_URL: "https://api.example.com" }).siteDomainIsPublicSuffix).toBe(false);
+    expect(loadConfig({
+      SITE_HOST_SUFFIX: ".localhost:8788", BASE_URL: "http://localhost:8788",
+      SITE_REGISTRABLE_DOMAIN: "localhost", SITE_DOMAIN_IS_PUBLIC_SUFFIX: "true",
+    }).siteDomainIsPublicSuffix).toBe(true);
+  });
 });

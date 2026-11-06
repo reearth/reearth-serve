@@ -18,7 +18,9 @@ INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-e2e-internal-secret}"
 SIGNING_SECRET="${SIGNING_SECRET:-e2e-signing-secret}"
 # Site hosts (ADR-013 B1). The suffix carries the port because it is compared
 # against the Host header verbatim; the apex ("localhost:PORT") does not end
-# with it, so every other test is unaffected.
+# with it, so every other test is unaffected. Browsers treat an unlisted TLD
+# such as localhost as a public suffix, so each {id}.localhost is its own site
+# and the site-isolation check's public-suffix override is the honest setting.
 SITE_HOST_SUFFIX="${SITE_HOST_SUFFIX:-.localhost:${PORT}}"
 
 cleanup() {
@@ -87,6 +89,8 @@ OIDC_ISSUER_URL="${OIDC_ISSUER}" \
 OIDC_AUDIENCE="e2e-audience" \
 CONTAINER_LAUNCHER="none" \
 SITE_HOST_SUFFIX="${SITE_HOST_SUFFIX}" \
+SITE_REGISTRABLE_DOMAIN="localhost" \
+SITE_DOMAIN_IS_PUBLIC_SUFFIX="true" \
 SITE_DNS_RESOLVER_URL="${DOH_URL}" \
   npm run start:node &
 SERVER_PID=$!

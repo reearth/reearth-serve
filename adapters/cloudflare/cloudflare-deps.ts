@@ -20,6 +20,7 @@ import { CloudflareCustomHostnames } from "./custom-hostnames";
 import { NoopProvisioner, type CustomHostnameProvisioner } from "../../core/site/provisioner";
 import { apexHost } from "../../core/site/middleware";
 import { parseCredentialedOrigins } from "../../core/file/cors";
+import { checkSiteIsolation, PUBLIC_SUFFIX_OVERRIDE_NOTICE } from "../../core/site/isolation";
 
 // Anonymous sessions are identity, not content — they must outlive the
 // demo asset TTL. A large multipart upload can take many hours between the
@@ -39,7 +40,14 @@ const CLEANUP_SUBREQUEST_BUDGET = 700;
  * the provider-independent `Deps` the app and the queue/cron handlers run on
  * (ADR-012 §1). Called once per invocation from `runtime/cloudflare/index.ts`.
  */
+let overrideLogged = false;
+
 export function buildDeps(env: Env): Deps {
+  // A Worker has no start, so a misconfiguration fails every invocation instead.
+  if (checkSiteIsolation(env).publicSuffixOverride && !overrideLogged) {
+    overrideLogged = true;
+    console.warn(PUBLIC_SUFFIX_OVERRIDE_NOTICE);
+  }
   const objectStore = r2Credentials(env);
   // One KeyValue per invocation, shared by every store that only needs
   // "JSON blob under a key with a TTL" (ADR-012 §2).
