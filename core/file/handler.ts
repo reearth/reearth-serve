@@ -471,7 +471,9 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     const fallback = await archiveFallback(storage, layouts, servePath, asset.spa === true);
     if (!fallback) return decorate(c.json({ error: "File not found" }, 404));
     if (fallback.kind === "notFound") {
-      return decorate(applySiteHeaders(serve404Page(fallback.located, c.get("siteHost")), hosting, servePath));
+      return decorate(applySiteHeaders(
+        serve404Page(fallback.located, c.get("siteHost")), hosting, servePath, c.get("siteHost"),
+      ));
     }
     // The SPA case rejoins the normal path below, so the index is served by
     // exactly the code a direct hit on `/index.html` takes: gzip passthrough,
@@ -497,7 +499,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
   // `_headers` rules go on first, so everything the handler sets below — and
   // everything `serveFile` already set — wins over a rule that named the same
   // header (ADR-013 C3).
-  applySiteHeaders(res, hosting, servePath);
+  applySiteHeaders(res, hosting, servePath, c.get("siteHost"));
 
   // A preview host serves the same pages as the production name: same content,
   // several URLs, only one of which should be indexed (ADR-013 B4). That covers

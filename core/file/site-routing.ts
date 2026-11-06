@@ -14,7 +14,9 @@
  */
 
 import { ENTRY_CACHE_CONTROL } from "./caching";
-import { matchHeaders, matchRedirect, type RedirectMatch, type SiteHosting } from "../site/rules";
+import {
+  isDeniedHeader, matchHeaders, matchRedirect, type RedirectMatch, type SiteHosting,
+} from "../site/rules";
 
 /** The request path a rule matches against: always rooted, never empty. */
 export function rulePath(filePath: string): string {
@@ -81,14 +83,22 @@ export function siteRedirectResponse(
  * visitor asked for (after a 200 rewrite, the rewritten one), not the file that
  * ended up being read: a rule written for `/about` must apply when `/about` is
  * answered by the SPA shell or by `404.html`.
+ *
+ * The denylist is checked again here because rules are stored at extraction
+ * time, and a version extracted before a name joined the list still carries
+ * it. On the apex a rule's `Content-Security-Policy` is dropped too, so it
+ * cannot replace the attachment sandbox.
  */
 export function applySiteHeaders(
   res: Response,
   hosting: SiteHosting | null,
   filePath: string,
+  siteHost: boolean,
 ): Response {
   if (!hosting || hosting.headers.length === 0) return res;
   for (const [name, value] of Object.entries(matchHeaders(hosting.headers, rulePath(filePath)))) {
+    if (isDeniedHeader(name)) continue;
+    if (!siteHost && name === "content-security-policy") continue;
     res.headers.set(name, value);
   }
   return res;

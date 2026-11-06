@@ -70,14 +70,16 @@ describe("parseHeaders", () => {
       "  Content-Type: text/plain",
       "  Set-Cookie: a=b",
       "  Access-Control-Allow-Origin: https://evil.test",
-      "  X-Content-Type-Options: nosniff",
+      "  Content-Disposition: inline",
+      "  X-Content-Type-Options: sniff",
+      "  X-Frame-Options: DENY",
     ].join("\n"));
 
-    expect(rules).toEqual([{ pattern: "/*", headers: { "x-content-type-options": "nosniff" } }]);
-    expect(warnings).toHaveLength(6);
+    expect(rules).toEqual([{ pattern: "/*", headers: { "x-frame-options": "DENY" } }]);
+    expect(warnings).toHaveLength(8);
     for (const name of [
       "cache-control", "etag", "vary", "content-type", "set-cookie",
-      "access-control-allow-origin",
+      "access-control-allow-origin", "content-disposition", "x-content-type-options",
     ]) {
       expect(warnings.some((w) => w.includes(`"${name}" cannot be set by a rule`))).toBe(true);
     }

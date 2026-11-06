@@ -58,6 +58,11 @@ export const REDIRECT_STATUSES = [200, 301, 302, 307, 308] as const;
  * a site mint cookies on its own origin or stack a credential dialog on the
  * password page.
  *
+ * `content-disposition` and `x-content-type-options` decide whether the apex
+ * renders a file at all (ADR-020 §9 items 8 and 9). `content-security-policy`
+ * is not here because a site host may set its own; the apex drops it when the
+ * rule is applied, see `applySiteHeaders`.
+ *
  * `x-robots-tag` is deliberately **not** here: a production site may want its
  * own robots policy. A preview host still wins, because the handler sets
  * `noindex` after rule headers have been applied.
@@ -74,12 +79,14 @@ const DENIED_HEADERS = new Set([
   "vary",
   "set-cookie",
   "www-authenticate",
+  "content-disposition",
+  "x-content-type-options",
 ]);
 
 /** Prefix form of the denylist: the whole CORS family belongs to B7. */
 const DENIED_HEADER_PREFIXES = ["access-control-"];
 
-function isDeniedHeader(name: string): boolean {
+export function isDeniedHeader(name: string): boolean {
   return DENIED_HEADERS.has(name) || DENIED_HEADER_PREFIXES.some((p) => name.startsWith(p));
 }
 

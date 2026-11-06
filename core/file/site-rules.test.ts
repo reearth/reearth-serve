@@ -129,7 +129,8 @@ describe("_headers", () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("X-Frame-Options")).toBe("DENY");
     expect(res.headers.get("Referrer-Policy")).toBe("no-referrer");
-    expect(res.headers.get("Content-Security-Policy")).toBe("default-src 'self'");
+    // The apex keeps its attachment sandbox; a site host takes the rule's CSP.
+    expect(res.headers.get("Content-Security-Policy")).toBe("sandbox");
   });
 
   test("and on a 304", async () => {
@@ -283,5 +284,43 @@ describe("gzip-stored entries keep working under rules", () => {
     expect(res.status).toBe(200);
     expect(await res.text()).toBe(APP_JS);
     expect(res.headers.get("X-Frame-Options")).toBe("DENY");
+  });
+});
+
+describe("_headers cannot undo the delivery's own safety headers (ADR-020 §9 item 9)", () => {
+  const stored = (headers: Record<string, string>): SiteHosting =>
+    ({ headers: [{ pattern: "/*", headers }], redirects: [], warnings: [] });
+
+  test("on the apex, a stored rule cannot inline HTML, enable sniffing or lift the sandbox", async () => {
+    const f = await siteFixture();
+    await seedEntry(f.storage, "notes.txt", "hi", "text/plain");
+    // Rules parsed before the denylist grew are still on the version.
+    seedHosting(f.versions, stored({
+      "content-disposition": "inline",
+      "x-content-type-options": "sniff",
+      "content-security-policy": "default-src *",
+      "x-frame-options": "DENY",
+    }));
+    const html = await f.app.request(`/files/${ASSET_ID}/index.html`);
+    expect(html.headers.get("Content-Disposition")).toBe('attachment; filename="index.html"');
+    expect(html.headers.get("X-Content-Type-Options")).toBe("nosniff");
+    expect(html.headers.get("Content-Security-Policy")).toBe("sandbox");
+    expect(html.headers.get("X-Frame-Options")).toBe("DENY");
+
+    const text = await f.app.request(`/files/${ASSET_ID}/notes.txt`);
+    expect(text.headers.get("Content-Disposition")).toBe('inline; filename="notes.txt"');
+    expect(text.headers.get("Content-Security-Policy")).toBeNull();
+  });
+
+  test("on a site host, the site's own CSP still applies, and disposition stays inline", async () => {
+    const f = await siteFixture();
+    seedHosting(f.versions, stored({
+      "content-disposition": "attachment",
+      "content-security-policy": "default-src 'self'",
+    }));
+    const host = `${ASSET_ID}${SUFFIX}`;
+    const res = await f.app.request(`http://${host}/`, { headers: { Host: host } });
+    expect(res.headers.get("Content-Disposition")).toBe('inline; filename="index.html"');
+    expect(res.headers.get("Content-Security-Policy")).toBe("default-src 'self'");
   });
 });
