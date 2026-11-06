@@ -13,7 +13,7 @@ import {
 } from "../testing/fixture";
 import { siteFixture, SUFFIX } from "../testing/site-fixture";
 import { setAssetAccess } from "../asset/usecase";
-import { AUTH_COOKIE } from "./cookie";
+import { APEX_COOKIE, SITE_COOKIE } from "./cookie";
 import { RATE_LIMIT_PER_IP } from "./ratelimit";
 
 const PASSWORD = "correct-horse-battery";
@@ -50,12 +50,12 @@ function submit(
   });
 }
 
-/** The `rs_site_auth` value out of a `Set-Cookie` header. */
+/** The `name=value` pair out of a `Set-Cookie` header. */
 function cookieFrom(res: Response): string {
   const header = res.headers.get("Set-Cookie") ?? "";
-  const match = header.match(new RegExp(`${AUTH_COOKIE}=([^;]+)`));
-  if (!match) throw new Error(`no ${AUTH_COOKIE} in "${header}"`);
-  return `${AUTH_COOKIE}=${match[1]}`;
+  const pair = header.split(";")[0];
+  if (!pair.includes("=")) throw new Error(`no cookie in "${header}"`);
+  return pair;
 }
 
 describe("a public asset pays nothing", () => {
@@ -186,7 +186,7 @@ describe("the password form", () => {
     expect(res.status).toBe(303);
     expect(res.headers.get("Location")).toBe(`/files/${ASSET_ID}/docs/`);
     const setCookie = res.headers.get("Set-Cookie") ?? "";
-    expect(setCookie).toContain(`${AUTH_COOKIE}=`);
+    expect(setCookie.startsWith(`${APEX_COOKIE}=`)).toBe(true);
     expect(setCookie).toContain("HttpOnly");
     expect(setCookie).toContain("SameSite=Lax");
     // On the apex the cookie is scoped to the asset's own file prefix.
@@ -351,13 +351,22 @@ describe("every URL form obeys the check", () => {
     const posted = await submit(app, `http://${host}/_serve/auth`, { password: PASSWORD, next: "/docs/" }, { Host: host });
     expect(posted.status).toBe(303);
     expect(posted.headers.get("Location")).toBe("/docs/");
-    expect(posted.headers.get("Set-Cookie")).toContain("Path=/");
+    const setCookie = posted.headers.get("Set-Cookie") ?? "";
+    expect(setCookie.startsWith(`${SITE_COOKIE}=`)).toBe(true);
+    expect(setCookie).toContain("Path=/;");
+    // The test request is plain http, and `__Host-` still needs Secure.
+    expect(setCookie).toContain("Secure");
 
     const cookie = cookieFrom(posted);
     const ok = await app.request(`http://${host}/`, { headers: { Host: host, Cookie: cookie } });
     expect(ok.status).toBe(200);
     expect(await ok.text()).toBe(INDEX_HTML);
     expect(metadata.protectionCalls).toBeGreaterThan(0);
+
+    // Each host form reads only its own cookie name.
+    const value = cookie.slice(cookie.indexOf("=") + 1);
+    const wrongName = await app.request(`http://${host}/`, { headers: { Host: host, Cookie: `${APEX_COOKIE}=${value}` } });
+    expect(wrongName.status).toBe(401);
   });
 });
 

@@ -5,7 +5,7 @@
  * make the site unusable. The cookie carries the *result* of one check, signed
  * so the server needs no session row to trust it:
  *
- *     rs_site_auth = base64url( assetId · passwordVersion · exp · HMAC-SHA256(secret, the same three) )
+ *     base64url( assetId · passwordVersion · exp · HMAC-SHA256(secret, label · the same three) )
  *
  * - **`assetId`** binds the cookie to one asset, so a cookie minted on one
  *   protected site proves nothing about another (on a site host the origin
@@ -20,8 +20,21 @@
  * URLs, so both proofs share one deployment secret and one rotation.
  */
 
-/** Cookie name, identical on a site host and on the apex. */
-export const AUTH_COOKIE = "rs_site_auth";
+/**
+ * Cookie names. On a site host the `__Host-` prefix makes the browser refuse
+ * the cookie unless it is `Secure`, `Path=/` and has no `Domain`, so no sibling
+ * host can plant or widen it. The apex path form cannot use the prefix, because
+ * its cookie is scoped to `/files/{id}`.
+ */
+export const SITE_COOKIE = "__Host-serve_access";
+export const APEX_COOKIE = "serve_access";
+
+export function authCookieName(siteHost: boolean): string {
+  return siteHost ? SITE_COOKIE : APEX_COOKIE;
+}
+
+/** Domain separation: an HMAC this key computes for anything else is not a cookie. */
+const MAC_LABEL = "serve-access-cookie-v1";
 
 /** ADR-013 B7: "lifetime 7 days". */
 export const COOKIE_MAX_AGE_SECONDS = 7 * 24 * 60 * 60;
@@ -48,7 +61,8 @@ function toHex(bytes: Uint8Array): string {
   return [...bytes].map((b) => b.toString(16).padStart(2, "0")).join("");
 }
 
-async function sign(secret: string, payload: string): Promise<string> {
+async function sign(secret: string, claims: string): Promise<string> {
+  const payload = `${MAC_LABEL}${SEPARATOR}${claims}`;
   const key = await crypto.subtle.importKey(
     "raw",
     new TextEncoder().encode(secret),
@@ -131,26 +145,29 @@ export function parseCookieHeader(header: string | null | undefined): Record<str
 /**
  * Build the `Set-Cookie` value.
  *
- * `Secure` is on everywhere except plain-http loopback, where a browser would
- * drop the cookie and local development of a protected site would be
- * impossible. `SameSite=Lax` keeps the cookie off cross-site subresource
- * requests while still arriving on a top-level navigation — which is how a
- * visitor reaches the page after the `303`.
+ * On a site host the whole origin is the asset, so the cookie is `Path=/`; on
+ * the apex it is scoped to the asset's own file prefix. `secure` decides the
+ * apex cookie only: plain-http loopback drops it so local development works,
+ * while a `__Host-` cookie is always `Secure` (browsers treat loopback as a
+ * secure context, so it still sticks there). `SameSite=Lax` keeps the cookie
+ * off cross-site subresource requests while still arriving on a top-level
+ * navigation, which is how a visitor reaches the page after the `303`.
  */
 export function buildSetCookie(opts: {
   value: string;
-  path: string;
+  siteHost: boolean;
+  assetId: string;
   secure: boolean;
   maxAgeSeconds?: number;
 }): string {
   const parts = [
-    `${AUTH_COOKIE}=${opts.value}`,
-    `Path=${opts.path}`,
+    `${authCookieName(opts.siteHost)}=${opts.value}`,
+    `Path=${opts.siteHost ? "/" : `/files/${opts.assetId}`}`,
     `Max-Age=${opts.maxAgeSeconds ?? COOKIE_MAX_AGE_SECONDS}`,
     "HttpOnly",
     "SameSite=Lax",
   ];
-  if (opts.secure) parts.push("Secure");
+  if (opts.siteHost || opts.secure) parts.push("Secure");
   return parts.join("; ");
 }
 

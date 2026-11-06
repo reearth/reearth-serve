@@ -128,7 +128,7 @@ describe("password-protected sites", { skip: !mockOidcAvailable }, () => {
     expect(posted.headers.get("Location")).toBe(`/files/${assetId}/site.zip`);
 
     const setCookie = posted.headers.get("Set-Cookie") ?? "";
-    expect(setCookie).toContain("rs_site_auth=");
+    expect(setCookie.startsWith("serve_access=")).toBe(true);
     expect(setCookie).toContain("HttpOnly");
     const cookie = setCookie.split(";")[0];
 

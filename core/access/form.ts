@@ -85,11 +85,8 @@ export async function handleAuthSubmit(
       Location: next,
       "Set-Cookie": buildSetCookie({
         value,
-        // On a site host the whole origin is this asset, so `/` is exact. On the
-        // apex the cookie is scoped to the asset's own file prefix — a weaker
-        // boundary than an origin, and one more reason site hosts (B1) come
-        // first.
-        path: deps.siteHost ? "/" : `/files/${asset.id}`,
+        siteHost: deps.siteHost,
+        assetId: asset.id,
         secure: shouldUseSecureCookie(new URL(request.url)),
       }),
       ...noStoreHeaders(),

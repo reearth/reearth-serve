@@ -24,7 +24,7 @@
 import type { AssetMetadata } from "../asset/model";
 import type { MetadataStore } from "../asset/repository";
 import type { KeyValue } from "../kv/port";
-import { AUTH_COOKIE, parseCookieHeader, verifyAuthCookie } from "./cookie";
+import { authCookieName, parseCookieHeader, verifyAuthCookie } from "./cookie";
 import {
   basicChallengeResponse,
   looksLikeBrowserNavigation,
@@ -122,7 +122,7 @@ export async function resolveAccess(
   // 1. The cookie. Pure computation — no store read, no PBKDF2 — which is why
   //    it is what a browsing visitor carries after one form submit.
   const cookies = parseCookieHeader(request.headers.get("Cookie"));
-  const cookieOk = await verifyAuthCookie(secret, cookies[AUTH_COOKIE], {
+  const cookieOk = await verifyAuthCookie(secret, cookies[authCookieName(deps.siteHost)], {
     assetId: asset.id,
     passwordVersion: protection.version,
     now,

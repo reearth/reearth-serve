@@ -10,12 +10,13 @@
 import { describe, expect, test } from "vitest";
 import { TEST_ITERATIONS } from "../testing/fixture";
 import {
-  AUTH_COOKIE,
+  APEX_COOKIE,
   buildSetCookie,
   COOKIE_MAX_AGE_SECONDS,
   mintAuthCookie,
   parseCookieHeader,
   shouldUseSecureCookie,
+  SITE_COOKIE,
   verifyAuthCookie,
 } from "./cookie";
 import {
@@ -128,6 +129,17 @@ describe("the auth cookie", () => {
     }
   });
 
+  test("a cookie MAC'd without the domain-separation label does not", async () => {
+    const payload = `${claims.assetId}.${claims.passwordVersion}.${future}`;
+    const key = await crypto.subtle.importKey(
+      "raw", new TextEncoder().encode(SECRET), { name: "HMAC", hash: "SHA-256" }, false, ["sign"],
+    );
+    const mac = new Uint8Array(await crypto.subtle.sign("HMAC", key, new TextEncoder().encode(payload)));
+    const hex = [...mac].map((b) => b.toString(16).padStart(2, "0")).join("");
+    const unlabelled = btoa(`${payload}.${hex}`).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    expect(await verifyAuthCookie(SECRET, unlabelled, { ...claims, now })).toBe(false);
+  });
+
   test("a tampered payload is rejected", async () => {
     const value = await mint();
     const at = Math.floor(value.length / 2);
@@ -138,14 +150,24 @@ describe("the auth cookie", () => {
 });
 
 describe("Set-Cookie", () => {
-  test("HttpOnly, SameSite=Lax, the 7-day lifetime and the given path", () => {
-    const value = buildSetCookie({ value: "v", path: "/files/abc", secure: true });
-    expect(value).toContain(`${AUTH_COOKIE}=v`);
+  test("on the apex: serve_access, scoped to the asset's file prefix", () => {
+    const value = buildSetCookie({ value: "v", siteHost: false, assetId: "abc", secure: true });
+    expect(APEX_COOKIE).toBe("serve_access");
+    expect(value.startsWith("serve_access=v;")).toBe(true);
     expect(value).toContain("Path=/files/abc");
     expect(value).toContain(`Max-Age=${COOKIE_MAX_AGE_SECONDS}`);
     expect(COOKIE_MAX_AGE_SECONDS).toBe(7 * 24 * 60 * 60);
     expect(value).toContain("HttpOnly");
     expect(value).toContain("SameSite=Lax");
+    expect(value).toContain("Secure");
+  });
+
+  test("on a site host: __Host-serve_access, Path=/, no Domain, Secure even on http loopback", () => {
+    const value = buildSetCookie({ value: "v", siteHost: true, assetId: "abc", secure: false });
+    expect(SITE_COOKIE).toBe("__Host-serve_access");
+    expect(value.startsWith("__Host-serve_access=v;")).toBe(true);
+    expect(value).toContain("Path=/;");
+    expect(value).not.toContain("Domain");
     expect(value).toContain("Secure");
   });
 
@@ -157,12 +179,12 @@ describe("Set-Cookie", () => {
     // A plain-http deployment that is not loopback still gets Secure — a
     // cookie that never comes back is the honest answer to cleartext.
     expect(shouldUseSecureCookie(new URL("http://serve.reearth.land/"))).toBe(true);
-    expect(buildSetCookie({ value: "v", path: "/", secure: false })).not.toContain("Secure");
+    expect(buildSetCookie({ value: "v", siteHost: false, assetId: "abc", secure: false })).not.toContain("Secure");
   });
 
   test("parseCookieHeader survives the shapes browsers send", () => {
-    expect(parseCookieHeader("a=1; rs_site_auth=xyz; b=2")).toMatchObject({
-      a: "1", rs_site_auth: "xyz", b: "2",
+    expect(parseCookieHeader("a=1; __Host-serve_access=xyz; b=2")).toMatchObject({
+      a: "1", "__Host-serve_access": "xyz", b: "2",
     });
     expect(parseCookieHeader(null)).toEqual({});
     expect(parseCookieHeader("novalue")).toEqual({});
