@@ -521,8 +521,10 @@ function parseAssetRow(row: Record<string, unknown>): AssetMetadata {
   delete model.passwordHash;
   delete model.passwordSalt;
   delete model.passwordVersion;
-  // NULL is the default, and the default is public.
-  model.access = model.access === "password" ? "password" : "public";
+  // NULL is the default, and the default is public. Any other value, a mode a
+  // newer deployment wrote or a typo, fails closed: read as `password`, it is
+  // challenged, and with no hash on the row it answers 503.
+  model.access = model.access == null || model.access === "public" ? "public" : "password";
   // SQLite stores the flag as 0/1 (ADR-013 C1); the domain sees a boolean, so
   // nothing downstream has to remember that `0` is falsy but `"0"` would not be.
   model.spa = Number(row.spa ?? 0) === 1;

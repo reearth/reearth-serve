@@ -290,3 +290,20 @@ describe("SqlStorageUsageStore", () => {
     expect(await store.get("project:p1")).toMatchObject({ totalSize: 42, assetCount: 3 });
   });
 });
+
+describe("SqlMetadataStore access column", () => {
+  test("NULL and public read as public, an unknown value fails closed as password", async () => {
+    const sql = db();
+    const store = new SqlMetadataStore(sql);
+    await store.save(asset({ id: "a1" }), 3600);
+    await store.save(asset({ id: "a2" }), 3600);
+    await store.save(asset({ id: "a3" }), 3600);
+    await sql.execute("UPDATE assets SET access = NULL WHERE id = 'a1'");
+    await sql.execute("UPDATE assets SET access = 'public' WHERE id = 'a2'");
+    // A mode a newer deployment wrote, or a typo, must never read back as public.
+    await sql.execute("UPDATE assets SET access = 'restricted' WHERE id = 'a3'");
+    expect((await store.find("a1"))?.access).toBe("public");
+    expect((await store.find("a2"))?.access).toBe("public");
+    expect((await store.find("a3"))?.access).toBe("password");
+  });
+});
