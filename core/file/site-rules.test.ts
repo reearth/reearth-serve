@@ -287,7 +287,7 @@ describe("gzip-stored entries keep working under rules", () => {
   });
 });
 
-describe("_headers cannot undo the delivery's own safety headers (ADR-020 §9 item 9)", () => {
+describe("_headers cannot undo the delivery's own safety headers (ADR-013 C3)", () => {
   const stored = (headers: Record<string, string>): SiteHosting =>
     ({ headers: [{ pattern: "/*", headers }], redirects: [], warnings: [] });
 

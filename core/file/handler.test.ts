@@ -144,7 +144,7 @@ describe("cache policy", () => {
   });
 });
 
-describe("nosniff and the inline allowlist (ADR-020 §9 items 8 and 10)", () => {
+describe("nosniff and the inline allowlist (ADR-013 A4)", () => {
   test("every /files response sends X-Content-Type-Options: nosniff", async () => {
     const { app, storage, metadata } = await fixture();
     await seedNotFoundPage(storage);

@@ -1,6 +1,6 @@
 /**
  * One password attempt, for the form and for `Authorization: Basic` alike
- * (ADR-013 B7, ADR-020 §9 item 6).
+ * (ADR-013 B7).
  *
  * PBKDF2 stays at 600 000 iterations, which is a few hundred milliseconds of
  * CPU. A tool that sends Basic on every tile request would pay that per

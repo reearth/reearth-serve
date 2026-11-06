@@ -181,7 +181,7 @@ describe("Authorization: Basic", () => {
   });
 });
 
-describe("the password memo (ADR-020 §9 item 6)", () => {
+describe("the password memo (ADR-013 B7)", () => {
   /** A KeyValue that counts the calls the limiter makes. */
   class CountingKeyValue extends MemoryKeyValue {
     calls = 0;

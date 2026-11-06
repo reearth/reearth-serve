@@ -1,6 +1,6 @@
 /**
  * The startup check that site hosts are really isolated from the API
- * (ADR-020 §9 item 7).
+ * (ADR-013 B1).
  *
  * Browsers treat every host under one registrable domain as the same site:
  * `SameSite` cookies flow between them and a sibling can set cookies for the

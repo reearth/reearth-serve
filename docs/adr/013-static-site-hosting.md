@@ -70,6 +70,11 @@ legacy layout second, exactly as file lookup did before.
 expose their file tree, and the file list already exists as an API
 (`GET /api/v1/assets/:id/files`) for tooling.
 
+**The apex renders no site.** Every asset on the apex shares one origin, so
+a page rendered there could read any other asset with the visitor's
+cookies. On the apex, `/files/:id/…` therefore serves an archive's HTML as
+an attachment (A4), and a hosted site renders only on a site host (B1).
+
 ### A2. Cache policy
 
 Two kinds of URL reach the same bytes and get different policies
@@ -148,6 +153,21 @@ the procurement conversations in ROADMAP Phase 6). The extractor writes
 nothing to local disk, so non-root needs no volume. Image size is ~12.6 MB,
 essentially the binary.
 
+**Rendering on the apex.** Every `/files` response sends
+`X-Content-Type-Options: nosniff`: files, thumbnails, the archive 404 page,
+redirects, `401` challenges and errors. On the apex, `Content-Disposition`
+is `inline` only for a type in `INLINE_TYPES` (`core/file/disposition.ts`),
+compared without parameters or case, and `attachment` for every other type.
+Every apex attachment also sends `Content-Security-Policy: sandbox`, so a
+browser that renders it anyway runs it in an opaque origin. The list holds
+types a browser shows without running script: PNG, JPEG, GIF, WebP and AVIF
+images, `text/plain`, `text/csv`, JSON, GeoJSON, glTF, octet-stream,
+protobuf and Mapbox vector tiles, MP4 and WebM video, and MPEG and Ogg
+audio. HTML, SVG, XML, JavaScript, PDF and unlisted types download. Site
+hosts stay `inline`, because a static site needs its HTML to render. A deny
+list of active types was rejected, because it leaves every unlisted type
+inline.
+
 ## Part B — Site hosts (B1–B5 implemented; B6 apart from its event log; B7's `password` mode implemented, `members` deferred)
 
 Part B introduces one new concept, the **site host**: a hostname under the
@@ -162,8 +182,8 @@ Root-relative paths and origin isolation are one problem with one fix:
 serve each asset from its own hostname.
 
 ```
-https://{assetId}.serve.reearth.land/           → /files/{assetId}/
-https://{versionId}.serve.reearth.land/         → /files/{versionId}/   (pinned)
+https://{assetId}.sites.example.net/           → /files/{assetId}/
+https://{versionId}.sites.example.net/         → /files/{versionId}/   (pinned)
 ```
 
 - **Routing.** `core/site/middleware.ts`, registered first in `core/app.ts`
@@ -184,17 +204,31 @@ https://{versionId}.serve.reearth.land/         → /files/{versionId}/   (pinne
   Each runtime entrypoint routes by path before the app sees the request
   (`/api/*` and `/files/*` on both; `/internal/cron` on Node, React Router
   SSR on the Worker), so both also send everything on a site host to the
-  app — otherwise the UI would answer at `{assetId}.serve.reearth.land/`.
-- **Configuration.** `SITE_HOST_SUFFIX` (e.g. `.serve.reearth.land`;
+  app — otherwise the UI would answer at `{assetId}.sites.example.net/`.
+- **Configuration.** `SITE_HOST_SUFFIX` (e.g. `.sites.example.net`;
   `.localhost:8787` for local development) names the suffix, in both
   composition roots. It must start with a dot — without one,
-  `notserve.reearth.land` would match a suffix of `serve.reearth.land` —
+  `notsites.example.net` would match a suffix of `sites.example.net` —
   and it is compared against the `Host` header verbatim, port included. A
   suffix without the dot fails at startup rather than silently disabling
   the feature. Unset disables site hosts entirely, so the Node runtime and
   tests opt in explicitly. On Cloudflare the variable stays commented out
   in `wrangler.toml` until the zone-side work below is done: a `siteUrl`
   that does not resolve is worse than no `siteUrl`.
+- **Site domain apart from the API.** Browsers treat every host under one
+  registrable domain as the same site: `SameSite` cookies flow between
+  them, and any of them can set a cookie for the parent domain. When
+  `SITE_HOST_SUFFIX` is set, Serve requires `BASE_URL` and
+  `SITE_REGISTRABLE_DOMAIN`, and refuses to start when the suffix host is
+  not under `.` plus that domain, or when the `BASE_URL` host equals the
+  domain or is under it. Hosts are compared lowercased, without port or
+  trailing dot. `SITE_DOMAIN_IS_PUBLIC_SUFFIX=true` skips the check for a
+  domain on the Public Suffix List, and Serve logs it. A valid setup puts
+  the API on `serve.example.com` and sites under `.sites.example.net`.
+  Local development uses `localhost` with the override, since browsers
+  treat an unlisted top-level domain as a public suffix. On Workers the
+  check runs when the request's dependencies are built, so a bad
+  configuration fails every API and file request.
 - **Anything else on the host is `404`.** A label that is not ID-shaped
   gets `404` with `Content-Type: text/plain`, the body `Not found` and
   `Cache-Control: no-store` — no JSON error (there is no API here) and
@@ -203,22 +237,26 @@ https://{versionId}.serve.reearth.land/         → /files/{versionId}/   (pinne
   skipped there, as they are for `/api/internal/*`: a hosted page is pure
   file delivery, and minting an anonymous session per page view would burn
   a KV write for an identity nothing reads.
-- **Zone-side work.** On the `reearth.land` zone: a proxied `*.serve` DNS
-  record, a certificate covering `*.serve.reearth.land`, and a Worker route
-  for `*.serve.reearth.land/*` (`routes` in `wrangler.toml` stays
+- **Zone-side work.** On the `example.net` zone: a proxied `*.sites` DNS
+  record, a certificate covering `*.sites.example.net`, and a Worker route
+  for `*.sites.example.net/*` (`routes` in `wrangler.toml` stays
   apex-only, so a half-configured wildcard never serves TLS errors to
   visitors). A wildcard on the apex certificate covers one level only
-  (`*.reearth.land`), so `serve` needs its own Advanced Certificate or
+  (`*.example.net`), so `sites` needs its own Advanced Certificate or
   Total TLS. One-time console/Terraform steps, listed in the commented-out
   `SITE_HOST_SUFFIX` block in `wrangler.toml`, not in code. The one-level
   limit is also why every host form below is a single label — see B4 for
   the `--` separator that follows from it.
-- **Absolute paths resolve.** `/assets/app.js` on `abc.serve.reearth.land`
+- **Absolute paths resolve.** `/assets/app.js` on `abc.sites.example.net`
   is `/files/abc/assets/app.js`. Where site hosts are not enabled, the
   README still instructs users to build with a relative base (Vite
   `base: './'`).
 - **Isolation.** Each hosted site is its own origin: a page can read its
-  own `localStorage` and nothing else. The API and the future Web UI stay
+  own `localStorage` and nothing else. Sibling site hosts are still one
+  *site* (same registrable domain), so origin scoping alone does not stop
+  one site's page from sending a `SameSite=Lax` cookie to another. B7's
+  CORS and cookie rules close that, and the separate site domain above
+  keeps the API out of it. The API and the future Web UI stay
   on the apex. This removes the standing hazard that any uploaded HTML runs
   same-origin with the management surface — today mitigated only by the
   API using bearer tokens rather than cookies.
@@ -245,7 +283,7 @@ https://{versionId}.serve.reearth.land/         → /files/{versionId}/   (pinne
   exactly that shape, which is what lets B2 test the ID form before
   touching the table (B6).
 - **Cache keys.** Cloudflare caches by full URL, so
-  `abc.serve.reearth.land/x` and `serve.reearth.land/files/abc/x` are
+  `abc.sites.example.net/x` and `serve.example.com/files/abc/x` are
   separate entries for the same bytes. Acceptable: the site host is the
   canonical URL once this lands; the path form stays for API clients and
   tiles.
@@ -256,7 +294,7 @@ An ID-shaped host is correct but not printable. A project member names the
 site:
 
 ```
-https://kawasaki-flood-map.serve.reearth.land/   → asset 3f9a1c…
+https://kawasaki-flood-map.sites.example.net/   → asset 3f9a1c…
 ```
 
 **Model.** A `site_hosts` table, one row per hostname. Custom domains (B5)
@@ -264,7 +302,7 @@ are the same table, so one resolver serves both.
 
 | column | notes |
 |--------|-------|
-| `hostname` | primary key, lowercase, full host (`kawasaki-flood-map.serve.reearth.land` or `map.city.example.jp`) |
+| `hostname` | primary key, lowercase, full host (`kawasaki-flood-map.sites.example.net` or `map.city.example.jp`) |
 | `asset_id` | target; nullable only for released rows whose asset is gone (B3) |
 | `project_id` | for listing and quota |
 | `kind` | `subdomain` \| `custom` |
@@ -399,14 +437,14 @@ states: they are capability URLs and stay reachable while the asset exists.
 
 Netlify's `deploy-preview-12--site.netlify.app` uses `--` because a
 wildcard certificate covers one label; a second level
-(`v3.site.serve.reearth.land`) would need another certificate per site.
+(`v3.site.sites.example.net`) would need another certificate per site.
 Same constraint here, same answer.
 
 ```
-kawasaki-flood-map.serve.reearth.land            active version (production)
-v3--kawasaki-flood-map.serve.reearth.land        version 3, pinned, immutable
-latest--kawasaki-flood-map.serve.reearth.land    newest version, ignoring the active pin
-{versionId}.serve.reearth.land                   B1: pinned by ID, unguessable, always on
+kawasaki-flood-map.sites.example.net            active version (production)
+v3--kawasaki-flood-map.sites.example.net        version 3, pinned, immutable
+latest--kawasaki-flood-map.sites.example.net    newest version, ignoring the active pin
+{versionId}.sites.example.net                   B1: pinned by ID, unguessable, always on
 ```
 
 - **Resolution.** Split the label on the first `--`. The right side is the
@@ -473,7 +511,7 @@ The `custom` kind of `site_hosts`. Differences from `subdomain`:
   passes, and the host does not resolve before that.
 - **Certificate.** Cloudflare for SaaS custom hostnames on Cloudflare; the
   platform's equivalent on other clouds (ADR-012). The customer CNAMEs
-  their host to `{name}.serve.reearth.land` or to the SaaS fallback
+  their host to `{name}.sites.example.net` or to the SaaS fallback
   origin.
 - **No previews.** `v{n}--` has no meaning on a customer's domain; use the
   subdomain form.
@@ -676,12 +714,13 @@ Pages all use a password page that sets a cookie. We do both:
 3. Any request with a valid cookie is served normally.
 
 **Cookie.** `HttpOnly; Secure; SameSite=Lax`, value =
-`HMAC(secret, assetId · passwordVersion · exp)`, lifetime 7 days. On a
-site host (B1) the cookie is `Path=/` and scoped to that origin — one
-site's cookie cannot reach another's. On the path form
-(`serve.reearth.land/files/{id}/…`) the cookie is `Path=/files/{id}`; path
-scoping is a weaker boundary than origin scoping, which is one more
-reason B1 comes first. `passwordVersion` increments on every password
+`HMAC(secret, label · assetId · passwordVersion · exp)` with the label
+`serve-access-cookie-v1`, lifetime 7 days. On a site host (B1) the cookie
+is `__Host-serve_access`, `Path=/`, no `Domain` and always `Secure`, so a
+sibling host can neither plant nor widen it. On the path form
+(`serve.example.com/files/{id}/…`) it is `serve_access` with
+`Path=/files/{id}`. A path does not isolate anything on a shared origin,
+which is why the apex renders no HTML (A1, A4). `passwordVersion` increments on every password
 change, so rotating the password logs everyone out without server-side
 session state. The HMAC secret is a deployment secret alongside
 `INTERNAL_API_SECRET`.
@@ -700,13 +739,24 @@ limiter is what keeps them from being guessable.
 **Caching.** Responses from a protected asset carry `private` in
 `Cache-Control` (A2 policies otherwise unchanged) so no shared cache
 stores them, and `Vary: Cookie, Authorization`. Cloudflare does not cache
-Worker responses by default, so this is defence in depth.
+Worker responses by default, so this is defence in depth. A pinned
+protected file keeps A2's year-long `max-age` under `private`: a visitor
+who loses the password keeps what the browser already holds. That is
+accepted, because the bytes already left.
 
-**CORS.** `Access-Control-Allow-Origin: *` cannot be combined with
-credentials. For protected assets the handler echoes the request's
-`Origin` and sets `Access-Control-Allow-Credentials: true`; a viewer
-embedding a protected tileset must fetch with `credentials: "include"` (or
-send Basic). Public assets keep `*`. This is the one place protection
+**CORS.** Only a cookie proof gets credentialed CORS. Serve echoes
+`Origin` with `Access-Control-Allow-Credentials: true` only when `Origin`
+is Serve's own origin or is listed exactly in `CREDENTIALED_ORIGINS`. The
+own origin is `BASE_URL` on the apex and `BASE_URL`'s scheme with the
+request host on a site host. It never echoes `null`. Every other read,
+Basic included, gets `*` with no credentials header: a tool that sends
+Basic needs no credentials mode. Protected responses send `Vary: Origin`,
+and cookie-authorized ones add `Cross-Origin-Resource-Policy:
+same-origin`, which stops no-cors loads from sibling hosts. Preflights and
+refusals carry no proof, so whatever the asset's mode they answer a
+trusted origin with credentials and everyone else with `*`. A
+`CREDENTIALED_ORIGINS` entry with a path, a wildcard or `null` fails at
+start. Public assets keep `*`. This is the one place protection
 changes how an asset is consumed, and the API response says so
 (`hosting.access` is visible to the caller).
 
@@ -780,11 +830,12 @@ every URL form, cookie/Basic proof, `private` caching, credentialed CORS
   what makes `curl -u`, QGIS and `file cp --password` work. It fails in the
   harmless direction: a client that sends `Accept: text/html` sees a form it
   can ignore in favour of Basic.
-- **Cookie `rs_site_auth`**, value
-  `base64url(assetId · passwordVersion · exp · HMAC-SHA256(secret, the same three))`,
-  `HttpOnly; SameSite=Lax; Max-Age` 7 days, `Secure` except on plain-http
-  loopback (where a browser would drop it and local development would be
-  impossible). `Path=/` on a site host, `Path=/files/{assetId}` on the apex.
+- **Cookie `__Host-serve_access`** on a site host and **`serve_access`**
+  on the apex, value
+  `base64url(assetId · passwordVersion · exp · HMAC-SHA256(secret, label · the same three))`,
+  `HttpOnly; SameSite=Lax; Max-Age` 7 days. The site-host cookie is always
+  `Secure` with `Path=/`. The apex cookie is `Path=/files/{assetId}` and
+  `Secure` except on plain-http loopback, where a browser would drop it.
 - **`POST /_serve/auth`** on a site host, `POST /files/{assetId}/_serve/auth`
   on the apex — the same route, because the site middleware rewrites the
   former into the latter. It is registered ahead of the catch-all and for
@@ -822,19 +873,34 @@ every URL form, cookie/Basic proof, `private` caching, credentialed CORS
   *before* the PBKDF2. The IP is `CF-Connecting-IP`, else the first hop of
   `X-Forwarded-For`. With neither, all visitors of the asset share one bucket
   with a deliberately looser limit (100), so one anonymous client cannot lock
-  a site's form for everyone.
+  a site's form for everyone. Unless `TRUST_PROXY=true`, the Node runtime
+  deletes an incoming `CF-Connecting-IP` and sets `X-Forwarded-For` to the
+  socket address before the app runs, so a client that reaches the process
+  directly cannot pick its own bucket. On Workers the edge sets
+  `CF-Connecting-IP`.
+- **Successful checks are memoized.** 600 000 iterations cost tens of
+  milliseconds of CPU, and a tool sending Basic pays them on every tile.
+  Each isolate remembers successful checks for 300 seconds, at most 1,000
+  entries with least-recently-used eviction, keyed by
+  `HMAC-SHA256(isolateKey, assetId | password_version | password)` under a
+  random 32-byte key. The form and Basic share the memo. A hit skips the
+  limiter's KV read and delete. A password change misses at once, because
+  the version is in the key. workerd's source caps PBKDF2 at 100 000
+  iterations, which `wrangler dev` does not enforce, so a deployed Worker
+  must be checked once before a password is set in production.
 - **The OIDC middleware no longer runs on `/files/*`.** It rejects every
   `Authorization` header that is not a Bearer token with `401`, so `curl -u`
   against a protected asset never reached the file handler. Those requests
   already bypassed it on a site host (B1: a hosted page is pure file
   delivery) and the apex path form should not differ.
 - **CORS moved into the handler.** The blanket `cors()` middleware could not
-  express a policy that depends on the asset, because it runs before the row
-  is read. Public assets keep `Access-Control-Allow-Origin: *`; protected
-  ones echo `Origin` with `Access-Control-Allow-Credentials: true` and
-  `Vary: Origin`. Preflight is answered without an access check (it carries
-  no credentials) but announces the mode's policy, which costs one metadata
-  read.
+  express a policy that depends on the proof, because it runs before the row
+  is read. The policy is the CORS rule above. Preflights read nothing and
+  allow the fixed headers `range`, `if-none-match`, `if-modified-since` and
+  `authorization`, with `Access-Control-Max-Age: 86400`.
+- **An unknown `access` value fails closed.** The SQL store reads `NULL`
+  and `public` as public and any other value as `password`, so a mode this
+  build does not know is challenged rather than served.
 - **Not implemented here:** the ADR-007 event on a mode or password change
   (there is still no event store — same gap as B6). `upload --password`
   landed with C2. `members` mode waits on the OIDC integration as specified.
@@ -1035,10 +1101,15 @@ the handler; bounded in size and rule count. Rules cannot set
   and a preview host still wins because `noindex` goes on afterwards.
   `Content-Type` is denied too — the extractor assigned it from the entry's
   name (A4) and a rule that disagreed would make the same bytes mean two
-  things.
+  things. `Content-Disposition` and `X-Content-Type-Options` are denied,
+  because they decide whether the apex renders a file (A4). A rule's
+  `Content-Security-Policy` is allowed on a site host and dropped on the
+  apex, where it would replace the sandbox. The denylist is checked again
+  when rules are applied, so rules stored before a header joined it are
+  ignored too.
 - **Redirect targets are internal only.** Netlify allows an external
   target because the name belongs to the site's owner either way; here a
-  site lives under `serve.reearth.land`, and letting an uploaded zip bounce
+  site lives under `serve.example.com`, and letting an uploaded zip bounce
   visitors off that name is a phishing primitive. `to` must be a rooted
   path, not `//host`, no scheme, no backslash. A deliberate limit — if
   external redirects are ever wanted they need a per-site opt-in, not a
@@ -1106,7 +1177,7 @@ fragile for no size win. It stays on `debian:bookworm-slim`.
 same-origin with the API. B1 fixes all of these without touching user
 content.
 
-**G. Names as a path prefix (`serve.reearth.land/s/name/`).** No zone
+**G. Names as a path prefix (`serve.example.com/s/name/`).** No zone
 work, but it inherits every problem B1 exists to solve.
 
 **H. Names as the asset ID itself.** Would remove the lookup, but IDs are
@@ -1126,7 +1197,7 @@ and an invitation to claim it. `503` says what is true.
 numbers make a public site's history guessable. Off by default; the
 unguessable ID-form previews remain for the review workflow.
 
-**L. Second-level preview hosts (`v3.name.serve.reearth.land`).** Needs a
+**L. Second-level preview hosts (`v3.name.sites.example.net`).** Needs a
 certificate per site. `--` costs nothing.
 
 **N. HTTP Basic auth only.** Works everywhere, but the browser experience
@@ -1186,8 +1257,14 @@ case: tile viewers and data consumers rely on `404` for missing entries.
   "capabilities unless the asset sets an access mode"; the check is one
   HMAC verification per request for protected assets and nothing for
   public ones.
-- Protected assets lose `Access-Control-Allow-Origin: *`; consumers must
-  send credentials. Documented on the asset (`hosting.access`).
+- Protected assets keep `Access-Control-Allow-Origin: *` for Basic, and
+  credentialed reads only from Serve's own origin and
+  `CREDENTIALED_ORIGINS`. Documented on the asset (`hosting.access`).
+- The apex stops rendering HTML for every deployment, with or without site
+  hosts: a page at `/files/{id}/` downloads. Sites render on site hosts.
+- Site hosts need a registrable domain apart from the API's, or a Public
+  Suffix List entry. A configuration that shares the API's domain fails at
+  start.
 - Name governance (reserved list, cooldown, quota) is product surface that
   will need occasional human decisions (a disputed name). The event log
   gives those decisions a record.

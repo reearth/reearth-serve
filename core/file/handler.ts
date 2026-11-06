@@ -316,7 +316,7 @@ function corsPolicy(c: Context<AppEnv>, proof: CorsPolicy["proof"]): CorsPolicy 
 }
 
 // Preflight. It carries no credentials and proves nothing, so it is answered
-// without an access check and without reading the asset (ADR-020 §9 item 4).
+// without an access check and without reading the asset (ADR-013 B7).
 fileRoutes.on("OPTIONS", ["/:id", "/:id/", "/:id/:path{.+}"], (c) => preflightResponse(corsPolicy(c, null)));
 
 // GET /files/:id                 — single-file asset, or an archive's index.html

@@ -59,7 +59,7 @@ export const REDIRECT_STATUSES = [200, 301, 302, 307, 308] as const;
  * password page.
  *
  * `content-disposition` and `x-content-type-options` decide whether the apex
- * renders a file at all (ADR-020 §9 items 8 and 9). `content-security-policy`
+ * renders a file at all (ADR-013 A4 and C3). `content-security-policy`
  * is not here because a site host may set its own; the apex drops it when the
  * rule is applied, see `applySiteHeaders`.
  *

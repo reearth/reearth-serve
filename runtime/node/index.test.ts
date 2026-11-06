@@ -32,7 +32,7 @@ function wrongAttempt(handler: Awaited<ReturnType<typeof protectedHandler>>, i: 
   return handler(request, env);
 }
 
-describe("the Node runtime's client IP (ADR-020 §9 item 6)", () => {
+describe("the Node runtime's client IP (ADR-013 B7)", () => {
   test("a forged CF-Connecting-IP or X-Forwarded-For does not buy a fresh rate-limit bucket", async () => {
     const handler = await protectedHandler();
     for (let i = 0; i < RATE_LIMIT_PER_IP; i++) {

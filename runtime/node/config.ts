@@ -50,7 +50,7 @@ export type NodeConfig = {
   /**
    * `SITE_DOMAIN_IS_PUBLIC_SUFFIX=true` skipped the site-isolation check, which
    * the runtime logs at start. Without it, a suffix on the API's own
-   * registrable domain fails `loadConfig` (ADR-020 §9 item 7).
+   * registrable domain fails `loadConfig` (ADR-013 B1).
    */
   siteDomainIsPublicSuffix: boolean;
   /**

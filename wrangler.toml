@@ -49,7 +49,7 @@ EXTRACTION_STUCK_THRESHOLD_SECONDS = "1800"
 # The sites must live under a different registrable domain than BASE_URL:
 # hosts under one registrable domain are the same site to a browser, so the
 # Worker refuses to serve when BASE_URL's host is under SITE_REGISTRABLE_DOMAIN
-# or the suffix is not (ADR-020 §9 item 7). SITE_DOMAIN_IS_PUBLIC_SUFFIX = "true"
+# or the suffix is not (ADR-013 B1). SITE_DOMAIN_IS_PUBLIC_SUFFIX = "true"
 # skips the check for a domain on the Public Suffix List.
 # SITE_HOST_SUFFIX = ".sites.example.net"
 # SITE_REGISTRABLE_DOMAIN = "example.net"

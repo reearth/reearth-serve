@@ -7,7 +7,7 @@ const valid = {
   SITE_REGISTRABLE_DOMAIN: "example.net",
 };
 
-describe("checkSiteIsolation (ADR-020 §9 item 7)", () => {
+describe("checkSiteIsolation (ADR-013 B1)", () => {
   test("no suffix, no requirement", () => {
     expect(checkSiteIsolation({})).toEqual({ publicSuffixOverride: false });
   });

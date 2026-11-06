@@ -1,6 +1,6 @@
 /**
- * Which files the apex renders and which it downloads (ADR-020 §9 items 5, 8
- * and 10).
+ * Which files the apex renders and which it downloads (ADR-013 A1
+ * and A4).
  *
  * The apex `/files/{id}/…` form shares one origin across every asset, so a
  * document a browser renders there runs on that shared origin. Only types a

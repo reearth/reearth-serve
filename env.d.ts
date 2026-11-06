@@ -42,7 +42,7 @@ interface Env {
   SITE_HOST_SUFFIX?: string;
   // Required with SITE_HOST_SUFFIX: the registrable domain the site hosts live
   // under, e.g. "example.net". The Worker refuses to serve when the suffix is
-  // not under it or when BASE_URL's host is (ADR-020 §9 item 7).
+  // not under it or when BASE_URL's host is (ADR-013 B1).
   SITE_REGISTRABLE_DOMAIN?: string;
   // "true" skips that check, for a domain on the Public Suffix List. Logged.
   SITE_DOMAIN_IS_PUBLIC_SUFFIX?: string;
