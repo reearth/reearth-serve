@@ -1,6 +1,6 @@
 # ADR-016: Policy Table, Accounts Authorization and Service Identity
 
-- **Status:** Accepted
+- **Status:** Proposed
 - **Date:** 2026-11-05
 - **Deciders:** @pyshx
 
