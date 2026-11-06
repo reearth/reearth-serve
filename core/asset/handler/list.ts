@@ -27,25 +27,26 @@ export function registerListRoute(app: Hono<AppEnv>) {
 
       if (!user) {
         if (!sessionId) return c.json({ assets: [], cursor: undefined });
-        const result = await metadata.list({ limit, cursor, sessionId });
+        const result = await metadata.list({ limit, cursor, scope: { kind: "session", sessionId } });
         return c.json({ assets: result.items, cursor: result.cursor });
       }
 
       if (projectId) {
         const access = await authorizeProject(accessCtx(c), projectId, "read_asset");
         if (!access.ok) return deniedResponse(c, access, { notFound: "Project not found" });
-        const result = await metadata.list({ limit, cursor, projectId });
+        const result = await metadata.list({ limit, cursor, scope: { kind: "project", projectId } });
         return c.json({ assets: result.items, cursor: result.cursor });
       }
 
       if (workspaceId) {
         const access = await authorizeWorkspace(accessCtx(c), workspaceId, "read");
         if (!access.ok) return deniedResponse(c, access, { notFound: "Workspace not found" });
-        const result = await metadata.list({ limit, cursor, workspaceId });
+        const result = await metadata.list({ limit, cursor, scope: { kind: "workspace", workspaceId } });
         return c.json({ assets: result.items, cursor: result.cursor });
       }
 
-      const result = await metadata.list({ limit, cursor, accessibleByUser: user.id });
+      const workspaceIds = (await c.get("tenancy").members.listForCaller()).map((m) => m.workspaceId);
+      const result = await metadata.list({ limit, cursor, scope: { kind: "visible", workspaceIds, ownerId: user.id } });
       return c.json({ assets: result.items, cursor: result.cursor });
     },
   );

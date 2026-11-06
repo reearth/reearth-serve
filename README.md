@@ -198,7 +198,7 @@ Uploaded JPEG/PNG/WebP/GIF images get four WebP thumbnails generated automatical
 
 ## Authorization
 
-One policy table, `POLICY` in `core/auth/permissions.ts`, gives each action on a workspace or a project the lowest role that may perform it. Assets and jobs take their project's permissions. A project outside any workspace belongs to its creator alone. The table decides each workspace route and each route on one project, asset, job or upload. Lists filtered by `?workspaceId` (projects, assets, jobs) and the unscoped asset and job lists are decided per workspace, by workspace `read` or workspace membership, never per project.
+One policy table, `POLICY` in `core/auth/permissions.ts`, gives each action on a workspace or a project the lowest role that may perform it. Assets and jobs take their project's permissions. A project outside any workspace belongs to its creator alone. The table decides each workspace route and each route on one project, asset, job or upload. Lists filtered by `?workspaceId` (projects, assets, jobs) and the unscoped project, asset and job lists are decided per workspace, by workspace `read` or workspace membership, never per project. An unscoped asset or job list covers every workspace the caller belongs to, with no cap on the count, plus the caller's projects outside any workspace. An unscoped project list shows the projects the caller created, minus those in a workspace the caller has left.
 
 | Kind | Action | viewer | editor | admin | owner |
 |------|--------|:---:|:---:|:---:|:---:|

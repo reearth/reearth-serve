@@ -81,12 +81,21 @@ describe("SqlProjectStore", () => {
     await store.save({ id: "p2", name: "P2", createdAt: 200, updatedAt: 200, ownerId: "u1", workspaceId: "ws2" });
 
     expect((await store.find("p1"))?.name).toBe("P1");
-    expect(await store.list({ ownerId: "u1" })).toHaveLength(2);
-    expect((await store.list({ workspaceId: "ws1" })).map((p) => p.id)).toEqual(["p1"]);
-    expect(await store.list({})).toEqual([]);
+    expect((await store.list({ kind: "workspace", workspaceId: "ws1" })).map((p) => p.id)).toEqual(["p1"]);
 
     await store.delete("p1");
     expect(await store.find("p1")).toBeNull();
+  });
+
+  test("a created list keeps ownerless projects and drops workspaces the caller left", async () => {
+    const store = new SqlProjectStore(db());
+    await store.save({ id: "kept", name: "K", createdAt: 300, updatedAt: 300, ownerId: "u1", workspaceId: "ws1" });
+    await store.save({ id: "left", name: "L", createdAt: 200, updatedAt: 200, ownerId: "u1", workspaceId: "ws2" });
+    await store.save({ id: "solo", name: "S", createdAt: 100, updatedAt: 100, ownerId: "u1" });
+    await store.save({ id: "other", name: "O", createdAt: 400, updatedAt: 400, ownerId: "u2", workspaceId: "ws1" });
+
+    const created = await store.list({ kind: "created", ownerId: "u1", memberOf: ["ws1"] });
+    expect(created.map((p) => p.id)).toEqual(["kept", "solo"]);
   });
 });
 
@@ -124,33 +133,13 @@ describe("SqlMetadataStore", () => {
     }
     await store.save(asset({ id: "other", projectId: "p2" }), 3600);
 
-    const page1 = await store.list({ projectId: "p1", limit: 2 });
+    const page1 = await store.list({ scope: { kind: "project", projectId: "p1" }, limit: 2 });
     expect(page1.items.map((a) => a.id)).toEqual(["a3", "a2"]);
     expect(page1.cursor).toBeDefined();
 
-    const page2 = await store.list({ projectId: "p1", limit: 2, cursor: page1.cursor });
+    const page2 = await store.list({ scope: { kind: "project", projectId: "p1" }, limit: 2, cursor: page1.cursor });
     expect(page2.items.map((a) => a.id)).toEqual(["a1"]);
     expect(page2.cursor).toBeUndefined();
-  });
-
-  test("list without a scope returns nothing", async () => {
-    const store = new SqlMetadataStore(db());
-    await store.save(asset({ projectId: "p1" }), 3600);
-    expect((await store.list()).items).toEqual([]);
-    expect((await store.list({})).items).toEqual([]);
-  });
-
-  test("list scoped by accessibleByUser joins members and projects", async () => {
-    const sql = db();
-    const assets = new SqlMetadataStore(sql);
-    await new SqlWorkspaceStore(sql).save({ id: "ws1", name: "W", createdAt: 1, updatedAt: 1 });
-    await new SqlMemberStore(sql, null).save({ workspaceId: "ws1", userId: "u1", role: "owner", createdAt: 1, updatedAt: 1 });
-    await new SqlProjectStore(sql).save({ id: "p1", name: "P", createdAt: 1, updatedAt: 1, ownerId: "u1", workspaceId: "ws1" });
-    await assets.save(asset({ id: "mine", projectId: "p1" }), 3600);
-    await assets.save(asset({ id: "theirs", projectId: "p9" }), 3600);
-
-    const result = await assets.list({ accessibleByUser: "u1" });
-    expect(result.items.map((a) => a.id)).toEqual(["mine"]);
   });
 
   test("listExpired ignores non-expiring assets", async () => {
@@ -159,6 +148,98 @@ describe("SqlMetadataStore", () => {
     await store.save(asset({ id: "project", expiresAt: 0 }), 3600);
     const expired = await store.listExpired(1000, 10);
     expect(expired.map((a) => a.id)).toEqual(["expiring"]);
+  });
+});
+
+describe("visible list scope", () => {
+  async function seed(sql: SqlClient, workspaceCount: number) {
+    const projects = new SqlProjectStore(sql);
+    const assets = new SqlMetadataStore(sql);
+    for (let i = 0; i < workspaceCount; i++) {
+      await projects.save({ id: `p${i}`, name: "P", createdAt: 1, updatedAt: 1, ownerId: "u2", workspaceId: `ws${i}` });
+      await assets.save(asset({ id: `ws-asset-${i}`, projectId: `p${i}`, createdAt: 10 + i }), 3600);
+    }
+    await projects.save({ id: "outside", name: "P", createdAt: 1, updatedAt: 1, ownerId: "u1", workspaceId: "ws-left" });
+    await assets.save(asset({ id: "outside-asset", projectId: "outside" }), 3600);
+    await projects.save({ id: "solo-u1", name: "P", createdAt: 1, updatedAt: 1, ownerId: "u1" });
+    await assets.save(asset({ id: "solo-u1-asset", projectId: "solo-u1" }), 3600);
+    await projects.save({ id: "solo-u2", name: "P", createdAt: 1, updatedAt: 1, ownerId: "u2" });
+    await assets.save(asset({ id: "solo-u2-asset", projectId: "solo-u2" }), 3600);
+  }
+
+  test("150 workspace ids bind as one parameter and the caller's ownerless project is included", async () => {
+    const inner = db();
+    await seed(inner, 150);
+    const argCounts: number[] = [];
+    const recording: SqlClient = {
+      execute: (sql, args) => {
+        argCounts.push(args?.length ?? 0);
+        return inner.execute(sql, args);
+      },
+      batch: (statements) => inner.batch(statements),
+    };
+
+    const workspaceIds = Array.from({ length: 150 }, (_, i) => `ws${i}`);
+    const result = await new SqlMetadataStore(recording).list({
+      scope: { kind: "visible", workspaceIds, ownerId: "u1" },
+      limit: 200,
+    });
+
+    const expected = [...workspaceIds.map((_, i) => `ws-asset-${i}`), "solo-u1-asset"];
+    expect(result.items.map((a) => a.id).sort()).toEqual(expected.sort());
+    expect(argCounts).toEqual([3]);
+  });
+
+  test("an empty id list with an owner returns only the owner's ownerless rows", async () => {
+    const sql = db();
+    await seed(sql, 2);
+    const result = await new SqlMetadataStore(sql).list({ scope: { kind: "visible", workspaceIds: [], ownerId: "u1" } });
+    expect(result.items.map((a) => a.id)).toEqual(["solo-u1-asset"]);
+  });
+
+  test("jobs follow the same scope", async () => {
+    const sql = db();
+    await seed(sql, 1);
+    const jobs = new SqlJobStore(sql);
+    await jobs.save(job({ id: "ws-job", projectId: "p0", createdAt: 3 }));
+    await jobs.save(job({ id: "solo-job", projectId: "solo-u1", createdAt: 2 }));
+    await jobs.save(job({ id: "foreign-job", projectId: "solo-u2", createdAt: 1 }));
+    const result = await jobs.list({ scope: { kind: "visible", workspaceIds: ["ws0"], ownerId: "u1" } });
+    expect(result.items.map((j) => j.id)).toEqual(["ws-job", "solo-job"]);
+  });
+});
+
+describe("workspace list scope", () => {
+  async function seed(sql: SqlClient) {
+    const projects = new SqlProjectStore(sql);
+    const assets = new SqlMetadataStore(sql);
+    const jobs = new SqlJobStore(sql);
+    const rows = [
+      { project: "pa", workspaceId: "wsA" },
+      { project: "pb", workspaceId: "wsB" },
+      { project: "solo" },
+    ];
+    for (const [i, { project, workspaceId }] of rows.entries()) {
+      await projects.save({ id: project, name: "P", createdAt: 1, updatedAt: 1, ownerId: "u1", ...(workspaceId && { workspaceId }) });
+      await assets.save(asset({ id: `${project}-asset`, projectId: project, createdAt: 10 + i }), 3600);
+      await jobs.save(job({ id: `${project}-job`, projectId: project, createdAt: 10 + i }));
+    }
+    await assets.save(asset({ id: "pa-asset-2", projectId: "pa", createdAt: 20 }), 3600);
+    await jobs.save(job({ id: "pa-job-2", projectId: "pa", createdAt: 20 }));
+  }
+
+  test("assets list only the named workspace's project rows", async () => {
+    const sql = db();
+    await seed(sql);
+    const result = await new SqlMetadataStore(sql).list({ scope: { kind: "workspace", workspaceId: "wsA" } });
+    expect(result.items.map((a) => a.id)).toEqual(["pa-asset-2", "pa-asset"]);
+  });
+
+  test("jobs list only the named workspace's project rows", async () => {
+    const sql = db();
+    await seed(sql);
+    const result = await new SqlJobStore(sql).list({ scope: { kind: "workspace", workspaceId: "wsA" } });
+    expect(result.items.map((j) => j.id)).toEqual(["pa-job-2", "pa-job"]);
   });
 });
 
@@ -214,7 +295,7 @@ describe("SqlJobStore", () => {
     const store = new SqlJobStore(db());
     await store.save(job({ id: "j1", sessionId: "s1", createdAt: 1 }));
     await store.save(job({ id: "j2", sessionId: "s2", createdAt: 2 }));
-    const result = await store.list({ sessionId: "s1" });
+    const result = await store.list({ scope: { kind: "session", sessionId: "s1" } });
     expect(result.items.map((j) => j.id)).toEqual(["j1"]);
   });
 

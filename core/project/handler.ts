@@ -33,10 +33,11 @@ projectRoutes.get("/",
     if (workspaceId) {
       const access = await authorizeWorkspace(accessCtx(c), workspaceId, "read");
       if (!access.ok) return deniedResponse(c, access, { notFound: "Workspace not found" });
-      const list = await listProjects(projects, { workspaceId });
+      const list = await listProjects(projects, { kind: "workspace", workspaceId });
       return c.json({ projects: list });
     }
-    const list = await listProjects(projects, { ownerId: user.id });
+    const memberOf = (await c.get("tenancy").members.listForCaller()).map((m) => m.workspaceId);
+    const list = await listProjects(projects, { kind: "created", ownerId: user.id, memberOf });
     return c.json({ projects: list });
   },
 );
