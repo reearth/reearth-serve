@@ -1,11 +1,12 @@
 import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
-import { resolver, validator as zValidator } from "hono-openapi";
+import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { deleteWorkspace } from "../usecase";
 import { accessCtx, authorizeWorkspace, deniedResponse } from "../../auth/access";
 import { requireTenancyAdmin } from "../../tenancy/middleware";
-import { errorResponseSchema, idParamSchema } from "../../../shared/openapi";
+import { idParamSchema } from "../../../shared/openapi";
+import { jsonError } from "../../openapi";
 
 export function registerDeleteRoute(app: Hono<AppEnv>) {
   app.delete("/:id",
@@ -14,11 +15,11 @@ export function registerDeleteRoute(app: Hono<AppEnv>) {
       summary: "Delete workspace",
       responses: {
         204: { description: "Workspace deleted" },
-        401: { description: "Authentication required", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        403: { description: "Forbidden", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        404: { description: "Workspace not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        405: { description: "Workspaces are managed by an external directory", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        409: { description: "Workspace still has projects", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        401: jsonError("Authentication required"),
+        403: jsonError("Forbidden"),
+        404: jsonError("Workspace not found"),
+        405: jsonError("Workspaces are managed by an external directory"),
+        409: jsonError("Workspace still has projects"),
       },
     }),
     zValidator("param", idParamSchema),

@@ -1,10 +1,11 @@
 import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
-import { resolver, validator as zValidator } from "hono-openapi";
+import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { createWorkspace } from "../usecase";
 import { requireTenancyAdmin } from "../../tenancy/middleware";
-import { workspaceResponseSchema, errorResponseSchema, createWorkspaceBodySchema } from "../../../shared/openapi";
+import { workspaceResponseSchema, createWorkspaceBodySchema } from "../../../shared/openapi";
+import { jsonError, jsonResponse } from "../../openapi";
 
 export function registerCreateRoute(app: Hono<AppEnv>) {
   app.post("/",
@@ -12,10 +13,10 @@ export function registerCreateRoute(app: Hono<AppEnv>) {
       tags: ["Workspaces"],
       summary: "Create a workspace",
       responses: {
-        201: { description: "Workspace created", content: { "application/json": { schema: resolver(workspaceResponseSchema) } } },
-        400: { description: "Bad request", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        401: { description: "Authentication required", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        405: { description: "Workspaces are managed by an external directory", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        201: jsonResponse("Workspace created", workspaceResponseSchema),
+        400: jsonError("Bad request"),
+        401: jsonError("Authentication required"),
+        405: jsonError("Workspaces are managed by an external directory"),
       },
     }),
     zValidator("json", createWorkspaceBodySchema),

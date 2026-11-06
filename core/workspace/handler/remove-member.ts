@@ -1,25 +1,26 @@
 import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
-import { resolver, validator as zValidator } from "hono-openapi";
+import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { accessCtx, authorizeWorkspace, deniedResponse } from "../../auth/access";
 import { canManageRole } from "../../auth/permissions";
 import { removeMember } from "../../member/usecase";
 import { requireTenancyAdmin } from "../../tenancy/middleware";
-import { errorResponseSchema, workspaceMemberParamSchema } from "../../../shared/openapi";
+import { workspaceMemberParamSchema } from "../../../shared/openapi";
+import { jsonError } from "../../openapi";
 
 export function registerRemoveMemberRoute(app: Hono<AppEnv>) {
-  app.delete("/:workspaceId/members/:userId",
+  app.delete("/:id/members/:userId",
     describeRoute({
       tags: ["Workspaces"],
       summary: "Remove member from workspace",
       responses: {
         204: { description: "Member removed" },
-        400: { description: "Bad request", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        401: { description: "Authentication required", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        403: { description: "Forbidden", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        404: { description: "Member not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        405: { description: "Members are managed by an external directory", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        400: jsonError("Bad request"),
+        401: jsonError("Authentication required"),
+        403: jsonError("Forbidden"),
+        404: jsonError("Member not found"),
+        405: jsonError("Members are managed by an external directory"),
       },
     }),
     zValidator("param", workspaceMemberParamSchema),
@@ -33,7 +34,7 @@ export function registerRemoveMemberRoute(app: Hono<AppEnv>) {
       }
 
       const members = admin.members;
-      const { workspaceId, userId: targetUserId } = c.req.valid("param");
+      const { id: workspaceId, userId: targetUserId } = c.req.valid("param");
 
       const access = await authorizeWorkspace(accessCtx(c), workspaceId, "manage_members");
       if (!access.ok) return deniedResponse(c, access, { notFound: "Workspace not found", forbiddenAs: 403 });

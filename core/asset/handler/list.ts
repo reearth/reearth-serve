@@ -1,9 +1,10 @@
 import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
-import { resolver, validator as zValidator } from "hono-openapi";
+import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { accessCtx, authorizeProject, authorizeWorkspace, deniedResponse } from "../../auth/access";
-import { assetListResponseSchema, errorResponseSchema, scopedListQuerySchema } from "../../../shared/openapi";
+import { assetListResponseSchema, scopedListQuerySchema } from "../../../shared/openapi";
+import { jsonError, jsonResponse } from "../../openapi";
 
 export function registerListRoute(app: Hono<AppEnv>) {
   app.get("/",
@@ -12,8 +13,8 @@ export function registerListRoute(app: Hono<AppEnv>) {
       summary: "List assets",
       description: "Anonymous callers see their own session's demo assets. Authenticated callers see assets in projects they have access to; narrow with ?projectId or ?workspaceId.",
       responses: {
-        200: { description: "Asset list", content: { "application/json": { schema: resolver(assetListResponseSchema) } } },
-        404: { description: "Scope not accessible", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        200: jsonResponse("Asset list", assetListResponseSchema),
+        404: jsonError("Scope not accessible"),
       },
     }),
     zValidator("query", scopedListQuerySchema),

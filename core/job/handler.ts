@@ -1,13 +1,13 @@
 import { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
-import { resolver, validator as zValidator } from "hono-openapi";
+import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../types";
 import { accessCtx, authorizeJob, authorizeProject, authorizeWorkspace, deniedResponse } from "../auth/access";
 import {
-  jobResponseSchema, jobListResponseSchema, errorResponseSchema,
-  idParamSchema, scopedListQuerySchema,
+  jobResponseSchema, jobListResponseSchema, idParamSchema, scopedListQuerySchema,
 } from "../../shared/openapi";
 import { jobSchema } from "../../shared/api";
+import { jsonError, jsonResponse } from "../openapi";
 
 // --- Public API routes (mounted at /api/v1/jobs) ---
 
@@ -19,8 +19,8 @@ jobRoutes.get("/",
     summary: "List jobs",
     description: "Anonymous callers see their own session's jobs. Authenticated callers see jobs in projects they have access to; narrow with ?projectId or ?workspaceId.",
     responses: {
-      200: { description: "Job list", content: { "application/json": { schema: resolver(jobListResponseSchema) } } },
-      404: { description: "Scope not accessible", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      200: jsonResponse("Job list", jobListResponseSchema),
+      404: jsonError("Scope not accessible"),
     },
   }),
   zValidator("query", scopedListQuerySchema),
@@ -61,8 +61,8 @@ jobRoutes.get("/:id",
     tags: ["Jobs"],
     summary: "Get job progress",
     responses: {
-      200: { description: "Job details", content: { "application/json": { schema: resolver(jobSchema) } } },
-      404: { description: "Job not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      200: jsonResponse("Job details", jobSchema),
+      404: jsonError("Job not found"),
     },
   }),
   zValidator("param", idParamSchema),
@@ -80,9 +80,9 @@ jobRoutes.post("/:id/retry",
     tags: ["Jobs"],
     summary: "Retry a stalled job",
     responses: {
-      200: { description: "Job restarted", content: { "application/json": { schema: resolver(jobSchema) } } },
-      400: { description: "Job already completed", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-      404: { description: "Job not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      200: jsonResponse("Job restarted", jobSchema),
+      400: jsonError("Job already completed"),
+      404: jsonError("Job not found"),
     },
   }),
   zValidator("param", idParamSchema),
