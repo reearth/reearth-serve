@@ -1,7 +1,11 @@
 import { describe, expect, test } from "vitest";
 import {
-  APP_JS, ASSET_ID, DOCS_HTML, fixture, INDEX_HTML, SINGLE_FILE_ID, VERSION_ID,
+  APP_JS, ASSET_ID, DOCS_HTML, fixture, INDEX_HTML, protect, seedEntry, seedNotFoundPage,
+  SINGLE_FILE_ID, VERSION_ID,
 } from "../testing/fixture";
+import { siteFixture, SUFFIX } from "../testing/site-fixture";
+import { versionThumbKey } from "../asset/usecase/shared";
+import { thumbnailFilename } from "../thumbnail/sizes";
 import { DEFAULT_CACHE_CONTROL, ENTRY_CACHE_CONTROL, PINNED_CACHE_CONTROL } from "./caching";
 
 // Delivery semantics that static-site hosting depends on (ADR-013): index
@@ -137,5 +141,94 @@ describe("cache policy", () => {
     expect(res.headers.get("Accept-Ranges")).toBe("bytes");
     expect(res.headers.get("ETag")).toBeTruthy();
     expect(await res.text()).toBe("<!doc");
+  });
+});
+
+describe("nosniff and the inline allowlist (ADR-020 §9 items 8 and 10)", () => {
+  test("every /files response sends X-Content-Type-Options: nosniff", async () => {
+    const { app, storage, metadata } = await fixture();
+    await seedNotFoundPage(storage);
+    const thumb = new TextEncoder().encode("RIFF");
+    await storage.put(
+      versionThumbKey(ASSET_ID, VERSION_ID, thumbnailFilename("md")),
+      new ReadableStream({ start(c) { c.enqueue(thumb); c.close(); } }),
+      "image/webp",
+      thumb.byteLength,
+    );
+    const etag = (await app.request(`/files/${ASSET_ID}/index.html`)).headers.get("ETag")!;
+
+    const open = [
+      ["file", await app.request(`/files/${ASSET_ID}/index.html`), 200],
+      ["range", await app.request(`/files/${ASSET_ID}/index.html`, { headers: { Range: "bytes=0-4" } }), 206],
+      ["304", await app.request(`/files/${ASSET_ID}/index.html`, { headers: { "If-None-Match": etag } }), 304],
+      ["thumbnail", await app.request(`/files/${ASSET_ID}?thumb=md`), 200],
+      ["missing thumbnail", await app.request(`/files/${SINGLE_FILE_ID}?thumb=md`), 404],
+      ["invalid thumbnail", await app.request(`/files/${ASSET_ID}?thumb=huge`), 400],
+      ["404 page", await app.request(`/files/${ASSET_ID}/nope.js`), 404],
+      ["unknown asset", await app.request(`/files/0000000000000000/x`), 404],
+      ["redirect", await app.request(`http://localhost/files/${ASSET_ID}/docs`), 301],
+      ["preflight", await app.request(`/files/${ASSET_ID}`, { method: "OPTIONS" }), 204],
+    ] as const;
+    await protect(metadata, ASSET_ID, "correct-horse-battery");
+    const wrong = { Authorization: `Basic ${btoa(":wrong-password")}`, "CF-Connecting-IP": "203.0.113.50" };
+    for (let i = 0; i < 10; i++) await app.request(`/files/${ASSET_ID}`, { headers: wrong });
+    const closed = [
+      ["challenge", await app.request(`/files/${ASSET_ID}`), 401],
+      ["password page", await app.request(`/files/${ASSET_ID}`, { headers: { Accept: "text/html" } }), 401],
+      ["rate limited", await app.request(`/files/${ASSET_ID}`, { headers: wrong }), 429],
+      ["form", await app.request(`/files/${ASSET_ID}/_serve/auth`, { method: "POST", body: "" }), 401],
+    ] as const;
+    const { app: noSecret, metadata: m2 } = await fixture({ signingSecret: undefined });
+    await protect(m2, ASSET_ID, "correct-horse-battery");
+    const failClosed = [["503", await noSecret.request(`/files/${ASSET_ID}`), 503]] as const;
+
+    for (const [name, res, status] of [...open, ...closed, ...failClosed]) {
+      expect(res.status, name).toBe(status);
+      expect(res.headers.get("X-Content-Type-Options"), name).toBe("nosniff");
+    }
+  });
+
+  test("on the apex, only listed types are inline; everything else downloads, sandboxed", async () => {
+    const { app, storage } = await fixture();
+    await seedEntry(storage, "notes.txt", "hi", "text/plain; charset=utf-8");
+    await seedEntry(storage, "tile.png", "png", "IMAGE/PNG");
+    await seedEntry(storage, "logo.svg", "<svg/>", "image/svg+xml");
+    await seedEntry(storage, "doc.pdf", "%PDF", "application/pdf");
+    await seedEntry(storage, "feed.xml", "<x/>", "application/xml");
+
+    const inline = [`/files/${SINGLE_FILE_ID}/data.geojson`, `/files/${ASSET_ID}/notes.txt`, `/files/${ASSET_ID}/tile.png`];
+    for (const path of inline) {
+      const res = await app.request(path);
+      expect(res.headers.get("Content-Disposition"), path).toMatch(/^inline; filename="/);
+      expect(res.headers.get("Content-Security-Policy"), path).toBeNull();
+    }
+    const attached = ["index.html", "assets/app.js", "logo.svg", "doc.pdf", "feed.xml", "site.zip"];
+    for (const name of attached) {
+      const res = await app.request(`/files/${ASSET_ID}/${name}`);
+      expect(res.headers.get("Content-Disposition"), name).toMatch(/^attachment; filename="/);
+      expect(res.headers.get("Content-Security-Policy"), name).toBe("sandbox");
+    }
+    // The filename parameter is unchanged.
+    expect((await app.request(`/files/${ASSET_ID}/index.html`)).headers.get("Content-Disposition"))
+      .toBe('attachment; filename="index.html"');
+  });
+
+  test("the archive's 404 page downloads, sandboxed, on the apex", async () => {
+    const { app, storage } = await fixture();
+    await seedNotFoundPage(storage);
+    const res = await app.request(`/files/${ASSET_ID}/nope.js`);
+    expect(res.status).toBe(404);
+    expect(res.headers.get("Content-Disposition")).toMatch(/^attachment/);
+    expect(res.headers.get("Content-Security-Policy")).toBe("sandbox");
+  });
+
+  test("a site host stays inline, so its HTML renders", async () => {
+    const { app } = await siteFixture();
+    const host = `${ASSET_ID}${SUFFIX}`;
+    const res = await app.request(`http://${host}/`, { headers: { Host: host } });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Disposition")).toBe('inline; filename="index.html"');
+    expect(res.headers.get("Content-Security-Policy")).toBeNull();
+    expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
   });
 });

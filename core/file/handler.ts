@@ -8,6 +8,7 @@ import { resolveAssetVersion } from "../asset/usecase";
 import { legacyThumbKey, versionThumbKey } from "../asset/usecase/shared";
 import { cacheControlFor, etagMatches, representationEtag } from "./caching";
 import { addVary, applyCors, preflightResponse, type CorsPolicy } from "./cors";
+import { dispositionHeaders } from "./disposition";
 import { handleAuthSubmit } from "../access/form";
 import { AUTH_PATH_SEGMENT, resolveAccess, type AccessDeps } from "../access/resolve";
 import { SITE_PREVIEW_HEADER, type SitePreview } from "../site/middleware";
@@ -231,11 +232,12 @@ async function archiveFallback(
  * representation of the requested URL, so caching or revalidating it would
  * attach the error page's identity to a path that may exist tomorrow.
  */
-function serve404Page(located: Located): Response {
+function serve404Page(located: Located, siteHost: boolean): Response {
   const isGzipStored = located.contentEncoding === "gzip";
   const headers: Record<string, string> = {
     "Content-Type": located.contentType,
     "Cache-Control": "no-store",
+    ...dispositionHeaders(located.contentType, located.displayName, siteHost),
   };
   if (!isGzipStored) headers["Content-Length"] = String(located.file.size);
   return new Response(
@@ -255,6 +257,12 @@ function serve404Page(located: Located): Response {
 // on every URL form that reaches this router. Any *further* access check
 // belongs in `core/access/`, behind `resolveAccess`, not inline below.
 export const fileRoutes = new Hono<AppEnv>();
+
+// Last on the way out, so no `_headers` rule and no branch below can drop it.
+fileRoutes.use("*", async (c, next) => {
+  await next();
+  c.res.headers.set("X-Content-Type-Options", "nosniff");
+});
 
 /** What `resolveAccess` and the auth form need, off the request context. */
 function accessDeps(c: Context<AppEnv>): AccessDeps {
@@ -463,7 +471,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     const fallback = await archiveFallback(storage, layouts, servePath, asset.spa === true);
     if (!fallback) return decorate(c.json({ error: "File not found" }, 404));
     if (fallback.kind === "notFound") {
-      return decorate(applySiteHeaders(serve404Page(fallback.located), hosting, servePath));
+      return decorate(applySiteHeaders(serve404Page(fallback.located, c.get("siteHost")), hosting, servePath));
     }
     // The SPA case rejoins the normal path below, so the index is served by
     // exactly the code a direct hit on `/index.html` takes: gzip passthrough,
@@ -483,6 +491,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
       protected: isProtected,
     }),
     storage,
+    siteHost: c.get("siteHost"),
   });
 
   // `_headers` rules go on first, so everything the handler sets below — and
@@ -601,6 +610,7 @@ interface ServeOptions {
   ifNoneMatch: string | undefined;
   cacheControl: string;
   storage: FileStorage;
+  siteHost: boolean;
 }
 
 async function serveFile(located: Located, opts: ServeOptions): Promise<Response> {
@@ -616,7 +626,7 @@ async function serveFile(located: Located, opts: ServeOptions): Promise<Response
   const common: Record<string, string> = {
     "Content-Type": contentType,
     "Cache-Control": opts.cacheControl,
-    "Content-Disposition": `inline; filename="${encodeURIComponent(displayName)}"`,
+    ...dispositionHeaders(contentType, displayName, opts.siteHost),
   };
   if (etag) common["ETag"] = etag;
   // The body differs by Accept-Encoding whenever gzip is on disk.
