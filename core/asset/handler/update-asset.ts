@@ -1,11 +1,12 @@
 import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
-import { resolver, validator as zValidator } from "hono-openapi";
+import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata, updateAsset, setAssetAccess, checkSpaChange, enrichAssetWithVersion } from "../usecase";
 import { canAccessAsset } from "../access";
 import { accessCtx } from "./shared";
-import { assetResponseSchema, errorResponseSchema, idParamSchema, updateAssetBodySchema } from "../../../shared/openapi";
+import { assetResponseSchema, idParamSchema, updateAssetBodySchema } from "../../../shared/openapi";
+import { jsonError, jsonResponse } from "../../openapi";
 
 export function registerUpdateAssetRoute(app: Hono<AppEnv>) {
   app.patch("/:id",
@@ -20,10 +21,10 @@ export function registerUpdateAssetRoute(app: Hono<AppEnv>) {
         "changing the password invalidates every outstanding auth cookie. `{\"spa\":true}` makes " +
         "an extensionless miss inside the archive serve its root `index.html` with status 200.",
       responses: {
-        200: { description: "Updated asset", content: { "application/json": { schema: resolver(assetResponseSchema) } } },
-        400: { description: "Protection or the SPA fallback is not available for this asset", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        404: { description: "Asset not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        503: { description: "SIGNING_SECRET not configured", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        200: jsonResponse("Updated asset", assetResponseSchema),
+        400: jsonError("Protection or the SPA fallback is not available for this asset"),
+        404: jsonError("Asset not found"),
+        503: jsonError("SIGNING_SECRET not configured"),
       },
     }),
     zValidator("param", idParamSchema),

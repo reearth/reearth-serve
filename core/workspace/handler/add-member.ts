@@ -1,28 +1,28 @@
 import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
-import { resolver, validator as zValidator } from "hono-openapi";
+import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { canManageRole } from "../../auth/roles";
 import { addMember } from "../../member/usecase";
 import {
-  memberResponseSchema, errorResponseSchema,
-  workspaceIdParamSchema, addMemberBodySchema,
+  memberResponseSchema, idParamSchema, addMemberBodySchema,
 } from "../../../shared/openapi";
+import { jsonError, jsonResponse } from "../../openapi";
 
 export function registerAddMemberRoute(app: Hono<AppEnv>) {
-  app.post("/:workspaceId/members",
+  app.post("/:id/members",
     describeRoute({
       tags: ["Workspaces"],
       summary: "Add member to workspace",
       responses: {
-        201: { description: "Member added", content: { "application/json": { schema: resolver(memberResponseSchema) } } },
-        400: { description: "Bad request", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        401: { description: "Authentication required", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        403: { description: "Forbidden", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        409: { description: "Conflict", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        201: jsonResponse("Member added", memberResponseSchema),
+        400: jsonError("Bad request"),
+        401: jsonError("Authentication required"),
+        403: jsonError("Forbidden"),
+        409: jsonError("Conflict"),
       },
     }),
-    zValidator("param", workspaceIdParamSchema),
+    zValidator("param", idParamSchema),
     zValidator("json", addMemberBodySchema),
     async (c) => {
       const user = c.get("user");
@@ -32,7 +32,7 @@ export function registerAddMemberRoute(app: Hono<AppEnv>) {
 
       const members = c.get("members");
       const authorizer = c.get("authorizer");
-      const { workspaceId } = c.req.valid("param");
+      const { id: workspaceId } = c.req.valid("param");
 
       const self = await members.find(workspaceId, user.sub);
       if (!self) {

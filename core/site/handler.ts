@@ -304,7 +304,7 @@ export function registerProjectHostRoutes(app: Hono<AppEnv>) {
       tags: ["Projects"],
       summary: "List site hosts of a project",
       responses: {
-        200: { description: "Host list", content: { "application/json": { schema: resolver(siteHostListResponseSchema) } } },
+        200: { description: "Hosts in the project", content: { "application/json": { schema: resolver(siteHostListResponseSchema) } } },
         401: { description: "Authentication required", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
         404: { description: "Project not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
       },

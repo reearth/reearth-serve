@@ -1,9 +1,10 @@
 import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
-import { resolver, validator as zValidator } from "hono-openapi";
+import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getWorkspace } from "../usecase";
-import { workspaceResponseSchema, errorResponseSchema, idParamSchema } from "../../../shared/openapi";
+import { workspaceResponseSchema, idParamSchema } from "../../../shared/openapi";
+import { jsonError, jsonResponse } from "../../openapi";
 
 export function registerGetRoute(app: Hono<AppEnv>) {
   app.get("/:id",
@@ -11,9 +12,9 @@ export function registerGetRoute(app: Hono<AppEnv>) {
       tags: ["Workspaces"],
       summary: "Get workspace",
       responses: {
-        200: { description: "Workspace details", content: { "application/json": { schema: resolver(workspaceResponseSchema) } } },
-        401: { description: "Authentication required", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        404: { description: "Workspace not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        200: jsonResponse("Workspace details", workspaceResponseSchema),
+        401: jsonError("Authentication required"),
+        404: jsonError("Workspace not found"),
       },
     }),
     zValidator("param", idParamSchema),

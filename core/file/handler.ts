@@ -16,8 +16,8 @@ import { hostingFor, isControlFile } from "../site/hosting";
 import {
   applySiteHeaders, siteRedirect, siteRedirectResponse, targetFilePath,
 } from "./site-routing";
-import { parseRange, sliceStream } from "./stream";
 import { errorResponseSchema } from "../../shared";
+import { parseRange, sliceStream } from "./stream";
 import {
   THUMBNAIL_SIZES,
   isThumbnailSize,

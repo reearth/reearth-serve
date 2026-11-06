@@ -1,15 +1,15 @@
 import { Hono } from "hono";
 import type { Context } from "hono";
 import { describeRoute } from "hono-openapi";
-import { resolver, validator as zValidator } from "hono-openapi";
+import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../types";
 import { canAccessJob, canAccessProject, type AccessContext } from "../asset/access";
 import {
-  jobResponseSchema, jobListResponseSchema, errorResponseSchema,
-  idParamSchema, scopedListQuerySchema,
+  jobResponseSchema, jobListResponseSchema, idParamSchema, scopedListQuerySchema,
 } from "../../shared/openapi";
 import { jobSchema } from "../../shared/api";
 import { hostingOnExtractionComplete } from "../site/hosting";
+import { jsonError, jsonResponse } from "../openapi";
 
 function accessCtx(c: Context<AppEnv>): AccessContext {
   return {
@@ -31,8 +31,8 @@ jobRoutes.get("/",
     summary: "List jobs",
     description: "Anonymous callers see their own session's jobs. Authenticated callers see jobs in projects they have access to; narrow with ?projectId or ?workspaceId.",
     responses: {
-      200: { description: "Job list", content: { "application/json": { schema: resolver(jobListResponseSchema) } } },
-      404: { description: "Scope not accessible", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      200: jsonResponse("Job list", jobListResponseSchema),
+      404: jsonError("Scope not accessible"),
     },
   }),
   zValidator("query", scopedListQuerySchema),
@@ -75,8 +75,8 @@ jobRoutes.get("/:id",
     tags: ["Jobs"],
     summary: "Get job progress",
     responses: {
-      200: { description: "Job details", content: { "application/json": { schema: resolver(jobSchema) } } },
-      404: { description: "Job not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      200: jsonResponse("Job details", jobSchema),
+      404: jsonError("Job not found"),
     },
   }),
   zValidator("param", idParamSchema),
@@ -96,9 +96,9 @@ jobRoutes.post("/:id/retry",
     tags: ["Jobs"],
     summary: "Retry a stalled job",
     responses: {
-      200: { description: "Job restarted", content: { "application/json": { schema: resolver(jobSchema) } } },
-      400: { description: "Job already completed", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-      404: { description: "Job not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      200: jsonResponse("Job restarted", jobSchema),
+      400: jsonError("Job already completed"),
+      404: jsonError("Job not found"),
     },
   }),
   zValidator("param", idParamSchema),

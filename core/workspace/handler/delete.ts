@@ -1,9 +1,10 @@
 import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
-import { resolver, validator as zValidator } from "hono-openapi";
+import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { deleteWorkspace } from "../usecase";
-import { errorResponseSchema, idParamSchema } from "../../../shared/openapi";
+import { idParamSchema } from "../../../shared/openapi";
+import { jsonError } from "../../openapi";
 
 export function registerDeleteRoute(app: Hono<AppEnv>) {
   app.delete("/:id",
@@ -12,9 +13,9 @@ export function registerDeleteRoute(app: Hono<AppEnv>) {
       summary: "Delete workspace",
       responses: {
         204: { description: "Workspace deleted" },
-        401: { description: "Authentication required", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        403: { description: "Forbidden", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        404: { description: "Workspace not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        401: jsonError("Authentication required"),
+        403: jsonError("Forbidden"),
+        404: jsonError("Workspace not found"),
       },
     }),
     zValidator("param", idParamSchema),
