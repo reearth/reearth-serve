@@ -1,13 +1,13 @@
 import { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
-import { resolver, validator as zValidator } from "hono-openapi";
+import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../types";
 import { createProject, listProjects, deleteProject } from "./usecase";
 import { accessCtx, authorizeProject, authorizeWorkspace, deniedResponse } from "../auth/access";
 import {
-  projectResponseSchema, projectListResponseSchema, errorResponseSchema,
-  idParamSchema, projectListQuerySchema, createProjectBodySchema,
+  projectResponseSchema, projectListResponseSchema, idParamSchema, projectListQuerySchema, createProjectBodySchema,
 } from "../../shared/openapi";
+import { jsonError, jsonResponse } from "../openapi";
 
 export const projectRoutes = new Hono<AppEnv>();
 
@@ -16,9 +16,9 @@ projectRoutes.get("/",
     tags: ["Projects"],
     summary: "List projects",
     responses: {
-      200: { description: "Project list", content: { "application/json": { schema: resolver(projectListResponseSchema) } } },
-      401: { description: "Authentication required", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-      404: { description: "Workspace not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      200: jsonResponse("Project list", projectListResponseSchema),
+      401: jsonError("Authentication required"),
+      404: jsonError("Workspace not found"),
     },
   }),
   zValidator("query", projectListQuerySchema),
@@ -46,11 +46,11 @@ projectRoutes.post("/",
     tags: ["Projects"],
     summary: "Create a project",
     responses: {
-      201: { description: "Project created", content: { "application/json": { schema: resolver(projectResponseSchema) } } },
-      400: { description: "Bad request", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-      401: { description: "Authentication required", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-      403: { description: "Forbidden", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-      404: { description: "Workspace not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      201: jsonResponse("Project created", projectResponseSchema),
+      400: jsonError("Bad request"),
+      401: jsonError("Authentication required"),
+      403: jsonError("Forbidden"),
+      404: jsonError("Workspace not found"),
     },
   }),
   zValidator("json", createProjectBodySchema),
@@ -77,9 +77,9 @@ projectRoutes.get("/:id",
     tags: ["Projects"],
     summary: "Get project",
     responses: {
-      200: { description: "Project details", content: { "application/json": { schema: resolver(projectResponseSchema) } } },
-      401: { description: "Authentication required", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-      404: { description: "Project not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      200: jsonResponse("Project details", projectResponseSchema),
+      401: jsonError("Authentication required"),
+      404: jsonError("Project not found"),
     },
   }),
   zValidator("param", idParamSchema),
@@ -101,8 +101,8 @@ projectRoutes.delete("/:id",
     summary: "Delete project",
     responses: {
       204: { description: "Project deleted" },
-      401: { description: "Authentication required", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-      404: { description: "Project not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      401: jsonError("Authentication required"),
+      404: jsonError("Project not found"),
     },
   }),
   zValidator("param", idParamSchema),

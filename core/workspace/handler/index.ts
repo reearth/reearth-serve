@@ -15,7 +15,7 @@ registerCreateRoute(workspaceRoutes);
 registerGetRoute(workspaceRoutes);
 registerDeleteRoute(workspaceRoutes);
 
-// Member management (nested under /:workspaceId/members)
+// Member management (nested under /:id/members)
 registerListMembersRoute(workspaceRoutes);
 registerAddMemberRoute(workspaceRoutes);
 registerUpdateMemberRoleRoute(workspaceRoutes);

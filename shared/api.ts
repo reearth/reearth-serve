@@ -1,13 +1,5 @@
 import { z } from "zod";
 
-// --- Enums ---
-
-export const assetTypeSchema = z.enum(["file", "archive"]);
-export const assetStatusSchema = z.enum(["pending", "ready", "extracting", "failed"]);
-export const archiveFormatSchema = z.enum(["zip", "tar", "tar.gz", "tar.bz2"]);
-export const jobTypeSchema = z.literal("archive-extraction");
-export const jobStatusSchema = z.enum(["pending", "running", "completed", "failed"]);
-
 // --- Filename ---
 
 // A filename becomes the last segment of an object key (`assets/<id>/<name>`).
@@ -23,66 +15,107 @@ export const filenameSchema = z.string().refine(isSafeFilename, "Invalid filenam
 
 // --- OpenAPI component names ---
 //
-// `.meta({ ref })` makes hono-openapi emit a schema as a named entry in
-// `components.schemas` and `$ref` it, so generated clients (e.g. oapi-codegen
-// in Re:Earth CMS) get `Asset` instead of `PostApiV1Assets201JSONResponseBodyAsset`.
-// The ref is not inherited by `.extend()`, so derived shapes stay inline.
+// `component()` tags a schema with `.meta({ ref })`, which makes hono-openapi
+// emit it as a named entry in `components.schemas` and `$ref` it, so generated
+// clients (e.g. oapi-codegen in Re:Earth CMS) get `Asset` instead of
+// `PostApiV1Assets201JSONResponseBodyAsset`. The ref is not inherited by
+// `.extend()`, so derived shapes stay inline.
+//
+// It also records the schema in `openApiComponentSchemas`. core/openapi.ts builds
+// `components.schemas` from that list rather than relying on hono-openapi to
+// collect them from the routes: hono-openapi resolves route schemas in place,
+// so a route that was already resolved (e.g. a module Vite did not reload)
+// contributes its $refs but no components.
+
+export const openApiComponentSchemas: z.ZodType[] = [];
+
+export function component<T extends z.ZodType>(ref: string, schema: T, meta: Record<string, unknown> = {}): T {
+  const named = schema.meta({ ...meta, ref });
+  openApiComponentSchemas.push(named);
+  return named;
+}
+
+/**
+ * A named string enum. `x-enum-varnames` prefixes each Go constant with the
+ * type name (`RoleOwner`, `ArchiveFormatTarGz`); oapi-codegen otherwise emits
+ * bare `Owner` / `Pending` constants unless two enums happen to collide.
+ */
+function enumComponent<T extends z.ZodEnum>(ref: string, schema: T): T {
+  const varnames = schema.options.map((value) =>
+    ref + String(value).split(/[^A-Za-z0-9]+/).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(""),
+  );
+  return component(ref, schema, { "x-enum-varnames": varnames });
+}
+
+// --- Enums ---
+
+export const assetTypeSchema = enumComponent("AssetType", z.enum(["file", "archive"]));
+export const assetStatusSchema = enumComponent("AssetStatus", z.enum(["pending", "ready", "extracting", "failed"]));
+export const archiveFormatSchema = enumComponent("ArchiveFormat", z.enum(["zip", "tar", "tar.gz", "tar.bz2"]));
+export const jobTypeSchema = z.literal("archive-extraction");
+export const jobStatusSchema = z.enum(["pending", "running", "completed", "failed"]);
+
+// Upload request headers (`Content-Encoding`, `X-Skip-Extraction`). Named so
+// the header parameters of both direct-upload routes share one type
+// (oapi-codegen only reuses a parameter's type when its schema is a $ref).
+export const contentEncodingHeaderSchema = enumComponent("ContentEncoding", z.enum(["gzip"]));
+export const skipExtractionHeaderSchema = enumComponent("XSkipExtraction", z.enum(["true"]));
 
 // --- Role ---
 
-export const roleSchema = z.enum(["owner", "admin", "editor", "viewer"]);
+export const roleSchema = enumComponent("Role", z.enum(["owner", "admin", "editor", "viewer"]));
 
 // --- Workspace ---
 
-export const workspaceSchema = z.object({
+export const workspaceSchema = component("Workspace", z.object({
   id: z.string(),
   name: z.string(),
   createdAt: z.number(),
   updatedAt: z.number(),
-}).meta({ ref: "Workspace" });
+}));
 
-export const createWorkspaceBodySchema = z.object({
+export const createWorkspaceBodySchema = component("CreateWorkspaceRequest", z.object({
   name: z.string().min(1).max(100),
-});
+}));
 
 // --- Member ---
 
-export const memberSchema = z.object({
+export const memberSchema = component("Member", z.object({
   workspaceId: z.string(),
   userId: z.string(),
   role: roleSchema,
   createdAt: z.number(),
   updatedAt: z.number(),
-}).meta({ ref: "Member" });
+}));
 
-export const addMemberBodySchema = z.object({
+export const addMemberBodySchema = component("AddMemberRequest", z.object({
   userId: z.string(),
   role: roleSchema,
-});
+}));
 
-export const updateMemberBodySchema = z.object({
+export const updateMemberBodySchema = component("UpdateMemberRoleRequest", z.object({
   role: roleSchema,
-});
+}));
 
 // --- Project ---
 
-export const projectSchema = z.object({
+export const projectSchema = component("Project", z.object({
   id: z.string(),
   name: z.string(),
   createdAt: z.number(),
   updatedAt: z.number(),
   ownerId: z.string(),
   workspaceId: z.string().optional(),
-}).meta({ ref: "Project" });
+}));
 
-export const createProjectBodySchema = z.object({
+export const createProjectBodySchema = component("CreateProjectRequest", z.object({
   name: z.string().min(1).max(100),
   workspaceId: z.string().optional(),
-});
+}));
 
 // --- Asset ---
 
-export const assetVersionSchema = z.object({
+export const assetVersionSchema = component("AssetVersion", z.object({
   id: z.string(),
   assetId: z.string(),
   version: z.number(),
@@ -99,9 +132,9 @@ export const assetVersionSchema = z.object({
   extractedSize: z.number().optional(),
   jobId: z.string().optional(),
   userMeta: z.record(z.string(), z.unknown()).optional(),
-}).meta({ ref: "AssetVersion" });
+}));
 
-export const assetMetadataSchema = z.object({
+export const assetMetadataSchema = component("Asset", z.object({
   id: z.string(),
   filename: z.string(),
   contentType: z.string(),
@@ -123,42 +156,45 @@ export const assetMetadataSchema = z.object({
   userMeta: z.record(z.string(), z.unknown()).optional(),
   currentVersion: assetVersionSchema.optional(),
   versionCount: z.number().optional(),
-}).meta({ ref: "Asset" });
+}));
 
-export const assetUploadResultSchema = z.object({
+export const assetUploadResultSchema = component("AssetUploadResponse", z.object({
   asset: assetMetadataSchema,
   url: z.string(),
-});
+}));
 
 // --- Upload session ---
 
-export const presignedUploadResultSchema = z.object({
+export const presignedUploadResultSchema = component("PresignedUploadSession", z.object({
   uploadId: z.string(),
   url: z.string(),
   method: z.literal("PUT"),
   headers: z.record(z.string(), z.string()),
   contentEncoding: z.string().optional(),
   expiresAt: z.number(),
-}).meta({ ref: "PresignedUploadSession" });
+}));
 
-export const multipartUploadResultSchema = z.object({
+/** One presigned URL per part; the client PUTs part `partNumber` to `url`. */
+export const multipartUploadPartSchema = component("MultipartUploadPart", z.object({
+  partNumber: z.number(),
+  url: z.string(),
+}));
+
+export const multipartUploadResultSchema = component("MultipartUploadSession", z.object({
   uploadId: z.string(),
-  parts: z.array(z.object({
-    partNumber: z.number(),
-    url: z.string(),
-  })),
+  parts: z.array(multipartUploadPartSchema),
   contentEncoding: z.string().optional(),
   expiresAt: z.number(),
-}).meta({ ref: "MultipartUploadSession" });
+}));
 
-export const uploadPartSchema = z.object({
+export const uploadPartSchema = component("UploadPart", z.object({
   partNumber: z.number(),
   etag: z.string(),
-});
+}));
 
 // --- Job ---
 
-export const jobSchema = z.object({
+export const jobSchema = component("Job", z.object({
   id: z.string(),
   assetId: z.string(),
   type: jobTypeSchema,
@@ -181,17 +217,17 @@ export const jobSchema = z.object({
   sessionId: z.string().optional(),
   projectId: z.string().optional(),
   versionId: z.string().optional(),
-}).meta({ ref: "Job" });
+}));
 
 // --- File entry (archive manifest) ---
 
-export const fileEntrySchema = z.object({
+export const fileEntrySchema = component("FileEntry", z.object({
   path: z.string(),
   size: z.number(),
   contentType: z.string(),
   contentEncoding: z.string().optional(),
   hash: z.string().optional(),
-}).meta({ ref: "FileEntry" });
+}));
 
 // --- Request bodies ---
 
@@ -199,16 +235,16 @@ export const fileEntrySchema = z.object({
 // client-side abuse (each part triggers an HMAC-SHA256 signature on the Worker).
 export const MAX_UPLOAD_PARTS = 10000;
 
-export const createUploadSessionBodySchema = z.object({
+export const createUploadSessionBodySchema = component("CreateUploadSessionRequest", z.object({
   filename: filenameSchema,
   contentType: z.string().optional(),
   size: z.number(),
   partCount: z.number().int().positive().max(MAX_UPLOAD_PARTS).optional(),
-});
+}));
 
-export const completeUploadBodySchema = z.object({
+export const completeUploadBodySchema = component("CompleteUploadSessionRequest", z.object({
   parts: z.array(uploadPartSchema).optional(),
-});
+}));
 
 export const updateJobStatusBodySchema = z.object({
   status: z.enum(["running", "completed", "failed"]),
@@ -219,30 +255,30 @@ export const updateJobStatusBodySchema = z.object({
 
 // --- Asset update ---
 
-export const updateAssetBodySchema = z.object({
+export const updateAssetBodySchema = component("UpdateAssetRequest", z.object({
   description: z.string().optional(),
   userMeta: z.record(z.string(), z.unknown()).optional(),
   activeVersionId: z.string().nullable().optional(),
   expiresAt: z.number().optional(),
-});
+}));
 
 // --- Version update ---
 
-export const updateVersionBodySchema = z.object({
+export const updateVersionBodySchema = component("UpdateVersionRequest", z.object({
   userMeta: z.record(z.string(), z.unknown()).optional(),
-});
+}));
 
 // --- Set active version ---
 
-export const setActiveVersionBodySchema = z.object({
+export const setActiveVersionBodySchema = component("SetActiveVersionRequest", z.object({
   versionId: z.string().nullable(),
-});
+}));
 
 // --- Error response ---
 
-export const errorResponseSchema = z.object({
+export const errorResponseSchema = component("Error", z.object({
   error: z.string(),
-}).meta({ ref: "Error" });
+}));
 
 // --- Inferred types ---
 

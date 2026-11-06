@@ -1,5 +1,4 @@
 import type { Context } from "hono";
-import type { DescribeRouteOptions } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { accessCtx, authorizeProject } from "../../auth/access";
 
@@ -23,24 +22,10 @@ export function denyAnonymousUpload(c: Context<AppEnv>): Response | null {
   );
 }
 
-type ParameterSpec = NonNullable<DescribeRouteOptions["parameters"]>[number];
 
 /**
- * OpenAPI parameter for the header `resolveUploadProject` reads. Optional in
- * the spec because anonymous uploads don't send it; routes using it must also
- * declare the 400 / 404 it produces.
- */
-export const projectIdHeaderParam: ParameterSpec = {
-  name: "X-Project-Id",
-  in: "header",
-  required: false,
-  schema: { type: "string" },
-  description:
-    "Project to upload into. Required for authenticated callers (missing → 400, unknown or inaccessible project → 404 \"Project not found\"). Ignored for anonymous (demo-mode) callers.",
-};
-
-/**
- * Resolve the project binding for an upload-like action.
+ * Resolve the project binding for an upload-like action. Documented by
+ * `projectIdHeaderParam` (core/openapi.ts).
  * - Anon caller (`!user`): returns `{ projectId: null }` — falls back to session scope.
  * - Authenticated caller: requires the `X-Project-Id` header AND workspace
  *   membership. Missing header → 400; unknown/unauthorized project → 404.

@@ -1,11 +1,12 @@
 import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
-import { resolver, validator as zValidator } from "hono-openapi";
+import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata } from "../usecase";
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { denyAnonymousUpload } from "./shared";
-import { jobResponseSchema, errorResponseSchema, idParamSchema } from "../../../shared/openapi";
+import { jobResponseSchema, idParamSchema } from "../../../shared/openapi";
+import { jsonError, jsonResponse } from "../../openapi";
 
 export function registerExtractRoute(app: Hono<AppEnv>) {
   app.post("/:id/extract",
@@ -13,10 +14,10 @@ export function registerExtractRoute(app: Hono<AppEnv>) {
       tags: ["Assets"],
       summary: "Start archive extraction",
       responses: {
-        200: { description: "Existing extraction job", content: { "application/json": { schema: resolver(jobResponseSchema) } } },
-        201: { description: "Extraction job created", content: { "application/json": { schema: resolver(jobResponseSchema) } } },
-        400: { description: "Bad request", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        404: { description: "Asset not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        200: jsonResponse("Existing extraction job", jobResponseSchema),
+        201: jsonResponse("Extraction job created", jobResponseSchema),
+        400: jsonError("Bad request"),
+        404: jsonError("Asset not found"),
       },
     }),
     zValidator("param", idParamSchema),

@@ -1,10 +1,11 @@
 import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
-import { resolver, validator as zValidator } from "hono-openapi";
+import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata, getVersion } from "../usecase";
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
-import { versionResponseSchema, errorResponseSchema, versionParamSchema } from "../../../shared/openapi";
+import { versionResponseSchema, versionParamSchema } from "../../../shared/openapi";
+import { jsonError, jsonResponse } from "../../openapi";
 
 export function registerGetVersionRoute(app: Hono<AppEnv>) {
   app.get("/:id/versions/:versionId",
@@ -12,8 +13,8 @@ export function registerGetVersionRoute(app: Hono<AppEnv>) {
       tags: ["Versions"],
       summary: "Get version metadata",
       responses: {
-        200: { description: "Version metadata", content: { "application/json": { schema: resolver(versionResponseSchema) } } },
-        404: { description: "Not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        200: jsonResponse("Version metadata", versionResponseSchema),
+        404: jsonError("Not found"),
       },
     }),
     zValidator("param", versionParamSchema),

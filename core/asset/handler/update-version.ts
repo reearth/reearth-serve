@@ -1,10 +1,11 @@
 import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
-import { resolver, validator as zValidator } from "hono-openapi";
+import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata, updateVersion } from "../usecase";
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
-import { versionResponseSchema, errorResponseSchema, versionParamSchema, updateVersionBodySchema } from "../../../shared/openapi";
+import { versionResponseSchema, versionParamSchema, updateVersionBodySchema } from "../../../shared/openapi";
+import { jsonError, jsonResponse } from "../../openapi";
 
 export function registerUpdateVersionRoute(app: Hono<AppEnv>) {
   app.patch("/:id/versions/:versionId",
@@ -13,8 +14,8 @@ export function registerUpdateVersionRoute(app: Hono<AppEnv>) {
       summary: "Update version metadata",
       description: "Update mutable version fields: userMeta.",
       responses: {
-        200: { description: "Updated version", content: { "application/json": { schema: resolver(versionResponseSchema) } } },
-        404: { description: "Not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        200: jsonResponse("Updated version", versionResponseSchema),
+        404: jsonError("Not found"),
       },
     }),
     zValidator("param", versionParamSchema),

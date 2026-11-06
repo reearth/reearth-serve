@@ -1,12 +1,11 @@
 import { Hono } from "hono";
 import { cors } from "hono/cors";
-import { describeRoute, resolver } from "hono-openapi";
+import { describeRoute } from "hono-openapi";
 import type { AppEnv } from "../types";
 import { decompressStream } from "../asset/compression";
 import { resolveAssetVersion } from "../asset/usecase";
 import { legacyThumbKey, versionThumbKey } from "../asset/usecase/shared";
 import { parseRange, sliceStream } from "./stream";
-import { errorResponseSchema } from "../../shared";
 import {
   THUMBNAIL_SIZES,
   isThumbnailSize,
@@ -14,6 +13,7 @@ import {
   THUMBNAIL_CONTENT_TYPE,
   type ThumbnailSize,
 } from "../thumbnail/sizes";
+import { jsonError } from "../openapi";
 
 // Detect a thumbnail request. Returns the requested size on success, "invalid"
 // if the request explicitly named an unknown size (→ 400), or null if not a
@@ -52,11 +52,6 @@ const fileHeaders = {
   "Cache-Control": stringHeader("`public, max-age=3600, immutable` for files; `public, max-age=31536000, immutable` for thumbnails"),
   "Access-Control-Allow-Origin": stringHeader("`*`"),
 };
-const jsonError = (description: string) => ({
-  description,
-  content: { "application/json": { schema: resolver(errorResponseSchema) } },
-});
-
 // GET /files/:id/:filename — serve single-file asset
 // GET /files/:id/path/to/file — serve extracted file from archive asset
 fileRoutes.get("/:id/:path{.+}",

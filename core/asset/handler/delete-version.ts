@@ -1,10 +1,11 @@
 import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
-import { resolver, validator as zValidator } from "hono-openapi";
+import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata, deleteVersion } from "../usecase";
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
-import { errorResponseSchema, versionParamSchema } from "../../../shared/openapi";
+import { versionParamSchema } from "../../../shared/openapi";
+import { jsonError } from "../../openapi";
 
 export function registerDeleteVersionRoute(app: Hono<AppEnv>) {
   app.delete("/:id/versions/:versionId",
@@ -13,7 +14,7 @@ export function registerDeleteVersionRoute(app: Hono<AppEnv>) {
       summary: "Delete a specific version",
       responses: {
         204: { description: "Version deleted" },
-        404: { description: "Not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        404: jsonError("Not found"),
       },
     }),
     zValidator("param", versionParamSchema),
