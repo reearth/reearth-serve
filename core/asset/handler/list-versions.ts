@@ -3,8 +3,7 @@ import { describeRoute } from "hono-openapi";
 import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata, listVersions } from "../usecase";
-import { canAccessAsset } from "../access";
-import { accessCtx } from "./shared";
+import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { versionListResponseSchema, idParamSchema, paginationQuerySchema } from "../../../shared/openapi";
 import { jsonError, jsonResponse } from "../../openapi";
 
@@ -26,10 +25,9 @@ export function registerListVersionsRoute(app: Hono<AppEnv>) {
       const { id } = c.req.valid("param");
       const { limit: limitStr, cursor } = c.req.valid("query");
 
-      const asset = await getAssetMetadata(metadata, id);
-      if (!asset || !await canAccessAsset(asset, accessCtx(c))) {
-        return c.json({ error: "Asset not found" }, 404);
-      }
+      const access = await authorizeAsset(accessCtx(c), await getAssetMetadata(metadata, id), "read_asset");
+      if (!access.ok) return deniedResponse(c, access, { notFound: "Asset not found" });
+      const asset = access.value;
 
       const limit = parseInt(limitStr || "20", 10);
       const result = await listVersions(versions, id, { limit: Math.min(limit, 100), cursor });

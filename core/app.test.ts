@@ -4,7 +4,7 @@ import type { Deps } from "./types";
 import type { AssetMetadata } from "./asset/model";
 import type { MetadataStore } from "./asset/repository";
 import type { Session, SessionStore } from "./session/repository";
-import { SimpleAuthorizer } from "../adapters/cloudflare/authorizer";
+import { SimpleAuthorizer } from "./auth/permissions";
 
 // The point of this file: createApp must be constructible from hand-built
 // dependencies, with no Cloudflare bindings and no `Env` anywhere (ADR-012 §1).

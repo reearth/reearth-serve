@@ -3,6 +3,7 @@ import { describeRoute } from "hono-openapi";
 import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getWorkspace } from "../usecase";
+import { accessCtx, authorizeWorkspace, deniedResponse } from "../../auth/access";
 import { workspaceResponseSchema, idParamSchema } from "../../../shared/openapi";
 import { jsonError, jsonResponse } from "../../openapi";
 
@@ -24,16 +25,11 @@ export function registerGetRoute(app: Hono<AppEnv>) {
         return c.json({ error: "Authentication required" }, 401);
       }
 
-      const workspaces = c.get("workspaces");
-      const members = c.get("members");
       const { id } = c.req.valid("param");
+      const access = await authorizeWorkspace(accessCtx(c), id, "read");
+      if (!access.ok) return deniedResponse(c, access, { notFound: "Workspace not found" });
 
-      const member = await members.find(id, user.sub);
-      if (!member) {
-        return c.json({ error: "Workspace not found" }, 404);
-      }
-
-      const workspace = await getWorkspace(workspaces, id);
+      const workspace = await getWorkspace(c.get("workspaces"), id);
       if (!workspace) {
         return c.json({ error: "Workspace not found" }, 404);
       }

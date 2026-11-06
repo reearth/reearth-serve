@@ -1,0 +1,14 @@
+apiVersion: api.cerbos.dev/v1
+resourcePolicy:
+  resource: workspace
+  version: default
+  rules:
+    - actions: [read]
+      effect: EFFECT_ALLOW
+      roles: [viewer, editor, admin, owner]
+    - actions: [manage_members, create_project]
+      effect: EFFECT_ALLOW
+      roles: [admin, owner]
+    - actions: [delete]
+      effect: EFFECT_ALLOW
+      roles: [owner]

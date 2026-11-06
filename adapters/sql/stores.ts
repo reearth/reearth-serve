@@ -188,7 +188,7 @@ export class SqlProjectStore implements ProjectStore {
     return rows.map((r) => rowToModel<Project>(r));
   }
 
-  async delete(id: string, _ownerId: string): Promise<void> {
+  async delete(id: string): Promise<void> {
     await this.db.execute("DELETE FROM projects WHERE id = ?1", [id]);
   }
 }

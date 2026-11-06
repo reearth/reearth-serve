@@ -3,6 +3,7 @@ import { describeRoute } from "hono-openapi";
 import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { deleteWorkspace } from "../usecase";
+import { accessCtx, authorizeWorkspace, deniedResponse } from "../../auth/access";
 import { idParamSchema } from "../../../shared/openapi";
 import { jsonError } from "../../openapi";
 
@@ -16,6 +17,7 @@ export function registerDeleteRoute(app: Hono<AppEnv>) {
         401: jsonError("Authentication required"),
         403: jsonError("Forbidden"),
         404: jsonError("Workspace not found"),
+        409: jsonError("Workspace still has projects"),
       },
     }),
     zValidator("param", idParamSchema),
@@ -25,28 +27,16 @@ export function registerDeleteRoute(app: Hono<AppEnv>) {
         return c.json({ error: "Authentication required" }, 401);
       }
 
-      const workspaces = c.get("workspaces");
-      const members = c.get("members");
-      const authorizer = c.get("authorizer");
       const { id } = c.req.valid("param");
+      const access = await authorizeWorkspace(accessCtx(c), id, "delete");
+      if (!access.ok) return deniedResponse(c, access, { notFound: "Workspace not found", forbiddenAs: 403 });
 
-      const member = await members.find(id, user.sub);
-      if (!member) {
+      const result = await deleteWorkspace(c.get("workspaces"), c.get("members"), c.get("projects"), id);
+      if (result === "not_found") {
         return c.json({ error: "Workspace not found" }, 404);
       }
-
-      const allowed = await authorizer.check({
-        principal: { id: user.sub, roles: [member.role] },
-        resource: { kind: "workspace", id },
-        action: "delete",
-      });
-      if (!allowed) {
-        return c.json({ error: "Forbidden" }, 403);
-      }
-
-      const deleted = await deleteWorkspace(workspaces, members, id);
-      if (!deleted) {
-        return c.json({ error: "Workspace not found" }, 404);
+      if (result === "has_projects") {
+        return c.json({ error: "Workspace still has projects" }, 409);
       }
 
       return c.body(null, 204);

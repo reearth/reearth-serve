@@ -3,8 +3,7 @@ import { describeRoute } from "hono-openapi";
 import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { enrichAssetWithVersion } from "../usecase";
-import { canAccessAsset } from "../access";
-import { accessCtx } from "./shared";
+import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { assetResponseSchema, idParamSchema } from "../../../shared/openapi";
 import { jsonError, jsonResponse } from "../../openapi";
 
@@ -24,10 +23,9 @@ export function registerGetRoute(app: Hono<AppEnv>) {
       const versions = c.get("versions");
       const { id } = c.req.valid("param");
 
-      const asset = await enrichAssetWithVersion(metadata, versions, id);
-      if (!asset || !await canAccessAsset(asset, accessCtx(c))) {
-        return c.json({ error: "Asset not found" }, 404);
-      }
+      const access = await authorizeAsset(accessCtx(c), await enrichAssetWithVersion(metadata, versions, id), "read_asset");
+      if (!access.ok) return deniedResponse(c, access, { notFound: "Asset not found" });
+      const asset = access.value;
 
       return c.json({ asset });
     },

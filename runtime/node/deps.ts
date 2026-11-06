@@ -3,10 +3,7 @@ import type { ExtractionMessage } from "../../core/extraction/handler";
 import type { ThumbnailMessage } from "../../core/thumbnail/queue";
 import { KeyValueSessionStore, KeyValueUploadSessionStore } from "../../core/kv/stores";
 import { CerbosAuthorizer } from "../../core/auth/authorizer";
-// SimpleAuthorizer is provider-independent (pure role logic); it still sits
-// under adapters/cloudflare/ from the PR6 move. Left where it is rather than
-// widening this PR's diff.
-import { SimpleAuthorizer } from "../../adapters/cloudflare/authorizer";
+import { SimpleAuthorizer } from "../../core/auth/permissions";
 import {
   SqlCleanupPendingStore, SqlJobStore, SqlMemberStore, SqlMetadataStore,
   SqlProjectStore, SqlStorageUsageStore, SqlVersionStore, SqlWorkspaceStore,

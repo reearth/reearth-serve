@@ -1,6 +1,6 @@
 # ADR-002: Authentication, Anonymous Sessions & Project Model
 
-- **Status:** Accepted (Revised 2026-04-17; amended 2026-11-05, the amendments are Proposed)
+- **Status:** Accepted (Revised 2026-04-17; amended 2026-11-05)
 - **Date:** 2026-03-12
 - **Deciders:** @rot1024
 
