@@ -37,7 +37,7 @@ export function createApp(deps: Deps) {
   // Anonymous session tracking (for unauthenticated users). Internal callers
   // are machines with their own credential; minting a demo session per
   // container callback would only burn a KV write.
-  app.use("*", exceptInternalApi(sessionMiddleware(deps.sessions, deps.sessionTtlSeconds)));
+  app.use("*", exceptInternalApi(exceptFileDelivery(sessionMiddleware(deps.sessions, deps.sessionTtlSeconds))));
 
   // Inject dependencies into all routes
   app.use("*", async (c, next) => {
@@ -150,6 +150,15 @@ function exceptInternalApi(mw: MiddlewareHandler<AppEnv>): MiddlewareHandler<App
     if (!c.req.path.startsWith(INTERNAL_API_PREFIX)) return mw(c, next);
     if (c.get("user") === undefined) c.set("user", null);
     if (c.get("sessionId") === undefined) c.set("sessionId", null);
+    await next();
+  };
+}
+
+function exceptFileDelivery(mw: MiddlewareHandler<AppEnv>): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
+    const path = c.req.path;
+    if (path !== "/files" && !path.startsWith("/files/")) return mw(c, next);
+    c.set("sessionId", null);
     await next();
   };
 }
