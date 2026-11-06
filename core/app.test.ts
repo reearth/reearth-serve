@@ -245,8 +245,8 @@ describe("OpenAPI document", () => {
     expect(op).toBeDefined();
     expect(op.security).toEqual([]);
     expect(op.parameters?.map((p) => `${p.in}:${p.name}`)).toEqual(
-      expect.arrayContaining(["path:id", "path:path", "query:thumb", "header:Range", "header:Accept-Encoding"]),
+      expect.arrayContaining(["path:id", "path:path", "query:thumb", "header:Range", "header:Accept-Encoding", "header:If-None-Match"]),
     );
-    expect(Object.keys(op.responses).sort()).toEqual(["200", "206", "400", "404"]);
+    expect(Object.keys(op.responses).sort()).toEqual(["200", "206", "301", "304", "400", "401", "404", "429", "503"]);
   });
 });

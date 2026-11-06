@@ -512,17 +512,28 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
 }
 
 const stringHeader = (description: string) => ({ description, schema: { type: "string" as const } });
+const nosniff = { "X-Content-Type-Options": stringHeader("`nosniff`, on every `/files` response") };
+const corsHeaders = {
+  "Access-Control-Allow-Origin": stringHeader("`*`, or the request's `Origin` for a cookie-authorized read from Serve's own origin or one listed in `CREDENTIALED_ORIGINS`"),
+  "Access-Control-Allow-Credentials": stringHeader("`true`, only alongside an echoed `Origin`"),
+  Vary: stringHeader("`Accept-Encoding` for a gzip-stored file; `Cookie, Authorization, Origin` for a password-protected asset"),
+};
 const fileHeaders = {
+  ...nosniff,
+  ...corsHeaders,
   "Content-Type": stringHeader("Stored content type of the file (image/webp for thumbnails)"),
   "Content-Length": stringHeader("Body length in bytes. Omitted when a gzip-stored file is decompressed and its original size is unknown"),
   "Content-Encoding": stringHeader("`gzip` when a gzip-stored file is passed through to a client that accepts gzip"),
-  "Content-Disposition": stringHeader("`inline; filename=\"<name>\"`"),
+  "Content-Disposition": stringHeader("`inline; filename=\"<name>\"` on a site host, and on the apex for an inline type (images, text/plain, text/csv, JSON, GeoJSON, glTF, vector tiles, octet-stream, MP4/WebM, MP3/Ogg); `attachment; filename=\"<name>\"` for every other type. Not sent on thumbnails"),
+  "Content-Security-Policy": stringHeader("`sandbox` on every `attachment` response"),
+  ETag: stringHeader("The stored object's tag; weak (`W/`) when a gzip-stored file is decompressed. Not sent on thumbnails"),
   "Accept-Ranges": stringHeader("`bytes`. Not sent on gzip pass-through responses or thumbnails"),
-  "Cache-Control": stringHeader("`public, max-age=3600, immutable` for files; `public, max-age=31536000, immutable` for thumbnails"),
-  "Access-Control-Allow-Origin": stringHeader("`*`"),
+  "Cache-Control": stringHeader("`public, max-age=31536000, immutable` at a version-ID URL and for thumbnails; `public, max-age=0, must-revalidate` at an asset-ID URL. A password-protected asset gets `private` in place of `public`"),
+  "Cross-Origin-Resource-Policy": stringHeader("`same-origin` on a cookie-authorized read"),
 };
 const jsonError = (description: string) => ({
   description,
+  headers: { ...nosniff, ...corsHeaders },
   content: { "application/json": { schema: resolver(errorResponseSchema) } },
 });
 
@@ -533,17 +544,22 @@ fileRoutes.get("/:id/:path{.+}",
     tags: ["Files"],
     summary: "Download a file",
     description: [
-      "Public permalink for an asset's file. `id` is an asset ID (serves the active version, or the latest when none is set) or a version ID (serves that version).",
+      "Permalink for an asset's file. `id` is an asset ID (serves the active version, or the latest when none is set) or a version ID (serves that version).",
       "",
       "For a single-file asset `path` is its filename; for an extracted archive it is the entry path inside the archive and may contain `/`.",
       "`_thumbs/{size}.webp` (or `?thumb={size}` on any path) serves a generated WebP thumbnail.",
       "",
       "Gzip-stored files are sent as-is with `Content-Encoding: gzip` when the request has `Accept-Encoding: gzip` and no `Range`; otherwise they are decompressed on the fly.",
       "",
-      "Conditional requests (`If-None-Match`, `If-Modified-Since`) are not supported: no `ETag` / `Last-Modified` is sent and `304` is never returned.",
+      "Conditional requests: every file carries an `ETag`, and an `If-None-Match` that matches it answers `304` with no body. `If-Modified-Since` is ignored: no `Last-Modified` is sent.",
       "An unparseable `Range` header is ignored and the full file is returned with `200`.",
+      "",
+      "Here, on the shared origin, only types a browser shows without running script are `inline`; HTML, SVG, XML, JavaScript, PDF and every other type download as an `attachment` with `Content-Security-Policy: sandbox`. A hosted site renders on its site host only.",
+      "",
+      "A public asset needs no credentials. A password-protected asset accepts the viewer cookie the password form sets, or `Authorization: Basic` with the password (the username is ignored); without either it answers `401`, and repeated wrong passwords from one client answer `429`.",
+      "CORS: `Access-Control-Allow-Origin: *`, except that a cookie-authorized read from Serve's own origin or one in `CREDENTIALED_ORIGINS` gets its `Origin` echoed with `Access-Control-Allow-Credentials: true`.",
     ].join("\n"),
-    // URL-as-capability: no credentials, see the comment above.
+    // Public assets need nothing; the password proofs are described above.
     security: [],
     parameters: [
       { name: "id", in: "path", required: true, schema: { type: "string" }, description: "Asset ID or version ID" },
@@ -551,6 +567,7 @@ fileRoutes.get("/:id/:path{.+}",
       { name: "thumb", in: "query", required: false, schema: { type: "string", enum: [...THUMBNAIL_SIZES] }, description: "Serve the WebP thumbnail of this size instead of the file. Any other value → 400" },
       { name: "Range", in: "header", required: false, schema: { type: "string", pattern: "^bytes=\\d+-\\d*$" }, description: "Single byte range, `bytes=<start>-` or `bytes=<start>-<end>`. Suffix (`bytes=-N`) and multi-range forms are ignored" },
       { name: "Accept-Encoding", in: "header", required: false, schema: { type: "string" }, description: "If it contains `gzip`, gzip-stored files are passed through compressed (non-Range requests only)" },
+      { name: "If-None-Match", in: "header", required: false, schema: { type: "string" }, description: "One or more entity tags, or `*`. Compared weakly against the `ETag`; a match answers `304`" },
     ],
     responses: {
       200: {
@@ -566,8 +583,40 @@ fileRoutes.get("/:id/:path{.+}",
         },
         content: { "*/*": { schema: { type: "string", format: "binary" } } },
       },
+      301: {
+        description: "A directory without its trailing slash; `Location` adds it. An archive's `_redirects` rules may also answer `302`, `307` or `308`",
+        headers: { ...nosniff, ...corsHeaders, Location: stringHeader("The same path with a trailing slash") },
+      },
+      304: {
+        description: "`If-None-Match` matched the current `ETag`. No body",
+        headers: {
+          ...nosniff,
+          ...corsHeaders,
+          ETag: fileHeaders.ETag,
+          "Cache-Control": fileHeaders["Cache-Control"],
+          "Content-Disposition": fileHeaders["Content-Disposition"],
+        },
+      },
       400: jsonError("Invalid thumbnail size"),
-      404: jsonError("Asset, file, or thumbnail not found"),
+      401: {
+        description: "Password-protected asset and no valid cookie or Basic password. A browser navigation (`Accept: text/html`) gets the password page and no `WWW-Authenticate`; every other request gets JSON and the Basic challenge",
+        headers: {
+          ...nosniff,
+          ...corsHeaders,
+          "WWW-Authenticate": stringHeader("`Basic realm=\"reearth-serve\", charset=\"UTF-8\"`, on the JSON form only"),
+          "Cache-Control": stringHeader("`no-store`"),
+        },
+        content: {
+          "application/json": { schema: resolver(errorResponseSchema) },
+          "text/html": { schema: { type: "string" } },
+        },
+      },
+      404: jsonError("Asset, file, or thumbnail not found. An archive with a root `404.html` answers with that page instead"),
+      429: {
+        ...jsonError("Too many wrong passwords from this client for this asset; wait for `Retry-After`"),
+        headers: { ...nosniff, ...corsHeaders, "Retry-After": stringHeader("Seconds until the window rolls over") },
+      },
+      503: jsonError("The asset is password-protected but the deployment has no `SIGNING_SECRET`, or its protection is misconfigured"),
     },
   }),
   serveRoute,
