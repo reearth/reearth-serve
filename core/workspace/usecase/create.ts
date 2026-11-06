@@ -1,10 +1,10 @@
 import type { Workspace } from "../../../shared/api";
-import type { WorkspaceStore } from "../repository";
-import type { MemberStore } from "../../member/repository";
+import type { WorkspaceAdmin } from "../repository";
+import type { MemberAdmin } from "../../member/repository";
 
 export async function createWorkspace(
-  workspaces: WorkspaceStore,
-  members: MemberStore,
+  workspaces: WorkspaceAdmin,
+  members: MemberAdmin,
   name: string,
   userId: string,
 ): Promise<Workspace> {
@@ -29,16 +29,15 @@ if (import.meta.vitest) {
   const { test, expect, vi } = import.meta.vitest;
 
   test("createWorkspace creates workspace and adds creator as owner", async () => {
-    const ws: WorkspaceStore = {
+    const ws: WorkspaceAdmin = {
       save: vi.fn(async () => {}),
       find: vi.fn(async () => null),
       delete: vi.fn(async () => {}),
     };
-    const ms: MemberStore = {
+    const ms: MemberAdmin = {
       save: vi.fn(async () => {}),
       find: vi.fn(async () => null),
       list: vi.fn(async () => []),
-      listByUser: vi.fn(async () => []),
       delete: vi.fn(async () => {}),
     };
 

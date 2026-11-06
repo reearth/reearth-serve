@@ -28,11 +28,12 @@ const notFound: Denial = { ok: false, reason: "not_found" };
 const forbidden: Denial = { ok: false, reason: "forbidden" };
 
 export function accessCtx(c: Context<AppEnv>): AccessContext {
+  const { authorizer, members } = c.get("tenancy");
   return {
     user: c.get("user"),
     sessionId: c.get("sessionId"),
-    authorizer: c.get("authorizer"),
-    members: c.get("members"),
+    authorizer,
+    members,
     projects: c.get("projects"),
   };
 }
@@ -47,9 +48,9 @@ export async function authorizeWorkspace(
   action: WorkspaceAction,
 ): Promise<Decision<Member>> {
   if (!ctx.user) return notFound;
-  const member = await ctx.members.find(workspaceId, ctx.user.sub);
+  const member = await ctx.members.find(workspaceId, ctx.user.id);
   if (!member) return notFound;
-  const principal = { id: ctx.user.sub, role: member.role };
+  const principal = { id: ctx.user.id, role: member.role };
   const ok = await permitted(ctx, { principal, workspaceId, resource: { kind: "workspace" }, action });
   return ok ? { ok: true, value: member } : forbidden;
 }
@@ -64,12 +65,12 @@ export async function authorizeProject(
   const project = await ctx.projects.find(projectId);
   if (!project) return notFound;
   if (!project.workspaceId) {
-    return project.ownerId === user.sub ? { ok: true, value: project } : notFound;
+    return project.ownerId === user.id ? { ok: true, value: project } : notFound;
   }
   const workspaceId = project.workspaceId;
-  const member = await ctx.members.find(workspaceId, user.sub);
+  const member = await ctx.members.find(workspaceId, user.id);
   if (!member) return notFound;
-  const principal = { id: user.sub, role: member.role };
+  const principal = { id: user.id, role: member.role };
   const ok = await permitted(ctx, { principal, workspaceId, resource: { kind: "project", projectId }, action });
   return ok ? { ok: true, value: project } : forbidden;
 }
@@ -128,14 +129,14 @@ if (import.meta.vitest) {
       find: vi.fn(async (id: string) => [wsProject, ownerless].find((p) => p.id === id) ?? null),
     };
     const members: MemberStore = {
-      save: vi.fn(), list: vi.fn(async () => []), listByUser: vi.fn(async () => []), delete: vi.fn(),
+      list: vi.fn(async () => []), listForCaller: vi.fn(async () => []),
       find: vi.fn(async (workspaceId: string, userId: string) =>
         opts.role && workspaceId === "ws1" && userId === opts.user
           ? { workspaceId, userId, role: opts.role, createdAt: 0, updatedAt: 0 }
           : null),
     };
     const access: AccessContext = {
-      user: opts.user ? { sub: opts.user } : null,
+      user: opts.user ? { id: opts.user, sub: `idp|${opts.user}` } : null,
       sessionId: opts.sessionId ?? null,
       authorizer, members, projects,
     };
@@ -285,6 +286,16 @@ if (import.meta.vitest) {
         principal: { id: "u1", roles: ["owner"] },
         resources: [{ resource: { kind: "workspace", id: "ws1", attr: { workspaceId: "ws1" } }, actions: ["delete"] }],
       });
+    });
+
+    test.each([
+      ["a non-2xx answer", async () => new Response("boom", { status: 500 })],
+      ["a refused connection", async () => { throw new TypeError("fetch failed"); }],
+      ["a timeout", async () => { throw new DOMException("The operation timed out.", "TimeoutError"); }],
+    ])("%s makes the decision unavailable instead of denied", async (_, answer) => {
+      const { TenancyUnavailableError } = await import("../tenancy/port");
+      vi.stubGlobal("fetch", vi.fn(answer));
+      await expect(authorizeProject(await withCerbos("editor"), "p1", "read")).rejects.toBeInstanceOf(TenancyUnavailableError);
     });
   });
 

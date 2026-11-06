@@ -1,13 +1,13 @@
-import type { WorkspaceStore } from "../repository";
-import type { MemberStore } from "../../member/repository";
+import type { WorkspaceAdmin } from "../repository";
+import type { MemberAdmin } from "../../member/repository";
 import type { ProjectStore } from "../../project/repository";
 import type { Project } from "../../project/model";
 
 export type DeleteWorkspaceResult = "deleted" | "not_found" | "has_projects";
 
 export async function deleteWorkspace(
-  workspaces: WorkspaceStore,
-  members: MemberStore,
+  workspaces: WorkspaceAdmin,
+  members: MemberAdmin,
   projects: ProjectStore,
   id: string,
 ): Promise<DeleteWorkspaceResult> {
@@ -28,19 +28,18 @@ if (import.meta.vitest) {
   const { test, expect, vi } = import.meta.vitest;
 
   function stores(projectList: Project[] = []) {
-    const ws: WorkspaceStore = {
+    const ws: WorkspaceAdmin = {
       save: vi.fn(async () => {}),
       find: vi.fn(async (id: string) => (id === "ws1" ? { id: "ws1", name: "Test", createdAt: 0, updatedAt: 0 } : null)),
       delete: vi.fn(async () => {}),
     };
-    const ms: MemberStore = {
+    const ms: MemberAdmin = {
       save: vi.fn(async () => {}),
       find: vi.fn(async () => null),
       list: vi.fn(async () => [
         { workspaceId: "ws1", userId: "u1", role: "owner" as const, createdAt: 0, updatedAt: 0 },
         { workspaceId: "ws1", userId: "u2", role: "editor" as const, createdAt: 0, updatedAt: 0 },
       ]),
-      listByUser: vi.fn(async () => []),
       delete: vi.fn(async () => {}),
     };
     const ps: ProjectStore = {

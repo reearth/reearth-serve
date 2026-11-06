@@ -15,9 +15,9 @@ import type { JobStore } from "../../core/job/repository";
 import type { Project } from "../../core/project/model";
 import type { ProjectStore } from "../../core/project/repository";
 import type { Workspace } from "../../core/workspace/model";
-import type { WorkspaceStore } from "../../core/workspace/repository";
+import type { WorkspaceAdmin, WorkspaceStore } from "../../core/workspace/repository";
 import type { Member } from "../../core/member/model";
-import type { MemberStore } from "../../core/member/repository";
+import type { MemberAdmin, MemberStore } from "../../core/member/repository";
 import type { SqlClient, SqlValue } from "../../core/sql/port";
 import { rowToModel, modelToRow, encodeCursor, decodeCursor, queryAll, queryFirst } from "./helpers";
 
@@ -78,7 +78,7 @@ function buildScopeClause(
 // SqlWorkspaceStore
 // ---------------------------------------------------------------------------
 
-export class SqlWorkspaceStore implements WorkspaceStore {
+export class SqlWorkspaceStore implements WorkspaceStore, WorkspaceAdmin {
   constructor(private db: SqlClient) {}
 
   async save(workspace: Workspace): Promise<void> {
@@ -104,8 +104,8 @@ export class SqlWorkspaceStore implements WorkspaceStore {
 // SqlMemberStore
 // ---------------------------------------------------------------------------
 
-export class SqlMemberStore implements MemberStore {
-  constructor(private db: SqlClient) {}
+export class SqlMemberStore implements MemberStore, MemberAdmin {
+  constructor(private db: SqlClient, private callerId: string | null) {}
 
   async save(member: Member): Promise<void> {
     const row = modelToRow(member as unknown as Record<string, unknown>);
@@ -134,11 +134,12 @@ export class SqlMemberStore implements MemberStore {
     return rows.map((r) => rowToModel<Member>(r));
   }
 
-  async listByUser(userId: string): Promise<Member[]> {
+  async listForCaller(): Promise<Member[]> {
+    if (this.callerId === null) return [];
     const rows = await queryAll(
       this.db,
-      "SELECT * FROM members WHERE user_id = ?1 ORDER BY created_at LIMIT ?2",
-      [userId, MEMBER_LIST_LIMIT],
+      "SELECT * FROM members WHERE user_id = ?1 ORDER BY created_at",
+      [this.callerId],
     );
     return rows.map((r) => rowToModel<Member>(r));
   }

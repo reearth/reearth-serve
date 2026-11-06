@@ -55,8 +55,8 @@ describe("SqlWorkspaceStore", () => {
 });
 
 describe("SqlMemberStore", () => {
-  test("save, find, list, listByUser, delete", async () => {
-    const store = new SqlMemberStore(db());
+  test("save, find, list, listForCaller, delete", async () => {
+    const store = new SqlMemberStore(db(), "u1");
     const m1 = { workspaceId: "ws1", userId: "u1", role: "owner" as const, createdAt: 100, updatedAt: 100 };
     const m2 = { workspaceId: "ws1", userId: "u2", role: "editor" as const, createdAt: 200, updatedAt: 200 };
     const m3 = { workspaceId: "ws2", userId: "u1", role: "viewer" as const, createdAt: 300, updatedAt: 300 };
@@ -67,7 +67,7 @@ describe("SqlMemberStore", () => {
     expect(await store.find("ws1", "u1")).toMatchObject(m1);
     expect(await store.find("ws1", "u3")).toBeNull();
     expect((await store.list("ws1")).map((m) => m.userId).sort()).toEqual(["u1", "u2"]);
-    expect((await store.listByUser("u1")).map((m) => m.workspaceId).sort()).toEqual(["ws1", "ws2"]);
+    expect((await store.listForCaller()).map((m) => m.workspaceId).sort()).toEqual(["ws1", "ws2"]);
 
     await store.delete("ws1", "u1");
     expect(await store.find("ws1", "u1")).toBeNull();
@@ -144,7 +144,7 @@ describe("SqlMetadataStore", () => {
     const sql = db();
     const assets = new SqlMetadataStore(sql);
     await new SqlWorkspaceStore(sql).save({ id: "ws1", name: "W", createdAt: 1, updatedAt: 1 });
-    await new SqlMemberStore(sql).save({ workspaceId: "ws1", userId: "u1", role: "owner", createdAt: 1, updatedAt: 1 });
+    await new SqlMemberStore(sql, null).save({ workspaceId: "ws1", userId: "u1", role: "owner", createdAt: 1, updatedAt: 1 });
     await new SqlProjectStore(sql).save({ id: "p1", name: "P", createdAt: 1, updatedAt: 1, ownerId: "u1", workspaceId: "ws1" });
     await assets.save(asset({ id: "mine", projectId: "p1" }), 3600);
     await assets.save(asset({ id: "theirs", projectId: "p9" }), 3600);

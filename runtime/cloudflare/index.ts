@@ -31,8 +31,14 @@ export default {
       url.pathname.startsWith("/api/") ||
       url.pathname.startsWith("/files")
     ) {
-      const app = createApp(buildDeps(env));
-      return app.fetch(request, env, ctx);
+      let deps;
+      try {
+        deps = buildDeps(env);
+      } catch (err) {
+        console.error(err);
+        return Response.json({ error: "Server misconfigured" }, { status: 500 });
+      }
+      return createApp(deps).fetch(request, env, ctx);
     }
 
     // Everything else: React Router SSR (UI)

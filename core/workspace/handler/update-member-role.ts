@@ -5,6 +5,7 @@ import type { AppEnv } from "../../types";
 import { accessCtx, authorizeWorkspace, deniedResponse } from "../../auth/access";
 import { canManageRole } from "../../auth/permissions";
 import { updateMemberRole } from "../../member/usecase";
+import { requireTenancyAdmin } from "../../tenancy/middleware";
 import {
   memberResponseSchema, workspaceMemberParamSchema, updateMemberBodySchema,
 } from "../../../shared/openapi";
@@ -21,17 +22,21 @@ export function registerUpdateMemberRoleRoute(app: Hono<AppEnv>) {
         401: jsonError("Authentication required"),
         403: jsonError("Forbidden"),
         404: jsonError("Member not found"),
+        405: jsonError("Members are managed by an external directory"),
       },
     }),
     zValidator("param", workspaceMemberParamSchema),
     zValidator("json", updateMemberBodySchema),
     async (c) => {
+      const admin = requireTenancyAdmin(c);
+      if (admin instanceof Response) return admin;
+
       const user = c.get("user");
       if (!user) {
         return c.json({ error: "Authentication required" }, 401);
       }
 
-      const members = c.get("members");
+      const members = admin.members;
       const { id: workspaceId, userId: targetUserId } = c.req.valid("param");
 
       const access = await authorizeWorkspace(accessCtx(c), workspaceId, "manage_members");

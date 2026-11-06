@@ -1,8 +1,8 @@
 import type { Member, Role } from "../../../shared/api";
-import type { MemberStore } from "../repository";
+import type { MemberAdmin } from "../repository";
 
 export async function addMember(
-  members: MemberStore,
+  members: MemberAdmin,
   workspaceId: string,
   userId: string,
   role: Role,
@@ -22,11 +22,10 @@ if (import.meta.vitest) {
   const { test, expect, vi } = import.meta.vitest;
 
   test("addMember creates a new member", async () => {
-    const ms: MemberStore = {
+    const ms: MemberAdmin = {
       save: vi.fn(async () => {}),
       find: vi.fn(async () => null),
       list: vi.fn(async () => []),
-      listByUser: vi.fn(async () => []),
       delete: vi.fn(async () => {}),
     };
 
@@ -38,13 +37,12 @@ if (import.meta.vitest) {
   });
 
   test("addMember throws if member already exists", async () => {
-    const ms: MemberStore = {
+    const ms: MemberAdmin = {
       save: vi.fn(async () => {}),
       find: vi.fn(async () => ({
         workspaceId: "ws1", userId: "user-2", role: "editor" as const, createdAt: 0, updatedAt: 0,
       })),
       list: vi.fn(async () => []),
-      listByUser: vi.fn(async () => []),
       delete: vi.fn(async () => {}),
     };
 

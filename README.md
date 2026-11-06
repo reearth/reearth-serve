@@ -111,7 +111,7 @@ SSR on Node is out of scope, and any other path returns 404 saying so.
 | `ANONYMOUS_UPLOAD_ENABLED` | (unset) | `"true"` to allow uploads without a token |
 | `ASSET_TTL_SECONDS` | `3600` | TTL for assets that belong to no project |
 | `OIDC_ISSUER_URL` / `OIDC_AUDIENCE` | (unset) | JWT verification; unset ⇒ demo mode |
-| `CERBOS_ENDPOINT` | (unset) | Cerbos PDP base URL; unset ⇒ the built-in policy table decides (see [Authorization](#authorization)) |
+| `CERBOS_ENDPOINT` | (unset) | Cerbos PDP base URL (http or https); unset ⇒ the built-in policy table decides (see [Authorization](#authorization)). Any other value fails at startup |
 | `OBJECT_STORE_*` | (unset) | Reserved for the future S3 adapter; until then storage is in-process |
 | `CONTAINER_LAUNCHER` | `none` | Only `none` is implemented; any other value fails at startup |
 
@@ -155,7 +155,7 @@ not persisted.
 | `GET` | `/api/v1/jobs` | List jobs (`?limit=&cursor=`) |
 | `GET` | `/api/v1/jobs/:id` | Get extraction job status |
 | `POST` | `/api/v1/jobs/:id/retry` | Retry a failed extraction job |
-| `GET` | `/api/v1/me` | Get current user info + workspace list |
+| `GET` | `/api/v1/me` | Get current user info + every workspace the user belongs to |
 | `GET` | `/api/v1/projects` | List projects (`?workspaceId=` filter) |
 | `POST` | `/api/v1/projects` | Create project |
 | `GET` | `/api/v1/projects/:id` | Get project |
@@ -226,6 +226,10 @@ docker run --rm -p 3592:3592 -v "$PWD/docs/examples/cerbos:/policies" \
   ghcr.io/cerbos/cerbos:0.40.0 server --config=/policies/.cerbos.yaml
 CERBOS_ENDPOINT=http://localhost:3592 npm run start:node
 ```
+
+Serve fails closed when Cerbos cannot decide. A timeout, a refused connection or a non-2xx answer returns `503 {"error":"Authorization service unavailable"}` with `Retry-After: 5`, never an allow.
+
+Workspaces and memberships live in Serve's own D1 or SQLite directory, and Serve binds them to the caller once per request, after token verification. Health, the OpenAPI routes, `/files` and `/api/internal/*` skip that step, so a token there costs no directory lookup.
 
 **Upgrade note.** Earlier releases sent Cerbos the kinds `asset`, `job`, `project` and `workspace`, with actions such as `create` and `read`. A policy written for those names denies every check after this release. Replace it with the policies in `docs/examples/cerbos/`.
 

@@ -9,6 +9,7 @@ import { workspaceRoutes } from "./workspace/handler";
 import { meRoutes } from "./me/handler";
 import { authMiddleware } from "./auth/middleware";
 import { sessionMiddleware } from "./session/middleware";
+import { bindsCaller, tenancyErrorResponse, tenancyMiddleware, TENANCY_RETRY_AFTER_SECONDS } from "./tenancy/middleware";
 import type { AppEnv, Deps } from "./types";
 import { buildSpec, jsonError, jsonResponse } from "./openapi";
 import { healthExamples } from "./openapi-examples";
@@ -24,6 +25,17 @@ import { healthResponseSchema } from "../shared/openapi";
 export function createApp(deps: Deps) {
   const app = new Hono<AppEnv>();
 
+  app.onError((err, c) => {
+    const tenancyError = tenancyErrorResponse(err, c);
+    if (tenancyError) return tenancyError;
+    if ("getResponse" in err) {
+      const res = err.getResponse();
+      return c.newResponse(res.body, res);
+    }
+    console.error(err);
+    return c.text("Internal Server Error", 500);
+  });
+
   // Authentication middleware (JWKS cache comes from deps).
   //
   // `/api/internal/*` is excluded: it authenticates with the shared secret in
@@ -33,6 +45,8 @@ export function createApp(deps: Deps) {
   // reject every container callback with 401 as soon as an issuer is
   // configured — i.e. in production.
   app.use("*", exceptInternalApi(authMiddleware(deps.auth)));
+
+  app.use("*", tenancyMiddleware(deps.tenancy));
 
   // Anonymous session tracking (for unauthenticated users). Internal callers
   // are machines with their own credential; minting a demo session per
@@ -49,10 +63,7 @@ export function createApp(deps: Deps) {
     c.set("jobs", deps.jobs);
     c.set("ttlSeconds", deps.ttlSeconds);
     c.set("baseUrl", deps.baseUrl);
-    c.set("authorizer", deps.authorizer);
     c.set("projects", deps.projects);
-    c.set("workspaces", deps.workspaces);
-    c.set("members", deps.members);
     c.set("extractionQueue", deps.extractionQueue);
     c.set("thumbnailQueue", deps.thumbnailQueue);
     c.set("writes", deps.writes);
@@ -117,11 +128,40 @@ let cachedSpec: ReturnType<typeof buildSpec> | undefined;
  * Vite's HMR reloads it (emptying the cache) whenever a route changes.
  */
 function openApiSpec(app: Hono<AppEnv>): ReturnType<typeof buildSpec> {
-  cachedSpec ??= buildSpec(app).catch((e: unknown) => {
-    cachedSpec = undefined;
-    throw e;
-  });
+  cachedSpec ??= buildSpec(app)
+    .then(declareTenancyUnavailable)
+    .catch((e: unknown) => {
+      cachedSpec = undefined;
+      throw e;
+    });
   return cachedSpec;
+}
+
+const TENANCY_UNAVAILABLE_RESPONSE = {
+  description: "Authorization service unavailable",
+  headers: {
+    "Retry-After": {
+      description: "Seconds to wait before retrying",
+      schema: { type: "integer", const: TENANCY_RETRY_AFTER_SECONDS },
+    },
+  },
+  content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+} as const;
+
+type Spec = Awaited<ReturnType<typeof buildSpec>>;
+
+function declareTenancyUnavailable(spec: Spec): Spec {
+  spec.components ??= {};
+  spec.components.responses = { ...spec.components.responses, TenancyUnavailable: TENANCY_UNAVAILABLE_RESPONSE };
+  for (const [path, item] of Object.entries(spec.paths ?? {})) {
+    if (!bindsCaller(path)) continue;
+    for (const op of Object.values(item ?? {})) {
+      if (op && typeof op === "object" && "responses" in op && op.responses) {
+        op.responses["503"] ??= { $ref: "#/components/responses/TenancyUnavailable" };
+      }
+    }
+  }
+  return spec;
 }
 
 /**
@@ -148,7 +188,7 @@ const INTERNAL_API_PREFIX = "/api/internal/";
 function exceptInternalApi(mw: MiddlewareHandler<AppEnv>): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     if (!c.req.path.startsWith(INTERNAL_API_PREFIX)) return mw(c, next);
-    if (c.get("user") === undefined) c.set("user", null);
+    if (c.get("caller") === undefined) c.set("caller", null);
     if (c.get("sessionId") === undefined) c.set("sessionId", null);
     await next();
   };

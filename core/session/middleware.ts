@@ -8,7 +8,6 @@ const SESSION_ID_PATTERN = /^[0-9a-f]{16}$/;
 /**
  * Session middleware for anonymous user tracking.
  *
- * - If user is authenticated (c.get("user") is set), sessionId = null.
  * - If X-Session-Id header is present, is well-formed, AND exists in KV,
  *   reuse it.
  * - Otherwise (absent, malformed, or unknown ID), mint a fresh one and
@@ -20,9 +19,7 @@ const SESSION_ID_PATTERN = /^[0-9a-f]{16}$/;
  */
 export function sessionMiddleware(sessions: SessionStore, ttlSeconds: number) {
   return createMiddleware<AppEnv>(async (c, next) => {
-    // Authenticated users don't need anonymous sessions
-    const user = c.get("user");
-    if (user) {
+    if (c.get("caller")) {
       c.set("sessionId", null);
       return next();
     }
@@ -62,6 +59,7 @@ export function sessionMiddleware(sessions: SessionStore, ttlSeconds: number) {
 if (import.meta.vitest) {
   const { test, expect, vi } = import.meta.vitest;
   const { Hono } = await import("hono");
+  const { BearerCredential } = await import("../auth/types");
 
   type Session = import("./repository").Session;
 
@@ -77,7 +75,8 @@ if (import.meta.vitest) {
   function createApp(sessions: ReturnType<typeof mockSessions>, authUser?: string) {
     const app = new Hono<AppEnv>();
     app.use("*", async (c, next) => {
-      c.set("user", authUser ? { sub: authUser } : null);
+      c.set("caller", authUser ? { kind: "user", sub: authUser, credential: new BearerCredential("t") } : null);
+      c.set("user", null);
       return next();
     });
     app.use("*", sessionMiddleware(sessions, 3600));

@@ -45,7 +45,7 @@ export function registerListRoute(app: Hono<AppEnv>) {
         return c.json({ assets: result.items, cursor: result.cursor });
       }
 
-      const result = await metadata.list({ limit, cursor, accessibleByUser: user.sub });
+      const result = await metadata.list({ limit, cursor, accessibleByUser: user.id });
       return c.json({ assets: result.items, cursor: result.cursor });
     },
   );

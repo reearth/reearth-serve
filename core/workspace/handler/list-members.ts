@@ -29,7 +29,7 @@ export function registerListMembersRoute(app: Hono<AppEnv>) {
       const access = await authorizeWorkspace(accessCtx(c), workspaceId, "read");
       if (!access.ok) return deniedResponse(c, access, { notFound: "Workspace not found" });
 
-      const list = await listMembers(c.get("members"), workspaceId);
+      const list = await listMembers(c.get("tenancy").members, workspaceId);
       return c.json({ members: list });
     },
   );
