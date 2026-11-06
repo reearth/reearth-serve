@@ -21,8 +21,6 @@ export function registerDeleteRoute(app: Hono<AppEnv>) {
     zValidator("param", idParamSchema),
     async (c) => {
       const metadata = c.get("metadata");
-      const storage = c.get("storage");
-      const versions = c.get("versions");
       const { id } = c.req.valid("param");
 
       const asset = await getAssetMetadata(metadata, id);
@@ -30,29 +28,18 @@ export function registerDeleteRoute(app: Hono<AppEnv>) {
         return c.json({ error: "Asset not found" }, 404);
       }
 
-      // Delete all versions (and get total size for storage accounting)
-      const { totalSize: versionsTotalSize } = await versions.deleteByAssetId(id);
+      const scopes: string[] = [];
+      if (asset.projectId) {
+        scopes.push(`project:${asset.projectId}`);
+        const project = await c.get("projects").find(asset.projectId);
+        if (project?.workspaceId) scopes.push(`workspace:${project.workspaceId}`);
+      }
 
-      const pendingCleanup = c.get("pendingCleanup");
-      const deleted = await deleteAsset(metadata, storage, id, {
-        pendingCleanup,
+      await deleteAsset(c.get("writes"), c.get("storage"), asset, {
+        usageScopes: scopes,
+        pendingCleanup: c.get("pendingCleanup"),
         siteHosts: siteHostDeps(c),
       });
-      if (!deleted) {
-        return c.json({ error: "Asset not found" }, 404);
-      }
-
-      // Update storage usage counters
-      if (asset.projectId) {
-        const storageUsage = c.get("storageUsage");
-        const projects = c.get("projects");
-        const totalSize = asset.size + versionsTotalSize;
-        await storageUsage.decrement(`project:${asset.projectId}`, totalSize);
-        const project = await projects.find(asset.projectId);
-        if (project?.workspaceId) {
-          await storageUsage.decrement(`workspace:${project.workspaceId}`, totalSize);
-        }
-      }
 
       return c.body(null, 204);
     },

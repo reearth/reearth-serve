@@ -1,4 +1,5 @@
 import type { Hono } from "hono";
+import { z } from "zod";
 import { describeRoute } from "hono-openapi";
 import { resolver, validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
@@ -7,12 +8,21 @@ import { canAccessProject } from "../access";
 import { accessCtx, usageScopes } from "./shared";
 import { uploadResultResponseSchema, errorResponseSchema, idParamSchema, completeUploadBodySchema } from "../../../shared/openapi";
 
+// hono-openapi only resolves `resolver()` in responses, and this route parses
+// its body by hand (no validator), so the request schema is converted here.
+const { $schema: _, ...completeUploadBodyJsonSchema } = z.toJSONSchema(completeUploadBodySchema, { io: "input" });
+
 export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
   app.post("/uploads/:id/complete",
     describeRoute({
       tags: ["Assets"],
       summary: "Complete upload session",
       description: "Confirm upload and create asset. For multipart uploads, send parts with ETags in JSON body.",
+      requestBody: {
+        required: false,
+        description: "Only read when Content-Type is application/json. Required for multipart sessions.",
+        content: { "application/json": { schema: completeUploadBodyJsonSchema as Record<string, unknown> } },
+      },
       responses: {
         201: { description: "Upload completed", content: { "application/json": { schema: resolver(uploadResultResponseSchema) } } },
         404: { description: "Upload session not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
@@ -56,7 +66,7 @@ export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
     const thumbnailQueue = c.get("thumbnailQueue");
     // Resolved up front so the counters ride along in the asset's batch.
     const scopes = await usageScopes(c, session.projectId);
-    const result = await completeUploadSession(sessions, writes, storage, presignedUrls, id, ttlSeconds, baseUrl, parts, { sessionId, extractionQueue, thumbnailQueue, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix") });
+    const result = await completeUploadSession(sessions, writes, c.get("metadata"), storage, presignedUrls, id, ttlSeconds, baseUrl, parts, { sessionId, extractionQueue, thumbnailQueue, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix") });
     if (!result) {
       return c.json({ error: "Upload session not found or file not yet uploaded" }, 404);
     }

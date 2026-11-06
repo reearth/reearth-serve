@@ -59,6 +59,11 @@ export const siteHostListResponseSchema = z.object({ hosts: z.array(siteHostSche
 export const siteHostVerificationFailedSchema = errorResponseSchema
   .extend(siteHostVerificationSchema.shape);
 
+export const versionUploadResultResponseSchema = z.object({
+  version: assetVersionSchema,
+  url: z.string(),
+});
+
 export const healthResponseSchema = z.object({
   ok: z.boolean(),
   anonymousUploadEnabled: z.boolean(),

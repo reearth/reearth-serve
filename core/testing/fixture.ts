@@ -392,7 +392,16 @@ export async function fixture(overrides?: Partial<Deps>) {
     metadata,
     versions,
     storage,
-    writes: unused("writes"),
+    // Only delete is exercised through the app; uploads have their own tests.
+    writes: {
+      createAsset: () => { throw new Error('fake dependency "writes.createAsset" was called unexpectedly'); },
+      createVersion: () => { throw new Error('fake dependency "writes.createVersion" was called unexpectedly'); },
+      saveJob: () => { throw new Error('fake dependency "writes.saveJob" was called unexpectedly'); },
+      async deleteAsset({ asset }) {
+        metadata.assets.delete(asset.id);
+        for (const [id, v] of versions.versions) if (v.assetId === asset.id) versions.versions.delete(id);
+      },
+    },
     uploadSessions: unused("uploadSessions"),
     presignedUrls: null,
     jobs: unused("jobs"),
@@ -405,7 +414,7 @@ export async function fixture(overrides?: Partial<Deps>) {
     extractionQueue: null,
     thumbnailQueue: null,
     storageUsage: unused("storageUsage"),
-    pendingCleanup: unused("pendingCleanup"),
+    pendingCleanup: { add: async () => {}, list: async () => [], remove: async () => {} },
     anonymousUploadEnabled: false,
     siteHostSuffix: undefined,
     siteHosts,

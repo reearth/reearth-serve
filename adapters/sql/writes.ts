@@ -5,7 +5,18 @@ import {
   JOB_UPSERT_SQL, jobUpsertArgs,
   VERSION_INSERT_SQL, versionInsertArgs, assignedVersion,
   USAGE_INCREMENT_SQL, usageIncrementArgs,
+  CLEANUP_PENDING_ADD_SQL,
 } from "./stores";
+
+// Runs before the version and asset rows are deleted in the same batch: it
+// reads their sizes, and the EXISTS guard skips it once the asset is gone.
+const USAGE_DECREMENT_FOR_ASSET_SQL =
+  `UPDATE storage_usage
+     SET total_size = MAX(0, total_size - ?2
+           - (SELECT COALESCE(SUM(size), 0) FROM asset_versions WHERE asset_id = ?3)),
+         asset_count = MAX(0, asset_count - 1),
+         updated_at = ?4
+     WHERE scope = ?1 AND EXISTS (SELECT 1 FROM assets WHERE id = ?3)`;
 
 /**
  * `AtomicWrites` over the SQL port: every composite write is one `batch()`,
@@ -35,6 +46,20 @@ export class SqlAtomicWrites implements AtomicWrites {
 
     const results = await this.db.batch(statements);
     return { ...version, version: assignedVersion(results[versionIndex].rows) };
+  }
+
+  async deleteAsset({ asset, usageScopes, cleanupPrefix }: Parameters<AtomicWrites["deleteAsset"]>[0]): Promise<void> {
+    const now = Date.now();
+    const statements: SqlStatement[] = (usageScopes ?? []).map((scope) => ({
+      sql: USAGE_DECREMENT_FOR_ASSET_SQL,
+      args: [scope, asset.size, asset.id, now],
+    }));
+    statements.push(
+      { sql: "DELETE FROM asset_versions WHERE asset_id = ?1", args: [asset.id] },
+      { sql: "DELETE FROM assets WHERE id = ?1", args: [asset.id] },
+      { sql: CLEANUP_PENDING_ADD_SQL, args: [cleanupPrefix, now] },
+    );
+    await this.db.batch(statements);
   }
 
   async saveJob({ job, asset }: Parameters<AtomicWrites["saveJob"]>[0]): Promise<void> {

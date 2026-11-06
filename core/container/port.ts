@@ -17,6 +17,11 @@ export interface ContainerLauncher {
    */
   readonly archiveExtractorAvailable: boolean;
   launchArchiveExtractor(params: ArchiveExtractorParams): Promise<void>;
+  /**
+   * Whether the out-of-process thumbnail generator exists. Without it, images
+   * the Worker would otherwise hand off are still thumbnailed in-process.
+   */
+  readonly thumbnailGeneratorAvailable: boolean;
   /** Runs the out-of-process thumbnail generator. Throws if it is unavailable. */
   generateThumbnails(params: ThumbnailGeneratorParams): Promise<void>;
 }

@@ -176,6 +176,12 @@ jobInternalRoutes.post("/:id/status", async (c) => {
   if (body.error) {
     job.error = body.error;
   }
+  // The container omits zero counters so a failure report cannot wipe real
+  // progress; a completed job with nothing reported extracted nothing.
+  if (body.status === "completed") {
+    job.fileCount ??= 0;
+    job.extractedSize ??= 0;
+  }
 
   // Demo-mode assets expire `ttlSeconds` after upload, but extraction of a
   // large archive can outlive that window — the cleanup cron would delete
@@ -193,8 +199,16 @@ jobInternalRoutes.post("/:id/status", async (c) => {
   // Mirror the job status onto the asset. The two rows go out in one atomic
   // write (ADR-012 §3) — a job marked completed while its asset still says
   // "extracting" is exactly the drift the cleanup cron has to reconcile.
+  //
+  // The job row is the one that must land: the container drops its checkpoint
+  // once "completed" is acknowledged, while a stale asset mirror is healed by
+  // `reconcileStuckAssets`. So a failed asset read or batch falls back to
+  // writing the job alone instead of losing the status.
   const ttl = c.get("ttlSeconds");
-  const asset = await c.get("metadata").find(job.assetId);
+  const asset = await c.get("metadata").find(job.assetId).catch((e: unknown) => {
+    console.warn(`job ${job.id}: asset read failed, saving job only:`, e);
+    return null;
+  });
 
   if (asset && body.status === "running") {
     asset.status = "extracting";
@@ -202,8 +216,8 @@ jobInternalRoutes.post("/:id/status", async (c) => {
   }
   if (asset && body.status === "completed") {
     asset.status = "ready";
-    asset.fileCount = body.fileCount;
-    asset.extractedSize = body.extractedSize;
+    asset.fileCount = job.fileCount;
+    asset.extractedSize = job.extractedSize;
     extendDemoExpiry(asset, ttl);
   }
   if (asset && body.status === "failed") {
@@ -220,7 +234,17 @@ jobInternalRoutes.post("/:id/status", async (c) => {
     : null;
   if (placement?.on === "asset" && asset) asset.hosting = placement.hosting;
 
-  await c.get("writes").saveJob({ job, asset: asset ?? undefined });
+  const writes = c.get("writes");
+  if (!asset) {
+    await writes.saveJob({ job });
+  } else {
+    try {
+      await writes.saveJob({ job, asset });
+    } catch (e) {
+      console.warn(`job ${job.id}: job+asset write failed, saving job only:`, e);
+      await writes.saveJob({ job });
+    }
+  }
 
   if (placement?.on === "version") {
     await c.get("versions").update(placement.versionId, { hosting: placement.hosting });

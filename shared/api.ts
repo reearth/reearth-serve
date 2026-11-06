@@ -18,6 +18,26 @@ export const assetAccessSchema = z.enum(["public", "password"]);
 export const jobTypeSchema = z.literal("archive-extraction");
 export const jobStatusSchema = z.enum(["pending", "running", "completed", "failed"]);
 
+// --- Filename ---
+
+// A filename becomes the last segment of an object key (`assets/<id>/<name>`).
+// Separators or dot segments would let it address another asset's key, since
+// URL resolution collapses `../` before a presigned URL is signed.
+export function isSafeFilename(name: string): boolean {
+  return name.length > 0 && name.length <= 255 &&
+    name !== "." && name !== ".." &&
+    !/[/\\\u0000-\u001f\u007f]/.test(name);
+}
+
+export const filenameSchema = z.string().refine(isSafeFilename, "Invalid filename");
+
+// --- OpenAPI component names ---
+//
+// `.meta({ ref })` makes hono-openapi emit a schema as a named entry in
+// `components.schemas` and `$ref` it, so generated clients (e.g. oapi-codegen
+// in Re:Earth CMS) get `Asset` instead of `PostApiV1Assets201JSONResponseBodyAsset`.
+// The ref is not inherited by `.extend()`, so derived shapes stay inline.
+
 // --- Role ---
 
 export const roleSchema = z.enum(["owner", "admin", "editor", "viewer"]);
@@ -29,7 +49,7 @@ export const workspaceSchema = z.object({
   name: z.string(),
   createdAt: z.number(),
   updatedAt: z.number(),
-});
+}).meta({ ref: "Workspace" });
 
 export const createWorkspaceBodySchema = z.object({
   name: z.string().min(1).max(100),
@@ -43,7 +63,7 @@ export const memberSchema = z.object({
   role: roleSchema,
   createdAt: z.number(),
   updatedAt: z.number(),
-});
+}).meta({ ref: "Member" });
 
 export const addMemberBodySchema = z.object({
   userId: z.string(),
@@ -63,7 +83,7 @@ export const projectSchema = z.object({
   updatedAt: z.number(),
   ownerId: z.string(),
   workspaceId: z.string().optional(),
-});
+}).meta({ ref: "Project" });
 
 export const createProjectBodySchema = z.object({
   name: z.string().min(1).max(100),
@@ -130,7 +150,7 @@ export const assetVersionSchema = z.object({
    * is exactly what ADR-005's system/user split reserves for fields serve owns.
    */
   hosting: siteHostingSchema.optional(),
-});
+}).meta({ ref: "AssetVersion" });
 
 export const assetMetadataSchema = z.object({
   id: z.string(),
@@ -178,7 +198,7 @@ export const assetMetadataSchema = z.object({
    * a version does carry them, the version's win.
    */
   hosting: siteHostingSchema.optional(),
-});
+}).meta({ ref: "Asset" });
 
 export const assetUploadResultSchema = z.object({
   asset: assetMetadataSchema,
@@ -275,7 +295,7 @@ export const presignedUploadResultSchema = z.object({
   headers: z.record(z.string(), z.string()),
   contentEncoding: z.string().optional(),
   expiresAt: z.number(),
-});
+}).meta({ ref: "PresignedUploadSession" });
 
 export const multipartUploadResultSchema = z.object({
   uploadId: z.string(),
@@ -285,7 +305,7 @@ export const multipartUploadResultSchema = z.object({
   })),
   contentEncoding: z.string().optional(),
   expiresAt: z.number(),
-});
+}).meta({ ref: "MultipartUploadSession" });
 
 export const uploadPartSchema = z.object({
   partNumber: z.number(),
@@ -317,7 +337,7 @@ export const jobSchema = z.object({
   sessionId: z.string().optional(),
   projectId: z.string().optional(),
   versionId: z.string().optional(),
-});
+}).meta({ ref: "Job" });
 
 // --- File entry (archive manifest) ---
 
@@ -327,7 +347,7 @@ export const fileEntrySchema = z.object({
   contentType: z.string(),
   contentEncoding: z.string().optional(),
   hash: z.string().optional(),
-});
+}).meta({ ref: "FileEntry" });
 
 // --- Request bodies ---
 
@@ -336,7 +356,7 @@ export const fileEntrySchema = z.object({
 export const MAX_UPLOAD_PARTS = 10000;
 
 export const createUploadSessionBodySchema = z.object({
-  filename: z.string(),
+  filename: filenameSchema,
   contentType: z.string().optional(),
   size: z.number(),
   partCount: z.number().int().positive().max(MAX_UPLOAD_PARTS).optional(),
@@ -401,7 +421,7 @@ export const setActiveVersionBodySchema = z.object({
 
 export const errorResponseSchema = z.object({
   error: z.string(),
-});
+}).meta({ ref: "Error" });
 
 // --- Inferred types ---
 

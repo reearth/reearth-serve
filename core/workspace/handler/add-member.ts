@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
 import { resolver, validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
+import { canManageRole } from "../../auth/roles";
 import { addMember } from "../../member/usecase";
 import {
   memberResponseSchema, errorResponseSchema,
@@ -48,6 +49,9 @@ export function registerAddMemberRoute(app: Hono<AppEnv>) {
       }
 
       const body = c.req.valid("json");
+      if (!canManageRole(self.role, body.role)) {
+        return c.json({ error: "Forbidden" }, 403);
+      }
 
       try {
         const member = await addMember(members, workspaceId, body.userId, body.role);

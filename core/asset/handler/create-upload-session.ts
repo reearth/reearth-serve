@@ -3,7 +3,7 @@ import { describeRoute } from "hono-openapi";
 import { resolver, validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { createUploadSession } from "../usecase";
-import { denyAnonymousUpload, resolveUploadProject } from "./shared";
+import { denyAnonymousUpload, projectIdHeaderParam, resolveUploadProject } from "./shared";
 import {
   uploadSessionResponseSchema, errorResponseSchema,
   createUploadSessionBodySchema,
@@ -14,9 +14,12 @@ export function registerCreateUploadSessionRoute(app: Hono<AppEnv>) {
     describeRoute({
       tags: ["Assets"],
       summary: "Create upload session with presigned URL",
+      parameters: [projectIdHeaderParam],
       responses: {
         201: { description: "Upload session created", content: { "application/json": { schema: resolver(uploadSessionResponseSchema) } } },
-        400: { description: "Bad request", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        400: { description: "Bad request (invalid body, or X-Project-Id missing for an authenticated caller)", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        401: { description: "Anonymous upload disabled, or invalid token / session ID", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        404: { description: "Project not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
         501: { description: "Presigned uploads not available", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
       },
     }),

@@ -43,9 +43,25 @@ describe("OpenAPI", () => {
       "/api/v1/workspaces/{id}",
       "/api/v1/workspaces/{workspaceId}/members",
       "/api/v1/workspaces/{workspaceId}/members/{userId}",
+      "/files/{id}/{path}",
     ];
     for (const p of expectedPaths) {
       expect(paths, `missing path: ${p}`).toHaveProperty(p);
+    }
+
+    type Op = { parameters?: { name: string; in: string }[] };
+    const ops = paths as Record<string, Record<string, Op>>;
+    for (const p of ["/api/v1/assets", "/api/v1/assets/uploads"]) {
+      expect(ops[p].post.parameters, `${p} X-Project-Id`).toContainEqual(
+        expect.objectContaining({ name: "X-Project-Id", in: "header" }),
+      );
+    }
+
+    // Fetched twice on purpose: the server builds a fresh app per request, and
+    // a regenerated spec once lost its named components.
+    for (let i = 0; i < 2; i++) {
+      const again = await (await fetch(`${BASE}/api/v1/doc`)).json() as { components: { schemas?: Record<string, unknown> } };
+      expect(again.components.schemas).toHaveProperty("Asset");
     }
   });
 
