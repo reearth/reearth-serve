@@ -42,12 +42,10 @@ interface Bucket {
 /**
  * The requesting client's address, or null when the runtime exposes none.
  *
- * `CF-Connecting-IP` is Cloudflare's, and is the only one of the two that a
- * visitor cannot set (the edge overwrites it). `X-Forwarded-For`'s first hop is
- * the best a reverse proxy in front of the Node runtime offers, and it is
- * spoofable by anyone who can reach the process directly — which is why
- * exceeding the limit only ever *adds* a restriction and the fallback bucket
- * below exists.
+ * `CF-Connecting-IP` is Cloudflare's, and a visitor cannot set it (the edge
+ * overwrites it). `X-Forwarded-For`'s first hop is what the Node runtime
+ * offers: the socket address it writes itself, or a reverse proxy's value when
+ * `TRUST_PROXY=true` (see `runtime/node/index.ts`).
  */
 export function clientIp(request: Request): string | null {
   const cf = request.headers.get("CF-Connecting-IP")?.trim();

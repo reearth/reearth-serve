@@ -15,6 +15,7 @@ import { siteFixture, SUFFIX } from "../testing/site-fixture";
 import { setAssetAccess } from "../asset/usecase";
 import { APEX_COOKIE, SITE_COOKIE } from "./cookie";
 import { RATE_LIMIT_PER_IP } from "./ratelimit";
+import { MemoryKeyValue } from "../../adapters/memory/memory-kv";
 
 const PASSWORD = "correct-horse-battery";
 const BROWSER = { Accept: "text/html,application/xhtml+xml" };
@@ -154,7 +155,11 @@ describe("Authorization: Basic", () => {
   });
 
   test(`${RATE_LIMIT_PER_IP} wrong passwords from one IP, then 429`, async () => {
-    const { app } = await protectedFixture();
+    // A password this isolate has never verified, so no memo entry lets it
+    // past the limiter.
+    const fresh = "limiter-basic-password";
+    const { app, metadata } = await siteFixture();
+    await protect(metadata, ASSET_ID, fresh);
     const headers = { ...basic("wrong-password"), "CF-Connecting-IP": "203.0.113.7" };
     for (let i = 0; i < RATE_LIMIT_PER_IP; i++) {
       expect((await app.request(`/files/${ASSET_ID}`, { headers })).status).toBe(401);
@@ -165,14 +170,54 @@ describe("Authorization: Basic", () => {
     // Even the correct password waits out the window: the limiter is what
     // makes a low-entropy shared secret safe.
     const right = await app.request(`/files/${ASSET_ID}`, {
-      headers: { ...basic(PASSWORD), "CF-Connecting-IP": "203.0.113.7" },
+      headers: { ...basic(fresh), "CF-Connecting-IP": "203.0.113.7" },
     });
     expect(right.status).toBe(429);
     // Another visitor is unaffected.
     const other = await app.request(`/files/${ASSET_ID}`, {
-      headers: { ...basic(PASSWORD), "CF-Connecting-IP": "198.51.100.4" },
+      headers: { ...basic(fresh), "CF-Connecting-IP": "198.51.100.4" },
     });
     expect(other.status).toBe(200);
+  });
+});
+
+describe("the password memo (ADR-020 §9 item 6)", () => {
+  /** A KeyValue that counts the calls the limiter makes. */
+  class CountingKeyValue extends MemoryKeyValue {
+    calls = 0;
+    override async get(key: string) { this.calls++; return super.get(key); }
+    override async put(key: string, value: string, o?: { ttlSeconds?: number }) { this.calls++; return super.put(key, value, o); }
+    override async delete(key: string) { this.calls++; return super.delete(key); }
+  }
+
+  test("a verified password skips the limiter's KV reads and deletes, for Basic and the form alike", async () => {
+    const memoPassword = "memo-only-password";
+    const cache = new CountingKeyValue();
+    const { app, metadata } = await siteFixture({ deps: { cache } });
+    await protect(metadata, ASSET_ID, memoPassword);
+
+    const posted = await submit(app, `/files/${ASSET_ID}/_serve/auth`, { password: memoPassword, next: "/" });
+    expect(posted.status).toBe(303);
+    expect(cache.calls).toBe(2);
+
+    cache.calls = 0;
+    for (let i = 0; i < 3; i++) {
+      const res = await app.request(`/files/${ASSET_ID}`, { headers: basic(memoPassword) });
+      expect(res.status).toBe(200);
+    }
+    expect(cache.calls).toBe(0);
+  });
+
+  test("a password change misses the memo", async () => {
+    const cache = new CountingKeyValue();
+    const { app, metadata } = await siteFixture({ deps: { cache } });
+    await protect(metadata, ASSET_ID, "memo-version-password");
+    expect((await app.request(`/files/${ASSET_ID}`, { headers: basic("memo-version-password") })).status).toBe(200);
+    // Same password, new password_version: verified again from scratch.
+    await protect(metadata, ASSET_ID, "memo-version-password");
+    cache.calls = 0;
+    expect((await app.request(`/files/${ASSET_ID}`, { headers: basic("memo-version-password") })).status).toBe(200);
+    expect(cache.calls).toBe(2);
   });
 });
 
@@ -238,13 +283,15 @@ describe("the password form", () => {
   });
 
   test("failed submits are rate limited too", async () => {
-    const { app } = await protectedFixture();
+    const fresh = "limiter-form-password";
+    const { app, metadata } = await siteFixture();
+    await protect(metadata, ASSET_ID, fresh);
     const headers = { "CF-Connecting-IP": "203.0.113.9" };
     for (let i = 0; i < RATE_LIMIT_PER_IP; i++) {
       const res = await submit(app, `/files/${ASSET_ID}/_serve/auth`, { password: "nope" }, headers);
       expect(res.status).toBe(401);
     }
-    const res = await submit(app, `/files/${ASSET_ID}/_serve/auth`, { password: PASSWORD }, headers);
+    const res = await submit(app, `/files/${ASSET_ID}/_serve/auth`, { password: fresh }, headers);
     expect(res.status).toBe(429);
     expect(res.headers.get("Retry-After")).not.toBeNull();
   });

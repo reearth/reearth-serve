@@ -9,16 +9,32 @@
  * Start it with `npm run start:node` (tsx). Configuration is environment
  * variables only; see `config.ts` and the README's "Running on Node" section.
  */
-import { serve } from "@hono/node-server";
+import { serve, type HttpBindings } from "@hono/node-server";
 import { createApp } from "../../core/app";
 import { isSiteHost } from "../../core/site/middleware";
 import { buildNodeRuntime, type NodeRuntime } from "./deps";
 import { runCron } from "./cron";
 
-export function createNodeHandler(runtime: NodeRuntime): (request: Request) => Promise<Response> {
+/**
+ * The password limiter keys on `CF-Connecting-IP`, else `X-Forwarded-For`. On
+ * Workers the edge overwrites the first; a Node process reachable directly
+ * would take either from the client. So unless `TRUST_PROXY=true` says a proxy
+ * in front sets them, both are replaced by the socket's own address.
+ */
+function pinClientIp(request: Request, env: HttpBindings | undefined): void {
+  request.headers.delete("CF-Connecting-IP");
+  const address = env?.incoming.socket.remoteAddress;
+  if (address) request.headers.set("X-Forwarded-For", address);
+  else request.headers.delete("X-Forwarded-For");
+}
+
+export function createNodeHandler(
+  runtime: NodeRuntime,
+): (request: Request, env?: HttpBindings) => Promise<Response> {
   const app = createApp(runtime.deps);
 
-  return async (request: Request): Promise<Response> => {
+  return async (request: Request, env?: HttpBindings): Promise<Response> => {
+    if (!runtime.config.trustProxy) pinClientIp(request, env);
     const url = new URL(request.url);
 
     // Site hosts (ADR-013 B1) serve files at every path, so they are decided
@@ -95,7 +111,7 @@ function timingSafeEqual(a: string, b: string): boolean {
 export function main(): void {
   const runtime = buildNodeRuntime();
   const handler = createNodeHandler(runtime);
-  serve({ fetch: handler, port: runtime.config.port }, (info) => {
+  serve({ fetch: (request, env) => handler(request, env as HttpBindings), port: runtime.config.port }, (info) => {
     console.log(`reearth-serve (node runtime) listening on http://localhost:${info.port}`);
     console.log(`  base URL:  ${runtime.config.baseUrl}`);
     console.log(`  sqlite:    ${runtime.config.sqlitePath}`);

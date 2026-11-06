@@ -26,8 +26,8 @@ import {
   rateLimitedResponse,
   signingSecretMissingResponse,
 } from "./page";
-import { verifyPassword } from "./password";
-import { checkRateLimit, clearFailures, clientIp, recordFailure } from "./ratelimit";
+import { attemptPassword } from "./attempt";
+import { clientIp } from "./ratelimit";
 import {
   accessModeOf,
   authActionPath,
@@ -61,17 +61,11 @@ export async function handleAuthSubmit(
   const next = safeNextPath(form.next, fallback);
 
   const now = deps.now ?? Date.now();
-  const ip = clientIp(request);
-
-  const limit = await checkRateLimit(deps.kv, asset.id, ip, now);
-  if (limit.limited) return rateLimitedResponse(limit.retryAfterSeconds, true);
-
-  if (typeof form.password !== "string" || !(await verifyPassword(form.password, protection))) {
-    await recordFailure(deps.kv, asset.id, ip, now);
+  const result = await attemptPassword(deps.kv, asset.id, protection, form.password, clientIp(request), now);
+  if (result.kind === "limited") return rateLimitedResponse(result.retryAfterSeconds, true);
+  if (result.kind === "wrong") {
     return passwordPageResponse({ action, next, error: "Wrong password. Try again." });
   }
-
-  await clearFailures(deps.kv, asset.id, ip);
 
   const value = await mintAuthCookie(secret, {
     assetId: asset.id,

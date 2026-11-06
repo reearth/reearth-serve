@@ -31,6 +31,12 @@ export type NodeConfig = {
   /** `CREDENTIALED_ORIGINS`, parsed; a malformed entry fails `loadConfig`. */
   credentialedOrigins: string[];
   anonymousUploadEnabled: boolean;
+  /**
+   * `TRUST_PROXY=true`: a reverse proxy in front sets `X-Forwarded-For` (or
+   * `CF-Connecting-IP`). Otherwise the runtime replaces both with the socket
+   * address before the app runs.
+   */
+  trustProxy: boolean;
   assetTtlSeconds: number;
   oidcIssuerUrl: string | undefined;
   oidcAudience: string | undefined;
@@ -78,6 +84,7 @@ export function loadConfig(env: Env): NodeConfig {
     credentialedOrigins: parseCredentialedOrigins(env.CREDENTIALED_ORIGINS),
     // Same fail-closed rule as Cloudflare: off unless explicitly "true".
     anonymousUploadEnabled: env.ANONYMOUS_UPLOAD_ENABLED === "true",
+    trustProxy: env.TRUST_PROXY === "true",
     assetTtlSeconds: intOr(env.ASSET_TTL_SECONDS, DEFAULT_ASSET_TTL_SECONDS),
     oidcIssuerUrl: env.OIDC_ISSUER_URL || undefined,
     oidcAudience: env.OIDC_AUDIENCE || undefined,

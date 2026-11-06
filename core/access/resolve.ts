@@ -33,8 +33,9 @@ import {
   rateLimitedResponse,
   signingSecretMissingResponse,
 } from "./page";
-import { basicPassword, verifyPassword } from "./password";
-import { checkRateLimit, clearFailures, clientIp, recordFailure } from "./ratelimit";
+import { attemptPassword } from "./attempt";
+import { basicPassword } from "./password";
+import { clientIp } from "./ratelimit";
 
 /**
  * The asset's access mode.
@@ -129,21 +130,16 @@ export async function resolveAccess(
   });
   if (cookieOk) return { kind: "allow", proof: "cookie" };
 
-  // 2. `Authorization: Basic`. One PBKDF2 per request that uses it, which is
-  //    the price of a stateless tool (curl, QGIS, `file cp`) that keeps no
-  //    cookie jar.
+  // 2. `Authorization: Basic`, for a stateless tool (curl, QGIS, `file cp`)
+  //    that keeps no cookie jar. The memo in `attemptPassword` keeps that
+  //    from costing a PBKDF2 per request.
   const submitted = basicPassword(request.headers.get("Authorization"));
   if (submitted !== null) {
-    const ip = clientIp(request);
-    const limit = await checkRateLimit(deps.kv, asset.id, ip, now);
-    if (limit.limited) {
-      return { kind: "challenge", response: rateLimitedResponse(limit.retryAfterSeconds, false) };
+    const result = await attemptPassword(deps.kv, asset.id, protection, submitted, clientIp(request), now);
+    if (result.kind === "ok") return { kind: "allow", proof: "basic" };
+    if (result.kind === "limited") {
+      return { kind: "challenge", response: rateLimitedResponse(result.retryAfterSeconds, false) };
     }
-    if (await verifyPassword(submitted, protection)) {
-      await clearFailures(deps.kv, asset.id, ip);
-      return { kind: "allow", proof: "basic" };
-    }
-    await recordFailure(deps.kv, asset.id, ip, now);
   }
 
   // 3. Nothing valid: a page for a browser, the Basic challenge for everyone
