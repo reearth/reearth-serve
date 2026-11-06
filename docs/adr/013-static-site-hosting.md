@@ -851,9 +851,9 @@ every URL form, cookie/Basic proof, `private` caching, credentialed CORS
   `x-reearth-site-preview`, which it deletes off every incoming request
   before setting it. A visitor cannot claim to be on a site host and move the
   cookie's `Path` to `/`.
-- **`SIGNING_SECRET`** is the secret's name — the one ADR-014 §4 reserves for
-  signed URLs, so cookie and future signed URLs share one secret and one
-  rotation. It is set in both composition roots. Unset, `PATCH` to `password`
+- **`SIGNING_SECRET`** is the cookie secret. It is set in both composition
+  roots. Delivery tokens have their own key ring, `DELIVERY_TOKEN_KEYS`
+  (ADR-014 §4), so the two rotate apart. Unset, `PATCH` to `password`
   is `503` and a protected asset answers `503 "SIGNING_SECRET not
   configured"` rather than serving its bytes.
 - **Password storage.** PBKDF2-SHA256 via WebCrypto, 600 000 iterations,
