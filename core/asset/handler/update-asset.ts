@@ -1,11 +1,12 @@
 import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
-import { resolver, validator as zValidator } from "hono-openapi";
+import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata, updateAsset, enrichAssetWithVersion } from "../usecase";
 import { canAccessAsset } from "../access";
 import { accessCtx } from "./shared";
-import { assetResponseSchema, errorResponseSchema, idParamSchema, updateAssetBodySchema } from "../../../shared/openapi";
+import { assetResponseSchema, idParamSchema, updateAssetBodySchema } from "../../../shared/openapi";
+import { jsonError, jsonResponse } from "../../openapi";
 
 export function registerUpdateAssetRoute(app: Hono<AppEnv>) {
   app.patch("/:id",
@@ -14,8 +15,8 @@ export function registerUpdateAssetRoute(app: Hono<AppEnv>) {
       summary: "Update asset metadata",
       description: "Update mutable asset fields: description, userMeta, activeVersionId, expiresAt.",
       responses: {
-        200: { description: "Updated asset", content: { "application/json": { schema: resolver(assetResponseSchema) } } },
-        404: { description: "Asset not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        200: jsonResponse("Updated asset", assetResponseSchema),
+        404: jsonError("Asset not found"),
       },
     }),
     zValidator("param", idParamSchema),

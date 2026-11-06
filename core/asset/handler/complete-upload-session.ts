@@ -1,16 +1,14 @@
 import type { Hono } from "hono";
-import { z } from "zod";
 import { describeRoute } from "hono-openapi";
-import { resolver, validator as zValidator } from "hono-openapi";
+import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { completeUploadSession } from "../usecase";
 import { canAccessProject } from "../access";
 import { accessCtx, usageScopes } from "./shared";
-import { uploadResultResponseSchema, errorResponseSchema, idParamSchema, completeUploadBodySchema } from "../../../shared/openapi";
+import { assetUploadResultExamples, completeUploadExamples } from "../../openapi-examples";
+import { completeUploadBodySchema, uploadResultResponseSchema, idParamSchema } from "../../../shared/openapi";
+import { jsonError, jsonResponse, schemaRef } from "../../openapi";
 
-// hono-openapi only resolves `resolver()` in responses, and this route parses
-// its body by hand (no validator), so the request schema is converted here.
-const { $schema: _, ...completeUploadBodyJsonSchema } = z.toJSONSchema(completeUploadBodySchema, { io: "input" });
 
 export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
   app.post("/uploads/:id/complete",
@@ -21,11 +19,13 @@ export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
       requestBody: {
         required: false,
         description: "Only read when Content-Type is application/json. Required for multipart sessions.",
-        content: { "application/json": { schema: completeUploadBodyJsonSchema as Record<string, unknown> } },
+        // This route parses its body by hand (no validator), so it points at the
+        // named component directly; core/openapi.ts emits it from the registry.
+        content: { "application/json": { schema: schemaRef(completeUploadBodySchema), examples: completeUploadExamples } },
       },
       responses: {
-        201: { description: "Upload completed", content: { "application/json": { schema: resolver(uploadResultResponseSchema) } } },
-        404: { description: "Upload session not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        201: jsonResponse("Upload completed", uploadResultResponseSchema, assetUploadResultExamples),
+        404: jsonError("Upload session not found"),
       },
     }),
     zValidator("param", idParamSchema),

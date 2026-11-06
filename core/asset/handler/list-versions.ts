@@ -1,11 +1,12 @@
 import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
-import { resolver, validator as zValidator } from "hono-openapi";
+import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata, listVersions } from "../usecase";
 import { canAccessAsset } from "../access";
 import { accessCtx } from "./shared";
-import { versionListResponseSchema, errorResponseSchema, idParamSchema, paginationQuerySchema } from "../../../shared/openapi";
+import { versionListResponseSchema, idParamSchema, paginationQuerySchema } from "../../../shared/openapi";
+import { jsonError, jsonResponse } from "../../openapi";
 
 export function registerListVersionsRoute(app: Hono<AppEnv>) {
   app.get("/:id/versions",
@@ -13,8 +14,8 @@ export function registerListVersionsRoute(app: Hono<AppEnv>) {
       tags: ["Versions"],
       summary: "List versions of an asset",
       responses: {
-        200: { description: "Version list", content: { "application/json": { schema: resolver(versionListResponseSchema) } } },
-        404: { description: "Asset not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        200: jsonResponse("Version list", versionListResponseSchema),
+        404: jsonError("Asset not found"),
       },
     }),
     zValidator("param", idParamSchema),

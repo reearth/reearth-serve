@@ -1,12 +1,13 @@
 import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
-import { resolver, validator as zValidator } from "hono-openapi";
+import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata, uploadVersion } from "../usecase";
 import { canAccessAsset } from "../access";
 import { accessCtx, denyAnonymousUpload, usageScopes } from "./shared";
-import { versionUploadResultResponseSchema, errorResponseSchema, idParamSchema } from "../../../shared/openapi";
+import { versionUploadResultResponseSchema, idParamSchema } from "../../../shared/openapi";
 import { isSafeFilename } from "../../../shared/api";
+import { contentEncodingHeaderParam, contentLengthHeaderParam, filenameHeaderParam, jsonError, jsonResponse, originalSizeHeaderParam, skipExtractionHeaderParam } from "../../openapi";
 
 export function registerUploadVersionRoute(app: Hono<AppEnv>) {
   app.post("/:id",
@@ -15,11 +16,11 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
       summary: "Upload new version to existing asset",
       description: "Upload a new version via streaming body. Same headers as asset upload.",
       parameters: [
-        { name: "X-Filename", in: "header", required: true, schema: { type: "string" }, description: "Filename" },
-        { name: "Content-Length", in: "header", required: true, schema: { type: "integer" }, description: "File size" },
-        { name: "Content-Encoding", in: "header", required: false, schema: { type: "string", enum: ["gzip"] } },
-        { name: "X-Original-Size", in: "header", required: false, schema: { type: "integer" } },
-        { name: "X-Skip-Extraction", in: "header", required: false, schema: { type: "string", enum: ["true"] } },
+        filenameHeaderParam,
+        contentLengthHeaderParam,
+        contentEncodingHeaderParam,
+        originalSizeHeaderParam,
+        skipExtractionHeaderParam,
       ],
       requestBody: {
         required: true,
@@ -27,11 +28,11 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
         content: { "*/*": { schema: { type: "string", format: "binary" } } },
       },
       responses: {
-        201: { description: "Version created", content: { "application/json": { schema: resolver(versionUploadResultResponseSchema) } } },
-        400: { description: "Bad request", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        401: { description: "Anonymous upload disabled, or invalid token / session ID", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        404: { description: "Asset not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        413: { description: "Upload exceeds storage capacity", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        201: jsonResponse("Version created", versionUploadResultResponseSchema),
+        400: jsonError("Bad request"),
+        401: jsonError("Anonymous upload disabled, or invalid token / session ID"),
+        404: jsonError("Asset not found"),
+        413: jsonError("Upload exceeds storage capacity"),
       },
     }),
     zValidator("param", idParamSchema),
