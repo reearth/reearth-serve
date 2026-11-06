@@ -9,9 +9,7 @@ import { legacyThumbKey, versionThumbKey } from "../asset/usecase/shared";
 import { cacheControlFor, etagMatches, representationEtag } from "./caching";
 import { addVary, applyCors, preflightResponse, type CorsPolicy } from "./cors";
 import { handleAuthSubmit } from "../access/form";
-import {
-  accessModeOf, AUTH_PATH_SEGMENT, resolveAccess, type AccessDeps,
-} from "../access/resolve";
+import { AUTH_PATH_SEGMENT, resolveAccess, type AccessDeps } from "../access/resolve";
 import { SITE_PREVIEW_HEADER, type SitePreview } from "../site/middleware";
 import { hostingFor, isControlFile } from "../site/hosting";
 import {
@@ -286,18 +284,32 @@ fileRoutes.post(`/:id/${AUTH_PATH_SEGMENT}`, async (c) => {
   return res ?? c.json({ error: "File not found" }, 404);
 });
 
+/**
+ * The origins a cookie read may be credentialed for: Serve's own and
+ * `CREDENTIALED_ORIGINS`. The own origin comes from `BASE_URL`, never from
+ * `c.req.url`, which reads `http://` behind a TLS-terminating proxy. On a site
+ * host it is `BASE_URL`'s scheme with the request's host.
+ */
+function trustedOrigins(c: Context<AppEnv>): string[] {
+  let base: URL;
+  try {
+    base = new URL(c.get("baseUrl"));
+  } catch {
+    return [...c.get("credentialedOrigins")];
+  }
+  const own = c.get("siteHost")
+    ? `${base.protocol}//${(c.req.header("Host") ?? new URL(c.req.url).host).toLowerCase()}`
+    : base.origin;
+  return [own, ...c.get("credentialedOrigins")];
+}
+
+function corsPolicy(c: Context<AppEnv>, proof: CorsPolicy["proof"]): CorsPolicy {
+  return { proof, origin: c.req.header("Origin") ?? null, trustedOrigins: trustedOrigins(c) };
+}
+
 // Preflight. It carries no credentials and proves nothing, so it is answered
-// without an access check — but the policy it announces still depends on the
-// asset's mode, which costs one metadata read.
-fileRoutes.on("OPTIONS", ["/:id", "/:id/", "/:id/:path{.+}"], async (c) => {
-  // The same resolution the GET route does, so a version-ID URL announces the
-  // policy of the asset it belongs to rather than falling back to public.
-  const resolved = await resolveAssetVersion(c.get("metadata"), c.get("versions"), c.req.param("id"));
-  return preflightResponse(c.req.raw, {
-    protected: !!resolved && accessModeOf(resolved.asset) === "password",
-    origin: c.req.header("Origin") ?? null,
-  });
-});
+// without an access check and without reading the asset (ADR-020 §9 item 4).
+fileRoutes.on("OPTIONS", ["/:id", "/:id/", "/:id/:path{.+}"], (c) => preflightResponse(corsPolicy(c, null)));
 
 // GET /files/:id                 — single-file asset, or an archive's index.html
 // GET /files/:id/:filename       — serve single-file asset
@@ -317,13 +329,12 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
 
   // Thumbnail dispatch (query parameter or _thumbs/ path).
   const thumb = detectThumbRequest(filePath, c.req.query("thumb"));
-  // Errors raised before the asset is known cannot know its mode, so they take
-  // the public policy: they disclose nothing, and a cross-origin caller should
-  // still be able to read the status.
-  const anonymousCors: CorsPolicy = { protected: false, origin: null };
+  // Errors raised before the asset is known carry no proof, so they take the
+  // refusal policy, which discloses nothing about the asset's mode.
+  const refusalCors = corsPolicy(c, null);
   if (thumb === "invalid") {
     const res = c.json({ error: "Invalid thumbnail size" }, 400);
-    applyCors(res.headers, anonymousCors);
+    applyCors(res.headers, refusalCors);
     return res;
   }
 
@@ -331,7 +342,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
   const resolved = await resolveAssetVersion(metadataStore, versions, id);
   if (!resolved) {
     const res = c.json({ error: "File not found" }, 404);
-    applyCors(res.headers, anonymousCors);
+    applyCors(res.headers, refusalCors);
     return res;
   }
 
@@ -343,20 +354,17 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
   // the resolution's own response; only the CORS headers are added to it, so a
   // browser fetch can read the 401 rather than seeing an opaque network error.
   const access = await resolveAccess(asset, c.req.raw, accessDeps(c));
-  const corsPolicy: CorsPolicy = {
-    protected: accessModeOf(asset) === "password",
-    origin: c.req.header("Origin") ?? null,
-  };
   if (access.kind === "challenge") {
-    applyCors(access.response.headers, corsPolicy);
+    applyCors(access.response.headers, refusalCors);
     return access.response;
   }
-  const isProtected = access.protected;
+  const isProtected = access.proof !== "none";
+  const cors = corsPolicy(c, access.proof);
 
   /** Everything that leaves this route goes through here. */
   const decorate = (res: Response): Response => {
     if (isProtected) addVary(res.headers, "Cookie", "Authorization");
-    applyCors(res.headers, corsPolicy);
+    applyCors(res.headers, cors);
     return res;
   };
 

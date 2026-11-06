@@ -81,6 +81,7 @@ function fakeDeps(overrides: Partial<Deps> = {}): Deps {
     siteFallbackOrigin: undefined,
     cache: unused("cache"),
     signingSecret: undefined,
+    credentialedOrigins: [],
     sessions: new MemorySessionStore(),
     sessionTtlSeconds: 60,
     internalApiSecret: undefined,

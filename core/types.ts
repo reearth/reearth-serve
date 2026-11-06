@@ -89,6 +89,11 @@ export type ContextDeps = {
    * the secret went missing from an environment.
    */
   signingSecret: string | undefined;
+  /**
+   * `CREDENTIALED_ORIGINS`, parsed: exact origins, besides Serve's own, that a
+   * cookie-authorized file read answers with credentialed CORS (ADR-020 §9).
+   */
+  credentialedOrigins: readonly string[];
 };
 
 /**

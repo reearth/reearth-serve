@@ -18,6 +18,9 @@ import { RATE_LIMIT_PER_IP } from "./ratelimit";
 
 const PASSWORD = "correct-horse-battery";
 const BROWSER = { Accept: "text/html,application/xhtml+xml" };
+/** The origin of the fixture's `BASE_URL`. */
+const OWN_ORIGIN = "https://example.test";
+const LISTED_ORIGIN = "https://viewer.example.net";
 
 function basic(password: string): Record<string, string> {
   return { Authorization: `Basic ${btoa(`viewer:${password}`)}` };
@@ -113,18 +116,18 @@ describe("the challenge", () => {
 });
 
 describe("Authorization: Basic", () => {
-  test("the right password serves the file, private and credentialed", async () => {
+  test("the right password serves the file, private and never credentialed", async () => {
     const { app } = await protectedFixture();
     const res = await app.request(`/files/${ASSET_ID}`, {
-      headers: { ...basic(PASSWORD), Origin: "https://viewer.example" },
+      headers: { ...basic(PASSWORD), Origin: OWN_ORIGIN },
     });
     expect(res.status).toBe(200);
     expect(await res.text()).toBe(INDEX_HTML);
     // A2's policy, plus `private` (ADR-013 B7).
     expect(res.headers.get("Cache-Control")).toBe("private, max-age=0, must-revalidate");
-    // `*` cannot be combined with credentials, so the origin is echoed.
-    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://viewer.example");
-    expect(res.headers.get("Access-Control-Allow-Credentials")).toBe("true");
+    // Basic is sent on purpose, so it needs no credentialed CORS.
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(res.headers.get("Access-Control-Allow-Credentials")).toBeNull();
     const vary = res.headers.get("Vary") ?? "";
     expect(vary).toContain("Cookie");
     expect(vary).toContain("Authorization");
@@ -359,36 +362,86 @@ describe("every URL form obeys the check", () => {
 });
 
 describe("CORS", () => {
-  test("preflight keeps working for public and protected assets alike", async () => {
-    const { app, metadata } = await siteFixture();
-    const preflight = (id: string) => app.request(`/files/${id}`, {
+  const preflight = (app: TestApp, id: string, origin: string, host?: string) =>
+    app.request(host ? `http://${host}/` : `/files/${id}`, {
       method: "OPTIONS",
-      headers: { Origin: "https://viewer.example", "Access-Control-Request-Method": "GET" },
+      headers: {
+        Origin: origin, "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Headers": "x-anything",
+        ...(host ? { Host: host } : {}),
+      },
     });
 
-    const open = await preflight(ASSET_ID);
-    expect(open.status).toBe(204);
-    expect(open.headers.get("Access-Control-Allow-Origin")).toBe("*");
-    expect(open.headers.get("Access-Control-Allow-Methods")).toContain("GET");
-    expect(open.headers.get("Access-Control-Allow-Credentials")).toBeNull();
-
-    await protect(metadata, ASSET_ID, PASSWORD);
-    const closed = await preflight(ASSET_ID);
-    // A preflight carries no credentials, so it is never challenged — but it
-    // must announce the policy the real request will get.
-    expect(closed.status).toBe(204);
-    expect(closed.headers.get("Access-Control-Allow-Origin")).toBe("https://viewer.example");
-    expect(closed.headers.get("Access-Control-Allow-Credentials")).toBe("true");
-    expect(closed.headers.get("Vary")).toContain("Origin");
+  test("a preflight credentials trusted origins only, whatever the asset's mode", async () => {
+    const { app, metadata } = await siteFixture({ deps: { credentialedOrigins: [LISTED_ORIGIN] } });
+    for (const mode of ["public", "password"]) {
+      if (mode === "password") await protect(metadata, ASSET_ID, PASSWORD);
+      for (const origin of [OWN_ORIGIN, LISTED_ORIGIN]) {
+        const res = await preflight(app, ASSET_ID, origin);
+        expect(res.status).toBe(204);
+        expect(res.headers.get("Access-Control-Allow-Origin")).toBe(origin);
+        expect(res.headers.get("Access-Control-Allow-Credentials")).toBe("true");
+        expect(res.headers.get("Vary")).toContain("Origin");
+      }
+      for (const origin of ["https://evil.example", "null"]) {
+        const res = await preflight(app, ASSET_ID, origin);
+        expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
+        expect(res.headers.get("Access-Control-Allow-Credentials")).toBeNull();
+      }
+      const res = await preflight(app, ASSET_ID, OWN_ORIGIN);
+      // Fixed, not echoed from Access-Control-Request-Headers.
+      expect(res.headers.get("Access-Control-Allow-Headers"))
+        .toBe("range, if-none-match, if-modified-since, authorization");
+      expect(res.headers.get("Access-Control-Max-Age")).toBe("86400");
+    }
   });
 
-  test("a challenge is still readable cross-origin", async () => {
+  test("a cookie read is credentialed for the own origin, and for nobody else", async () => {
+    const { app } = await protectedFixture();
+    const cookie = cookieFrom(
+      await submit(app, `/files/${ASSET_ID}/_serve/auth`, { password: PASSWORD, next: "/" }),
+    );
+    const own = await app.request(`/files/${ASSET_ID}`, { headers: { Cookie: cookie, Origin: OWN_ORIGIN } });
+    expect(own.status).toBe(200);
+    expect(own.headers.get("Access-Control-Allow-Origin")).toBe(OWN_ORIGIN);
+    expect(own.headers.get("Access-Control-Allow-Credentials")).toBe("true");
+    expect(own.headers.get("Vary")).toContain("Origin");
+    expect(own.headers.get("Cross-Origin-Resource-Policy")).toBe("same-origin");
+
+    for (const origin of ["https://evil.example", "null"]) {
+      const res = await app.request(`/files/${ASSET_ID}`, { headers: { Cookie: cookie, Origin: origin } });
+      expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
+      expect(res.headers.get("Access-Control-Allow-Credentials")).toBeNull();
+    }
+  });
+
+  test("on a site host the own origin is BASE_URL's scheme plus the request host", async () => {
+    const { app } = await protectedFixture();
+    const host = `${ASSET_ID}${SUFFIX}`;
+    const posted = await submit(app, `http://${host}/_serve/auth`, { password: PASSWORD, next: "/" }, { Host: host });
+    const cookie = cookieFrom(posted);
+    // The request URL reads http:// (a TLS proxy in front); BASE_URL says https.
+    const ok = await app.request(`http://${host}/`, {
+      headers: { Host: host, Cookie: cookie, Origin: `https://${host}` },
+    });
+    expect(ok.status).toBe(200);
+    expect(ok.headers.get("Access-Control-Allow-Origin")).toBe(`https://${host}`);
+    expect(ok.headers.get("Access-Control-Allow-Credentials")).toBe("true");
+
+    for (const origin of [`http://${host}`, OWN_ORIGIN]) {
+      const res = await app.request(`http://${host}/`, { headers: { Host: host, Cookie: cookie, Origin: origin } });
+      expect(res.headers.get("Access-Control-Allow-Credentials")).toBeNull();
+    }
+  });
+
+  test("a challenge is readable cross-origin, without credentials", async () => {
     const { app } = await protectedFixture();
     const res = await app.request(`/files/${ASSET_ID}`, {
-      headers: { Origin: "https://viewer.example" },
+      headers: { Origin: "https://evil.example" },
     });
     expect(res.status).toBe(401);
-    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("https://viewer.example");
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(res.headers.get("Access-Control-Allow-Credentials")).toBeNull();
   });
 });
 

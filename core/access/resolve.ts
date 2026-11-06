@@ -81,11 +81,18 @@ export interface AccessDeps {
   now?: number;
 }
 
+/**
+ * What a request was allowed on. `none` is a public read. The CORS decision
+ * depends on it: only a cookie, which the browser attaches on its own, is ever
+ * answered with credentialed CORS.
+ */
+export type AccessProof = "none" | "cookie" | "basic";
+
 export type AccessResolution =
-  | { kind: "allow"; protected: boolean; principal?: string }
+  | { kind: "allow"; proof: AccessProof }
   | { kind: "challenge"; response: Response };
 
-const ALLOW_PUBLIC: AccessResolution = { kind: "allow", protected: false };
+const ALLOW_PUBLIC: AccessResolution = { kind: "allow", proof: "none" };
 
 /**
  * Decide whether this request may read this asset's bytes.
@@ -120,7 +127,7 @@ export async function resolveAccess(
     passwordVersion: protection.version,
     now,
   });
-  if (cookieOk) return { kind: "allow", protected: true, principal: "password" };
+  if (cookieOk) return { kind: "allow", proof: "cookie" };
 
   // 2. `Authorization: Basic`. One PBKDF2 per request that uses it, which is
   //    the price of a stateless tool (curl, QGIS, `file cp`) that keeps no
@@ -134,7 +141,7 @@ export async function resolveAccess(
     }
     if (await verifyPassword(submitted, protection)) {
       await clearFailures(deps.kv, asset.id, ip);
-      return { kind: "allow", protected: true, principal: "password" };
+      return { kind: "allow", proof: "basic" };
     }
     await recordFailure(deps.kv, asset.id, ip, now);
   }

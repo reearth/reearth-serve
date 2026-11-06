@@ -3,6 +3,8 @@
  * it can be unit-tested without opening a database or a socket.
  */
 
+import { parseCredentialedOrigins } from "../../core/file/cors";
+
 export type ContainerLauncherKind = "none";
 
 export type ObjectStoreConfig = {
@@ -26,6 +28,8 @@ export type NodeConfig = {
    * refused.
    */
   signingSecret: string | undefined;
+  /** `CREDENTIALED_ORIGINS`, parsed; a malformed entry fails `loadConfig`. */
+  credentialedOrigins: string[];
   anonymousUploadEnabled: boolean;
   assetTtlSeconds: number;
   oidcIssuerUrl: string | undefined;
@@ -71,6 +75,7 @@ export function loadConfig(env: Env): NodeConfig {
     sqlitePath: env.SQLITE_PATH || ":memory:",
     internalApiSecret: env.INTERNAL_API_SECRET || undefined,
     signingSecret: env.SIGNING_SECRET || undefined,
+    credentialedOrigins: parseCredentialedOrigins(env.CREDENTIALED_ORIGINS),
     // Same fail-closed rule as Cloudflare: off unless explicitly "true".
     anonymousUploadEnabled: env.ANONYMOUS_UPLOAD_ENABLED === "true",
     assetTtlSeconds: intOr(env.ASSET_TTL_SECONDS, DEFAULT_ASSET_TTL_SECONDS),

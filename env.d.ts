@@ -28,6 +28,10 @@ interface Env {
   // wrangler secret. Unset ⇒ protected assets answer 503 and protecting one is
   // refused.
   SIGNING_SECRET?: string;
+  // Comma-separated exact origins (besides Serve's own) whose pages may read a
+  // password-protected file with the visitor's cookie, e.g.
+  // "https://viewer.example.com". A path, a wildcard or "null" fails at start.
+  CREDENTIALED_ORIGINS?: string;
   // Extraction settings
   EXTRACTION_STUCK_THRESHOLD_SECONDS?: string;
   // Anonymous (demo-mode) upload toggle. Set to "false" to require login for uploads.

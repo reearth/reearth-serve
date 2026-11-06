@@ -423,6 +423,7 @@ export async function fixture(overrides?: Partial<Deps>) {
     siteFallbackOrigin: undefined,
     cache,
     signingSecret: SIGNING_SECRET,
+    credentialedOrigins: [],
     sessions: new MemorySessionStore(),
     sessionTtlSeconds: 60,
     internalApiSecret: undefined,

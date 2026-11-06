@@ -19,6 +19,7 @@ import { DohDnsResolver } from "../doh/dns";
 import { CloudflareCustomHostnames } from "./custom-hostnames";
 import { NoopProvisioner, type CustomHostnameProvisioner } from "../../core/site/provisioner";
 import { apexHost } from "../../core/site/middleware";
+import { parseCredentialedOrigins } from "../../core/file/cors";
 
 // Anonymous sessions are identity, not content — they must outlive the
 // demo asset TTL. A large multipart upload can take many hours between the
@@ -93,6 +94,7 @@ export function buildDeps(env: Env): Deps {
     // would protect one is refused, rather than minting cookies nobody can
     // verify.
     signingSecret: env.SIGNING_SECRET || undefined,
+    credentialedOrigins: parseCredentialedOrigins(env.CREDENTIALED_ORIGINS),
 
     sessions: new KeyValueSessionStore(kv),
     sessionTtlSeconds: SESSION_TTL_SECONDS,

@@ -59,4 +59,11 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ CONTAINER_LAUNCHER: "docker" })).toThrow(/not supported/);
     expect(loadConfig({ CONTAINER_LAUNCHER: "none" }).containerLauncher).toBe("none");
   });
+
+  test("CREDENTIALED_ORIGINS is parsed, and a malformed entry refuses to start", () => {
+    expect(loadConfig({}).credentialedOrigins).toEqual([]);
+    expect(loadConfig({ CREDENTIALED_ORIGINS: "https://a.example.com,https://b.example.net" }).credentialedOrigins)
+      .toEqual(["https://a.example.com", "https://b.example.net"]);
+    expect(() => loadConfig({ CREDENTIALED_ORIGINS: "https://a.example.com/app" })).toThrow(/CREDENTIALED_ORIGINS/);
+  });
 });

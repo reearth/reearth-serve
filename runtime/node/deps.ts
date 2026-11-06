@@ -114,6 +114,7 @@ export function buildNodeRuntime(env: Env = process.env): NodeRuntime {
     sessionTtlSeconds: SESSION_TTL_SECONDS,
     internalApiSecret: config.internalApiSecret,
     signingSecret: config.signingSecret,
+    credentialedOrigins: config.credentialedOrigins,
     auth: {
       issuer: config.oidcIssuerUrl,
       audience: config.oidcAudience,
