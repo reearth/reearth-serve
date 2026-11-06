@@ -1,11 +1,12 @@
 import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
-import { resolver } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { uploadAsset } from "../usecase";
-import { denyAnonymousUpload, projectIdHeaderParam, resolveUploadProject, usageScopes } from "./shared";
-import { uploadResultResponseSchema, errorResponseSchema } from "../../../shared/openapi";
+import { denyAnonymousUpload, resolveUploadProject, usageScopes } from "./shared";
+import { assetUploadResultExamples } from "../../openapi-examples";
+import { uploadResultResponseSchema } from "../../../shared/openapi";
 import { isSafeFilename } from "../../../shared/api";
+import { contentEncodingHeaderParam, contentLengthHeaderParam, filenameHeaderParam, jsonError, jsonResponse, originalSizeHeaderParam, projectIdHeaderParam, skipExtractionHeaderParam } from "../../openapi";
 
 export function registerUploadRoute(app: Hono<AppEnv>) {
   app.post("/",
@@ -14,11 +15,11 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
       summary: "Upload a file (direct streaming)",
       description: "Upload a file using streaming body. Set filename via X-Filename header.",
       parameters: [
-        { name: "X-Filename", in: "header", required: true, schema: { type: "string" }, description: "Filename of the uploaded file" },
-        { name: "Content-Length", in: "header", required: true, schema: { type: "integer" }, description: "File size in bytes" },
-        { name: "Content-Encoding", in: "header", required: false, schema: { type: "string", enum: ["gzip"] }, description: "Set to 'gzip' for pre-compressed uploads" },
-        { name: "X-Original-Size", in: "header", required: false, schema: { type: "integer" }, description: "Original uncompressed size (when Content-Encoding: gzip)" },
-        { name: "X-Skip-Extraction", in: "header", required: false, schema: { type: "string", enum: ["true"] }, description: "Skip archive extraction" },
+        filenameHeaderParam,
+        contentLengthHeaderParam,
+        contentEncodingHeaderParam,
+        originalSizeHeaderParam,
+        skipExtractionHeaderParam,
         projectIdHeaderParam,
       ],
       requestBody: {
@@ -27,11 +28,11 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
         content: { "*/*": { schema: { type: "string", format: "binary" } } },
       },
       responses: {
-        201: { description: "Upload result", content: { "application/json": { schema: resolver(uploadResultResponseSchema) } } },
-        400: { description: "Bad request (missing/invalid headers, or X-Project-Id missing for an authenticated caller)", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        401: { description: "Anonymous upload disabled, or invalid token / session ID", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        404: { description: "Project not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-        413: { description: "Upload exceeds storage capacity", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        201: jsonResponse("Upload result", uploadResultResponseSchema, assetUploadResultExamples),
+        400: jsonError("Bad request (missing/invalid headers, or X-Project-Id missing for an authenticated caller)"),
+        401: jsonError("Anonymous upload disabled, or invalid token / session ID"),
+        404: jsonError("Project not found"),
+        413: jsonError("Upload exceeds storage capacity"),
       },
     }),
     async (c) => {

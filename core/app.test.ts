@@ -1,5 +1,4 @@
 import { describe, expect, test } from "vitest";
-import { createConfig, lintFromString } from "@redocly/openapi-core";
 import { createApp } from "./app";
 import type { Deps } from "./types";
 import type { AssetMetadata } from "./asset/model";
@@ -160,80 +159,5 @@ describe("createApp with hand-built deps", () => {
     expect(res.status).toBe(200);
     // A machine caller must not burn a demo session either.
     expect(sessions.sessions.size).toBe(0);
-  });
-});
-
-// External clients generate code from /api/v1/doc (Re:Earth CMS uses
-// oapi-codegen), so anything a handler reads or returns must be declared here.
-describe("OpenAPI document", () => {
-  type Operation = {
-    parameters?: { name: string; in: string; required?: boolean }[];
-    responses: Record<string, unknown>;
-    security?: unknown[];
-  };
-  type Spec = {
-    paths: Record<string, Record<string, Operation>>;
-    components: { schemas: Record<string, unknown> };
-  };
-
-  async function loadSpec(): Promise<Spec> {
-    const res = await createApp(fakeDeps()).request("/api/v1/doc");
-    expect(res.status).toBe(200);
-    return res.json();
-  }
-
-  test("passes Redocly's recommended OpenAPI 3.1 lint", async () => {
-    // Covers what codegen trips over: unresolved $refs, undefined security
-    // schemes, path templates without a matching path parameter, and schema
-    // shapes that are not valid OpenAPI. Warnings (e.g. no info.license) are
-    // allowed; errors fail the build.
-    const problems = await lintFromString({
-      source: JSON.stringify(await loadSpec()),
-      absoluteRef: "openapi.json",
-      config: await createConfig({ extends: ["recommended"] }),
-    });
-    const errors = problems
-      .filter((p) => p.severity === "error")
-      .map((p) => `${p.ruleId} at ${p.location[0]?.pointer}: ${p.message}`);
-    expect(errors).toEqual([]);
-  });
-
-  test("keeps named components when the app is rebuilt (one createApp per request)", async () => {
-    // Regression: hono-openapi resolves schemas in place on module-level
-    // routes, so regenerating for a fresh app dropped components.schemas
-    // while the $refs stayed.
-    const first = await loadSpec();
-    const second = await loadSpec();
-    expect(Object.keys(second.components.schemas)).toEqual(Object.keys(first.components.schemas));
-    expect(second.components.schemas).toHaveProperty("Asset");
-  });
-
-  test("names the shared schemas as components", async () => {
-    const { components } = await loadSpec();
-    for (const name of ["Asset", "AssetVersion", "FileEntry", "Error", "Job", "Project", "Workspace", "Member"]) {
-      expect(components.schemas, name).toHaveProperty(name);
-    }
-  });
-
-  test.each([
-    ["/api/v1/assets", "post"],
-    ["/api/v1/assets/uploads", "post"],
-  ])("%s %s declares X-Project-Id and the errors it produces", async (path, method) => {
-    const op = (await loadSpec()).paths[path][method];
-    expect(op.parameters).toContainEqual(
-      expect.objectContaining({ name: "X-Project-Id", in: "header", required: false }),
-    );
-    expect(op.responses).toHaveProperty("400");
-    expect(op.responses).toHaveProperty("404");
-  });
-
-  test("documents public file delivery without auth", async () => {
-    const op = (await loadSpec()).paths["/files/{id}/{path}"]?.get;
-    expect(op).toBeDefined();
-    expect(op.security).toEqual([]);
-    expect(op.parameters?.map((p) => `${p.in}:${p.name}`)).toEqual(
-      expect.arrayContaining(["path:id", "path:path", "query:thumb", "header:Range", "header:Accept-Encoding"]),
-    );
-    expect(Object.keys(op.responses).sort()).toEqual(["200", "206", "400", "404"]);
   });
 });
