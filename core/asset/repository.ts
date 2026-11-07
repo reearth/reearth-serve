@@ -6,22 +6,24 @@ export interface ListResult<T> {
   cursor?: string;
 }
 
+export type ListScope =
+  | { kind: "session"; sessionId: string }
+  | { kind: "project"; projectId: string }
+  | { kind: "workspace"; workspaceId: string }
+  | { kind: "visible"; workspaceIds: readonly string[]; ownerId: string };
+
+export interface ListOptions {
+  scope: ListScope;
+  limit?: number;
+  cursor?: string;
+}
+
 export interface MetadataStore {
   save(asset: AssetMetadata, ttlSeconds: number): Promise<void>;
   find(id: string): Promise<AssetMetadata | null>;
   update(id: string, patch: { activeVersionId?: string | null; expiresAt?: number; description?: string; userMeta?: Record<string, unknown> }): Promise<void>;
   delete(id: string): Promise<void>;
-  // scope exactly one of: sessionId, projectId, workspaceId (caller-verified
-  // membership), or accessibleByUser (membership-driven across all workspaces).
-  // Unscoped calls return an empty result — use a scope explicitly.
-  list(options?: {
-    limit?: number;
-    cursor?: string;
-    sessionId?: string;
-    projectId?: string;
-    workspaceId?: string;
-    accessibleByUser?: string;
-  }): Promise<ListResult<AssetMetadata>>;
+  list(options: ListOptions): Promise<ListResult<AssetMetadata>>;
 }
 
 export interface VersionStore {

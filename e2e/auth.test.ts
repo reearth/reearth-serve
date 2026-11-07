@@ -204,15 +204,15 @@ describe("project API (requires auth)", { skip: !mockOidcAvailable }, () => {
     });
   });
 
-  describe("workspace privilege boundaries", () => {
-    async function api(token: string, method: string, path: string, body?: unknown) {
-      return fetch(`${BASE}/api/v1${path}`, {
-        method,
-        headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
-        body: body === undefined ? undefined : JSON.stringify(body),
-      });
-    }
+  async function api(token: string, method: string, path: string, body?: unknown) {
+    return fetch(`${BASE}/api/v1${path}`, {
+      method,
+      headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+  }
 
+  describe("workspace privilege boundaries", () => {
     async function workspaceWithAdmin() {
       const suffix = crypto.randomUUID().slice(0, 8);
       const ownerToken = await signToken({ sub: `ws-owner-${suffix}` });
@@ -241,7 +241,7 @@ describe("project API (requires auth)", { skip: !mockOidcAvailable }, () => {
       expect((await api(adminToken, "PATCH", `/workspaces/${ws}/members/ed-${suffix}`, { role: "viewer" })).status).toBe(200);
     });
 
-    test("project creation requires project:create in the target workspace", async () => {
+    test("project creation requires create_project in the target workspace", async () => {
       const { ws, ownerToken, suffix } = await workspaceWithAdmin();
       const outsider = await signToken({ sub: `outsider-${suffix}` });
       expect((await api(outsider, "POST", "/projects", { name: "planted", workspaceId: ws })).status).toBe(404);
@@ -251,6 +251,174 @@ describe("project API (requires auth)", { skip: !mockOidcAvailable }, () => {
       expect((await api(viewer, "POST", "/projects", { name: "nope", workspaceId: ws })).status).toBe(403);
 
       expect((await api(ownerToken, "POST", "/projects", { name: "ok", workspaceId: ws })).status).toBe(201);
+    });
+
+    test("a workspace with projects cannot be deleted until its projects are", async () => {
+      const { ws, ownerToken } = await workspaceWithAdmin();
+      const created = await api(ownerToken, "POST", "/projects", { name: "blocker", workspaceId: ws });
+      const { project } = await created.json() as { project: { id: string } };
+
+      const refused = await api(ownerToken, "DELETE", `/workspaces/${ws}`);
+      expect(refused.status).toBe(409);
+      expect(await refused.json()).toEqual({ error: "Workspace still has projects" });
+      expect((await api(ownerToken, "GET", `/workspaces/${ws}`)).status).toBe(200);
+
+      expect((await api(ownerToken, "DELETE", `/projects/${project.id}`)).status).toBe(204);
+      expect((await api(ownerToken, "DELETE", `/workspaces/${ws}`)).status).toBe(204);
+      expect((await api(ownerToken, "GET", `/workspaces/${ws}`)).status).toBe(404);
+    });
+  });
+
+  describe("workspace project roles", () => {
+    const ROLES = ["owner", "admin", "editor", "viewer"] as const;
+    type Role = (typeof ROLES)[number];
+
+    async function workspaceWithRoles() {
+      const suffix = crypto.randomUUID().slice(0, 8);
+      const tokens = {} as Record<Role, string>;
+      for (const role of ROLES) tokens[role] = await signToken({ sub: `${role}-${suffix}` });
+      const res = await api(tokens.owner, "POST", "/workspaces", { name: `roles-${suffix}` });
+      const { workspace } = await res.json() as { workspace: { id: string } };
+      for (const role of ROLES.filter((r) => r !== "owner")) {
+        expect((await api(tokens.owner, "POST", `/workspaces/${workspace.id}/members`, { userId: `${role}-${suffix}`, role })).status).toBe(201);
+      }
+      return { ws: workspace.id, tokens };
+    }
+
+    async function workspaceProject(token: string, ws: string): Promise<string> {
+      const res = await api(token, "POST", "/projects", { name: "roles", workspaceId: ws });
+      expect(res.status).toBe(201);
+      return ((await res.json()) as { project: { id: string } }).project.id;
+    }
+
+    test("owner, admin and editor upload into a workspace project; viewer gets 404", async () => {
+      const { ws, tokens } = await workspaceWithRoles();
+      const projectId = await workspaceProject(tokens.owner, ws);
+      const expected: Record<Role, number> = { owner: 201, admin: 201, editor: 201, viewer: 404 };
+      const content = new TextEncoder().encode('{"role":true}');
+      for (const role of ROLES) {
+        const { status } = await uploadFileWithAuth(content, `${role}.json`, "application/json", tokens[role], projectId);
+        expect(status, role).toBe(expected[role]);
+      }
+    });
+
+    test("owner, admin and editor update a workspace project's asset; viewer gets 404", async () => {
+      const { ws, tokens } = await workspaceWithRoles();
+      const projectId = await workspaceProject(tokens.owner, ws);
+      const { body } = await uploadFileWithAuth(new TextEncoder().encode("{}"), "a.json", "application/json", tokens.owner, projectId);
+      const expected: Record<Role, number> = { owner: 200, admin: 200, editor: 200, viewer: 404 };
+      for (const role of ROLES) {
+        const res = await api(tokens[role], "PATCH", `/assets/${body.asset.id}`, { description: role });
+        expect(res.status, role).toBe(expected[role]);
+      }
+    });
+
+    test("only the workspace owner deletes a workspace project; others get 404", async () => {
+      const { ws, tokens } = await workspaceWithRoles();
+      const expected: Record<Role, number> = { owner: 204, admin: 404, editor: 404, viewer: 404 };
+      for (const role of ROLES) {
+        const projectId = await workspaceProject(tokens.owner, ws);
+        expect((await api(tokens[role], "DELETE", `/projects/${projectId}`)).status, role).toBe(expected[role]);
+        expect((await api(tokens.owner, "GET", `/projects/${projectId}`)).status, role).toBe(expected[role] === 204 ? 404 : 200);
+      }
+    });
+
+    test("an admin who created a workspace project gets 404 on its delete; the owner gets 204", async () => {
+      const { ws, tokens } = await workspaceWithRoles();
+      const projectId = await workspaceProject(tokens.admin, ws);
+      expect((await api(tokens.admin, "DELETE", `/projects/${projectId}`)).status).toBe(404);
+      expect((await api(tokens.owner, "DELETE", `/projects/${projectId}`)).status).toBe(204);
+    });
+  });
+
+  describe("list scopes", () => {
+    async function ids(token: string, path: string, key: "assets" | "jobs" | "projects"): Promise<string[]> {
+      const res = await api(token, "GET", path);
+      expect(res.status).toBe(200);
+      const body = await res.json() as Record<string, { id: string }[]>;
+      return body[key].map((item) => item.id);
+    }
+
+    async function upload(token: string, projectId: string): Promise<string> {
+      const { status, body } = await uploadFileWithAuth(new TextEncoder().encode("{}"), "a.json", "application/json", token, projectId);
+      expect(status).toBe(201);
+      return body.asset.id;
+    }
+
+    async function archiveJob(token: string, projectId: string): Promise<string> {
+      const { status, body } = await uploadFileWithAuth(new TextEncoder().encode("PK\x03\x04"), "a.zip", "application/zip", token, projectId);
+      expect(status).toBe(201);
+      return body.asset.jobId;
+    }
+
+    async function workspaceProject(token: string, name: string): Promise<{ workspaceId: string; projectId: string }> {
+      const { workspace } = await (await api(token, "POST", "/workspaces", { name })).json() as { workspace: { id: string } };
+      const res = await api(token, "POST", "/projects", { name, workspaceId: workspace.id });
+      expect(res.status).toBe(201);
+      const { project } = await res.json() as { project: { id: string } };
+      return { workspaceId: workspace.id, projectId: project.id };
+    }
+
+    test("assets include the caller's ownerless projects and workspace projects, not another user's", async () => {
+      const suffix = crypto.randomUUID().slice(0, 8);
+      const me = await signToken({ sub: `lister-${suffix}` });
+      const other = await signToken({ sub: `other-${suffix}` });
+      const { workspace } = await (await api(me, "POST", "/workspaces", { name: `list-${suffix}` })).json() as { workspace: { id: string } };
+      const created = await api(me, "POST", "/projects", { name: "ws", workspaceId: workspace.id });
+      const { project: wsProject } = await created.json() as { project: { id: string } };
+
+      const wsAsset = await upload(me, wsProject.id);
+      const soloAsset = await upload(me, await createProjectForAuth(me));
+      const foreignAsset = await upload(other, await createProjectForAuth(other));
+
+      const listed = await ids(me, "/assets?limit=100", "assets");
+      expect(listed.sort()).toEqual([soloAsset, wsAsset].sort());
+      expect(listed).not.toContain(foreignAsset);
+    });
+
+    test("a workspace-scoped asset list leaves out the caller's ownerless and other-workspace assets", async () => {
+      const suffix = crypto.randomUUID().slice(0, 8);
+      const me = await signToken({ sub: `ws-lister-${suffix}` });
+      const a = await workspaceProject(me, `a-${suffix}`);
+      const b = await workspaceProject(me, `b-${suffix}`);
+      const inA = await upload(me, a.projectId);
+      await upload(me, b.projectId);
+      await upload(me, await createProjectForAuth(me));
+
+      expect(await ids(me, `/assets?workspaceId=${a.workspaceId}&limit=100`, "assets")).toEqual([inA]);
+    });
+
+    test("unscoped jobs include the caller's workspace and ownerless jobs, not another user's", async () => {
+      const suffix = crypto.randomUUID().slice(0, 8);
+      const me = await signToken({ sub: `job-lister-${suffix}` });
+      const other = await signToken({ sub: `job-other-${suffix}` });
+      const { projectId } = await workspaceProject(me, `jobs-${suffix}`);
+      const wsJob = await archiveJob(me, projectId);
+      const soloJob = await archiveJob(me, await createProjectForAuth(me));
+      const foreignJob = await archiveJob(other, await createProjectForAuth(other));
+
+      const listed = await ids(me, "/jobs?limit=100", "jobs");
+      expect(listed.sort()).toEqual([soloJob, wsJob].sort());
+      expect(listed).not.toContain(foreignJob);
+    });
+
+    test("a creator removed from the workspace loses its project and assets from the lists", async () => {
+      const suffix = crypto.randomUUID().slice(0, 8);
+      const owner = await signToken({ sub: `ws-owner-${suffix}` });
+      const creator = await signToken({ sub: `creator-${suffix}` });
+      const { workspace } = await (await api(owner, "POST", "/workspaces", { name: `rm-${suffix}` })).json() as { workspace: { id: string } };
+      expect((await api(owner, "POST", `/workspaces/${workspace.id}/members`, { userId: `creator-${suffix}`, role: "admin" })).status).toBe(201);
+      const created = await api(creator, "POST", "/projects", { name: "left-behind", workspaceId: workspace.id });
+      const { project } = await created.json() as { project: { id: string } };
+      const assetId = await upload(creator, project.id);
+
+      expect(await ids(creator, "/projects", "projects")).toEqual([project.id]);
+      expect(await ids(creator, "/assets", "assets")).toEqual([assetId]);
+
+      expect((await api(owner, "DELETE", `/workspaces/${workspace.id}/members/creator-${suffix}`)).status).toBe(204);
+      expect((await api(creator, "GET", `/projects/${project.id}`)).status).toBe(404);
+      expect(await ids(creator, "/projects", "projects")).toEqual([]);
+      expect(await ids(creator, "/assets", "assets")).toEqual([]);
     });
   });
 });

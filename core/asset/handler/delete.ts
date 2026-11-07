@@ -1,11 +1,11 @@
 import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
-import { resolver, validator as zValidator } from "hono-openapi";
+import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata, deleteAsset } from "../usecase";
-import { canAccessAsset } from "../access";
-import { accessCtx } from "./shared";
-import { errorResponseSchema, idParamSchema } from "../../../shared/openapi";
+import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
+import { idParamSchema } from "../../../shared/openapi";
+import { jsonError } from "../../openapi";
 
 export function registerDeleteRoute(app: Hono<AppEnv>) {
   app.delete("/:id",
@@ -14,7 +14,7 @@ export function registerDeleteRoute(app: Hono<AppEnv>) {
       summary: "Delete asset",
       responses: {
         204: { description: "Asset deleted" },
-        404: { description: "Asset not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        404: jsonError("Asset not found"),
       },
     }),
     zValidator("param", idParamSchema),
@@ -22,10 +22,9 @@ export function registerDeleteRoute(app: Hono<AppEnv>) {
       const metadata = c.get("metadata");
       const { id } = c.req.valid("param");
 
-      const asset = await getAssetMetadata(metadata, id);
-      if (!asset || !await canAccessAsset(asset, accessCtx(c), "delete")) {
-        return c.json({ error: "Asset not found" }, 404);
-      }
+      const access = await authorizeAsset(accessCtx(c), await getAssetMetadata(metadata, id), "delete_asset");
+      if (!access.ok) return deniedResponse(c, access, { notFound: "Asset not found" });
+      const asset = access.value;
 
       const scopes: string[] = [];
       if (asset.projectId) {

@@ -136,7 +136,7 @@ Set via `npx wrangler secret put <NAME>`:
 | `R2_BUCKET_NAME` | Yes* | R2 bucket name |
 | `OIDC_ISSUER_URL` | No | OIDC Issuer URL for JWT authentication |
 | `OIDC_AUDIENCE` | No | JWT audience claim for token validation |
-| `CERBOS_ENDPOINT` | No | Cerbos PDP endpoint URL for authorization |
+| `CERBOS_ENDPOINT` | No | Cerbos PDP endpoint URL (http or https) for authorization; starting policies in `docs/examples/cerbos/`. An outage answers 503 with `Retry-After: 5`. An invalid value stops Node at startup; on Workers every `/api/` and `/files` request answers `500`. |
 
 \* Required for presigned URL uploads and archive extraction containers.
 

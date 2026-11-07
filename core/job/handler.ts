@@ -1,25 +1,14 @@
 import { Hono } from "hono";
-import type { Context } from "hono";
 import { describeRoute } from "hono-openapi";
-import { resolver, validator as zValidator } from "hono-openapi";
+import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../types";
-import { canAccessJob, canAccessProject, type AccessContext } from "../asset/access";
+import { accessCtx, authorizeJob, authorizeProject, authorizeWorkspace, deniedResponse } from "../auth/access";
 import {
-  jobResponseSchema, jobListResponseSchema, errorResponseSchema,
-  idParamSchema, scopedListQuerySchema,
+  jobResponseSchema, jobListResponseSchema, idParamSchema, scopedListQuerySchema,
 } from "../../shared/openapi";
 import { jobSchema } from "../../shared/api";
 import { extractionMessageForJob } from "../extraction/handler";
-
-function accessCtx(c: Context<AppEnv>): AccessContext {
-  return {
-    sessionId: c.get("sessionId"),
-    user: c.get("user"),
-    authorizer: c.get("authorizer"),
-    members: c.get("members"),
-    projects: c.get("projects"),
-  };
-}
+import { jsonError, jsonResponse } from "../openapi";
 
 // --- Public API routes (mounted at /api/v1/jobs) ---
 
@@ -31,8 +20,8 @@ jobRoutes.get("/",
     summary: "List jobs",
     description: "Anonymous callers see their own session's jobs. Authenticated callers see jobs in projects they have access to; narrow with ?projectId or ?workspaceId.",
     responses: {
-      200: { description: "Job list", content: { "application/json": { schema: resolver(jobListResponseSchema) } } },
-      404: { description: "Scope not accessible", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      200: jsonResponse("Job list", jobListResponseSchema),
+      404: jsonError("Scope not accessible"),
     },
   }),
   zValidator("query", scopedListQuerySchema),
@@ -45,27 +34,26 @@ jobRoutes.get("/",
 
     if (!user) {
       if (!sessionId) return c.json({ jobs: [], cursor: undefined });
-      const result = await jobs.list({ limit, cursor, sessionId });
+      const result = await jobs.list({ limit, cursor, scope: { kind: "session", sessionId } });
       return c.json({ jobs: result.items, cursor: result.cursor });
     }
 
     if (projectId) {
-      if (!await canAccessProject(accessCtx(c), projectId, "read")) {
-        return c.json({ error: "Project not found" }, 404);
-      }
-      const result = await jobs.list({ limit, cursor, projectId });
+      const access = await authorizeProject(accessCtx(c), projectId, "read_job");
+      if (!access.ok) return deniedResponse(c, access, { notFound: "Project not found" });
+      const result = await jobs.list({ limit, cursor, scope: { kind: "project", projectId } });
       return c.json({ jobs: result.items, cursor: result.cursor });
     }
 
     if (workspaceId) {
-      const members = c.get("members");
-      const member = await members.find(workspaceId, user.sub);
-      if (!member) return c.json({ error: "Workspace not found" }, 404);
-      const result = await jobs.list({ limit, cursor, workspaceId });
+      const access = await authorizeWorkspace(accessCtx(c), workspaceId, "read");
+      if (!access.ok) return deniedResponse(c, access, { notFound: "Workspace not found" });
+      const result = await jobs.list({ limit, cursor, scope: { kind: "workspace", workspaceId } });
       return c.json({ jobs: result.items, cursor: result.cursor });
     }
 
-    const result = await jobs.list({ limit, cursor, accessibleByUser: user.sub });
+    const workspaceIds = (await c.get("tenancy").members.listForCaller()).map((m) => m.workspaceId);
+    const result = await jobs.list({ limit, cursor, scope: { kind: "visible", workspaceIds, ownerId: user.id } });
     return c.json({ jobs: result.items, cursor: result.cursor });
   },
 );
@@ -75,19 +63,17 @@ jobRoutes.get("/:id",
     tags: ["Jobs"],
     summary: "Get job progress",
     responses: {
-      200: { description: "Job details", content: { "application/json": { schema: resolver(jobSchema) } } },
-      404: { description: "Job not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      200: jsonResponse("Job details", jobSchema),
+      404: jsonError("Job not found"),
     },
   }),
   zValidator("param", idParamSchema),
   async (c) => {
     const jobs = c.get("jobs");
     const { id } = c.req.valid("param");
-    const job = await jobs.find(id);
-    if (!job || !await canAccessJob(job, accessCtx(c))) {
-      return c.json({ error: "Job not found" }, 404);
-    }
-    return c.json(job);
+    const access = await authorizeJob(accessCtx(c), await jobs.find(id), "read_job");
+    if (!access.ok) return deniedResponse(c, access, { notFound: "Job not found" });
+    return c.json(access.value);
   },
 );
 
@@ -96,19 +82,18 @@ jobRoutes.post("/:id/retry",
     tags: ["Jobs"],
     summary: "Retry a stalled job",
     responses: {
-      200: { description: "Job restarted", content: { "application/json": { schema: resolver(jobSchema) } } },
-      400: { description: "Job already completed", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
-      404: { description: "Job not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      200: jsonResponse("Job restarted", jobSchema),
+      400: jsonError("Job already completed"),
+      404: jsonError("Job not found"),
     },
   }),
   zValidator("param", idParamSchema),
   async (c) => {
     const jobs = c.get("jobs");
     const { id } = c.req.valid("param");
-    const job = await jobs.find(id);
-    if (!job || !await canAccessJob(job, accessCtx(c), "retry")) {
-      return c.json({ error: "Job not found" }, 404);
-    }
+    const access = await authorizeJob(accessCtx(c), await jobs.find(id), "retry_job");
+    if (!access.ok) return deniedResponse(c, access, { notFound: "Job not found" });
+    const job = access.value;
     if (job.status === "completed") {
       return c.json({ error: "Job already completed" }, 400);
     }

@@ -1,8 +1,8 @@
 import { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
-import { resolver } from "hono-openapi";
 import type { AppEnv } from "../types";
-import { meResponseSchema, errorResponseSchema } from "../../shared/openapi";
+import { meResponseSchema } from "../../shared/openapi";
+import { jsonError, jsonResponse } from "../openapi";
 
 export const meRoutes = new Hono<AppEnv>();
 
@@ -11,8 +11,8 @@ meRoutes.get("/",
     tags: ["Auth"],
     summary: "Get current user info",
     responses: {
-      200: { description: "User info and workspaces", content: { "application/json": { schema: resolver(meResponseSchema) } } },
-      401: { description: "Authentication required", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+      200: jsonResponse("User info and workspaces", meResponseSchema),
+      401: jsonError("Authentication required"),
     },
   }),
   async (c) => {
@@ -21,10 +21,9 @@ meRoutes.get("/",
       return c.json({ error: "Authentication required" }, 401);
     }
 
-    const members = c.get("members");
-    const workspaceStore = c.get("workspaces");
+    const { members, workspaces: workspaceStore } = c.get("tenancy");
 
-    const memberEntries = await members.listByUser(user.sub);
+    const memberEntries = await members.listForCaller();
 
     // Fetch workspaces in parallel — sequential N+1 multiplied D1 round-trip
     // latency by the membership count, which got expensive for users in many

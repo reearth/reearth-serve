@@ -11,6 +11,20 @@ describe("loadConfig", () => {
     expect(config.containerLauncher).toBe("none");
   });
 
+  test("without CERBOS_ENDPOINT the local directory and the policy table decide", () => {
+    expect(loadConfig({}).tenancy).toEqual({ kind: "local" });
+    expect(loadConfig({ CERBOS_ENDPOINT: "" }).tenancy).toEqual({ kind: "local" });
+  });
+
+  test("CERBOS_ENDPOINT selects Cerbos, and a value that is not an http(s) URL fails naming the setting", () => {
+    expect(loadConfig({ CERBOS_ENDPOINT: "http://localhost:3592" }).tenancy).toEqual({
+      kind: "cerbos",
+      endpoint: "http://localhost:3592",
+    });
+    expect(() => loadConfig({ CERBOS_ENDPOINT: "localhost:3592" })).toThrow(/CERBOS_ENDPOINT/);
+    expect(() => loadConfig({ CERBOS_ENDPOINT: "not a url" })).toThrow(/CERBOS_ENDPOINT/);
+  });
+
   test("BASE_URL defaults to the configured port, not the default one", () => {
     expect(loadConfig({ PORT: "9000" }).baseUrl).toBe("http://localhost:9000");
     expect(loadConfig({ PORT: "9000", BASE_URL: "https://x.test" }).baseUrl).toBe("https://x.test");

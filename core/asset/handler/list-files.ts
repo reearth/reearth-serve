@@ -3,19 +3,20 @@ import { describeRoute } from "hono-openapi";
 import { resolver, validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata } from "../usecase";
-import { canAccessAsset } from "../access";
-import { accessCtx } from "./shared";
-import { errorResponseSchema, fileEntrySchema, idParamSchema, fileListQuerySchema } from "../../../shared/openapi";
+import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
+import { fileListExamples } from "../../openapi-examples";
+import { fileEntrySchema, idParamSchema, fileListQuerySchema } from "../../../shared/openapi";
+import { jsonError } from "../../openapi";
 
 export function registerListFilesRoute(app: Hono<AppEnv>) {
   app.get("/:id/files",
     describeRoute({
       tags: ["Assets"],
       summary: "List files in asset (NDJSON stream)",
-      description: "Returns a stream of newline-delimited JSON. Each line is a file entry object.",
+      description: "Returns a stream of newline-delimited JSON (`application/x-ndjson`): one `FileEntry` object per line, each terminated by `\\n`. The schema below describes a single line. Read the body line by line rather than as one JSON document.",
       responses: {
-        200: { description: "NDJSON stream of file entries", content: { "application/x-ndjson": { schema: resolver(fileEntrySchema) } } },
-        404: { description: "Asset not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        200: { description: "NDJSON stream of file entries", content: { "application/x-ndjson": { schema: resolver(fileEntrySchema), examples: fileListExamples } } },
+        404: jsonError("Asset not found"),
       },
     }),
     zValidator("param", idParamSchema),
@@ -27,10 +28,9 @@ export function registerListFilesRoute(app: Hono<AppEnv>) {
       const { prefix: prefixParam } = c.req.valid("query");
       const prefix = prefixParam || "";
 
-    const asset = await getAssetMetadata(metadata, id);
-    if (!asset || !await canAccessAsset(asset, accessCtx(c))) {
-      return c.json({ error: "Asset not found" }, 404);
-    }
+    const access = await authorizeAsset(accessCtx(c), await getAssetMetadata(metadata, id), "read_asset");
+    if (!access.ok) return deniedResponse(c, access, { notFound: "Asset not found" });
+    const asset = access.value;
 
     // Body framing is the runtime's business, not ours: an explicit
     // `Transfer-Encoding: chunked` next to the empty-string bodies below makes

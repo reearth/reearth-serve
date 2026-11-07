@@ -2,6 +2,7 @@
  * Environment parsing for the Node runtime, kept separate from the wiring so
  * it can be unit-tested without opening a database or a socket.
  */
+import { parseTenancyConfig, type TenancyConfig } from "../../adapters/tenancy";
 
 export type ContainerLauncherKind = "none";
 
@@ -23,6 +24,7 @@ export type NodeConfig = {
   assetTtlSeconds: number;
   oidcIssuerUrl: string | undefined;
   oidcAudience: string | undefined;
+  tenancy: TenancyConfig;
   /**
    * Parsed `OBJECT_STORE_*`. Reserved for the S3 adapter; until that exists the
    * runtime logs and falls back to in-process storage when it is set.
@@ -51,6 +53,7 @@ export function loadConfig(env: Env): NodeConfig {
     assetTtlSeconds: intOr(env.ASSET_TTL_SECONDS, DEFAULT_ASSET_TTL_SECONDS),
     oidcIssuerUrl: env.OIDC_ISSUER_URL || undefined,
     oidcAudience: env.OIDC_AUDIENCE || undefined,
+    tenancy: parseTenancyConfig(env),
     objectStore: objectStore(env),
     containerLauncher: containerLauncher(env.CONTAINER_LAUNCHER),
   };

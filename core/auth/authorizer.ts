@@ -1,64 +1,121 @@
-export interface AuthzRequest {
-  principal: { id: string; roles: string[] };
-  resource: { kind: string; id: string; attr?: Record<string, unknown> };
-  action: string;
+import type { Role } from "../../shared/api";
+import type { ProjectAction, WorkspaceAction } from "./permissions";
+import { TenancyUnavailableError } from "../tenancy/port";
+
+type Principal = {
+  id: string;
+  role: Role;
+};
+
+export type AuthzRequest =
+  | {
+      principal: Principal;
+      workspaceId: string;
+      resource: { kind: "workspace" };
+      action: WorkspaceAction;
+    }
+  | {
+      principal: Principal;
+      workspaceId: string;
+      resource: { kind: "project"; projectId: string };
+      action: ProjectAction;
+    };
+
+export function isWorkspaceRequest(req: AuthzRequest): req is Extract<AuthzRequest, { resource: { kind: "workspace" } }> {
+  return req.resource.kind === "workspace";
 }
 
 export interface Authorizer {
   check(req: AuthzRequest): Promise<boolean>;
 }
 
-// Cerbos PDP runs in the request hot path. A short timeout makes us fail fast
-// when the PDP is degraded instead of stalling every authenticated request to
-// the 30s Worker subrequest cap.
 const CERBOS_TIMEOUT_MS = 3000;
 
-/**
- * CerbosAuthorizer sends authorization requests to an external Cerbos PDP.
- */
 export class CerbosAuthorizer implements Authorizer {
   constructor(private endpoint: string, private timeoutMs: number = CERBOS_TIMEOUT_MS) {}
 
   async check(req: AuthzRequest): Promise<boolean> {
-    const body = {
-      principal: {
-        id: req.principal.id,
-        roles: req.principal.roles,
-      },
-      resource: {
-        kind: req.resource.kind,
-        id: req.resource.id,
-        attr: req.resource.attr ?? {},
-      },
-      actions: [req.action],
-    };
+    const id = req.resource.kind === "workspace" ? req.workspaceId : req.resource.projectId;
+    try {
+      const res = await fetch(`${this.endpoint}/api/check/resources`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          principal: { id: req.principal.id, roles: [req.principal.role] },
+          resources: [
+            {
+              resource: { kind: req.resource.kind, id, attr: { workspaceId: req.workspaceId } },
+              actions: [req.action],
+            },
+          ],
+        }),
+        signal: AbortSignal.timeout(this.timeoutMs),
+      });
+      if (!res.ok) throw new TenancyUnavailableError(`Cerbos check failed: ${res.status}`);
+      return effectOf(await res.json(), req.action) === "EFFECT_ALLOW";
+    } catch (cause) {
+      if (cause instanceof TenancyUnavailableError) throw cause;
+      throw new TenancyUnavailableError("Cerbos did not answer a decision", { cause });
+    }
+  }
+}
 
-    const res = await fetch(`${this.endpoint}/api/check/resources`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        principal: body.principal,
-        resources: [
-          {
-            resource: { kind: body.resource.kind, id: body.resource.id, attr: body.resource.attr },
-            actions: body.actions,
-          },
-        ],
-      }),
-      signal: AbortSignal.timeout(this.timeoutMs),
+type CheckResponse = { results?: Array<{ actions?: Record<string, unknown> } | null> };
+
+function effectOf(body: unknown, action: string): string {
+  const effect = (body as CheckResponse | null)?.results?.[0]?.actions?.[action];
+  if (typeof effect !== "string") throw new TenancyUnavailableError("Cerbos answered a malformed decision");
+  return effect;
+}
+
+if (import.meta.vitest) {
+  const { test, expect, describe, afterEach, vi } = import.meta.vitest;
+  const { createServer } = await import("node:http");
+
+  const req: AuthzRequest = {
+    principal: { id: "u1", role: "editor" },
+    workspaceId: "ws1",
+    resource: { kind: "project", projectId: "p1" },
+    action: "read",
+  };
+
+  describe("CerbosAuthorizer", () => {
+    afterEach(() => vi.unstubAllGlobals());
+
+    test("a body that stalls past the timeout makes the decision unavailable", async () => {
+      const server = createServer((_, res) => {
+        res.writeHead(200, { "Content-Type": "application/json" });
+        res.write('{"results":');
+      });
+      await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+      const { port } = server.address() as { port: number };
+      try {
+        await expect(new CerbosAuthorizer(`http://127.0.0.1:${port}`, 50).check(req))
+          .rejects.toBeInstanceOf(TenancyUnavailableError);
+      } finally {
+        server.closeAllConnections();
+        await new Promise((resolve) => server.close(resolve));
+      }
     });
 
-    if (!res.ok) {
-      throw new Error(`Cerbos check failed: ${res.status}`);
-    }
+    test.each([
+      ["a truncated body", '{"results":[{"actions":'],
+      ["a non-JSON body", "<html>proxy error</html>"],
+      ["a JSON null", "null"],
+      ["no results", "{}"],
+      ["no effect for the action", '{"results":[{"actions":{}}]}'],
+      ["a non-string effect", '{"results":[{"actions":{"read":true}}]}'],
+    ])("a 200 with %s makes the decision unavailable instead of denied", async (_, body) => {
+      vi.stubGlobal("fetch", vi.fn(async () => new Response(body, { status: 200 })));
+      await expect(new CerbosAuthorizer("http://pdp").check(req)).rejects.toBeInstanceOf(TenancyUnavailableError);
+    });
 
-    const data = await res.json() as {
-      results?: Array<{
-        actions?: Record<string, string>;
-      }>;
-    };
-
-    const result = data.results?.[0]?.actions?.[req.action];
-    return result === "EFFECT_ALLOW";
-  }
+    test.each([
+      ["EFFECT_ALLOW", true],
+      ["EFFECT_DENY", false],
+    ])("a well-formed %s decides %s", async (effect, allowed) => {
+      vi.stubGlobal("fetch", vi.fn(async () => Response.json({ results: [{ actions: { read: effect } }] })));
+      expect(await new CerbosAuthorizer("http://pdp").check(req)).toBe(allowed);
+    });
+  });
 }

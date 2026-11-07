@@ -1,11 +1,11 @@
 import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
-import { resolver, validator as zValidator } from "hono-openapi";
+import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata, updateAsset, enrichAssetWithVersion } from "../usecase";
-import { canAccessAsset } from "../access";
-import { accessCtx } from "./shared";
-import { assetResponseSchema, errorResponseSchema, idParamSchema, setActiveVersionBodySchema } from "../../../shared/openapi";
+import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
+import { assetResponseSchema, idParamSchema, setActiveVersionBodySchema } from "../../../shared/openapi";
+import { jsonError, jsonResponse } from "../../openapi";
 
 export function registerSetActiveVersionRoute(app: Hono<AppEnv>) {
   app.put("/:id/active-version",
@@ -14,8 +14,8 @@ export function registerSetActiveVersionRoute(app: Hono<AppEnv>) {
       summary: "Set active version",
       description: "Set the active version for an asset. Pass { versionId: null } to reset to latest.",
       responses: {
-        200: { description: "Updated asset", content: { "application/json": { schema: resolver(assetResponseSchema) } } },
-        404: { description: "Not found", content: { "application/json": { schema: resolver(errorResponseSchema) } } },
+        200: jsonResponse("Asset with the new active version", assetResponseSchema),
+        404: jsonError("Not found"),
       },
     }),
     zValidator("param", idParamSchema),
@@ -25,10 +25,9 @@ export function registerSetActiveVersionRoute(app: Hono<AppEnv>) {
       const versions = c.get("versions");
       const { id } = c.req.valid("param");
 
-      const asset = await getAssetMetadata(metadata, id);
-      if (!asset || !await canAccessAsset(asset, accessCtx(c), "update")) {
-        return c.json({ error: "Asset not found" }, 404);
-      }
+      const access = await authorizeAsset(accessCtx(c), await getAssetMetadata(metadata, id), "update_asset");
+      if (!access.ok) return deniedResponse(c, access, { notFound: "Asset not found" });
+      const asset = access.value;
 
       const { versionId } = c.req.valid("json");
       const updated = await updateAsset(metadata, versions, id, { activeVersionId: versionId });

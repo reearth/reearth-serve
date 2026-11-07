@@ -1,5 +1,5 @@
 import { Hono, type Context, type MiddlewareHandler } from "hono";
-import { generateSpecs, type GenerateSpecOptions } from "hono-openapi";
+import { describeRoute } from "hono-openapi";
 import { Scalar } from "@scalar/hono-api-reference";
 import { assetRoutes } from "./asset/handler";
 import { fileRoutes } from "./file/handler";
@@ -9,7 +9,11 @@ import { workspaceRoutes } from "./workspace/handler";
 import { meRoutes } from "./me/handler";
 import { authMiddleware } from "./auth/middleware";
 import { sessionMiddleware } from "./session/middleware";
+import { bindsCaller, tenancyErrorResponse, tenancyMiddleware, TENANCY_RETRY_AFTER_SECONDS } from "./tenancy/middleware";
 import type { AppEnv, Deps } from "./types";
+import { buildSpec, jsonError, jsonResponse } from "./openapi";
+import { healthExamples } from "./openapi-examples";
+import { healthResponseSchema } from "../shared/openapi";
 
 /**
  * Builds the HTTP application from an already-assembled dependency set.
@@ -21,6 +25,17 @@ import type { AppEnv, Deps } from "./types";
 export function createApp(deps: Deps) {
   const app = new Hono<AppEnv>();
 
+  app.onError((err, c) => {
+    const tenancyError = tenancyErrorResponse(err, c);
+    if (tenancyError) return tenancyError;
+    if ("getResponse" in err) {
+      const res = err.getResponse();
+      return c.newResponse(res.body, res);
+    }
+    console.error(err);
+    return c.text("Internal Server Error", 500);
+  });
+
   // Authentication middleware (JWKS cache comes from deps).
   //
   // `/api/internal/*` is excluded: it authenticates with the shared secret in
@@ -31,10 +46,12 @@ export function createApp(deps: Deps) {
   // configured — i.e. in production.
   app.use("*", exceptInternalApi(authMiddleware(deps.auth)));
 
+  app.use("*", tenancyMiddleware(deps.tenancy));
+
   // Anonymous session tracking (for unauthenticated users). Internal callers
   // are machines with their own credential; minting a demo session per
   // container callback would only burn a KV write.
-  app.use("*", exceptInternalApi(sessionMiddleware(deps.sessions, deps.sessionTtlSeconds)));
+  app.use("*", exceptInternalApi(exceptFileDelivery(sessionMiddleware(deps.sessions, deps.sessionTtlSeconds))));
 
   // Inject dependencies into all routes
   app.use("*", async (c, next) => {
@@ -46,10 +63,7 @@ export function createApp(deps: Deps) {
     c.set("jobs", deps.jobs);
     c.set("ttlSeconds", deps.ttlSeconds);
     c.set("baseUrl", deps.baseUrl);
-    c.set("authorizer", deps.authorizer);
     c.set("projects", deps.projects);
-    c.set("workspaces", deps.workspaces);
-    c.set("members", deps.members);
     c.set("extractionQueue", deps.extractionQueue);
     c.set("thumbnailQueue", deps.thumbnailQueue);
     c.set("writes", deps.writes);
@@ -60,7 +74,19 @@ export function createApp(deps: Deps) {
   });
 
   // Public API (versioned)
-  app.get("/api/v1/health", (c) => c.json({ ok: true, anonymousUploadEnabled: deps.anonymousUploadEnabled }));
+  app.get("/api/v1/health",
+    describeRoute({
+      tags: ["System"],
+      summary: "Health check",
+      description: "Liveness probe. `anonymousUploadEnabled` tells clients whether uploads without credentials (demo mode) are accepted.",
+      responses: {
+        200: jsonResponse("Service is up", healthResponseSchema, healthExamples),
+        // From authMiddleware / sessionMiddleware, which run here like on every public route.
+        401: jsonError("Malformed Authorization header, invalid or expired token, or malformed X-Session-Id"),
+      },
+    }),
+    (c) => c.json({ ok: true, anonymousUploadEnabled: deps.anonymousUploadEnabled }),
+  );
   app.route("/api/v1/assets", assetRoutes);
   app.route("/api/v1/jobs", jobRoutes);
   app.route("/api/v1/me", meRoutes);
@@ -93,61 +119,49 @@ export function createApp(deps: Deps) {
   return app;
 }
 
-const OPENAPI_DOCUMENTATION: GenerateSpecOptions["documentation"] = {
-  info: {
-    title: "Re:Earth Serve API",
-    version: "1.0.0",
-    description: "Spatial Data Delivery API",
-  },
-  servers: [{ url: "/" }],
-  tags: [
-    { name: "Assets", description: "Asset upload, metadata, and management" },
-    { name: "Jobs", description: "Background job tracking" },
-    { name: "Projects", description: "Project management" },
-    { name: "Workspaces", description: "Workspace and member management" },
-    { name: "Auth", description: "Authentication and user info" },
-    { name: "Files", description: "Public file delivery (permalink URLs)" },
-  ],
-  // Read by authMiddleware / sessionMiddleware on every non-internal
-  // route. Both are optional: no credentials means demo mode, so `{}` is
-  // listed too. Routes that ignore credentials override with `security: []`.
-  components: {
-    securitySchemes: {
-      bearerAuth: {
-        type: "http",
-        scheme: "bearer",
-        bearerFormat: "JWT",
-        description: "OIDC access token. Invalid or expired token → 401. Without it the caller is anonymous (demo mode).",
-      },
-      sessionId: {
-        type: "apiKey",
-        in: "header",
-        name: "X-Session-Id",
-        description: "Anonymous (demo-mode) session. Malformed ID → 401; unknown ID → a new session is minted and returned in the X-Session-Id response header. Ignored when bearerAuth is present.",
-      },
-    },
-  },
-  security: [{ bearerAuth: [] }, { sessionId: [] }, {}],
-};
-
-let cachedSpec: ReturnType<typeof generateSpecs> | undefined;
+let cachedSpec: ReturnType<typeof buildSpec> | undefined;
 
 /**
- * Generate the OpenAPI document once per isolate.
- *
- * hono-openapi converts each route's `resolver()` schemas in place, and the
- * route specs live on module-level routers shared by every `createApp`. A
- * second generation therefore finds nothing left to resolve, drops
- * `components.schemas` and leaves dangling `$ref`s. `createApp` runs per
- * request on Workers, so the per-app cache of `openAPIRouteHandler` is not
- * enough. Routes are identical across apps, so one cached document serves all.
+ * The OpenAPI document, built once per isolate. `createApp` runs per request
+ * on Workers; routes are identical across apps, so one document serves them
+ * all. The cache lives in this module on purpose: it imports every route, so
+ * Vite's HMR reloads it (emptying the cache) whenever a route changes.
  */
-function openApiSpec(app: Hono<AppEnv>): ReturnType<typeof generateSpecs> {
-  cachedSpec ??= generateSpecs(app, { documentation: OPENAPI_DOCUMENTATION }).catch((e: unknown) => {
-    cachedSpec = undefined;
-    throw e;
-  });
+function openApiSpec(app: Hono<AppEnv>): ReturnType<typeof buildSpec> {
+  cachedSpec ??= buildSpec(app)
+    .then(declareTenancyUnavailable)
+    .catch((e: unknown) => {
+      cachedSpec = undefined;
+      throw e;
+    });
   return cachedSpec;
+}
+
+const TENANCY_UNAVAILABLE_RESPONSE = {
+  description: "Authorization service unavailable",
+  headers: {
+    "Retry-After": {
+      description: "Seconds to wait before retrying",
+      schema: { type: "integer", const: TENANCY_RETRY_AFTER_SECONDS },
+    },
+  },
+  content: { "application/json": { schema: { $ref: "#/components/schemas/Error" } } },
+} as const;
+
+type Spec = Awaited<ReturnType<typeof buildSpec>>;
+
+function declareTenancyUnavailable(spec: Spec): Spec {
+  spec.components ??= {};
+  spec.components.responses = { ...spec.components.responses, TenancyUnavailable: TENANCY_UNAVAILABLE_RESPONSE };
+  for (const [path, item] of Object.entries(spec.paths ?? {})) {
+    if (!bindsCaller(path)) continue;
+    for (const op of Object.values(item ?? {})) {
+      if (op && typeof op === "object" && "responses" in op && op.responses) {
+        op.responses["503"] ??= { $ref: "#/components/responses/TenancyUnavailable" };
+      }
+    }
+  }
+  return spec;
 }
 
 /**
@@ -174,8 +188,17 @@ const INTERNAL_API_PREFIX = "/api/internal/";
 function exceptInternalApi(mw: MiddlewareHandler<AppEnv>): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     if (!c.req.path.startsWith(INTERNAL_API_PREFIX)) return mw(c, next);
-    if (c.get("user") === undefined) c.set("user", null);
+    if (c.get("caller") === undefined) c.set("caller", null);
     if (c.get("sessionId") === undefined) c.set("sessionId", null);
+    await next();
+  };
+}
+
+function exceptFileDelivery(mw: MiddlewareHandler<AppEnv>): MiddlewareHandler<AppEnv> {
+  return async (c, next) => {
+    const path = c.req.path;
+    if (path !== "/files" && !path.startsWith("/files/")) return mw(c, next);
+    c.set("sessionId", null);
     await next();
   };
 }

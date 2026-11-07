@@ -1,8 +1,8 @@
 import type { Member, Role } from "../../../shared/api";
-import type { MemberStore } from "../repository";
+import type { MemberAdmin } from "../repository";
 
 export async function updateMemberRole(
-  members: MemberStore,
+  members: MemberAdmin,
   workspaceId: string,
   userId: string,
   newRole: Role,
@@ -28,13 +28,12 @@ if (import.meta.vitest) {
   const { test, expect, vi } = import.meta.vitest;
 
   test("updateMemberRole updates role", async () => {
-    const ms: MemberStore = {
+    const ms: MemberAdmin = {
       save: vi.fn(async () => {}),
       find: vi.fn(async () => ({
         workspaceId: "ws1", userId: "u2", role: "editor" as const, createdAt: 0, updatedAt: 0,
       })),
       list: vi.fn(async () => []),
-      listByUser: vi.fn(async () => []),
       delete: vi.fn(async () => {}),
     };
 
@@ -44,11 +43,10 @@ if (import.meta.vitest) {
   });
 
   test("updateMemberRole returns null for non-existent member", async () => {
-    const ms: MemberStore = {
+    const ms: MemberAdmin = {
       save: vi.fn(async () => {}),
       find: vi.fn(async () => null),
       list: vi.fn(async () => []),
-      listByUser: vi.fn(async () => []),
       delete: vi.fn(async () => {}),
     };
 
@@ -56,7 +54,7 @@ if (import.meta.vitest) {
   });
 
   test("updateMemberRole throws when demoting last owner", async () => {
-    const ms: MemberStore = {
+    const ms: MemberAdmin = {
       save: vi.fn(async () => {}),
       find: vi.fn(async () => ({
         workspaceId: "ws1", userId: "u1", role: "owner" as const, createdAt: 0, updatedAt: 0,
@@ -64,7 +62,6 @@ if (import.meta.vitest) {
       list: vi.fn(async () => [
         { workspaceId: "ws1", userId: "u1", role: "owner" as const, createdAt: 0, updatedAt: 0 },
       ]),
-      listByUser: vi.fn(async () => []),
       delete: vi.fn(async () => {}),
     };
 
