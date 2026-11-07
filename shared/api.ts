@@ -17,7 +17,7 @@ export const filenameSchema = z.string().refine(isSafeFilename, "Invalid filenam
 //
 // `component()` tags a schema with `.meta({ ref })`, which makes hono-openapi
 // emit it as a named entry in `components.schemas` and `$ref` it, so generated
-// clients (e.g. oapi-codegen in Re:Earth CMS) get `Asset` instead of
+// clients (e.g. oapi-codegen in an external client) get `Asset` instead of
 // `PostApiV1Assets201JSONResponseBodyAsset`. The ref is not inherited by
 // `.extend()`, so derived shapes stay inline.
 //

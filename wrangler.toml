@@ -64,9 +64,9 @@ EXTRACTION_STUCK_THRESHOLD_SECONDS = "1800"
 # SITE_DNS_RESOLVER_URL overrides the DoH endpoint the TXT check uses.
 # Zone-side prerequisite: Cloudflare for SaaS enabled, with a fallback origin
 # configured — without it no certificate is ever issued.
-# Password-protected sites (ADR-013 B7) need one more secret — the HMAC key the
-# viewer's auth cookie is signed with, and the key ADR-014 §4 reserves for
-# signed URLs, so one secret covers both:
+# Password-protected sites (ADR-013 B7) need one more secret, the HMAC key the
+# viewer's auth cookie is signed with. Delivery tokens (ADR-014 §4) use their
+# own key ring, so it signs cookies only:
 #   wrangler secret put SIGNING_SECRET   # 32+ random bytes, e.g. `openssl rand -base64 32`
 # A secret, not a var: it is a key, it must not sit in version control, and it
 # survives deploys. Until it is set, protecting an asset is refused (503) and an

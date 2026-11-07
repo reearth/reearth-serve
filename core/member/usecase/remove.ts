@@ -1,7 +1,7 @@
-import type { MemberStore } from "../repository";
+import type { MemberAdmin } from "../repository";
 
 export async function removeMember(
-  members: MemberStore,
+  members: MemberAdmin,
   workspaceId: string,
   userId: string,
 ): Promise<boolean> {
@@ -25,13 +25,12 @@ if (import.meta.vitest) {
   const { test, expect, vi } = import.meta.vitest;
 
   test("removeMember removes existing member", async () => {
-    const ms: MemberStore = {
+    const ms: MemberAdmin = {
       save: vi.fn(async () => {}),
       find: vi.fn(async () => ({
         workspaceId: "ws1", userId: "u2", role: "editor" as const, createdAt: 0, updatedAt: 0,
       })),
       list: vi.fn(async () => []),
-      listByUser: vi.fn(async () => []),
       delete: vi.fn(async () => {}),
     };
 
@@ -40,11 +39,10 @@ if (import.meta.vitest) {
   });
 
   test("removeMember returns false for non-existent member", async () => {
-    const ms: MemberStore = {
+    const ms: MemberAdmin = {
       save: vi.fn(async () => {}),
       find: vi.fn(async () => null),
       list: vi.fn(async () => []),
-      listByUser: vi.fn(async () => []),
       delete: vi.fn(async () => {}),
     };
 
@@ -52,7 +50,7 @@ if (import.meta.vitest) {
   });
 
   test("removeMember throws when removing last owner", async () => {
-    const ms: MemberStore = {
+    const ms: MemberAdmin = {
       save: vi.fn(async () => {}),
       find: vi.fn(async () => ({
         workspaceId: "ws1", userId: "u1", role: "owner" as const, createdAt: 0, updatedAt: 0,
@@ -60,7 +58,6 @@ if (import.meta.vitest) {
       list: vi.fn(async () => [
         { workspaceId: "ws1", userId: "u1", role: "owner" as const, createdAt: 0, updatedAt: 0 },
       ]),
-      listByUser: vi.fn(async () => []),
       delete: vi.fn(async () => {}),
     };
 

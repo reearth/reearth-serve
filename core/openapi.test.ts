@@ -11,8 +11,8 @@ test("schemaRef points at a named component and rejects an unnamed schema", () =
   expect(() => schemaRef(z.string())).toThrow(/component\(\)/);
 });
 
-// External clients generate code from /api/v1/doc (Re:Earth CMS uses
-// oapi-codegen), so anything a handler reads or returns must be declared here.
+// External clients generate code from /api/v1/doc (oapi-codegen, for
+// example), so anything a handler reads or returns must be declared here.
 describe("OpenAPI document", () => {
   type Parameter = { $ref?: string; name: string; in: string; required?: boolean; schema?: unknown };
   type Operation = {
@@ -230,6 +230,32 @@ describe("OpenAPI document", () => {
     expect(paths["/api/v1/assets/uploads/{id}/complete"].post.requestBody?.content["application/json"].examples).toHaveProperty("multipart");
     const ndjson = paths["/api/v1/assets/{id}/files"].get.responses["200"].content?.["application/x-ndjson"].examples ?? {};
     expect(typeof ndjson.archive?.value).toBe("string");
+  });
+
+  test("names no product in its title", async () => {
+    const spec = await loadSpec() as Spec & { info: { title: string } };
+    expect(spec.info.title).toBe("Serve API");
+  });
+
+  test.each([
+    ["/api/v1/workspaces", "post"],
+    ["/api/v1/workspaces/{id}", "delete"],
+    ["/api/v1/workspaces/{id}/members", "post"],
+    ["/api/v1/workspaces/{id}/members/{userId}", "patch"],
+    ["/api/v1/workspaces/{id}/members/{userId}", "delete"],
+  ])("%s %s declares 405 for an external directory", async (path, method) => {
+    expect((await loadSpec()).paths[path][method].responses).toHaveProperty("405");
+  });
+
+  test("every route that binds the caller declares 503, and no other route does", async () => {
+    const { paths } = await loadSpec();
+    const declares = (path: string) =>
+      Object.values(paths[path]).every((op) => "503" in op.responses);
+    const bound = Object.keys(paths).filter((p) => p.startsWith("/api/v1/") && !["/api/v1/health", "/api/v1/doc", "/api/v1/docs"].includes(p));
+    expect(bound.length).toBeGreaterThan(0);
+    for (const path of bound) expect(declares(path), path).toBe(true);
+    // /files binds no caller. Its own 503 is a password-protection misconfiguration.
+    expect(paths["/files/{id}/{path}"].get.responses["503"]).not.toEqual({ $ref: "#/components/responses/TenancyUnavailable" });
   });
 
   test("documents public file delivery without auth", async () => {

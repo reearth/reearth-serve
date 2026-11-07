@@ -148,10 +148,10 @@ Set via `npx wrangler secret put <NAME>`:
 | `R2_BUCKET_NAME` | Yes* | R2 bucket name |
 | `OIDC_ISSUER_URL` | No | OIDC Issuer URL for JWT authentication |
 | `OIDC_AUDIENCE` | No | JWT audience claim for token validation |
-| `CERBOS_ENDPOINT` | No | Cerbos PDP endpoint URL for authorization |
-| `SIGNING_SECRET` | No‡ | HMAC key for the viewer-authentication cookie of password-protected sites (ADR-013 B7), and the key ADR-014 §4 reserves for signed URLs. A secret (`wrangler secret put SIGNING_SECRET`), not a var |
+| `CERBOS_ENDPOINT` | No | Cerbos PDP endpoint URL (http or https) for authorization; starting policies in `docs/examples/cerbos/`. An outage answers 503 with `Retry-After: 5`. An invalid value stops Node at startup; on Workers every `/api/` and `/files` request answers `500`. |
+| `SIGNING_SECRET` | No‡ | HMAC key for the viewer-authentication cookie of password-protected sites (ADR-013 B7), not used for delivery tokens (ADR-014 §4). A secret (`wrangler secret put SIGNING_SECRET`), not a var |
 | `CREDENTIALED_ORIGINS` | No | Comma-separated exact origins, besides Serve's own, whose pages may read a protected file with the visitor's cookie. An entry with a path, a wildcard or `null` fails at start |
-| `SITE_HOST_SUFFIX` | No | Wildcard suffix site hosts live under, e.g. `.serve.reearth.land` (ADR-013 B1). Unset ⇒ site hosts and custom domains are off. Set in `wrangler.toml` once the zone is ready |
+| `SITE_HOST_SUFFIX` | No | Wildcard suffix site hosts live under, e.g. `.sites.example.net` (ADR-013 B1). Unset ⇒ site hosts and custom domains are off. Set in `wrangler.toml` once the zone is ready |
 | `SITE_REGISTRABLE_DOMAIN` | With `SITE_HOST_SUFFIX` | The registrable domain the site hosts live under, e.g. `example.net`. The Worker refuses to serve when the suffix is not under it or when the `BASE_URL` host is |
 | `SITE_DOMAIN_IS_PUBLIC_SUFFIX` | No | `"true"` skips the site-isolation check, for a domain on the Public Suffix List. Logged |
 | `CF_API_TOKEN` | No† | Cloudflare API token with `Zone → SSL and Certificates: Edit` on the site-host zone, for Cloudflare for SaaS custom hostnames (ADR-013 B5) |

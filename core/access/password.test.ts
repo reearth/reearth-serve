@@ -8,7 +8,7 @@
  * exactly the same code path a production hash does.
  */
 import { describe, expect, test } from "vitest";
-import { TEST_ITERATIONS } from "../testing/fixture";
+import { TEST_ITERATIONS } from "../../adapters/memory/fixture";
 import {
   APEX_COOKIE,
   buildSetCookie,
@@ -172,13 +172,13 @@ describe("Set-Cookie", () => {
   });
 
   test("Secure is dropped only for plain-http loopback", () => {
-    expect(shouldUseSecureCookie(new URL("https://serve.reearth.land/"))).toBe(true);
+    expect(shouldUseSecureCookie(new URL("https://serve.example.com/"))).toBe(true);
     expect(shouldUseSecureCookie(new URL("https://localhost:8788/"))).toBe(true);
     expect(shouldUseSecureCookie(new URL("http://localhost:8788/"))).toBe(false);
     expect(shouldUseSecureCookie(new URL("http://127.0.0.1:8788/"))).toBe(false);
     // A plain-http deployment that is not loopback still gets Secure — a
     // cookie that never comes back is the honest answer to cleartext.
-    expect(shouldUseSecureCookie(new URL("http://serve.reearth.land/"))).toBe(true);
+    expect(shouldUseSecureCookie(new URL("http://serve.example.com/"))).toBe(true);
     expect(buildSetCookie({ value: "v", siteHost: false, assetId: "abc", secure: false })).not.toContain("Secure");
   });
 

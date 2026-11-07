@@ -73,7 +73,7 @@ export interface AccessDeps {
    *
    * It comes from the context variable the composition root sets when it builds
    * the file-only router, never from a request header — the same discipline the
-   * site middleware applies to `x-reearth-site-preview`, which it deletes off
+   * site middleware applies to `x-serve-site-preview`, which it deletes off
    * every incoming request before setting it. A visitor therefore cannot claim
    * to be on a site host and move the cookie's `Path` to `/`.
    */

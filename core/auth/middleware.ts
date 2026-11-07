@@ -1,7 +1,7 @@
 import { createMiddleware } from "hono/factory";
 import { jwtVerify, type JWTVerifyGetKey, type JSONWebKeySet } from "jose";
 import type { AppEnv } from "../types";
-import type { AuthUser } from "./types";
+import { BearerCredential } from "./types";
 import type { KeyValue } from "../kv/port";
 import { resolveJWKS } from "./jwks";
 
@@ -26,9 +26,7 @@ export interface AuthConfig {
 /**
  * JWT authentication middleware.
  *
- * - If no issuer is configured, all requests proceed as demo mode (user = null).
  * - If Authorization header is present, validates the JWT. Invalid tokens → 401.
- * - If no Authorization header, proceeds as demo mode (user = null).
  */
 export function authMiddleware(config: AuthConfig) {
   const issuer = config.issuer;
@@ -40,13 +38,13 @@ export function authMiddleware(config: AuthConfig) {
   return createMiddleware<AppEnv>(async (c, next) => {
     // No OIDC configured — everything is demo mode
     if (!issuer) {
-      c.set("user", null);
+      c.set("caller", null);
       return next();
     }
 
     const authHeader = c.req.header("Authorization");
     if (!authHeader) {
-      c.set("user", null);
+      c.set("caller", null);
       return next();
     }
 
@@ -63,14 +61,17 @@ export function authMiddleware(config: AuthConfig) {
         issuer,
         ...(audience && { audience }),
       });
+      if (typeof payload.sub !== "string" || payload.sub === "") {
+        return c.json({ error: "Token has no subject" }, 401);
+      }
 
-      const user: AuthUser = {
-        sub: payload.sub!,
+      c.set("caller", {
+        kind: "user",
+        sub: payload.sub,
         email: payload.email as string | undefined,
         name: payload.name as string | undefined,
-      };
-
-      c.set("user", user);
+        credential: new BearerCredential(token),
+      });
     } catch {
       return c.json({ error: "Invalid or expired token" }, 401);
     }
@@ -127,30 +128,25 @@ if (import.meta.vitest) {
   function createTestApp(opts: AuthConfig) {
     const app = new Hono<AppEnv>();
     app.use("*", authMiddleware(opts));
-    app.get("/test", (c) => {
-      const user = c.get("user");
-      return c.json({ user });
-    });
+    app.get("/test", (c) => c.json({ caller: c.get("caller") }));
     return app;
   }
 
-  // --- Auth middleware tests ---
-
-  test("no OIDC configured → demo mode (user=null)", async () => {
+  test("no OIDC configured → demo mode (caller=null)", async () => {
     const app = createTestApp({});
     const res = await app.request("/test");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ user: null });
+    expect(await res.json()).toEqual({ caller: null });
   });
 
-  test("no Authorization header → demo mode (user=null)", async () => {
+  test("no Authorization header → demo mode (caller=null)", async () => {
     const app = createTestApp({ issuer: TEST_ISSUER, jwks: localJWKS });
     const res = await app.request("/test");
     expect(res.status).toBe(200);
-    expect(await res.json()).toEqual({ user: null });
+    expect(await res.json()).toEqual({ caller: null });
   });
 
-  test("valid token → user set", async () => {
+  test("valid token → caller set, with the token redacted", async () => {
     const app = createTestApp({
       issuer: TEST_ISSUER,
       audience: TEST_AUDIENCE,
@@ -161,10 +157,27 @@ if (import.meta.vitest) {
       headers: { Authorization: `Bearer ${token}` },
     });
     expect(res.status).toBe(200);
-    const body = await res.json() as { user: { sub: string; email: string; name: string } };
-    expect(body.user.sub).toBe("user-1");
-    expect(body.user.email).toBe("test@example.com");
-    expect(body.user.name).toBe("Test User");
+    const text = await res.text();
+    expect(text).not.toContain(token);
+    expect(JSON.parse(text)).toEqual({
+      caller: { kind: "user", sub: "user-1", email: "test@example.com", name: "Test User", credential: "[redacted]" },
+    });
+  });
+
+  test.each<[string, Record<string, unknown>]>([
+    ["no sub", {}],
+    ["an empty sub", { sub: "" }],
+    ["a numeric sub", { sub: 42 }],
+  ])("a verified token with %s → 401", async (_, claims) => {
+    const app = createTestApp({ issuer: TEST_ISSUER, audience: TEST_AUDIENCE, jwks: localJWKS });
+    const token = await new SignJWT(claims)
+      .setProtectedHeader({ alg: "RS256", kid: "test-key" })
+      .setIssuer(TEST_ISSUER)
+      .setAudience(TEST_AUDIENCE)
+      .setExpirationTime("1h")
+      .sign(privateKey);
+    const res = await app.request("/test", { headers: { Authorization: `Bearer ${token}` } });
+    expect(res.status).toBe(401);
   });
 
   test("expired token → 401", async () => {

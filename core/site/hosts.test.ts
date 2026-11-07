@@ -8,10 +8,10 @@ import { describe, expect, test } from "vitest";
 // The API's view of a row (with `url`, without the internal columns), not the
 // store's — these assertions are about what a caller receives.
 import type { SiteHost } from "../../shared/api";
-import { ASSET_ID, fixture, SINGLE_FILE_ID } from "../testing/fixture";
+import { ASSET_ID, fixture, SINGLE_FILE_ID } from "../../adapters/memory/fixture";
 import {
   PROJECT_ID, siteFixture, SUFFIX, token, USER, type SiteApp,
-} from "../testing/site-fixture";
+} from "../../adapters/memory/site-fixture";
 import { ENTRY_CACHE_CONTROL, PINNED_CACHE_CONTROL } from "../file/caching";
 import { SITE_PREVIEW_HEADER } from "./middleware";
 import { NAME_ERRORS } from "./names";

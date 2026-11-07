@@ -359,10 +359,11 @@ addressed through it.
   way, so enabling the feature later does not lose rows.
 - **`kind: "custom"` is refused** with `400 "custom domains are not supported
   yet"` until B5.
-- The authorization action is `manage-hosts` on the `asset` kind
-  (`core/auth/roles.ts`), owner/admin/editor — the bar the ADR names. A
-  caller who fails it gets `404`, matching the rest of the asset API rather
-  than confirming the asset exists.
+- The authorization action is `manage_hosts` in ADR-016's `POLICY`
+  (`core/auth/permissions.ts`), at `editor`, the bar the ADR names. It is a
+  project action checked through `authorizeAsset`, and a caller who fails it
+  gets `404` through `deniedResponse`, matching the rest of the asset API
+  rather than confirming the asset exists.
 - `hostname` is accepted as either the bare label or the full host, and
   reported as the full host.
 - Validation order is shape first, then reserved. ID-shaped and `v{n}` names
@@ -478,7 +479,7 @@ latest--kawasaki-flood-map.sites.example.net    newest version, ignoring the act
   the bytes are one version's but the *host* follows the asset, so the
   response must stay revalidatable. `SiteTarget` gained
   `preview?: "pinned" | "latest"`, and the middleware passes it to the
-  file router in an internal request header (`x-reearth-site-preview`) —
+  file router in an internal request header (`x-serve-site-preview`) —
   the rewritten request is a fresh `Request` dispatched into a separate
   Hono app, so there is no context to carry it on. The middleware deletes
   that header off the incoming request before setting it, or a visitor
@@ -774,7 +775,7 @@ or password is an event (ADR-007). Requires `editor` on the project.
 **`members` mode** is the real answer for "internal to the city" and is
 deferred until the OIDC integration listed open in ROADMAP Phase 2 lands:
 the `401` page becomes a redirect into the IdP with the site host as the
-return URL, and the cookie is minted after `canAccessAsset` passes. The
+return URL, and the cookie is minted after `authorizeAsset` passes. The
 cookie, caching and CORS rules are identical, which is why they are
 specified here rather than per mode.
 
@@ -848,7 +849,7 @@ every URL form, cookie/Basic proof, `private` caching, credentialed CORS
 - **Which requests are "on a site host"** is read from the context variable
   the composition root sets when it builds the file-only router, never from a
   request header — the same discipline the middleware applies to
-  `x-reearth-site-preview`, which it deletes off every incoming request
+  `x-serve-site-preview`, which it deletes off every incoming request
   before setting it. A visitor cannot claim to be on a site host and move the
   cookie's `Path` to `/`.
 - **`SIGNING_SECRET`** is the cookie secret. It is set in both composition

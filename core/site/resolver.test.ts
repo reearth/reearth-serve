@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { MemoryKeyValue } from "../../adapters/memory/memory-kv";
-import { MemorySiteHostStore, MemoryVersionStore } from "../testing/fixture";
+import { MemorySiteHostStore, MemoryVersionStore } from "../../adapters/memory/fixture";
 import { composeSiteHostResolver, hostCacheKey } from "./resolver";
 import type { AssetVersion } from "../asset/model";
 import type { SiteHost } from "./repository";

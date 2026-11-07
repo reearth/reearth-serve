@@ -3,8 +3,8 @@ import { describeRoute } from "hono-openapi";
 import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata, uploadVersion } from "../usecase";
-import { canAccessAsset } from "../access";
-import { accessCtx, denyAnonymousUpload, usageScopes } from "./shared";
+import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
+import { denyAnonymousUpload, usageScopes } from "./shared";
 import { versionUploadResultResponseSchema, idParamSchema } from "../../../shared/openapi";
 import { isSafeFilename } from "../../../shared/api";
 import { contentEncodingHeaderParam, contentLengthHeaderParam, filenameHeaderParam, jsonError, jsonResponse, originalSizeHeaderParam, skipExtractionHeaderParam } from "../../openapi";
@@ -46,10 +46,9 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
       const baseUrl = c.get("baseUrl");
       const { id } = c.req.valid("param");
 
-      const asset = await getAssetMetadata(metadata, id);
-      if (!asset || !await canAccessAsset(asset, accessCtx(c), "create")) {
-        return c.json({ error: "Asset not found" }, 404);
-      }
+      const access = await authorizeAsset(accessCtx(c), await getAssetMetadata(metadata, id), "create_asset");
+      if (!access.ok) return deniedResponse(c, access, { notFound: "Asset not found" });
+      const asset = access.value;
 
       const filename = c.req.header("X-Filename");
       const contentLength = c.req.header("Content-Length");

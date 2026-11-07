@@ -9,19 +9,21 @@
  */
 
 import { gzipSync } from "node:zlib";
-import { createApp } from "../app";
-import type { Deps } from "../types";
-import type { AssetMetadata, AssetVersion } from "../asset/model";
+import { createApp } from "../../core/app";
+import type { Deps } from "../../core/types";
+import type { AssetMetadata, AssetVersion } from "../../core/asset/model";
 import type { SiteHosting } from "../../shared/api";
-import type { AssetProtection, ListResult, MetadataStore, VersionStore } from "../asset/repository";
-import { hashPassword } from "../access/password";
-import type { Session, SessionStore } from "../session/repository";
-import type { SiteHost, SiteHostPatch, SiteHostStore } from "../site/repository";
-import { MemoryFileStorage } from "../../adapters/memory/storage";
-import { MemoryKeyValue } from "../../adapters/memory/memory-kv";
-import { MemoryDnsResolver } from "../../adapters/memory/dns";
-import { MemoryCustomHostnames } from "../../adapters/memory/custom-hostnames";
-import { SimpleAuthorizer } from "../../adapters/cloudflare/authorizer";
+import type { AssetProtection, ListResult, MetadataStore, VersionStore } from "../../core/asset/repository";
+import { hashPassword } from "../../core/access/password";
+import type { Session, SessionStore } from "../../core/session/repository";
+import type { SiteHost, SiteHostPatch, SiteHostStore } from "../../core/site/repository";
+import { MemoryFileStorage } from "./storage";
+import { MemoryKeyValue } from "./memory-kv";
+import { MemoryDnsResolver } from "./dns";
+import { MemoryCustomHostnames } from "./custom-hostnames";
+import { SimpleAuthorizer } from "../../core/auth/permissions";
+import type { MemberStore } from "../../core/member/repository";
+import type { Tenancy, TenantScope } from "../../core/tenancy/port";
 
 /** Archive asset, active version {@link VERSION_ID}. */
 export const ASSET_ID = "3f9a1c2b4d5e6f70";
@@ -407,10 +409,8 @@ export async function fixture(overrides?: Partial<Deps>) {
     jobs: unused("jobs"),
     ttlSeconds: 3600,
     baseUrl: "https://example.test",
-    authorizer: new SimpleAuthorizer(),
     projects: unused("projects"),
-    workspaces: unused("workspaces"),
-    members: unused("members"),
+    tenancy: memberTenancy(unused("members")),
     extractionQueue: null,
     thumbnailQueue: null,
     storageUsage: unused("storageUsage"),
@@ -439,5 +439,23 @@ export async function fixture(overrides?: Partial<Deps>) {
     // always assert against the ones the app actually uses.
     dns: (deps.dns as MemoryDnsResolver),
     customHostnames: (deps.customHostnames as MemoryCustomHostnames),
+  };
+}
+
+/**
+ * A directory where a verified caller is the user whose id is the token's
+ * subject, and `members` decides their roles under the built-in policy.
+ */
+export function memberTenancy(members: MemberStore): Tenancy {
+  const scope: TenantScope = {
+    workspaces: unused("workspaces"),
+    members,
+    authorizer: new SimpleAuthorizer(),
+    admin: null,
+  };
+  return {
+    async enter(caller) {
+      return { user: caller ? { id: caller.sub, sub: caller.sub } : null, scope };
+    },
   };
 }

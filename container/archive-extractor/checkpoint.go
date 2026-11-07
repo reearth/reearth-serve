@@ -35,10 +35,11 @@ type CheckpointManager struct {
 }
 
 // NewCheckpointManager creates a new CheckpointManager.
-func NewCheckpointManager(storage ObjectStorage, assetID string) *CheckpointManager {
+// NewCheckpointManager keeps the checkpoint under root, the run's key prefix.
+func NewCheckpointManager(storage ObjectStorage, root string) *CheckpointManager {
 	return &CheckpointManager{
 		storage: storage,
-		key:     fmt.Sprintf("assets/%s/_archive/_checkpoint.json", assetID),
+		key:     root + "/_archive/_checkpoint.json",
 	}
 }
 

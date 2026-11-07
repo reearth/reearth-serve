@@ -121,11 +121,13 @@ const sharedErrorResponses = {
   WorkspaceNotFound: "Workspace not found",
   ScopeNotAccessible: "Scope not accessible",
   StorageCapacityExceeded: "Upload exceeds storage capacity",
+  MembersManagedExternally: "Members are managed by an external directory",
+  WorkspacesManagedExternally: "Workspaces are managed by an external directory",
 } satisfies Record<string, string>;
 
 const OPENAPI_DOCUMENTATION: GenerateSpecOptions["documentation"] = {
   info: {
-    title: "Re:Earth Serve API",
+    title: "Serve API",
     version: "1.0.0",
     description: "Spatial Data Delivery API",
   },

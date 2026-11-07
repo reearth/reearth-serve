@@ -1,25 +1,15 @@
 import { Hono } from "hono";
-import type { Context } from "hono";
 import { describeRoute } from "hono-openapi";
 import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../types";
-import { canAccessJob, canAccessProject, type AccessContext } from "../asset/access";
+import { accessCtx, authorizeJob, authorizeProject, authorizeWorkspace, deniedResponse } from "../auth/access";
 import {
   jobResponseSchema, jobListResponseSchema, idParamSchema, scopedListQuerySchema,
 } from "../../shared/openapi";
 import { jobSchema } from "../../shared/api";
 import { hostingOnExtractionComplete } from "../site/hosting";
+import { extractionMessageForJob } from "../extraction/handler";
 import { jsonError, jsonResponse } from "../openapi";
-
-function accessCtx(c: Context<AppEnv>): AccessContext {
-  return {
-    sessionId: c.get("sessionId"),
-    user: c.get("user"),
-    authorizer: c.get("authorizer"),
-    members: c.get("members"),
-    projects: c.get("projects"),
-  };
-}
 
 // --- Public API routes (mounted at /api/v1/jobs) ---
 
@@ -45,27 +35,26 @@ jobRoutes.get("/",
 
     if (!user) {
       if (!sessionId) return c.json({ jobs: [], cursor: undefined });
-      const result = await jobs.list({ limit, cursor, sessionId });
+      const result = await jobs.list({ limit, cursor, scope: { kind: "session", sessionId } });
       return c.json({ jobs: result.items, cursor: result.cursor });
     }
 
     if (projectId) {
-      if (!await canAccessProject(accessCtx(c), projectId, "read")) {
-        return c.json({ error: "Project not found" }, 404);
-      }
-      const result = await jobs.list({ limit, cursor, projectId });
+      const access = await authorizeProject(accessCtx(c), projectId, "read_job");
+      if (!access.ok) return deniedResponse(c, access, { notFound: "Project not found" });
+      const result = await jobs.list({ limit, cursor, scope: { kind: "project", projectId } });
       return c.json({ jobs: result.items, cursor: result.cursor });
     }
 
     if (workspaceId) {
-      const members = c.get("members");
-      const member = await members.find(workspaceId, user.sub);
-      if (!member) return c.json({ error: "Workspace not found" }, 404);
-      const result = await jobs.list({ limit, cursor, workspaceId });
+      const access = await authorizeWorkspace(accessCtx(c), workspaceId, "read");
+      if (!access.ok) return deniedResponse(c, access, { notFound: "Workspace not found" });
+      const result = await jobs.list({ limit, cursor, scope: { kind: "workspace", workspaceId } });
       return c.json({ jobs: result.items, cursor: result.cursor });
     }
 
-    const result = await jobs.list({ limit, cursor, accessibleByUser: user.sub });
+    const workspaceIds = (await c.get("tenancy").members.listForCaller()).map((m) => m.workspaceId);
+    const result = await jobs.list({ limit, cursor, scope: { kind: "visible", workspaceIds, ownerId: user.id } });
     return c.json({ jobs: result.items, cursor: result.cursor });
   },
 );
@@ -83,11 +72,9 @@ jobRoutes.get("/:id",
   async (c) => {
     const jobs = c.get("jobs");
     const { id } = c.req.valid("param");
-    const job = await jobs.find(id);
-    if (!job || !await canAccessJob(job, accessCtx(c))) {
-      return c.json({ error: "Job not found" }, 404);
-    }
-    return c.json(job);
+    const access = await authorizeJob(accessCtx(c), await jobs.find(id), "read_job");
+    if (!access.ok) return deniedResponse(c, access, { notFound: "Job not found" });
+    return c.json(access.value);
   },
 );
 
@@ -105,10 +92,9 @@ jobRoutes.post("/:id/retry",
   async (c) => {
     const jobs = c.get("jobs");
     const { id } = c.req.valid("param");
-    const job = await jobs.find(id);
-    if (!job || !await canAccessJob(job, accessCtx(c), "retry")) {
-      return c.json({ error: "Job not found" }, 404);
-    }
+    const access = await authorizeJob(accessCtx(c), await jobs.find(id), "retry_job");
+    if (!access.ok) return deniedResponse(c, access, { notFound: "Job not found" });
+    const job = access.value;
     if (job.status === "completed") {
       return c.json({ error: "Job already completed" }, 400);
     }
@@ -119,16 +105,8 @@ jobRoutes.post("/:id/retry",
 
     const extractionQueue = c.get("extractionQueue");
     if (extractionQueue) {
-      const metadata = c.get("metadata");
-      const asset = await metadata.find(job.assetId);
-      if (asset?.archiveFormat) {
-        await extractionQueue.send({
-          assetId: job.assetId,
-          archiveKey: `assets/${job.assetId}/${asset.filename}`,
-          archiveFilename: asset.filename,
-          archiveFormat: asset.archiveFormat,
-        });
-      }
+      const message = await extractionMessageForJob(job, c.get("metadata"), c.get("versions"));
+      if (message) await extractionQueue.send(message);
     }
 
     return c.json(job);
@@ -196,32 +174,39 @@ jobInternalRoutes.post("/:id/status", async (c) => {
     }
   };
 
-  // Mirror the job status onto the asset. The two rows go out in one atomic
-  // write (ADR-012 §3) — a job marked completed while its asset still says
+  // Mirror the job status onto its version for a version's job, onto the
+  // asset otherwise (ADR-005). The rows go out in one atomic write (ADR-012
+  // §3), because a job marked completed while its asset still says
   // "extracting" is exactly the drift the cleanup cron has to reconcile.
   //
   // The job row is the one that must land: the container drops its checkpoint
   // once "completed" is acknowledged, while a stale asset mirror is healed by
-  // `reconcileStuckAssets`. So a failed asset read or batch falls back to
-  // writing the job alone instead of losing the status.
+  // `reconcileStuckAssets`. So a failed read or batch falls back to writing
+  // the job alone instead of losing the status.
   const ttl = c.get("ttlSeconds");
-  const asset = await c.get("metadata").find(job.assetId).catch((e: unknown) => {
-    console.warn(`job ${job.id}: asset read failed, saving job only:`, e);
+  const readFailed = (e: unknown) => {
+    console.warn(`job ${job.id}: mirror read failed, saving job only:`, e);
     return null;
-  });
+  };
+  const asset = await c.get("metadata").find(job.assetId).catch(readFailed);
+  const version = job.versionId
+    ? await c.get("versions").find(job.versionId).catch(readFailed)
+    : null;
+  const mirror = job.versionId ? version : asset;
 
-  if (asset && body.status === "running") {
-    asset.status = "extracting";
-    extendDemoExpiry(asset, ttl);
+  if (mirror && body.status === "running") {
+    mirror.status = "extracting";
   }
-  if (asset && body.status === "completed") {
-    asset.status = "ready";
-    asset.fileCount = job.fileCount;
-    asset.extractedSize = job.extractedSize;
-    extendDemoExpiry(asset, ttl);
+  if (mirror && body.status === "completed") {
+    mirror.status = "ready";
+    mirror.fileCount = job.fileCount;
+    mirror.extractedSize = job.extractedSize;
   }
-  if (asset && body.status === "failed") {
-    asset.status = "failed";
+  if (mirror && body.status === "failed") {
+    mirror.status = "failed";
+  }
+  if (asset && body.status !== "failed") {
+    extendDemoExpiry(asset, ttl);
   }
 
   // `_headers` / `_redirects` (ADR-013 C3). The archive's control files only
@@ -235,13 +220,13 @@ jobInternalRoutes.post("/:id/status", async (c) => {
   if (placement?.on === "asset" && asset) asset.hosting = placement.hosting;
 
   const writes = c.get("writes");
-  if (!asset) {
+  if (!asset && !version) {
     await writes.saveJob({ job });
   } else {
     try {
-      await writes.saveJob({ job, asset });
+      await writes.saveJob({ job, asset: asset ?? undefined, version: version ?? undefined });
     } catch (e) {
-      console.warn(`job ${job.id}: job+asset write failed, saving job only:`, e);
+      console.warn(`job ${job.id}: job+mirror write failed, saving job only:`, e);
       await writes.saveJob({ job });
     }
   }

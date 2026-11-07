@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
 import {
   APP_JS, ASSET_ID, DOCS_HTML, fixture, INDEX_HTML, SINGLE_FILE_ID, VERSION_ID,
-} from "../testing/fixture";
+} from "../../adapters/memory/fixture";
 import { ENTRY_CACHE_CONTROL, PINNED_CACHE_CONTROL } from "../file/caching";
 
 // Per-asset origins (ADR-013 B1): `{id}{SITE_HOST_SUFFIX}` serves exactly what

@@ -2,12 +2,11 @@ import type { Deps } from "../../core/types";
 import { R2FileStorage } from "./storage";
 import {
   SqlMetadataStore, SqlJobStore, SqlProjectStore,
-  SqlWorkspaceStore, SqlMemberStore, SqlStorageUsageStore, SqlVersionStore,
+  SqlStorageUsageStore, SqlVersionStore,
   SqlCleanupPendingStore,
 } from "../sql/stores";
 import { R2PresignedUrlGenerator } from "./presigned";
-import { CerbosAuthorizer } from "../../core/auth/authorizer";
-import { SimpleAuthorizer } from "./authorizer";
+import { buildTenancy, parseTenancyConfig } from "../tenancy";
 import { CloudflareContainerLauncher, type ObjectStoreCredentials } from "./container";
 import { CloudflareKeyValue } from "./kv";
 import { KeyValueUploadSessionStore, KeyValueSessionStore } from "../../core/kv/stores";
@@ -65,12 +64,7 @@ export function buildDeps(env: Env): Deps {
     jobs: new SqlJobStore(sql),
     ttlSeconds: parseInt(env.ASSET_TTL_SECONDS, 10) || 3600,
     baseUrl: env.BASE_URL,
-    authorizer: env.CERBOS_ENDPOINT
-      ? new CerbosAuthorizer(env.CERBOS_ENDPOINT)
-      : new SimpleAuthorizer(),
     projects: new SqlProjectStore(sql),
-    workspaces: new SqlWorkspaceStore(sql),
-    members: new SqlMemberStore(sql),
     extractionQueue: env.EXTRACTION_QUEUE ? new CloudflareJobQueue(env.EXTRACTION_QUEUE) : null,
     thumbnailQueue: env.THUMBNAIL_QUEUE ? new CloudflareJobQueue(env.THUMBNAIL_QUEUE) : null,
     storageUsage: new SqlStorageUsageStore(sql),
@@ -115,6 +109,7 @@ export function buildDeps(env: Env): Deps {
         ? parseInt(env.JWKS_CACHE_TTL_SECONDS, 10)
         : undefined,
     },
+    tenancy: buildTenancy(parseTenancyConfig(env), { sql }),
     containers: new CloudflareContainerLauncher({
       archiveExtractor: env.ARCHIVE_EXTRACTOR ?? null,
       thumbnailGenerator: env.THUMBNAIL_GENERATOR ?? null,

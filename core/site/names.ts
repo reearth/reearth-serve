@@ -19,8 +19,7 @@ export const ID_LABEL = /^[0-9a-f]{16}$/;
 export const RESERVED_NAMES: ReadonlySet<string> = new Set([
   "www", "api", "app", "admin", "dashboard", "login", "auth", "files",
   "static", "assets", "cdn", "mail", "ftp", "ns1", "ns2", "status", "docs",
-  "help", "support", "latest", "reearth", "eukarya", "plateau", "serve",
-  "untiled",
+  "help", "support", "latest", "serve",
 ]);
 
 /** The exact error strings B6 specifies. Handlers return these verbatim. */
@@ -44,7 +43,7 @@ export type NameCheck =
  * Take the bare label out of whatever the caller sent.
  *
  * The API accepts either form — `kawasaki-flood-map` or the full
- * `kawasaki-flood-map.serve.reearth.land` — because the response prints the
+ * `kawasaki-flood-map.serve.example.com` — because the response prints the
  * full host and round-tripping it should work. A host that does not end with
  * the suffix is returned unchanged and then fails validation on its dots.
  */
@@ -75,7 +74,7 @@ export function validateSiteName(input: string): NameCheck {
 
   if (ID_LABEL.test(name)) return bad(NAME_ERRORS.reserved);
   if (/^v[0-9]+$/.test(name)) return bad(NAME_ERRORS.reserved);
-  // Hyphen-delimited parts too, so `api-v2` and `login-reearth` are out. Cheap,
+  // Hyphen-delimited parts too, so `api-v2` and `login-portal` are out. Cheap,
   // and it removes the obvious phishing shapes.
   if (name.split("-").some((part) => RESERVED_NAMES.has(part))) {
     return bad(NAME_ERRORS.reserved);
@@ -180,7 +179,7 @@ if (import.meta.vitest) {
 
     test("reserved words as hyphen-delimited parts", () => {
       expect(errorOf("api-v2")).toBe(NAME_ERRORS.reserved);
-      expect(errorOf("login-reearth")).toBe(NAME_ERRORS.reserved);
+      expect(errorOf("login-portal")).toBe(NAME_ERRORS.reserved);
       expect(errorOf("kawasaki-admin")).toBe(NAME_ERRORS.reserved);
       expect(errorOf("my-cdn-1")).toBe(NAME_ERRORS.reserved);
     });
@@ -192,16 +191,16 @@ if (import.meta.vitest) {
   });
 
   describe("toSiteName", () => {
-    const suffix = ".serve.reearth.land";
+    const suffix = ".serve.example.com";
 
     test("passes a bare label through, lowercased", () => {
       expect(toSiteName("Kawasaki-Flood-Map", suffix)).toBe("kawasaki-flood-map");
     });
 
     test("strips the configured suffix from a full host", () => {
-      expect(toSiteName("kawasaki-flood-map.serve.reearth.land", suffix)).toBe("kawasaki-flood-map");
-      expect(toSiteName("KAWASAKI.SERVE.REEARTH.LAND", suffix)).toBe("kawasaki");
-      expect(toSiteName("kawasaki.serve.reearth.land.", suffix)).toBe("kawasaki");
+      expect(toSiteName("kawasaki-flood-map.serve.example.com", suffix)).toBe("kawasaki-flood-map");
+      expect(toSiteName("KAWASAKI.SERVE.EXAMPLE.COM", suffix)).toBe("kawasaki");
+      expect(toSiteName("kawasaki.serve.example.com.", suffix)).toBe("kawasaki");
     });
 
     test("leaves a host under a different suffix alone (it then fails validation)", () => {

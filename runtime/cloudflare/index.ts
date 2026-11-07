@@ -47,8 +47,14 @@ export default {
         suffix: env.SITE_HOST_SUFFIX,
       })
     ) {
-      const app = createApp(buildDeps(env));
-      return app.fetch(request, env, ctx);
+      let deps;
+      try {
+        deps = buildDeps(env);
+      } catch (err) {
+        console.error(err);
+        return Response.json({ error: "Server misconfigured" }, { status: 500 });
+      }
+      return createApp(deps).fetch(request, env, ctx);
     }
 
     // Everything else: React Router SSR (UI)

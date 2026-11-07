@@ -226,8 +226,10 @@ One function, `resolveAccess(asset, request)`, before any storage I/O:
    decides:
    1. A delivery token (§4). Pure computation, with no table and no
       storage read.
-   2. `Authorization: Bearer <jwt>`. The OIDC middleware verifies it, then
-      the handler calls `enterCaller(c, caller)` and
+   2. `Authorization: Bearer <jwt>`. The auth middleware skips `/files`,
+      because `Authorization: Basic` is a credential there (ADR-013 B7), so
+      this branch verifies the token itself, then calls
+      `enterCaller(c, caller)` and
       `authorizeAsset(ctx, asset, "read_asset")` (ADR-016). This is the only
       branch on `/files` that binds a caller; public, password and token
       reads make no directory call, and `/files` runs no session

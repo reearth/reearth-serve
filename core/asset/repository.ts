@@ -27,6 +27,18 @@ export interface AssetProtection {
   version: number;
 }
 
+export type ListScope =
+  | { kind: "session"; sessionId: string }
+  | { kind: "project"; projectId: string }
+  | { kind: "workspace"; workspaceId: string }
+  | { kind: "visible"; workspaceIds: readonly string[]; ownerId: string };
+
+export interface ListOptions {
+  scope: ListScope;
+  limit?: number;
+  cursor?: string;
+}
+
 export interface MetadataStore {
   save(asset: AssetMetadata, ttlSeconds: number): Promise<void>;
   find(id: string): Promise<AssetMetadata | null>;
@@ -48,17 +60,7 @@ export interface MetadataStore {
   /** `spa` is ADR-013 C1's SPA fallback flag; see `core/asset/usecase/set-spa.ts`. */
   update(id: string, patch: { activeVersionId?: string | null; expiresAt?: number; description?: string; userMeta?: Record<string, unknown>; spa?: boolean }): Promise<void>;
   delete(id: string): Promise<void>;
-  // scope exactly one of: sessionId, projectId, workspaceId (caller-verified
-  // membership), or accessibleByUser (membership-driven across all workspaces).
-  // Unscoped calls return an empty result — use a scope explicitly.
-  list(options?: {
-    limit?: number;
-    cursor?: string;
-    sessionId?: string;
-    projectId?: string;
-    workspaceId?: string;
-    accessibleByUser?: string;
-  }): Promise<ListResult<AssetMetadata>>;
+  list(options: ListOptions): Promise<ListResult<AssetMetadata>>;
 }
 
 export interface VersionStore {
@@ -109,8 +111,12 @@ export interface AtomicWrites {
    * Returns the version with the number the store assigned (see `VersionStore.save`).
    */
   createVersion(input: { version: AssetVersion; job?: Job; usageScopes?: string[] }): Promise<AssetVersion>;
-  /** A job row plus the asset row that mirrors its status. */
-  saveJob(input: { job: Job; asset?: AssetMetadata }): Promise<void>;
+  /**
+   * A job row plus the row that mirrors its status: the version for a
+   * version's job, the asset otherwise. A version's job may still pass the
+   * asset to extend its expiry.
+   */
+  saveJob(input: { job: Job; asset?: AssetMetadata; version?: AssetVersion }): Promise<void>;
   /**
    * Removes the asset row and all its version rows, decrements each usage
    * scope by the asset's size plus its versions' sizes, and records

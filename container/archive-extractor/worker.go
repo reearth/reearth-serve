@@ -28,7 +28,9 @@ const workerAPITimeout = 30 * time.Second
 
 // ExtractionConfig holds configuration for the extraction worker.
 type ExtractionConfig struct {
+	JobID             string // job to report status to; an asset's own job when empty
 	AssetID           string
+	VersionID         string // set for a version's job
 	ArchiveKey        string // storage key for the archive file
 	ArchiveFilename   string // original filename (for root prefix detection)
 	ArchiveFormat     string // "zip", "tar", "tar.gz"
@@ -36,6 +38,23 @@ type ExtractionConfig struct {
 	InternalAPISecret string // shared bearer secret for /api/internal/* callbacks
 	MaxConcurrency    int    // max parallel uploads (default: 48)
 	CheckpointEvery   int    // checkpoint interval in entries (default: 100)
+}
+
+// keyRoot is the prefix a run reads and writes under: the version's for a
+// version's job, the asset's otherwise (ADR-005, amendment 2026-11-05).
+func (c ExtractionConfig) keyRoot() string {
+	if c.VersionID != "" {
+		return fmt.Sprintf("assets/%s/v/%s", c.AssetID, c.VersionID)
+	}
+	return "assets/" + c.AssetID
+}
+
+// An asset's own job has the asset's ID.
+func (c ExtractionConfig) jobID() string {
+	if c.JobID != "" {
+		return c.JobID
+	}
+	return c.AssetID
 }
 
 // ExtractionWorker orchestrates the extraction of an archive to object storage.
@@ -59,8 +78,8 @@ func NewExtractionWorker(storage ObjectStorage, cfg ExtractionConfig) *Extractio
 	return &ExtractionWorker{
 		cfg:        cfg,
 		storage:    storage,
-		checkpoint: NewCheckpointManager(storage, cfg.AssetID),
-		manifest:   NewManifestWriter(storage, cfg.AssetID),
+		checkpoint: NewCheckpointManager(storage, cfg.keyRoot()),
+		manifest:   NewManifestWriter(storage, cfg.keyRoot()),
 		httpClient: &http.Client{Timeout: workerAPITimeout},
 	}
 }
@@ -110,7 +129,7 @@ func (w *ExtractionWorker) Run(ctx context.Context) error {
 }
 
 func (w *ExtractionWorker) phaseA(ctx context.Context, cp *JobCheckpoint) error {
-	entryListKey := fmt.Sprintf("assets/%s/_archive/_entry_list.jsonl", w.cfg.AssetID)
+	entryListKey := w.cfg.keyRoot() + "/_archive/_entry_list.jsonl"
 	if _, err := w.storage.HeadObject(ctx, entryListKey); err == nil {
 		log.Println("phase A: entry list already exists, skipping")
 		cp.Phase = "entries_listed"
@@ -464,7 +483,7 @@ func (w *ExtractionWorker) phaseC(ctx context.Context, cp *JobCheckpoint) error 
 		}
 
 		w.manifest.DeleteChunks(ctx, cp.ManifestChunksWritten)
-		entryListKey := fmt.Sprintf("assets/%s/_archive/_entry_list.jsonl", w.cfg.AssetID)
+		entryListKey := w.cfg.keyRoot() + "/_archive/_entry_list.jsonl"
 		_ = w.storage.DeleteObject(ctx, entryListKey)
 	}
 
@@ -603,7 +622,7 @@ func (w *ExtractionWorker) transmuxUpload(ctx context.Context, rde RawDeflateExt
 		bytes.NewReader(gzipTrailer(wantCRC, entry.Size)),
 	)
 
-	r2Key := fmt.Sprintf("assets/%s/files/%s", w.cfg.AssetID, entry.NormalizedPath)
+	r2Key := w.cfg.keyRoot() + "/files/" + entry.NormalizedPath
 	putErr := w.storage.PutObject(ctx, r2Key, body, size, DetectContentType(entry.NormalizedPath), &PutOptions{ContentEncoding: "gzip"})
 	_ = pw.CloseWithError(putErr) // nil → clean EOF for the decoder
 	res := <-hashCh
@@ -626,7 +645,7 @@ func (w *ExtractionWorker) transmuxUpload(ctx context.Context, rde RawDeflateExt
 // the reader's lifetime; this function only consumes from it. Used by both
 // the parallel ExtractEntry path and the sequential ExtractAllSequential path.
 func (w *ExtractionWorker) uploadFromReader(ctx context.Context, entry ArchiveEntry, rc io.Reader) (string, error) {
-	r2Key := fmt.Sprintf("assets/%s/files/%s", w.cfg.AssetID, entry.NormalizedPath)
+	r2Key := w.cfg.keyRoot() + "/files/" + entry.NormalizedPath
 	contentType := DetectContentType(entry.NormalizedPath)
 
 	// Compute MD5 while streaming the uncompressed data
@@ -657,7 +676,7 @@ func (w *ExtractionWorker) uploadFromReader(ctx context.Context, entry ArchiveEn
 // at one line of JSON, which is what prevents phaseB from doubling the
 // worst-case allocation phaseA already had to trim.
 func (w *ExtractionWorker) streamEntryList(ctx context.Context, yield func(entry ArchiveEntry) error) error {
-	key := fmt.Sprintf("assets/%s/_archive/_entry_list.jsonl", w.cfg.AssetID)
+	key := w.cfg.keyRoot() + "/_archive/_entry_list.jsonl"
 	body, err := w.storage.GetObject(ctx, key)
 	if err != nil {
 		return fmt.Errorf("failed to get entry list: %w", err)
@@ -790,7 +809,7 @@ func (w *ExtractionWorker) updateJobStatus(ctx context.Context, status string, f
 
 	payload, _ := json.Marshal(p)
 
-	url := strings.TrimRight(w.cfg.WorkerAPIURL, "/") + fmt.Sprintf("/api/internal/jobs/%s/status", w.cfg.AssetID)
+	url := strings.TrimRight(w.cfg.WorkerAPIURL, "/") + fmt.Sprintf("/api/internal/jobs/%s/status", w.cfg.jobID())
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(payload))
 	if err != nil {
 		return err

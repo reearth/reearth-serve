@@ -2,8 +2,10 @@ import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
 import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
-import { canManageRole } from "../../auth/roles";
+import { accessCtx, authorizeWorkspace, deniedResponse } from "../../auth/access";
+import { canManageRole } from "../../auth/permissions";
 import { addMember } from "../../member/usecase";
+import { requireTenancyAdmin } from "../../tenancy/middleware";
 import {
   memberResponseSchema, idParamSchema, addMemberBodySchema,
 } from "../../../shared/openapi";
@@ -19,34 +21,27 @@ export function registerAddMemberRoute(app: Hono<AppEnv>) {
         400: jsonError("Bad request"),
         401: jsonError("Authentication required"),
         403: jsonError("Forbidden"),
+        405: jsonError("Members are managed by an external directory"),
         409: jsonError("Conflict"),
       },
     }),
     zValidator("param", idParamSchema),
     zValidator("json", addMemberBodySchema),
     async (c) => {
+      const admin = requireTenancyAdmin(c);
+      if (admin instanceof Response) return admin;
+
       const user = c.get("user");
       if (!user) {
         return c.json({ error: "Authentication required" }, 401);
       }
 
-      const members = c.get("members");
-      const authorizer = c.get("authorizer");
+      const members = admin.members;
       const { id: workspaceId } = c.req.valid("param");
 
-      const self = await members.find(workspaceId, user.sub);
-      if (!self) {
-        return c.json({ error: "Workspace not found" }, 404);
-      }
-
-      const allowed = await authorizer.check({
-        principal: { id: user.sub, roles: [self.role] },
-        resource: { kind: "workspace", id: workspaceId },
-        action: "manage-members",
-      });
-      if (!allowed) {
-        return c.json({ error: "Forbidden" }, 403);
-      }
+      const access = await authorizeWorkspace(accessCtx(c), workspaceId, "manage_members");
+      if (!access.ok) return deniedResponse(c, access, { notFound: "Workspace not found", forbiddenAs: 403 });
+      const self = access.value;
 
       const body = c.req.valid("json");
       if (!canManageRole(self.role, body.role)) {

@@ -11,12 +11,12 @@
 import { SignJWT } from "jose";
 import type { JWTVerifyGetKey } from "jose";
 import type { Role } from "../../shared/api";
-import type { Project } from "../project/model";
-import type { ProjectStore } from "../project/repository";
-import type { Member } from "../member/model";
-import type { MemberStore } from "../member/repository";
-import type { Deps } from "../types";
-import { ASSET_ID, fixture, SINGLE_FILE_ID } from "./fixture";
+import type { Project } from "../../core/project/model";
+import type { ProjectStore } from "../../core/project/repository";
+import type { Member } from "../../core/member/model";
+import type { MemberStore } from "../../core/member/repository";
+import type { Deps } from "../../core/types";
+import { ASSET_ID, fixture, memberTenancy, SINGLE_FILE_ID } from "./fixture";
 
 export const SUFFIX = ".serve.example.test";
 export const PROJECT_ID = "p1";
@@ -41,8 +41,7 @@ export class MemoryMemberStore implements MemberStore {
     return this.members.get(`${workspaceId}:${userId}`) ?? null;
   }
   async list(): Promise<Member[]> { return [...this.members.values()]; }
-  async listByUser(): Promise<Member[]> { return [...this.members.values()]; }
-  async delete(): Promise<void> {}
+  async listForCaller(): Promise<Member[]> { return [...this.members.values()]; }
 }
 
 export async function token(sub = USER): Promise<string> {
@@ -79,7 +78,7 @@ export async function siteFixture(options: SiteFixtureOptions = {}) {
   const f = await fixture({
     siteHostSuffix: "suffix" in options ? options.suffix : SUFFIX,
     projects,
-    members,
+    tenancy: memberTenancy(members),
     // Deleting a project asset moves the storage counters.
     storageUsage: {
       async get() { return null; },

@@ -107,6 +107,7 @@ export async function completeUploadSession(
   if (job && archiveFormat && options?.extractionQueue) {
     try {
       await options.extractionQueue.send({
+        jobId: id,
         assetId: id,
         archiveKey: key,
         archiveFilename: session.filename,

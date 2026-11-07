@@ -11,8 +11,8 @@
  *
  * The asset routes hang off `assetRoutes` and the project one off
  * `projectRoutes`; both live here so the whole surface of one feature reads in
- * one file. Authorization is the asset's: `canAccessAsset` with the
- * `manage-hosts` action, which is editor-and-above (the same rule as an asset
+ * one file. Authorization is the asset's: `authorizeAsset` with the
+ * `manage_hosts` action, which is editor-and-above (the same rule as an asset
  * update), so a viewer can list names but not claim or release one.
  */
 
@@ -20,8 +20,7 @@ import type { Hono } from "hono";
 import { describeRoute, resolver, validator as zValidator } from "hono-openapi";
 import type { Context } from "hono";
 import type { AppEnv } from "../types";
-import { canAccessAsset } from "../asset/access";
-import { accessCtx } from "../asset/handler/shared";
+import { accessCtx, authorizeAsset, authorizeProject, deniedResponse } from "../auth/access";
 import { getAssetMetadata } from "../asset/usecase";
 import type { SiteHost as SiteHostRow } from "./repository";
 import {
@@ -36,9 +35,6 @@ import {
   siteHostListResponseSchema, siteHostParamSchema, siteHostResponseSchema,
   siteHostVerificationFailedSchema, updateSiteHostBodySchema,
 } from "../../shared/openapi";
-
-/** The action name checked against the role map (core/auth/roles.ts). */
-export const MANAGE_HOSTS_ACTION = "manage-hosts";
 
 export function siteHostDeps(c: Context<AppEnv>): SiteHostDeps {
   return {
@@ -97,10 +93,9 @@ export function registerAssetHostRoutes(app: Hono<AppEnv>) {
     }),
     zValidator("param", idParamSchema),
     async (c) => {
-      const asset = await getAssetMetadata(c.get("metadata"), c.req.valid("param").id);
-      if (!asset || !await canAccessAsset(asset, accessCtx(c), "read")) {
-        return c.json({ error: "Asset not found" }, 404);
-      }
+      const access = await authorizeAsset(accessCtx(c), await getAssetMetadata(c.get("metadata"), c.req.valid("param").id), "read_asset");
+      if (!access.ok) return deniedResponse(c, access, { notFound: "Asset not found" });
+      const asset = access.value;
       const hosts = await listAssetSiteHosts(siteHostDeps(c), asset.id);
       return c.json({ hosts: hosts.map((h) => toSiteHostDto(h, c.get("baseUrl"))) });
     },
@@ -126,10 +121,9 @@ export function registerAssetHostRoutes(app: Hono<AppEnv>) {
     zValidator("param", idParamSchema),
     zValidator("json", claimSiteHostBodySchema),
     async (c) => {
-      const asset = await getAssetMetadata(c.get("metadata"), c.req.valid("param").id);
-      if (!asset || !await canAccessAsset(asset, accessCtx(c), MANAGE_HOSTS_ACTION)) {
-        return c.json({ error: "Asset not found" }, 404);
-      }
+      const access = await authorizeAsset(accessCtx(c), await getAssetMetadata(c.get("metadata"), c.req.valid("param").id), "manage_hosts");
+      if (!access.ok) return deniedResponse(c, access, { notFound: "Asset not found" });
+      const asset = access.value;
 
       const deps = siteHostDeps(c);
       const body = c.req.valid("json");
@@ -165,10 +159,9 @@ export function registerAssetHostRoutes(app: Hono<AppEnv>) {
     zValidator("param", siteHostParamSchema),
     async (c) => {
       const { id, hostname } = c.req.valid("param");
-      const asset = await getAssetMetadata(c.get("metadata"), id);
-      if (!asset || !await canAccessAsset(asset, accessCtx(c), "read")) {
-        return c.json({ error: "Asset not found" }, 404);
-      }
+      const access = await authorizeAsset(accessCtx(c), await getAssetMetadata(c.get("metadata"), id), "read_asset");
+      if (!access.ok) return deniedResponse(c, access, { notFound: "Asset not found" });
+      const asset = access.value;
 
       const deps = siteHostDeps(c);
       const row = await getAssetSiteHost(deps, { assetId: asset.id, hostname });
@@ -203,12 +196,11 @@ export function registerAssetHostRoutes(app: Hono<AppEnv>) {
     zValidator("param", siteHostParamSchema),
     async (c) => {
       const { id, hostname } = c.req.valid("param");
-      const asset = await getAssetMetadata(c.get("metadata"), id);
       // Verification publishes a hostname, so it is a change to the asset's
       // site, not a read of it: the same bar as claim and release.
-      if (!asset || !await canAccessAsset(asset, accessCtx(c), MANAGE_HOSTS_ACTION)) {
-        return c.json({ error: "Asset not found" }, 404);
-      }
+      const access = await authorizeAsset(accessCtx(c), await getAssetMetadata(c.get("metadata"), id), "manage_hosts");
+      if (!access.ok) return deniedResponse(c, access, { notFound: "Asset not found" });
+      const asset = access.value;
 
       const deps = siteHostDeps(c);
       const result = await verifySiteHost(deps, { assetId: asset.id, hostname });
@@ -249,12 +241,11 @@ export function registerAssetHostRoutes(app: Hono<AppEnv>) {
     zValidator("json", updateSiteHostBodySchema),
     async (c) => {
       const { id, hostname } = c.req.valid("param");
-      const asset = await getAssetMetadata(c.get("metadata"), id);
       // Same bar as claiming and releasing: taking a public site down is a
       // change to it, not a read of it.
-      if (!asset || !await canAccessAsset(asset, accessCtx(c), MANAGE_HOSTS_ACTION)) {
-        return c.json({ error: "Asset not found" }, 404);
-      }
+      const access = await authorizeAsset(accessCtx(c), await getAssetMetadata(c.get("metadata"), id), "manage_hosts");
+      if (!access.ok) return deniedResponse(c, access, { notFound: "Asset not found" });
+      const asset = access.value;
 
       const body = c.req.valid("json");
       const result = await updateSiteHost(siteHostDeps(c), {
@@ -286,10 +277,9 @@ export function registerAssetHostRoutes(app: Hono<AppEnv>) {
     zValidator("param", siteHostParamSchema),
     async (c) => {
       const { id, hostname } = c.req.valid("param");
-      const asset = await getAssetMetadata(c.get("metadata"), id);
-      if (!asset || !await canAccessAsset(asset, accessCtx(c), MANAGE_HOSTS_ACTION)) {
-        return c.json({ error: "Asset not found" }, 404);
-      }
+      const access = await authorizeAsset(accessCtx(c), await getAssetMetadata(c.get("metadata"), id), "manage_hosts");
+      if (!access.ok) return deniedResponse(c, access, { notFound: "Asset not found" });
+      const asset = access.value;
 
       const result = await releaseSiteHost(siteHostDeps(c), { assetId: asset.id, hostname });
       if (!result.ok) return c.json({ error: result.error }, result.status);
@@ -314,16 +304,11 @@ export function registerProjectHostRoutes(app: Hono<AppEnv>) {
       const user = c.get("user");
       if (!user) return c.json({ error: "Authentication required" }, 401);
 
-      // Same visibility rule as GET /projects/:id — owner, or a member of the
-      // project's workspace — and the same 404 for everyone else, so the
+      // Same visibility rule and the same 404 as GET /projects/:id, so the
       // endpoint does not confirm that a project exists.
-      const project = await c.get("projects").find(c.req.valid("param").id);
-      if (!project) return c.json({ error: "Project not found" }, 404);
-      const isOwner = project.ownerId === user.sub;
-      const isMember = project.workspaceId
-        ? (await c.get("members").find(project.workspaceId, user.sub)) !== null
-        : false;
-      if (!isOwner && !isMember) return c.json({ error: "Project not found" }, 404);
+      const access = await authorizeProject(accessCtx(c), c.req.valid("param").id, "read");
+      if (!access.ok) return deniedResponse(c, access, { notFound: "Project not found" });
+      const project = access.value;
 
       const hosts = await listProjectSiteHosts(siteHostDeps(c), project.id);
       return c.json({ hosts: hosts.map((h) => toSiteHostDto(h, c.get("baseUrl"))) });

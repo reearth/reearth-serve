@@ -3,8 +3,7 @@ import { describeRoute } from "hono-openapi";
 import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata, updateAsset, setAssetAccess, checkSpaChange, enrichAssetWithVersion } from "../usecase";
-import { canAccessAsset } from "../access";
-import { accessCtx } from "./shared";
+import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { assetResponseSchema, idParamSchema, updateAssetBodySchema } from "../../../shared/openapi";
 import { jsonError, jsonResponse } from "../../openapi";
 
@@ -34,10 +33,9 @@ export function registerUpdateAssetRoute(app: Hono<AppEnv>) {
       const versions = c.get("versions");
       const { id } = c.req.valid("param");
 
-      const existing = await getAssetMetadata(metadata, id);
-      if (!existing || !await canAccessAsset(existing, accessCtx(c), "update")) {
-        return c.json({ error: "Asset not found" }, 404);
-      }
+      const access = await authorizeAsset(accessCtx(c), await getAssetMetadata(metadata, id), "update_asset");
+      if (!access.ok) return deniedResponse(c, access, { notFound: "Asset not found" });
+      const existing = access.value;
 
       const body = c.req.valid("json");
 
@@ -49,9 +47,8 @@ export function registerUpdateAssetRoute(app: Hono<AppEnv>) {
         if (!check.ok) return c.json({ error: check.error }, check.status);
       }
 
-      const access = body.access;
-      if (access !== undefined) {
-        const result = await setAssetAccess(metadata, existing, { access, password: body.password }, {
+      if (body.access !== undefined) {
+        const result = await setAssetAccess(metadata, existing, { access: body.access, password: body.password }, {
           signingSecret: c.get("signingSecret"),
         });
         if (!result.ok) return c.json({ error: result.error }, result.status);

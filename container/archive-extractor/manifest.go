@@ -24,13 +24,13 @@ type FileEntry struct {
 // ManifestWriter manages writing manifest chunks and the final manifest to storage.
 type ManifestWriter struct {
 	storage ObjectStorage
-	assetID string
+	root    string // the run's key prefix
 	chunk   []FileEntry
 }
 
 // NewManifestWriter creates a new ManifestWriter.
-func NewManifestWriter(storage ObjectStorage, assetID string) *ManifestWriter {
-	return &ManifestWriter{storage: storage, assetID: assetID}
+func NewManifestWriter(storage ObjectStorage, root string) *ManifestWriter {
+	return &ManifestWriter{storage: storage, root: root}
 }
 
 const manifestChunkSize = 1000
@@ -51,7 +51,7 @@ func (mw *ManifestWriter) FlushChunk(ctx context.Context, chunkIndex *int) error
 		return nil
 	}
 
-	key := fmt.Sprintf("assets/%s/_archive/_manifest_chunks/%06d.jsonl", mw.assetID, *chunkIndex)
+	key := fmt.Sprintf("%s/_archive/_manifest_chunks/%06d.jsonl", mw.root, *chunkIndex)
 	data := encodeJSONL(mw.chunk)
 
 	if err := mw.storage.PutObject(ctx, key, bytes.NewReader(data), int64(len(data)), "application/x-ndjson", nil); err != nil {
@@ -79,7 +79,7 @@ func (mw *ManifestWriter) FlushChunk(ctx context.Context, chunkIndex *int) error
 // chunks. The seen-set costs ~50 bytes per file (25 MB for a 500k-file
 // archive), well within the standard-2 container.
 func (mw *ManifestWriter) Finalize(ctx context.Context, totalChunks int) error {
-	finalKey := fmt.Sprintf("assets/%s/_archive/_manifest.jsonl", mw.assetID)
+	finalKey := mw.root + "/_archive/_manifest.jsonl"
 
 	pr, pw := io.Pipe()
 	go func() {
@@ -89,7 +89,7 @@ func (mw *ManifestWriter) Finalize(ctx context.Context, totalChunks int) error {
 				_ = pw.CloseWithError(err)
 				return
 			}
-			key := fmt.Sprintf("assets/%s/_archive/_manifest_chunks/%06d.jsonl", mw.assetID, i)
+			key := fmt.Sprintf("%s/_archive/_manifest_chunks/%06d.jsonl", mw.root, i)
 			body, err := mw.storage.GetObject(ctx, key)
 			if err != nil {
 				_ = pw.CloseWithError(fmt.Errorf("failed to read manifest chunk %d: %w", i, err))
@@ -141,7 +141,7 @@ func (mw *ManifestWriter) Finalize(ctx context.Context, totalChunks int) error {
 // no longer exist, and every retry of Finalize would fail.
 func (mw *ManifestWriter) DeleteChunks(ctx context.Context, totalChunks int) {
 	for i := range totalChunks {
-		key := fmt.Sprintf("assets/%s/_archive/_manifest_chunks/%06d.jsonl", mw.assetID, i)
+		key := fmt.Sprintf("%s/_archive/_manifest_chunks/%06d.jsonl", mw.root, i)
 		_ = mw.storage.DeleteObject(ctx, key)
 	}
 }

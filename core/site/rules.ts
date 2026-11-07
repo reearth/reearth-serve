@@ -17,7 +17,7 @@
  *    rule headers *before* its own without checking anything.
  * 2. **Redirect targets stay inside the site.** Netlify allows a redirect to
  *    another origin because the name belongs to the site's owner either way.
- *    Here a site lives under `serve.reearth.land`, and letting an uploaded zip
+ *    Here a site lives under `serve.example.com`, and letting an uploaded zip
  *    bounce visitors off that name is a phishing primitive. Targets must be
  *    rooted paths; external ones are refused with a warning. A deliberate
  *    limit, not an oversight.

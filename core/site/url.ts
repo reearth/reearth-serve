@@ -29,11 +29,11 @@ if (import.meta.vitest) {
     expect(
       siteUrlFor({
         assetId: "3f9a1c2b4d5e6f70",
-        baseUrl: "https://serve.reearth.land",
-        siteHostSuffix: ".serve.reearth.land",
+        baseUrl: "https://serve.example.com",
+        siteHostSuffix: ".serve.example.com",
         archive: true,
       }),
-    ).toBe("https://3f9a1c2b4d5e6f70.serve.reearth.land/");
+    ).toBe("https://3f9a1c2b4d5e6f70.serve.example.com/");
   });
 
   test("siteUrlFor follows the scheme (and port suffix) of a local deployment", () => {
@@ -48,8 +48,8 @@ if (import.meta.vitest) {
   });
 
   test("siteUrlFor is undefined without a suffix or for a non-archive", () => {
-    const base = { assetId: "3f9a1c2b4d5e6f70", baseUrl: "https://serve.reearth.land" };
+    const base = { assetId: "3f9a1c2b4d5e6f70", baseUrl: "https://serve.example.com" };
     expect(siteUrlFor({ ...base, siteHostSuffix: undefined, archive: true })).toBeUndefined();
-    expect(siteUrlFor({ ...base, siteHostSuffix: ".serve.reearth.land", archive: false })).toBeUndefined();
+    expect(siteUrlFor({ ...base, siteHostSuffix: ".serve.example.com", archive: false })).toBeUndefined();
   });
 }

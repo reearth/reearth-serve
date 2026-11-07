@@ -2,15 +2,15 @@ import { describe, expect, test } from "vitest";
 import {
   APP_JS, ASSET_ID, DOCS_HTML, fixture, INDEX_HTML, protect, seedEntry, seedNotFoundPage,
   SINGLE_FILE_ID, VERSION_ID,
-} from "../testing/fixture";
-import { siteFixture, SUFFIX } from "../testing/site-fixture";
+} from "../../adapters/memory/fixture";
+import { siteFixture, SUFFIX } from "../../adapters/memory/site-fixture";
 import { versionThumbKey } from "../asset/usecase/shared";
 import { thumbnailFilename } from "../thumbnail/sizes";
 import { DEFAULT_CACHE_CONTROL, ENTRY_CACHE_CONTROL, PINNED_CACHE_CONTROL } from "./caching";
 
 // Delivery semantics that static-site hosting depends on (ADR-013): index
 // file resolution, directory redirects, and the cache/ETag policy. Everything
-// runs against the in-memory adapters seeded by core/testing/fixture.ts.
+// runs against the in-memory adapters seeded by adapters/memory/fixture.ts.
 
 describe("index file resolution", () => {
   test("GET /files/:id serves the archive's index.html", async () => {

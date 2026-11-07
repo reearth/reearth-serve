@@ -1,11 +1,9 @@
 import type { AtomicWrites, FileStorage, MetadataStore, VersionStore, UploadSessionStore, PresignedUrlGenerator } from "./asset/repository";
 import type { JobStore } from "./job/repository";
-import type { AuthUser } from "./auth/types";
+import type { AuthUser, VerifiedCaller } from "./auth/types";
 import type { AuthConfig } from "./auth/middleware";
-import type { Authorizer } from "./auth/authorizer";
 import type { ProjectStore } from "./project/repository";
-import type { WorkspaceStore } from "./workspace/repository";
-import type { MemberStore } from "./member/repository";
+import type { Tenancy, TenantScope } from "./tenancy/port";
 import type { SessionStore } from "./session/repository";
 import type { ContainerLauncher } from "./container/port";
 import type { StorageUsageStore } from "./asset/repository";
@@ -35,10 +33,7 @@ export type ContextDeps = {
   jobs: JobStore;
   ttlSeconds: number;
   baseUrl: string;
-  authorizer: Authorizer;
   projects: ProjectStore;
-  workspaces: WorkspaceStore;
-  members: MemberStore;
   extractionQueue: JobQueue<ExtractionMessage> | null;
   thumbnailQueue: JobQueue<ThumbnailMessage> | null;
   storageUsage: StorageUsageStore;
@@ -46,7 +41,7 @@ export type ContextDeps = {
   anonymousUploadEnabled: boolean;
   /**
    * `SITE_HOST_SUFFIX` — the wildcard suffix site hosts live under, e.g.
-   * `.serve.reearth.land` (ADR-013 B1). Undefined ⇒ site hosts are off and
+   * `.serve.example.com` (ADR-013 B1). Undefined ⇒ site hosts are off and
    * upload responses carry no `siteUrl`.
    */
   siteHostSuffix: string | undefined;
@@ -109,11 +104,6 @@ export type Limits = {
 };
 
 /**
- * The whole application's dependency set: everything in `AppEnv.Variables`
- * except the per-request `user` / `sessionId`, plus the request-independent
- * collaborators and configuration that `createApp` and the queue/cron
- * handlers need but individual route handlers never see.
- *
  * A composition root (`adapters/cloudflare/cloudflare-deps.ts` on Cloudflare) builds this
  * from provider bindings; nothing below this type knows which cloud it runs
  * on. See ADR-012 §1.
@@ -124,6 +114,7 @@ export type Deps = ContextDeps & {
   /** Shared secret guarding /api/internal/*. Undefined ⇒ the routes 503. */
   internalApiSecret: string | undefined;
   auth: AuthConfig;
+  tenancy: Tenancy;
   containers: ContainerLauncher;
   /** How long an extraction job may sit untouched before the cron retriggers it. */
   extractionStuckThresholdMs: number;
@@ -132,7 +123,10 @@ export type Deps = ContextDeps & {
 
 export type AppEnv = {
   Variables: ContextDeps & {
+    caller: VerifiedCaller | null;
+    directory: Tenancy;
     user: AuthUser | null;
+    tenancy: TenantScope;
     sessionId: string | null;
     /**
      * True when the request arrived on a site host and was rewritten into

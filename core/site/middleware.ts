@@ -53,7 +53,7 @@ export type SiteTarget =
  * visitor's headers onto the rewritten request, and a visitor who sent this
  * one themselves would otherwise choose their own cache policy.
  */
-export const SITE_PREVIEW_HEADER = "x-reearth-site-preview";
+export const SITE_PREVIEW_HEADER = "x-serve-site-preview";
 
 /**
  * What the middleware hands the resolver.
@@ -85,7 +85,7 @@ export const resolveIdLabel: SiteHostResolver = async (query) =>
     : null;
 
 export interface SiteHostOptions {
-  /** `SITE_HOST_SUFFIX`, e.g. `.serve.reearth.land`. Undefined ⇒ feature off. */
+  /** `SITE_HOST_SUFFIX`, e.g. `.serve.example.com`. Undefined ⇒ feature off. */
   suffix: string | undefined;
   /**
    * `BASE_URL`. Its host is the apex — the one hostname that is never a site
@@ -107,8 +107,8 @@ export interface SiteHostOptions {
  *
  * The suffix is compared against the `Host` header verbatim, so it carries
  * the port in local development (`.localhost:8787`). It must start with a
- * dot: without one, `notserve.reearth.land` would match a suffix of
- * `serve.reearth.land` and every unrelated host would turn into a file
+ * dot: without one, `notserve.example.com` would match a suffix of
+ * `serve.example.com` and every unrelated host would turn into a file
  * lookup. Fails loudly at composition time rather than silently disabling
  * the feature.
  */
@@ -379,17 +379,17 @@ if (import.meta.vitest) {
   test("normalizeSiteHostSuffix lowercases and requires a leading dot", () => {
     expect(normalizeSiteHostSuffix(undefined)).toBeUndefined();
     expect(normalizeSiteHostSuffix("")).toBeUndefined();
-    expect(normalizeSiteHostSuffix(".Serve.ReEarth.Land")).toBe(".serve.reearth.land");
+    expect(normalizeSiteHostSuffix(".Serve.Example.Com")).toBe(".serve.example.com");
     expect(normalizeSiteHostSuffix(".localhost:8787")).toBe(".localhost:8787");
-    expect(() => normalizeSiteHostSuffix("serve.reearth.land")).toThrow(/must start with/);
+    expect(() => normalizeSiteHostSuffix("serve.example.com")).toThrow(/must start with/);
   });
 
   test("siteHostLabel takes the single leading label, port included", () => {
-    expect(siteHostLabel("abc.serve.reearth.land", ".serve.reearth.land")).toBe("abc");
-    expect(siteHostLabel("ABC.Serve.ReEarth.Land", ".serve.reearth.land")).toBe("abc");
-    expect(siteHostLabel("serve.reearth.land", ".serve.reearth.land")).toBeNull();
-    expect(siteHostLabel("a.b.serve.reearth.land", ".serve.reearth.land")).toBeNull();
-    expect(siteHostLabel("notserve.reearth.land", ".serve.reearth.land")).toBeNull();
+    expect(siteHostLabel("abc.serve.example.com", ".serve.example.com")).toBe("abc");
+    expect(siteHostLabel("ABC.Serve.Example.Com", ".serve.example.com")).toBe("abc");
+    expect(siteHostLabel("serve.example.com", ".serve.example.com")).toBeNull();
+    expect(siteHostLabel("a.b.serve.example.com", ".serve.example.com")).toBeNull();
+    expect(siteHostLabel("notserve.example.com", ".serve.example.com")).toBeNull();
     expect(siteHostLabel("abc.localhost:8787", ".localhost:8787")).toBe("abc");
     expect(siteHostLabel("localhost:8787", ".localhost:8787")).toBeNull();
   });
@@ -405,35 +405,35 @@ if (import.meta.vitest) {
   });
 
   test("apexHost is the host of BASE_URL, port included", () => {
-    expect(apexHost("https://serve.reearth.land")).toBe("serve.reearth.land");
+    expect(apexHost("https://serve.example.com")).toBe("serve.example.com");
     expect(apexHost("http://localhost:8788/base")).toBe("localhost:8788");
     expect(apexHost("not a url")).toBeNull();
   });
 
   test("isApexHost names the management surface and nothing else", () => {
-    const base = "https://serve.reearth.land";
-    const suffix = ".serve.reearth.land";
-    expect(isApexHost("serve.reearth.land", base, suffix)).toBe(true);
+    const base = "https://serve.example.com";
+    const suffix = ".serve.example.com";
+    expect(isApexHost("serve.example.com", base, suffix)).toBe(true);
     // The wildcard's parent, even when BASE_URL points somewhere else.
-    expect(isApexHost("serve.reearth.land", "https://api.reearth.land", suffix)).toBe(true);
+    expect(isApexHost("serve.example.com", "https://api.example.com", suffix)).toBe(true);
     expect(isApexHost("", base, suffix)).toBe(true);
     expect(isApexHost(undefined, base, suffix)).toBe(true);
     expect(isApexHost("localhost", base, suffix)).toBe(true);
     expect(isApexHost("localhost:8788", base, suffix)).toBe(true);
     expect(isApexHost("127.0.0.1:5173", base, suffix)).toBe(true);
 
-    expect(isApexHost("kawasaki.serve.reearth.land", base, suffix)).toBe(false);
+    expect(isApexHost("kawasaki.serve.example.com", base, suffix)).toBe(false);
     expect(isApexHost("map.city.example.jp", base, suffix)).toBe(false);
     // A site host under a loopback suffix is still a site host.
     expect(isApexHost("abc.localhost:8788", "http://localhost:8788", ".localhost:8788")).toBe(false);
   });
 
   test("isSiteHost is 'not the apex', and is off without a suffix", () => {
-    const opts = { baseUrl: "https://serve.reearth.land", suffix: ".serve.reearth.land" };
-    expect(isSiteHost("kawasaki.serve.reearth.land", opts)).toBe(true);
+    const opts = { baseUrl: "https://serve.example.com", suffix: ".serve.example.com" };
+    expect(isSiteHost("kawasaki.serve.example.com", opts)).toBe(true);
     // B5: a custom domain is a site host although it ends with nothing of ours.
     expect(isSiteHost("map.city.example.jp", opts)).toBe(true);
-    expect(isSiteHost("serve.reearth.land", opts)).toBe(false);
+    expect(isSiteHost("serve.example.com", opts)).toBe(false);
     expect(isSiteHost("localhost:8788", opts)).toBe(false);
     expect(isSiteHost("map.city.example.jp", { ...opts, suffix: undefined })).toBe(false);
   });

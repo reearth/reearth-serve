@@ -11,6 +11,7 @@
     "shared/**/*",
     "cli/**/*",
     "e2e/**/*",
+    "scripts/*.ts",
     "env.d.ts",
     "wasm.d.ts"
   ],

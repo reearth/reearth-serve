@@ -2,6 +2,7 @@
  * Environment parsing for the Node runtime, kept separate from the wiring so
  * it can be unit-tested without opening a database or a socket.
  */
+import { parseTenancyConfig, type TenancyConfig } from "../../adapters/tenancy";
 
 import { parseCredentialedOrigins } from "../../core/file/cors";
 import { checkSiteIsolation } from "../../core/site/isolation";
@@ -41,6 +42,7 @@ export type NodeConfig = {
   assetTtlSeconds: number;
   oidcIssuerUrl: string | undefined;
   oidcAudience: string | undefined;
+  tenancy: TenancyConfig;
   /**
    * Wildcard suffix per-asset site hosts live under, e.g.
    * `.serve.reearth.land` or `.localhost:8788` locally (ADR-013 B1). Unset ⇒
@@ -100,6 +102,7 @@ export function loadConfig(env: Env): NodeConfig {
     siteDomainIsPublicSuffix: isolation.publicSuffixOverride,
     siteDnsResolverUrl: env.SITE_DNS_RESOLVER_URL || undefined,
     siteFallbackOrigin: env.SITE_FALLBACK_ORIGIN || undefined,
+    tenancy: parseTenancyConfig(env),
     objectStore: objectStore(env),
     containerLauncher: containerLauncher(env.CONTAINER_LAUNCHER),
   };

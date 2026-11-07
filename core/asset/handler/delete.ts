@@ -3,8 +3,7 @@ import { describeRoute } from "hono-openapi";
 import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata, deleteAsset } from "../usecase";
-import { canAccessAsset } from "../access";
-import { accessCtx } from "./shared";
+import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { siteHostDeps } from "../../site/handler";
 import { idParamSchema } from "../../../shared/openapi";
 import { jsonError } from "../../openapi";
@@ -24,10 +23,9 @@ export function registerDeleteRoute(app: Hono<AppEnv>) {
       const metadata = c.get("metadata");
       const { id } = c.req.valid("param");
 
-      const asset = await getAssetMetadata(metadata, id);
-      if (!asset || !await canAccessAsset(asset, accessCtx(c), "delete")) {
-        return c.json({ error: "Asset not found" }, 404);
-      }
+      const access = await authorizeAsset(accessCtx(c), await getAssetMetadata(metadata, id), "delete_asset");
+      if (!access.ok) return deniedResponse(c, access, { notFound: "Asset not found" });
+      const asset = access.value;
 
       const scopes: string[] = [];
       if (asset.projectId) {

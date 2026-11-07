@@ -8,7 +8,7 @@
  * status mirror — is what is actually tested.
  */
 import { describe, expect, test } from "vitest";
-import { ASSET_ID, fixture, seedEntry, VERSION_ID } from "../testing/fixture";
+import { ASSET_ID, fixture, seedEntry, VERSION_ID } from "../../adapters/memory/fixture";
 import type { AssetMetadata } from "../asset/model";
 import type { AtomicWrites } from "../asset/repository";
 import type { Job } from "../job/model";

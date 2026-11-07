@@ -120,9 +120,9 @@ export function newVerificationToken(): string {
 if (import.meta.vitest) {
   const { describe, test, expect } = import.meta.vitest;
 
-  const SUFFIX = ".serve.reearth.land";
+  const SUFFIX = ".serve.example.com";
   const check = (input: string) =>
-    validateCustomHostname(input, { suffix: SUFFIX, apexHost: "serve.reearth.land" });
+    validateCustomHostname(input, { suffix: SUFFIX, apexHost: "serve.example.com" });
   const errorOf = (input: string) => {
     const r = check(input);
     return r.ok ? null : r.error;
@@ -173,19 +173,19 @@ if (import.meta.vitest) {
 
   describe("validateCustomHostname rejects our own domain", () => {
     test("anything under the configured suffix", () => {
-      expect(errorOf("kawasaki.serve.reearth.land")).toBe(CUSTOM_HOST_ERRORS.reserved);
-      expect(errorOf("a.b.serve.reearth.land")).toBe(CUSTOM_HOST_ERRORS.reserved);
+      expect(errorOf("kawasaki.serve.example.com")).toBe(CUSTOM_HOST_ERRORS.reserved);
+      expect(errorOf("a.b.serve.example.com")).toBe(CUSTOM_HOST_ERRORS.reserved);
     });
 
     test("the suffix's own apex and the deployment's apex", () => {
-      expect(errorOf("serve.reearth.land")).toBe(CUSTOM_HOST_ERRORS.reserved);
+      expect(errorOf("serve.example.com")).toBe(CUSTOM_HOST_ERRORS.reserved);
       expect(
-        validateCustomHostname("api.reearth.land", { apexHost: "api.reearth.land" }),
+        validateCustomHostname("api.example.com", { apexHost: "api.example.com" }),
       ).toEqual({ ok: false, error: CUSTOM_HOST_ERRORS.reserved });
     });
 
     test("but a lookalike that merely starts the same is fine", () => {
-      expect(check("notserve.reearth.land").ok).toBe(true);
+      expect(check("notserve.example.com").ok).toBe(true);
     });
   });
 

@@ -34,8 +34,8 @@ npm run cli -- upload myfile.geojson
 ```bash
 npm run cli -- upload ./dist --site --name my-map
 # → http://localhost:5173/files/abc123/dist.zip
-#   Site: https://abc123.serve.reearth.land/
-#   Named site: https://my-map.serve.reearth.land/
+#   Site: https://abc123.sites.example.net/
+#   Named site: https://my-map.sites.example.net/
 ```
 
 `upload <dir>` zips the directory (stored, not deflated) into a temp file and uploads that as `<dirname>.zip`, so the whole path from a build output to a URL is one command. `--site` turns on the SPA fallback, `--name <slug>` claims a named site host, and `--password` prompts for a shared password — all three need a project, so run `project use <id>` first.
@@ -52,7 +52,7 @@ curl -X POST http://localhost:5173/api/v1/assets \
 
 When calling with `Authorization: Bearer <jwt>`, add
 `X-Project-Id: <projectId>` — authenticated uploads must be project-scoped
-and the caller must be a member of the project's workspace. Anonymous
+and the caller needs `create_asset` on that project (see [Authorization](#authorization)). Anonymous
 (demo-mode) uploads omit both headers and are tracked by `X-Session-Id`.
 
 The production endpoint is `https://serve.reearth.land`. Point the CLI at it via `REEARTH_SERVE_ENDPOINT=https://serve.reearth.land` (or `--endpoint` per command).
@@ -130,6 +130,7 @@ SSR on Node is out of scope, and any other path returns 404 saying so.
 | `SITE_DOMAIN_IS_PUBLIC_SUFFIX` | (unset) | `"true"` skips that check, for a domain on the Public Suffix List (and for `localhost`); logged at startup |
 | `SITE_DNS_RESOLVER_URL` | `https://cloudflare-dns.com/dns-query` | DNS-over-HTTPS endpoint the custom-domain TXT check is asked of |
 | `SITE_FALLBACK_ORIGIN` | (unset) | What a customer CNAMEs their domain at; unset ⇒ the host of `BASE_URL` |
+| `CERBOS_ENDPOINT` | (unset) | Cerbos PDP base URL (http or https); unset ⇒ the built-in policy table decides (see [Authorization](#authorization)). Any other value fails at startup |
 | `OBJECT_STORE_*` | (unset) | Reserved for the future S3 adapter; until then storage is in-process |
 | `CONTAINER_LAUNCHER` | `none` | Only `none` is implemented; any other value fails at startup |
 
@@ -179,7 +180,7 @@ not persisted.
 | `GET` | `/api/v1/jobs` | List jobs (`?limit=&cursor=`) |
 | `GET` | `/api/v1/jobs/:id` | Get extraction job status |
 | `POST` | `/api/v1/jobs/:id/retry` | Retry a failed extraction job |
-| `GET` | `/api/v1/me` | Get current user info + workspace list |
+| `GET` | `/api/v1/me` | Get current user info + every workspace the user belongs to |
 | `GET` | `/api/v1/projects` | List projects (`?workspaceId=` filter) |
 | `POST` | `/api/v1/projects` | Create project |
 | `GET` | `/api/v1/projects/:id` | Get project |
@@ -218,6 +219,8 @@ These endpoints require `Authorization: Bearer $INTERNAL_API_SECRET` — set it 
 | `GET` | `/files/:id/_thumbs/:size.webp` | Image thumbnail (`xs`/`sm`/`md`/`lg`) |
 | `GET` | `/files/:id/:filename?thumb=:size` | Same thumbnail, accessed via query parameter |
 | `POST` | `/files/:id/_serve/auth` | Password form of a protected asset (`/_serve/auth` on a site host) — sets the cookie and redirects back |
+
+File delivery never reads or mints an anonymous session. `/files` responses carry no `X-Session-Id`, and the request's `X-Session-Id` header is ignored.
 
 Assets support **versioning** — uploading to an existing asset (`POST /api/v1/assets/:id`) creates a new version while keeping the asset ID and URL stable. Each asset can have an explicit active version; if unset, the latest version is served. File URLs (`/files/:id/:filename`) resolve the active/latest version automatically. Version IDs can also be used directly in file URLs. Demo mode assets (no project) auto-expire after 1 hour. Project assets are permanent. See [ADR-005](./docs/adr/005-asset-versioning.md).
 
@@ -279,7 +282,7 @@ reearth-serve asset protect <assetId> --off        # remove it
 **Named sites.** An ID-shaped host is correct but not printable, so an archive asset in a project can also be given a name:
 
 ```bash
-reearth-serve asset host add <assetId> kawasaki-flood-map   # → https://kawasaki-flood-map.serve.reearth.land/
+reearth-serve asset host add <assetId> kawasaki-flood-map   # → https://kawasaki-flood-map.sites.example.net/
 reearth-serve asset host list <assetId>                     # hostname, state, URL
 reearth-serve asset host disable <assetId> kawasaki-flood-map   # or --all for every name
 reearth-serve asset host enable <assetId> --all
@@ -290,7 +293,7 @@ reearth-serve asset host remove <assetId> kawasaki-flood-map
 
 Names are 3–63 characters of `[a-z0-9-]` with no leading or trailing hyphen and no `--` anywhere (`--` is reserved for preview hosts), are not ID-shaped, and are not on the reserved list (`www`, `api`, `admin`, `latest`, `v<n>`, … — also blocked as hyphen-delimited parts, so `api-v2` is out). Claiming requires **editor or above** on the asset's **project**: demo-mode assets cannot hold a name, and only archives can, since a single file has no site. Twenty active names per project; one asset may have several names. A name has three states: **enabled** (it serves the site), **disabled** (`asset host disable` — the host answers `503` with a "This site is temporarily unavailable" page, `Retry-After: 3600`, and the name stays held, so taking a site down no longer means deleting the asset), and **released**. Removing a name **releases** it rather than deleting it — for 30 days the host answers `410` with a plain "This site has moved or been removed" page and nobody can claim it, which closes the subdomain-takeover path where a stale link starts serving someone else's content. Deleting an asset releases its names the same way. ID hosts and `/files/:id/` are unaffected by any of this. See [ADR-013 B2–B3](./docs/adr/013-static-site-hosting.md).
 
-**Preview hosts.** A name can also serve its own version history, under `--` (a wildcard certificate covers one label, so `v3.name.serve…` would need a second one): `v3--kawasaki-flood-map.serve.reearth.land` is version 3, pinned and immutable, and `latest--kawasaki-flood-map.serve.reearth.land` is the newest version whatever the active one is — the same bytes as the production name but never cached as immutable, because it moves on the next upload. Every preview response is `X-Robots-Tag: noindex`, so only the production name is indexed. Version numbers are sequential and therefore guessable, so previews are **off by default** and are turned on per name (`asset host update <id> <name> --previews on`); the ID-form hosts (`<versionId>.serve.reearth.land`) stay available for review either way. `v0`, `v01` and anything else on the left of the `--` are `404`; a disabled name's previews are `503` and a released name's `410`, like the name itself. See [ADR-013 B4](./docs/adr/013-static-site-hosting.md).
+**Preview hosts.** A name can also serve its own version history, under `--` (a wildcard certificate covers one label, so `v3.name.serve…` would need a second one): `v3--kawasaki-flood-map.sites.example.net` is version 3, pinned and immutable, and `latest--kawasaki-flood-map.sites.example.net` is the newest version whatever the active one is — the same bytes as the production name but never cached as immutable, because it moves on the next upload. Every preview response is `X-Robots-Tag: noindex`, so only the production name is indexed. Version numbers are sequential and therefore guessable, so previews are **off by default** and are turned on per name (`asset host update <id> <name> --previews on`); the ID-form hosts (`<versionId>.sites.example.net`) stay available for review either way. `v0`, `v01` and anything else on the left of the `--` are `404`; a disabled name's previews are `503` and a released name's `410`, like the name itself. See [ADR-013 B4](./docs/adr/013-static-site-hosting.md).
 
 **Custom domains.** A site can also be served from a hostname the customer owns
 (`https://map.city.example.jp/`), as the `custom` kind of the same table. Three
@@ -332,6 +335,44 @@ not available**: `v<n>--` has no meaning on a domain the customer owns, so
 
 Uploaded JPEG/PNG/WebP/GIF images get four WebP thumbnails generated automatically: `xs` (64 px), `sm` (128 px), `md` (512 px), `lg` (1280 px). `xs` is sized to fit comfortably inside Cesium's billboard TextureAtlas on mobile. Generation is asynchronous via a queue and serves static from R2 thereafter — see [ADR-009](./docs/adr/009-image-thumbnail-generation.md).
 
+## Authorization
+
+One policy table, `POLICY` in `core/auth/permissions.ts`, gives each action on a workspace or a project the lowest role that may perform it. Assets and jobs take their project's permissions. A project outside any workspace belongs to its creator alone. The table decides each workspace route and each route on one project, asset, job or upload. Lists filtered by `?workspaceId` (projects, assets, jobs) and the unscoped project, asset and job lists are decided per workspace, by workspace `read` or workspace membership, never per project. An unscoped asset or job list covers every workspace the caller belongs to, with no cap on the count, plus the caller's projects outside any workspace. An unscoped project list shows the projects the caller created, minus those in a workspace the caller has left.
+
+| Kind | Action | viewer | editor | admin | owner |
+|------|--------|:---:|:---:|:---:|:---:|
+| `workspace` | `read` | ✓ | ✓ | ✓ | ✓ |
+| `workspace` | `delete` |  |  |  | ✓ |
+| `workspace` | `manage_members` |  |  | ✓ | ✓ |
+| `workspace` | `create_project` |  |  | ✓ | ✓ |
+| `project` | `read` | ✓ | ✓ | ✓ | ✓ |
+| `project` | `delete` |  |  |  | ✓ |
+| `project` | `read_asset` | ✓ | ✓ | ✓ | ✓ |
+| `project` | `create_asset` |  | ✓ | ✓ | ✓ |
+| `project` | `update_asset` |  | ✓ | ✓ | ✓ |
+| `project` | `manage_hosts` |  | ✓ | ✓ | ✓ |
+| `project` | `delete_asset` |  | ✓ | ✓ | ✓ |
+| `project` | `extract_asset` |  | ✓ | ✓ | ✓ |
+| `project` | `read_job` | ✓ | ✓ | ✓ | ✓ |
+| `project` | `retry_job` |  | ✓ | ✓ | ✓ |
+| `project` | `manage_webhooks` |  |  | ✓ | ✓ |
+
+A denied caller gets 404 on asset, job, upload and project routes, so the answer does not confirm that the target exists. Project create, workspace delete and the member routes answer 403 to a member who lacks the role. Nobody can grant, change or remove a role above their own. Deleting a workspace that still has projects answers 409. Delete its projects first. No route uses `manage_webhooks` yet.
+
+Set `CERBOS_ENDPOINT` to send each decision to your own Cerbos PDP. Serve sends resource kind `workspace` or `project`, the workspace or project id as the resource id, `attr.workspaceId`, and the caller's workspace role as its one principal role. Serve refuses a role below the table's minimum without asking Cerbos, so a policy can deny more than the table but never allow more. A policy that denies one project does not hide that project's rows from the workspace-scoped or unscoped lists. [`docs/examples/cerbos/`](./docs/examples/cerbos/) holds policies that mirror the table, and `npm run check` fails if they drift from it. To run them:
+
+```bash
+docker run --rm -p 3592:3592 -v "$PWD/docs/examples/cerbos:/policies" \
+  ghcr.io/cerbos/cerbos:0.40.0 server --config=/policies/.cerbos.yaml
+CERBOS_ENDPOINT=http://localhost:3592 npm run start:node
+```
+
+Serve fails closed when Cerbos cannot decide. A timeout, a refused connection or a non-2xx answer returns `503 {"error":"Authorization service unavailable"}` with `Retry-After: 5`, never an allow.
+
+Workspaces and memberships live in Serve's own D1 or SQLite directory, and Serve binds them to the caller once per request, after token verification. Health, the OpenAPI routes, `/files` and `/api/internal/*` skip that step, so a token there costs no directory lookup.
+
+**Upgrade note.** Earlier releases sent Cerbos the kinds `asset`, `job`, `project` and `workspace`, with actions such as `create` and `read`. A policy written for those names denies every check after this release. Replace it with the policies in `docs/examples/cerbos/`.
+
 ## CLI
 
 The CLI (`npm run cli --`) provides subcommands for managing assets and files. Set `REEARTH_SERVE_ENDPOINT` to change the target server (default: `http://localhost:8787`).
@@ -342,7 +383,7 @@ npm run cli -- upload myfile.geojson
 npm run cli -- upload --direct myfile.geojson   # skip presigned URLs
 npm run cli -- upload ./dist                    # zip a directory and upload it as <dirname>.zip
 npm run cli -- upload ./dist --site             # …and turn the SPA fallback on
-npm run cli -- upload ./dist --site --name my-map   # …and claim my-map.serve.reearth.land
+npm run cli -- upload ./dist --site --name my-map   # …and claim my-map.sites.example.net
 npm run cli -- upload ./dist --password         # …and protect it (prompts twice)
 
 # Asset management

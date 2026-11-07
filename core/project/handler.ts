@@ -2,7 +2,8 @@ import { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
 import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../types";
-import { createProject, getProject, listProjects, deleteProject } from "./usecase";
+import { createProject, listProjects, deleteProject } from "./usecase";
+import { accessCtx, authorizeProject, authorizeWorkspace, deniedResponse } from "../auth/access";
 import {
   projectResponseSchema, projectListResponseSchema, idParamSchema, projectListQuerySchema, createProjectBodySchema,
 } from "../../shared/openapi";
@@ -35,16 +36,13 @@ projectRoutes.get("/",
     const projects = c.get("projects");
     const { workspaceId } = c.req.valid("query");
     if (workspaceId) {
-      // Require membership before listing the workspace's projects, otherwise
-      // any authed caller could enumerate every workspace's projects just by
-      // guessing IDs.
-      const members = c.get("members");
-      const member = await members.find(workspaceId, user.sub);
-      if (!member) return c.json({ error: "Workspace not found" }, 404);
-      const list = await listProjects(projects, { workspaceId });
+      const access = await authorizeWorkspace(accessCtx(c), workspaceId, "read");
+      if (!access.ok) return deniedResponse(c, access, { notFound: "Workspace not found" });
+      const list = await listProjects(projects, { kind: "workspace", workspaceId });
       return c.json({ projects: list });
     }
-    const list = await listProjects(projects, { ownerId: user.sub });
+    const memberOf = (await c.get("tenancy").members.listForCaller()).map((m) => m.workspaceId);
+    const list = await listProjects(projects, { kind: "created", ownerId: user.id, memberOf });
     return c.json({ projects: list });
   },
 );
@@ -70,23 +68,12 @@ projectRoutes.post("/",
 
     const body = c.req.valid("json");
     if (body.workspaceId) {
-      // 404 for non-members so the response doesn't confirm the workspace exists.
-      const self = await c.get("members").find(body.workspaceId, user.sub);
-      if (!self) {
-        return c.json({ error: "Workspace not found" }, 404);
-      }
-      const allowed = await c.get("authorizer").check({
-        principal: { id: user.sub, roles: [self.role] },
-        resource: { kind: "project", id: body.workspaceId },
-        action: "create",
-      });
-      if (!allowed) {
-        return c.json({ error: "Forbidden" }, 403);
-      }
+      const access = await authorizeWorkspace(accessCtx(c), body.workspaceId, "create_project");
+      if (!access.ok) return deniedResponse(c, access, { notFound: "Workspace not found", forbiddenAs: 403 });
     }
 
     const projects = c.get("projects");
-    const project = await createProject(projects, body.name, user.sub, body.workspaceId);
+    const project = await createProject(projects, body.name, user.id, body.workspaceId);
     return c.json({ project }, 201);
   },
 );
@@ -108,25 +95,9 @@ projectRoutes.get("/:id",
       return c.json({ error: "Authentication required" }, 401);
     }
 
-    const projects = c.get("projects");
-    const project = await getProject(projects, c.req.valid("param").id);
-    if (!project) {
-      return c.json({ error: "Project not found" }, 404);
-    }
-
-    // Enforce visibility: owner, or a member of the project's workspace.
-    // Return 404 (not 403) so we don't confirm existence to non-members.
-    const isOwner = project.ownerId === user.sub;
-    let isMember = false;
-    if (project.workspaceId) {
-      const members = c.get("members");
-      isMember = (await members.find(project.workspaceId, user.sub)) !== null;
-    }
-    if (!isOwner && !isMember) {
-      return c.json({ error: "Project not found" }, 404);
-    }
-
-    return c.json({ project });
+    const access = await authorizeProject(accessCtx(c), c.req.valid("param").id, "read");
+    if (!access.ok) return deniedResponse(c, access, { notFound: "Project not found" });
+    return c.json({ project: access.value });
   },
 );
 
@@ -147,12 +118,9 @@ projectRoutes.delete("/:id",
       return c.json({ error: "Authentication required" }, 401);
     }
 
-    const projects = c.get("projects");
-    const deleted = await deleteProject(projects, c.req.valid("param").id, user.sub);
-    if (!deleted) {
-      return c.json({ error: "Project not found or not authorized" }, 404);
-    }
-
+    const access = await authorizeProject(accessCtx(c), c.req.valid("param").id, "delete");
+    if (!access.ok) return deniedResponse(c, access, { notFound: "Project not found or not authorized" });
+    await deleteProject(c.get("projects"), access.value.id);
     return c.body(null, 204);
   },
 );

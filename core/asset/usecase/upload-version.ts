@@ -98,6 +98,7 @@ export async function uploadVersion(
     if (job && archiveFormat && options?.extractionQueue) {
       try {
         await options.extractionQueue.send({
+          jobId: job.id,
           assetId,
           versionId,
           archiveKey: key,

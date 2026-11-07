@@ -3,15 +3,15 @@
  *
  * The Node e2e runtime has no extraction container, so nothing there ever puts
  * an `index.html` inside an archive; C1 is therefore covered here, against the
- * in-memory adapters seeded by `core/testing/fixture.ts`, with the routing, the
+ * in-memory adapters seeded by `adapters/memory/fixture.ts`, with the routing, the
  * zod validation, the authorization and the access check all taking part.
  */
 import { describe, expect, test } from "vitest";
 import {
   ASSET_ID, fixture, INDEX_HTML, NOT_FOUND_HTML, protect, seedNotFoundPage,
   SINGLE_FILE_ID, VERSION_ID,
-} from "../testing/fixture";
-import { siteFixture, SUFFIX } from "../testing/site-fixture";
+} from "../../adapters/memory/fixture";
+import { siteFixture, SUFFIX } from "../../adapters/memory/site-fixture";
 import { checkSpaChange } from "../asset/usecase";
 import type { AssetMetadata } from "../asset/model";
 import { looksLikeAssetPath } from "./handler";

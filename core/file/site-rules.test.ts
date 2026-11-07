@@ -10,8 +10,8 @@ import { describe, expect, test } from "vitest";
 import {
   APP_JS, ASSET_ID, INDEX_HTML, protect, seedEntry, seedHosting, seedNotFoundPage,
   VERSION_ID,
-} from "../testing/fixture";
-import { siteFixture, SUFFIX } from "../testing/site-fixture";
+} from "../../adapters/memory/fixture";
+import { siteFixture, SUFFIX } from "../../adapters/memory/site-fixture";
 import { parseHeaders, parseRedirects, type SiteHosting } from "../site/rules";
 import { ENTRY_CACHE_CONTROL } from "./caching";
 

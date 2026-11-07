@@ -10,8 +10,8 @@
 import { describe, expect, test } from "vitest";
 import {
   ASSET_ID, fixture, INDEX_HTML, protect, SINGLE_FILE_ID, TEST_ITERATIONS, VERSION_ID,
-} from "../testing/fixture";
-import { siteFixture, SUFFIX } from "../testing/site-fixture";
+} from "../../adapters/memory/fixture";
+import { siteFixture, SUFFIX } from "../../adapters/memory/site-fixture";
 import { setAssetAccess } from "../asset/usecase";
 import { APEX_COOKIE, SITE_COOKIE } from "./cookie";
 import { RATE_LIMIT_PER_IP } from "./ratelimit";

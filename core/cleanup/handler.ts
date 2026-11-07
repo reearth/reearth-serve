@@ -2,9 +2,9 @@ import { cleanupExpiredAssets, drainPendingCleanups, SubrequestBudget } from "./
 import { purgeReleasedSiteHosts } from "../site/usecase";
 import type { Job } from "../job/model";
 import type { JobStore } from "../job/repository";
-import type { AtomicWrites, MetadataStore } from "../asset/repository";
+import type { AtomicWrites, MetadataStore, VersionStore } from "../asset/repository";
 import type { Deps } from "../types";
-import type { ExtractionMessage } from "../extraction/handler";
+import { extractionMessageForJob, type ExtractionMessage } from "../extraction/handler";
 import type { JobQueue } from "../queue/port";
 
 const MAX_RETRIES = 5;
@@ -59,7 +59,7 @@ export async function handleScheduled(deps: Deps): Promise<void> {
 
   // Re-trigger pending/failed/stuck extraction jobs via queue
   if (deps.extractionQueue) {
-    await retriggerPendingJobs(metadata, jobs, deps.writes, deps.extractionQueue, deps.extractionStuckThresholdMs);
+    await retriggerPendingJobs(metadata, versions, jobs, deps.writes, deps.extractionQueue, deps.extractionStuckThresholdMs);
   }
 }
 
@@ -106,6 +106,7 @@ export function effectiveRetryCount(
 
 async function retriggerPendingJobs(
   metadata: MetadataStore,
+  versions: VersionStore,
   jobs: JobStore,
   writes: AtomicWrites,
   queue: JobQueue<ExtractionMessage>,
@@ -129,29 +130,31 @@ async function retriggerPendingJobs(
         updatedAt: Date.now(),
         completedAt: Date.now(),
       };
-      const asset = await metadata.find(job.assetId);
-      if (asset) asset.status = "failed";
-      // Job and its asset mirror in one atomic write (ADR-012 §3).
-      await writes.saveJob({ job: updatedJob, asset: asset ?? undefined });
-      console.log(`Marked asset ${job.assetId} as permanently failed: max retries exceeded`);
+      // Job and its mirror in one atomic write (ADR-012 §3). A version's job
+      // fails only that version; the asset and its other versions stay usable.
+      if (job.versionId) {
+        const version = await versions.find(job.versionId);
+        if (version) version.status = "failed";
+        await writes.saveJob({ job: updatedJob, version: version ?? undefined });
+      } else {
+        const asset = await metadata.find(job.assetId);
+        if (asset) asset.status = "failed";
+        await writes.saveJob({ job: updatedJob, asset: asset ?? undefined });
+      }
+      console.log(`Marked job ${job.id} (asset ${job.assetId}) as permanently failed: max retries exceeded`);
       continue;
     }
 
-    const asset = await metadata.find(job.assetId);
-    if (!asset || !asset.archiveFormat) continue;
+    const message = await extractionMessageForJob(job, metadata, versions);
+    if (!message) continue;
 
     // Send to queue FIRST. If it fails, the job stays pending with the same
     // retry_count and the next cron tick will try again — without burning a
     // retry on a transient queue/network failure.
     try {
-      await queue.send({
-        assetId: job.assetId,
-        archiveKey: `assets/${job.assetId}/${asset.filename}`,
-        archiveFilename: asset.filename,
-        archiveFormat: asset.archiveFormat,
-      });
+      await queue.send(message);
     } catch (e) {
-      console.error(`Failed to enqueue extraction for asset ${job.assetId} (retry budget preserved):`, e);
+      console.error(`Failed to enqueue extraction for job ${job.id} (retry budget preserved):`, e);
       continue;
     }
 
@@ -169,10 +172,10 @@ async function retriggerPendingJobs(
     try {
       await jobs.save(updatedJob);
     } catch (e) {
-      console.error(`Failed to persist retry count for asset ${job.assetId} (job already enqueued):`, e);
+      console.error(`Failed to persist retry count for job ${job.id} (job already enqueued):`, e);
       continue;
     }
-    console.log(`Re-enqueued extraction for asset ${job.assetId} (retry ${updatedJob.retryCount}/${MAX_RETRIES})`);
+    console.log(`Re-enqueued extraction for job ${job.id} (retry ${updatedJob.retryCount}/${MAX_RETRIES})`);
   }
 }
 
