@@ -73,9 +73,16 @@ if [ -f .dev.vars ]; then
   echo "Error: .dev.vars already exists; refusing to overwrite it." >&2
   exit 1
 fi
+# SIGNING_SECRET and the site-host settings match scripts/e2e-node.sh, so the
+# password and `upload --site --name` tests exercise the feature rather than
+# its fail-closed 503.
 {
   echo 'ANONYMOUS_UPLOAD_ENABLED = "true"'
   echo "INTERNAL_API_SECRET = \"${INTERNAL_API_SECRET}\""
+  echo 'SIGNING_SECRET = "e2e-signing-secret"'
+  echo "SITE_HOST_SUFFIX = \".localhost:${PORT}\""
+  echo 'SITE_REGISTRABLE_DOMAIN = "localhost"'
+  echo 'SITE_DOMAIN_IS_PUBLIC_SUFFIX = "true"'
 } > .dev.vars
 
 echo "Starting dev server on port ${PORT}..."

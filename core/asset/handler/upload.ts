@@ -90,7 +90,7 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
         { name: filename, type: contentType, body, size, contentEncoding, originalSize },
         ttlSeconds,
         baseUrl,
-        { sessionId, projectId, extractionQueue, thumbnailQueue, skipExtraction, usageScopes: scopes },
+        { sessionId, projectId, extractionQueue, thumbnailQueue, skipExtraction, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix") },
       );
 
       return c.json(result, 201);

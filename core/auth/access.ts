@@ -21,7 +21,7 @@ export type AccessContext = {
 export type Denial = { ok: false; reason: "not_found" | "forbidden" };
 export type Decision<T> = { ok: true; value: T } | Denial;
 
-type AssetAction = Extract<ProjectAction, `${string}_asset`>;
+type AssetAction = Extract<ProjectAction, `${string}_asset`> | "manage_hosts";
 type JobAction = Extract<ProjectAction, `${string}_job`>;
 
 const notFound: Denial = { ok: false, reason: "not_found" };

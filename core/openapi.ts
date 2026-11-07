@@ -4,7 +4,8 @@ import type { z } from "zod";
 import type { AppEnv } from "./types";
 import { contentEncodingHeaderSchema, openApiComponentSchemas, skipExtractionHeaderSchema } from "../shared/api";
 import {
-  errorResponseSchema, idParamSchema, scopedListQuerySchema, versionParamSchema, workspaceMemberParamSchema,
+  errorResponseSchema, idParamSchema, scopedListQuerySchema, siteHostParamSchema, versionParamSchema,
+  workspaceMemberParamSchema,
 } from "../shared/openapi";
 
 // OpenAPI building blocks for the route handlers' `describeRoute`, and the
@@ -113,6 +114,7 @@ const sharedErrorResponses = {
   Forbidden: "Forbidden",
   NotFound: "Not found",
   AssetNotFound: "Asset not found",
+  AssetOrHostNotFound: "Asset or host not found",
   JobNotFound: "Job not found",
   MemberNotFound: "Member not found",
   ProjectNotFound: "Project not found",
@@ -217,6 +219,7 @@ async function sharedParameters(): Promise<Record<string, Parameter>> {
     ...await parametersFrom("path", idParamSchema, { id: "Id" }),
     ...await parametersFrom("path", versionParamSchema, { versionId: "VersionId" }),
     ...await parametersFrom("path", workspaceMemberParamSchema, { userId: "UserId" }),
+    ...await parametersFrom("path", siteHostParamSchema, { hostname: "Hostname" }),
     ...await parametersFrom("query", scopedListQuerySchema, {
       limit: "Limit", cursor: "Cursor", workspaceId: "WorkspaceFilter", projectId: "ProjectFilter",
     }),

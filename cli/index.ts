@@ -1,9 +1,10 @@
 import { Command } from "commander";
 import { PATHS } from "../shared/paths";
 import type { AssetMetadata, AssetVersion, Job } from "../shared/api";
-import { apiGet, apiPost, apiPatch, apiPut, apiDelete, output, formatAsset, formatJob, formatVersion, formatBytes } from "./helpers";
+import { apiGet, apiPost, apiPatch, apiPut, apiDelete, output, formatAsset, formatJob, formatVersion, formatBytes, parseOnOff, promptPasswordTwice } from "./helpers";
 import { doUpload } from "./upload";
 import { registerFileCommands } from "./file";
+import { registerHostCommands } from "./host";
 import { login, logout, whoami } from "./auth";
 import { registerProjectCommands } from "./project";
 import { registerWorkspaceCommands } from "./workspace";
@@ -19,33 +20,55 @@ const program = new Command()
   .option("--endpoint <url>", "Server endpoint", DEFAULT_ENDPOINT)
   .option("--json", "Output JSON", false);
 
+/**
+ * `upload <path>`, and its `asset create` alias (ADR-013 C2).
+ *
+ * Registered twice from one place so the two never drift: an alias that quietly
+ * lacks `--site` is worse than no alias.
+ */
+function registerUploadCommand(parent: Command, name: string, description: string) {
+  parent
+    .command(name)
+    .description(description)
+    .argument("<path>", "File to upload, or a directory to zip and upload as a site")
+    .option("--direct", "Force direct upload (skip presigned URL)")
+    .option("--no-extract", "Skip automatic archive extraction")
+    .option("--site", "Turn on the SPA fallback: unknown routes serve index.html (ADR-013 C1)")
+    .option("--name <slug>", "Claim a named site host for the upload, e.g. kawasaki-flood-map")
+    .option("--password", "Password-protect the site (prompts; never pass it on the command line)")
+    .action(async (
+      path: string,
+      cmdOpts: { direct?: boolean; extract?: boolean; site?: boolean; name?: string; password?: boolean | string },
+    ) => {
+      const globalOpts = program.opts<{ endpoint: string; json: boolean }>();
+      if (typeof cmdOpts.password === "string") {
+        console.error(
+          "Error: --password takes no value. A password on the command line is visible in `ps`, " +
+          "in shell history and in CI logs; pass --password on its own and type it at the prompt.",
+        );
+        process.exit(1);
+      }
+      await doUpload(path, {
+        endpoint: globalOpts.endpoint,
+        direct: !!cmdOpts.direct,
+        json: globalOpts.json,
+        skipExtraction: cmdOpts.extract === false,
+        site: !!cmdOpts.site,
+        name: cmdOpts.name,
+        password: !!cmdOpts.password,
+      });
+    });
+}
+
 // upload (shortcut)
-program
-  .command("upload")
-  .description("Upload a file and get a public URL")
-  .argument("<file>", "File to upload")
-  .option("--direct", "Force direct upload (skip presigned URL)")
-  .option("--no-extract", "Skip automatic archive extraction")
-  .action(async (file: string, cmdOpts: { direct?: boolean; extract?: boolean }) => {
-    const globalOpts = program.opts<{ endpoint: string; json: boolean }>();
-    await doUpload(file, { endpoint: globalOpts.endpoint, direct: !!cmdOpts.direct, json: globalOpts.json, skipExtraction: cmdOpts.extract === false });
-  });
+registerUploadCommand(program, "upload", "Upload a file, or zip a directory and upload it as a site");
 
 // asset
 const asset = program
   .command("asset")
   .description("Manage assets");
 
-asset
-  .command("create")
-  .description("Upload a file (alias for upload)")
-  .argument("<file>", "File to upload")
-  .option("--direct", "Force direct upload (skip presigned URL)")
-  .option("--no-extract", "Skip automatic archive extraction")
-  .action(async (file: string, cmdOpts: { direct?: boolean; extract?: boolean }) => {
-    const globalOpts = program.opts<{ endpoint: string; json: boolean }>();
-    await doUpload(file, { endpoint: globalOpts.endpoint, direct: !!cmdOpts.direct, json: globalOpts.json, skipExtraction: cmdOpts.extract === false });
-  });
+registerUploadCommand(asset, "create", "Upload a file or directory (alias for upload)");
 
 asset
   .command("list")
@@ -182,16 +205,62 @@ asset
   .argument("<id>", "Asset ID")
   .option("--description <text>", "Description")
   .option("--user-meta <json>", "User metadata (JSON)")
-  .action(async (id: string, cmdOpts: { description?: string; userMeta?: string }) => {
+  .option("--spa <on|off>", "SPA fallback: serve the site's index.html for unknown routes (ADR-013 C1)")
+  .action(async (id: string, cmdOpts: { description?: string; userMeta?: string; spa?: string }) => {
     const opts = program.opts<{ endpoint: string; json: boolean }>();
     const body: Record<string, unknown> = {};
     if (cmdOpts.description !== undefined) body.description = cmdOpts.description;
     if (cmdOpts.userMeta !== undefined) body.userMeta = JSON.parse(cmdOpts.userMeta);
+    if (cmdOpts.spa !== undefined) body.spa = parseOnOff(cmdOpts.spa, "--spa");
     const data = await apiPatch<{ asset: AssetMetadata }>(opts.endpoint, PATHS.asset(id), body);
     if (opts.json) {
       output(data, true);
     } else {
       console.log(formatAsset(data.asset));
+    }
+  });
+
+/**
+ * `asset protect <id> --password | --off` (ADR-013 B7).
+ *
+ * The password is only ever read from a prompt, twice, without echo. Not from
+ * an argument: a command line is visible in `ps`, in shell history and in CI
+ * logs. `--password` therefore takes no value, and a value passed anyway is
+ * refused rather than silently used.
+ */
+asset
+  .command("protect")
+  .description("Password-protect a site (archive) asset, or remove the protection")
+  .argument("<id>", "Asset ID")
+  .option("--password", "Prompt for a new password (never pass it on the command line)")
+  .option("--off", "Remove the protection: the site becomes public again")
+  .action(async (id: string, cmdOpts: { password?: boolean | string; off?: boolean }) => {
+    const opts = program.opts<{ endpoint: string; json: boolean }>();
+
+    if (typeof cmdOpts.password === "string") {
+      console.error(
+        "Error: --password takes no value. A password on the command line is visible in `ps`, " +
+        "in shell history and in CI logs; run `asset protect <id> --password` and type it at the prompt.",
+      );
+      process.exit(1);
+    }
+    if (!!cmdOpts.password === !!cmdOpts.off) {
+      console.error("Error: pass exactly one of --password or --off");
+      process.exit(1);
+    }
+
+    const body = cmdOpts.off
+      ? { access: "public" as const }
+      : { access: "password" as const, password: await promptPasswordTwice() };
+
+    const data = await apiPatch<{ asset: AssetMetadata }>(opts.endpoint, PATHS.asset(id), body);
+    if (opts.json) {
+      output(data, true);
+    } else if (cmdOpts.off) {
+      console.log("Protection removed: the asset is public again.");
+    } else {
+      console.log("Protected. Visitors now get a password page; tools can send HTTP Basic.");
+      console.log("Changing the password signs every existing visitor out.");
     }
   });
 
@@ -305,6 +374,9 @@ version
       console.log(formatVersion(data.version));
     }
   });
+
+// host subcommand (ADR-013 B2/B3)
+registerHostCommands(program, asset);
 
 asset
   .command("set-version")

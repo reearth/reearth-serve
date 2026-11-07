@@ -15,6 +15,7 @@ import { registerGetVersionRoute } from "./get-version";
 import { registerUpdateVersionRoute } from "./update-version";
 import { registerDeleteVersionRoute } from "./delete-version";
 import { registerSetActiveVersionRoute } from "./set-active-version";
+import { registerAssetHostRoutes } from "../../site/handler";
 
 export const assetRoutes = new Hono<AppEnv>();
 
@@ -32,6 +33,10 @@ registerGetVersionRoute(assetRoutes);
 registerUpdateVersionRoute(assetRoutes);
 registerDeleteVersionRoute(assetRoutes);
 registerSetActiveVersionRoute(assetRoutes);
+
+// Site hosts (ADR-013 B2/B3/B6) — before /:id GET/DELETE for the same reason
+// the version routes are.
+registerAssetHostRoutes(assetRoutes);
 
 // Asset-level routes
 registerListFilesRoute(assetRoutes);

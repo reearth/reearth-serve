@@ -4,6 +4,7 @@ import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata, deleteAsset } from "../usecase";
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
+import { siteHostDeps } from "../../site/handler";
 import { idParamSchema } from "../../../shared/openapi";
 import { jsonError } from "../../openapi";
 
@@ -36,6 +37,7 @@ export function registerDeleteRoute(app: Hono<AppEnv>) {
       await deleteAsset(c.get("writes"), c.get("storage"), asset, {
         usageScopes: scopes,
         pendingCleanup: c.get("pendingCleanup"),
+        siteHosts: siteHostDeps(c),
       });
 
       return c.body(null, 204);

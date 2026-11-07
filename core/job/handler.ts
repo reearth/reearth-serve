@@ -7,6 +7,7 @@ import {
   jobResponseSchema, jobListResponseSchema, idParamSchema, scopedListQuerySchema,
 } from "../../shared/openapi";
 import { jobSchema } from "../../shared/api";
+import { hostingOnExtractionComplete } from "../site/hosting";
 import { extractionMessageForJob } from "../extraction/handler";
 import { jsonError, jsonResponse } from "../openapi";
 
@@ -208,6 +209,16 @@ jobInternalRoutes.post("/:id/status", async (c) => {
     extendDemoExpiry(asset, ttl);
   }
 
+  // `_headers` / `_redirects` (ADR-013 C3). The archive's control files only
+  // exist once extraction has written them, so this is the moment to read and
+  // parse them. The asset-row case joins the atomic write below; the version
+  // case follows it, since `saveJob` carries a job and an asset and nothing
+  // else.
+  const placement = body.status === "completed"
+    ? await hostingOnExtractionComplete(c.get("storage"), job, asset)
+    : null;
+  if (placement?.on === "asset" && asset) asset.hosting = placement.hosting;
+
   const writes = c.get("writes");
   if (!asset && !version) {
     await writes.saveJob({ job });
@@ -218,6 +229,10 @@ jobInternalRoutes.post("/:id/status", async (c) => {
       console.warn(`job ${job.id}: job+mirror write failed, saving job only:`, e);
       await writes.saveJob({ job });
     }
+  }
+
+  if (placement?.on === "version") {
+    await c.get("versions").update(placement.versionId, { hosting: placement.hosting });
   }
 
   return c.json({ ok: true });

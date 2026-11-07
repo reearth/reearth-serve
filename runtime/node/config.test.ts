@@ -9,6 +9,14 @@ describe("loadConfig", () => {
     expect(config.sqlitePath).toBe(":memory:");
     expect(config.objectStore).toBeNull();
     expect(config.containerLauncher).toBe("none");
+    // No secret by default: protected sites (ADR-013 B7) fail closed until an
+    // operator sets one, rather than running on a guessable default.
+    expect(config.signingSecret).toBeUndefined();
+  });
+
+  test("SIGNING_SECRET is read, and an empty value is no secret at all", () => {
+    expect(loadConfig({ SIGNING_SECRET: "s3cret" }).signingSecret).toBe("s3cret");
+    expect(loadConfig({ SIGNING_SECRET: "" }).signingSecret).toBeUndefined();
   });
 
   test("without CERBOS_ENDPOINT the local directory and the policy table decide", () => {
@@ -64,5 +72,24 @@ describe("loadConfig", () => {
   test("an unsupported CONTAINER_LAUNCHER fails loudly instead of silently doing nothing", () => {
     expect(() => loadConfig({ CONTAINER_LAUNCHER: "docker" })).toThrow(/not supported/);
     expect(loadConfig({ CONTAINER_LAUNCHER: "none" }).containerLauncher).toBe("none");
+  });
+
+  test("CREDENTIALED_ORIGINS is parsed, and a malformed entry refuses to start", () => {
+    expect(loadConfig({}).credentialedOrigins).toEqual([]);
+    expect(loadConfig({ CREDENTIALED_ORIGINS: "https://a.example.com,https://b.example.net" }).credentialedOrigins)
+      .toEqual(["https://a.example.com", "https://b.example.net"]);
+    expect(() => loadConfig({ CREDENTIALED_ORIGINS: "https://a.example.com/app" })).toThrow(/CREDENTIALED_ORIGINS/);
+  });
+
+  test("site hosts refuse to start on the API's own registrable domain", () => {
+    const sites = { SITE_HOST_SUFFIX: ".sites.example.net", SITE_REGISTRABLE_DOMAIN: "example.net" };
+    // The Node default BASE_URL does not count: the operator must say it.
+    expect(() => loadConfig(sites)).toThrow(/BASE_URL/);
+    expect(() => loadConfig({ ...sites, BASE_URL: "https://api.example.net" })).toThrow(/same site/);
+    expect(loadConfig({ ...sites, BASE_URL: "https://api.example.com" }).siteDomainIsPublicSuffix).toBe(false);
+    expect(loadConfig({
+      SITE_HOST_SUFFIX: ".localhost:8788", BASE_URL: "http://localhost:8788",
+      SITE_REGISTRABLE_DOMAIN: "localhost", SITE_DOMAIN_IS_PUBLIC_SUFFIX: "true",
+    }).siteDomainIsPublicSuffix).toBe(true);
   });
 });

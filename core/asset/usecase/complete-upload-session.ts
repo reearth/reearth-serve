@@ -3,6 +3,7 @@ import { detectArchiveFormat } from "../model";
 import type { AtomicWrites, FileStorage, MetadataStore, PresignedUrlGenerator, UploadSessionStore } from "../repository";
 import type { Job } from "../../job/model";
 import { storageKey } from "./shared";
+import { siteUrlFor } from "../../site/url";
 import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
 import type { JobQueue } from "../../queue/port";
@@ -18,7 +19,7 @@ export async function completeUploadSession(
   ttlSeconds: number,
   baseUrl: string,
   parts?: UploadPart[],
-  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[] },
+  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string },
 ): Promise<AssetUploadResult | null> {
   const session = await sessions.find(id);
   if (!session) return null;
@@ -28,6 +29,8 @@ export async function completeUploadSession(
 
   const key = storageKey(id, session.filename);
   const url = `${baseUrl}/files/${id}/${encodeURIComponent(session.filename)}`;
+  const archiveFormat = detectArchiveFormat(session.filename);
+  const siteUrl = siteUrlFor({ assetId: id, baseUrl, siteHostSuffix: options?.siteHostSuffix, archive: Boolean(archiveFormat) });
 
   // The session outlives a completed call when its KV delete has not
   // propagated yet, or when the row write committed but reported an error.
@@ -35,7 +38,7 @@ export async function completeUploadSession(
   const existing = await metadata.find(id);
   if (existing) {
     await sessions.delete(id);
-    return { asset: existing, url };
+    return { asset: existing, url, ...(siteUrl && { siteUrl }) };
   }
 
   // Complete the multipart upload unless a previous attempt already did and
@@ -50,7 +53,6 @@ export async function completeUploadSession(
   }
   if (!head) return null;
 
-  const archiveFormat = detectArchiveFormat(session.filename);
   const now = Date.now();
 
   // projectId is bound at createUploadSession time (after membership check)
@@ -124,7 +126,7 @@ export async function completeUploadSession(
   });
   await sessions.delete(id);
 
-  return { asset, url };
+  return { asset, url, ...(siteUrl && { siteUrl }) };
 }
 
 if (import.meta.vitest) {
@@ -145,6 +147,7 @@ if (import.meta.vitest) {
 
   const noAssets: MetadataStore = {
     save: vi.fn(), find: vi.fn(async () => null), update: vi.fn(), delete: vi.fn(), list: vi.fn(),
+    findProtection: vi.fn(async () => null), setProtection: vi.fn(),
   };
 
   function mockStorage(headResult: { size: number; contentEncoding?: string } | null = null): FileStorage {

@@ -52,10 +52,15 @@ E2E_ENDPOINT=http://localhost:5173 npm run test:e2e
 | `E2E_PRESIGNED` | (unset) | Set to `true` to enable presigned upload tests |
 | `E2E_CONTAINER` | (unset) | Set to `true` to enable container extraction tests (requires Docker) |
 | `E2E_THUMBNAILS` | (unset) | Set to `false` to skip thumbnail tests on a runtime without the jSquash wasm codecs |
+| `E2E_SITE_HOST_SUFFIX` | (unset) | The suffix the server was started with; unset ⇒ the site-host suite is skipped |
+| `E2E_MOCK_DOH` | (unset) | Base URL of the mock DoH resolver (`e2e/mock-doh.ts`); unset ⇒ the custom-domain verification tests are skipped |
 
 `npm run test:e2e:node` starts `runtime/node` instead of wrangler and sets
 `E2E_PRESIGNED=false`, `E2E_CONTAINER=false` and `E2E_THUMBNAILS=false`, since
-that runtime has none of those three features. Everything else runs unchanged.
+that runtime has none of those three features. It also sets `SIGNING_SECRET`,
+without which the password-protection suite (`e2e/access.test.ts`) would be
+exercising the missing-secret path rather than the feature. Everything else
+runs unchanged.
 
 ### Container Tests (Go)
 
@@ -90,6 +95,13 @@ npx wrangler d1 migrations list reearth-serve --remote
 ```
 
 Migrations are automatically applied before deployment in `scripts/deploy.sh`.
+
+The latest domain migration is `0004_add_site_hosts.sql` (ADR-013 B2). It adds
+a table only, so it is backward-compatible and can be applied before the deploy:
+`npx wrangler d1 migrations apply reearth-serve --remote`. The Node runtime and
+the unit tests pick it up automatically — both apply
+`adapters/cloudflare/migrations/` wholesale — so nothing outside D1 needs a
+manual step.
 
 When developing locally, the E2E test script (`scripts/e2e.sh`) automatically applies migrations after clearing miniflare state.
 
@@ -137,8 +149,26 @@ Set via `npx wrangler secret put <NAME>`:
 | `OIDC_ISSUER_URL` | No | OIDC Issuer URL for JWT authentication |
 | `OIDC_AUDIENCE` | No | JWT audience claim for token validation |
 | `CERBOS_ENDPOINT` | No | Cerbos PDP endpoint URL (http or https) for authorization; starting policies in `docs/examples/cerbos/`. An outage answers 503 with `Retry-After: 5`. An invalid value stops Node at startup; on Workers every `/api/` and `/files` request answers `500`. |
+| `SIGNING_SECRET` | No‡ | HMAC key for the viewer-authentication cookie of password-protected sites (ADR-013 B7), not used for delivery tokens (ADR-014 §4). A secret (`wrangler secret put SIGNING_SECRET`), not a var |
+| `CREDENTIALED_ORIGINS` | No | Comma-separated exact origins, besides Serve's own, whose pages may read a protected file with the visitor's cookie. An entry with a path, a wildcard or `null` fails at start |
+| `SITE_HOST_SUFFIX` | No | Wildcard suffix site hosts live under, e.g. `.sites.example.net` (ADR-013 B1). Unset ⇒ site hosts and custom domains are off. Set in `wrangler.toml` once the zone is ready |
+| `SITE_REGISTRABLE_DOMAIN` | With `SITE_HOST_SUFFIX` | The registrable domain the site hosts live under, e.g. `example.net`. The Worker refuses to serve when the suffix is not under it or when the `BASE_URL` host is |
+| `SITE_DOMAIN_IS_PUBLIC_SUFFIX` | No | `"true"` skips the site-isolation check, for a domain on the Public Suffix List. Logged |
+| `CF_API_TOKEN` | No† | Cloudflare API token with `Zone → SSL and Certificates: Edit` on the site-host zone, for Cloudflare for SaaS custom hostnames (ADR-013 B5) |
+| `CF_ZONE_ID` | No† | The zone the custom hostnames are registered on (ADR-013 B5) |
+| `SITE_FALLBACK_ORIGIN` | No | What a customer CNAMEs their domain at — Cloudflare for SaaS's fallback origin. Unset ⇒ the host of `BASE_URL` |
+| `SITE_DNS_RESOLVER_URL` | No | DNS-over-HTTPS endpoint used for the custom-domain TXT check. Default `https://cloudflare-dns.com/dns-query` |
 
 \* Required for presigned URL uploads and archive extraction containers.
+
+‡ Required only to protect a site. Unset, an asset cannot be given a password
+(`503` on the PATCH) and one that already has one answers `503` instead of
+serving its bytes — fail closed, the same rule `INTERNAL_API_SECRET` follows.
+
+† Both or neither. With both, a verified custom domain is registered on the
+zone and gets a DV certificate automatically; with neither, the customer is
+told to CNAME at the fallback origin and the operator terminates TLS
+themselves (which is what the Node runtime always does).
 
 ### Initial Setup
 

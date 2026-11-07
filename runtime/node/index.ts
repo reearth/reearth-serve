@@ -9,16 +9,50 @@
  * Start it with `npm run start:node` (tsx). Configuration is environment
  * variables only; see `config.ts` and the README's "Running on Node" section.
  */
-import { serve } from "@hono/node-server";
+import { serve, type HttpBindings } from "@hono/node-server";
 import { createApp } from "../../core/app";
+import { isSiteHost } from "../../core/site/middleware";
+import { PUBLIC_SUFFIX_OVERRIDE_NOTICE } from "../../core/site/isolation";
 import { buildNodeRuntime, type NodeRuntime } from "./deps";
 import { runCron } from "./cron";
 
-export function createNodeHandler(runtime: NodeRuntime): (request: Request) => Promise<Response> {
+/**
+ * The password limiter keys on `CF-Connecting-IP`, else `X-Forwarded-For`. On
+ * Workers the edge overwrites the first; a Node process reachable directly
+ * would take either from the client. So unless `TRUST_PROXY=true` says a proxy
+ * in front sets them, both are replaced by the socket's own address.
+ */
+function pinClientIp(request: Request, env: HttpBindings | undefined): void {
+  request.headers.delete("CF-Connecting-IP");
+  const address = env?.incoming.socket.remoteAddress;
+  if (address) request.headers.set("X-Forwarded-For", address);
+  else request.headers.delete("X-Forwarded-For");
+}
+
+export function createNodeHandler(
+  runtime: NodeRuntime,
+): (request: Request, env?: HttpBindings) => Promise<Response> {
   const app = createApp(runtime.deps);
 
-  return async (request: Request): Promise<Response> => {
+  return async (request: Request, env?: HttpBindings): Promise<Response> => {
+    if (!runtime.config.trustProxy) pinClientIp(request, env);
     const url = new URL(request.url);
+
+    // Site hosts (ADR-013 B1) serve files at every path, so they are decided
+    // before the API-only guard below — and before /internal/cron, which must
+    // not be reachable from a hosted origin.
+    //
+    // The test is "not the apex", not "ends with SITE_HOST_SUFFIX" (B5): a
+    // custom domain is unrecognisable from its name, so every non-apex host
+    // goes to the app and the app's middleware does the `site_hosts` lookup. A
+    // host with no row gets the middleware's plain-text 404; the health check,
+    // the docs and the API stay reachable on the apex alone.
+    if (isSiteHost(request.headers.get("Host") ?? url.host, {
+      baseUrl: runtime.deps.baseUrl,
+      suffix: runtime.deps.siteHostSuffix,
+    })) {
+      return app.fetch(request);
+    }
 
     if (url.pathname === "/internal/cron") {
       if (request.method !== "POST") {
@@ -77,8 +111,9 @@ function timingSafeEqual(a: string, b: string): boolean {
 
 export function main(): void {
   const runtime = buildNodeRuntime();
+  if (runtime.config.siteDomainIsPublicSuffix) console.warn(PUBLIC_SUFFIX_OVERRIDE_NOTICE);
   const handler = createNodeHandler(runtime);
-  serve({ fetch: handler, port: runtime.config.port }, (info) => {
+  serve({ fetch: (request, env) => handler(request, env as HttpBindings), port: runtime.config.port }, (info) => {
     console.log(`reearth-serve (node runtime) listening on http://localhost:${info.port}`);
     console.log(`  base URL:  ${runtime.config.baseUrl}`);
     console.log(`  sqlite:    ${runtime.config.sqlitePath}`);

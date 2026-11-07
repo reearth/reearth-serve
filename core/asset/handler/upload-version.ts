@@ -84,7 +84,7 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
         metadata, writes, storage, id,
         { name: filename, type: c.req.header("Content-Type") || "application/octet-stream", body, size, contentEncoding, originalSize },
         baseUrl,
-        { extractionQueue, thumbnailQueue, skipExtraction, usageScopes: scopes },
+        { extractionQueue, thumbnailQueue, skipExtraction, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix") },
       ).catch((e: unknown) => {
         if (e instanceof Error && e.message.includes("exceeds storage capacity")) return "over-capacity" as const;
         throw e;
@@ -97,7 +97,10 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
         return c.json({ error: "Asset not found" }, 404);
       }
 
-      return c.json({ version: result.version, url: result.url }, 201);
+      return c.json(
+        { version: result.version, url: result.url, ...(result.siteUrl && { siteUrl: result.siteUrl }) },
+        201,
+      );
     },
   );
 }

@@ -7,9 +7,14 @@ import { accessCtx, authorizeProject, authorizeWorkspace, deniedResponse } from 
 import {
   projectResponseSchema, projectListResponseSchema, idParamSchema, projectListQuerySchema, createProjectBodySchema,
 } from "../../shared/openapi";
+import { registerProjectHostRoutes } from "../site/handler";
 import { jsonError, jsonResponse } from "../openapi";
 
 export const projectRoutes = new Hono<AppEnv>();
+
+// Site hosts across the project (ADR-013 B6). Registered from core/site so the
+// whole hosts API reads in one file.
+registerProjectHostRoutes(projectRoutes);
 
 projectRoutes.get("/",
   describeRoute({

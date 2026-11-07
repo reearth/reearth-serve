@@ -8,6 +8,8 @@ import {
   createProjectBodySchema, createWorkspaceBodySchema,
   addMemberBodySchema, updateMemberBodySchema,
   updateAssetBodySchema, updateVersionBodySchema, setActiveVersionBodySchema,
+  siteHostSchema, siteHostVerificationSchema, claimSiteHostBodySchema,
+  updateSiteHostBodySchema,
   component,
 } from "./api";
 
@@ -44,6 +46,20 @@ export const versionListResponseSchema = component("VersionListResponse", z.obje
   cursor: z.string().optional(),
 }));
 
+export const siteHostResponseSchema = component("SiteHostResponse", z.object({
+  host: siteHostSchema,
+  /** The same value as `host.url`, alongside the upload response's `siteUrl`. */
+  siteUrl: z.string(),
+}).extend(siteHostVerificationSchema.partial().shape));
+export const siteHostListResponseSchema = component("SiteHostList", z.object({ hosts: z.array(siteHostSchema) }));
+
+/**
+ * `409` from `POST …/hosts/:hostname/verify` (ADR-013 B5): the record was not
+ * found, so the body repeats what the customer has to publish.
+ */
+export const siteHostVerificationFailedSchema = component("SiteHostVerificationFailed", errorResponseSchema
+  .extend(siteHostVerificationSchema.shape));
+
 export const versionUploadResultResponseSchema = component("VersionUploadResponse", z.object({
   version: assetVersionSchema,
   url: z.string(),
@@ -70,6 +86,8 @@ export const workspaceMemberParamSchema = z.object({
   id: z.string(),
   userId: z.string(),
 });
+export const workspaceIdParamSchema = z.object({ workspaceId: z.string() });
+export const siteHostParamSchema = z.object({ id: z.string(), hostname: z.string() });
 
 // --- Query schemas ---
 
@@ -102,6 +120,8 @@ export {
   updateAssetBodySchema,
   updateVersionBodySchema,
   setActiveVersionBodySchema,
+  claimSiteHostBodySchema,
+  updateSiteHostBodySchema,
   errorResponseSchema,
   fileEntrySchema,
 };

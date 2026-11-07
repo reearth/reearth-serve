@@ -257,6 +257,22 @@ describe("SqlVersionStore", () => {
     expect(await store.count("a1")).toBe(2);
   });
 
+  test("findByAssetAndNumber picks one version by its per-asset number", async () => {
+    const store = new SqlVersionStore(db());
+    const base = { assetId: "a1", version: 0, filename: "f", contentType: "text/plain", size: 1, createdAt: 1 };
+    await store.save({ ...base, id: "v1" });
+    await store.save({ ...base, id: "v2" });
+    // Same number under a different asset: the number is per-asset (ADR-005),
+    // which is what `v{n}--name` addresses (ADR-013 B4).
+    await store.save({ ...base, id: "other", assetId: "a2" });
+
+    expect((await store.findByAssetAndNumber("a1", 1))?.id).toBe("v1");
+    expect((await store.findByAssetAndNumber("a1", 2))?.id).toBe("v2");
+    expect((await store.findByAssetAndNumber("a2", 1))?.id).toBe("other");
+    expect(await store.findByAssetAndNumber("a1", 3)).toBeNull();
+    expect(await store.findByAssetAndNumber("a1", 0)).toBeNull();
+  });
+
   test("findByAssetId, update, delete and deleteByAssetId", async () => {
     const store = new SqlVersionStore(db());
     const base = { assetId: "a1", version: 0, filename: "f", contentType: "text/plain", createdAt: 1 };
@@ -353,5 +369,22 @@ describe("SqlStorageUsageStore", () => {
 
     await store.recalculate("project:p1", 42, 3);
     expect(await store.get("project:p1")).toMatchObject({ totalSize: 42, assetCount: 3 });
+  });
+});
+
+describe("SqlMetadataStore access column", () => {
+  test("NULL and public read as public, an unknown value fails closed as password", async () => {
+    const sql = db();
+    const store = new SqlMetadataStore(sql);
+    await store.save(asset({ id: "a1" }), 3600);
+    await store.save(asset({ id: "a2" }), 3600);
+    await store.save(asset({ id: "a3" }), 3600);
+    await sql.execute("UPDATE assets SET access = NULL WHERE id = 'a1'");
+    await sql.execute("UPDATE assets SET access = 'public' WHERE id = 'a2'");
+    // A mode a newer deployment wrote, or a typo, must never read back as public.
+    await sql.execute("UPDATE assets SET access = 'restricted' WHERE id = 'a3'");
+    expect((await store.find("a1"))?.access).toBe("public");
+    expect((await store.find("a2"))?.access).toBe("public");
+    expect((await store.find("a3"))?.access).toBe("password");
   });
 });
