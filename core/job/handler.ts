@@ -7,6 +7,7 @@ import {
   jobResponseSchema, jobListResponseSchema, idParamSchema, scopedListQuerySchema,
 } from "../../shared/openapi";
 import { jobSchema } from "../../shared/api";
+import { extractionMessageForJob } from "../extraction/handler";
 import { jsonError, jsonResponse } from "../openapi";
 
 // --- Public API routes (mounted at /api/v1/jobs) ---
@@ -103,16 +104,8 @@ jobRoutes.post("/:id/retry",
 
     const extractionQueue = c.get("extractionQueue");
     if (extractionQueue) {
-      const metadata = c.get("metadata");
-      const asset = await metadata.find(job.assetId);
-      if (asset?.archiveFormat) {
-        await extractionQueue.send({
-          assetId: job.assetId,
-          archiveKey: `assets/${job.assetId}/${asset.filename}`,
-          archiveFilename: asset.filename,
-          archiveFormat: asset.archiveFormat,
-        });
-      }
+      const message = await extractionMessageForJob(job, c.get("metadata"), c.get("versions"));
+      if (message) await extractionQueue.send(message);
     }
 
     return c.json(job);
@@ -180,42 +173,49 @@ jobInternalRoutes.post("/:id/status", async (c) => {
     }
   };
 
-  // Mirror the job status onto the asset. The two rows go out in one atomic
-  // write (ADR-012 §3) — a job marked completed while its asset still says
+  // Mirror the job status onto its version for a version's job, onto the
+  // asset otherwise (ADR-005). The rows go out in one atomic write (ADR-012
+  // §3), because a job marked completed while its asset still says
   // "extracting" is exactly the drift the cleanup cron has to reconcile.
   //
   // The job row is the one that must land: the container drops its checkpoint
   // once "completed" is acknowledged, while a stale asset mirror is healed by
-  // `reconcileStuckAssets`. So a failed asset read or batch falls back to
-  // writing the job alone instead of losing the status.
+  // `reconcileStuckAssets`. So a failed read or batch falls back to writing
+  // the job alone instead of losing the status.
   const ttl = c.get("ttlSeconds");
-  const asset = await c.get("metadata").find(job.assetId).catch((e: unknown) => {
-    console.warn(`job ${job.id}: asset read failed, saving job only:`, e);
+  const readFailed = (e: unknown) => {
+    console.warn(`job ${job.id}: mirror read failed, saving job only:`, e);
     return null;
-  });
+  };
+  const asset = await c.get("metadata").find(job.assetId).catch(readFailed);
+  const version = job.versionId
+    ? await c.get("versions").find(job.versionId).catch(readFailed)
+    : null;
+  const mirror = job.versionId ? version : asset;
 
-  if (asset && body.status === "running") {
-    asset.status = "extracting";
-    extendDemoExpiry(asset, ttl);
+  if (mirror && body.status === "running") {
+    mirror.status = "extracting";
   }
-  if (asset && body.status === "completed") {
-    asset.status = "ready";
-    asset.fileCount = job.fileCount;
-    asset.extractedSize = job.extractedSize;
-    extendDemoExpiry(asset, ttl);
+  if (mirror && body.status === "completed") {
+    mirror.status = "ready";
+    mirror.fileCount = job.fileCount;
+    mirror.extractedSize = job.extractedSize;
   }
-  if (asset && body.status === "failed") {
-    asset.status = "failed";
+  if (mirror && body.status === "failed") {
+    mirror.status = "failed";
+  }
+  if (asset && body.status !== "failed") {
+    extendDemoExpiry(asset, ttl);
   }
 
   const writes = c.get("writes");
-  if (!asset) {
+  if (!asset && !version) {
     await writes.saveJob({ job });
   } else {
     try {
-      await writes.saveJob({ job, asset });
+      await writes.saveJob({ job, asset: asset ?? undefined, version: version ?? undefined });
     } catch (e) {
-      console.warn(`job ${job.id}: job+asset write failed, saving job only:`, e);
+      console.warn(`job ${job.id}: job+mirror write failed, saving job only:`, e);
       await writes.saveJob({ job });
     }
   }

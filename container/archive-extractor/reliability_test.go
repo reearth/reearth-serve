@@ -22,6 +22,7 @@ type statusServer struct {
 	mu       sync.Mutex
 	failures int
 	bodies   []map[string]any
+	paths    []string
 }
 
 func (s *statusServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -33,6 +34,7 @@ func (s *statusServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	var body map[string]any
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	s.bodies = append(s.bodies, body)
+	s.paths = append(s.paths, r.URL.Path)
 	if s.failures > 0 {
 		s.failures--
 		w.WriteHeader(http.StatusInternalServerError)

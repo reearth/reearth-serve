@@ -4,6 +4,7 @@ import {
   ASSET_UPSERT_SQL, assetUpsertArgs,
   JOB_UPSERT_SQL, jobUpsertArgs,
   VERSION_INSERT_SQL, versionInsertArgs, assignedVersion,
+  VERSION_EXTRACTION_UPDATE_SQL, versionExtractionUpdateArgs,
   USAGE_INCREMENT_SQL, usageIncrementArgs,
   CLEANUP_PENDING_ADD_SQL,
 } from "./stores";
@@ -62,9 +63,10 @@ export class SqlAtomicWrites implements AtomicWrites {
     await this.db.batch(statements);
   }
 
-  async saveJob({ job, asset }: Parameters<AtomicWrites["saveJob"]>[0]): Promise<void> {
+  async saveJob({ job, asset, version }: Parameters<AtomicWrites["saveJob"]>[0]): Promise<void> {
     const statements: SqlStatement[] = [{ sql: JOB_UPSERT_SQL, args: jobUpsertArgs(job) }];
     if (asset) statements.push({ sql: ASSET_UPSERT_SQL, args: assetUpsertArgs(asset) });
+    if (version) statements.push({ sql: VERSION_EXTRACTION_UPDATE_SQL, args: versionExtractionUpdateArgs(version) });
     await this.db.batch(statements);
   }
 }

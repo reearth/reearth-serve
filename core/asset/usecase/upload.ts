@@ -78,6 +78,7 @@ export async function uploadAsset(
     if (job && options?.extractionQueue) {
       try {
         await options.extractionQueue.send({
+          jobId: id,
           assetId: id,
           archiveKey: key,
           archiveFilename: file.name,

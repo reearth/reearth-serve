@@ -126,6 +126,45 @@ describe("Archive & Job", () => {
       expect(assetAfter.asset.extractedSize).toBe(5);
     });
 
+    test("A version's job reports to its own job and mirrors onto the version, not the asset", async () => {
+      const { body: uploadBody, sessionId } = await uploadFile(buildMiniZip({ "a.txt": "v1" }), "root.zip", "application/zip");
+      const assetId = uploadBody.asset.id;
+      const headers: Record<string, string> = sessionId ? { "X-Session-Id": sessionId } : {};
+
+      const bytes = buildMiniZip({ "a.txt": "v2" });
+      const versionRes = await fetch(`${BASE}/api/v1/assets/${assetId}`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/zip", "Content-Length": String(bytes.byteLength), "X-Filename": "v2.zip" },
+        body: bytes as BodyInit,
+      });
+      expect(versionRes.status).toBe(201);
+      const { version } = await versionRes.json() as any;
+      expect(version.jobId).toBeDefined();
+      expect(version.jobId).not.toBe(assetId);
+
+      const versionJob = await (await fetch(`${BASE}/api/v1/jobs/${version.jobId}`, { headers })).json() as any;
+      expect(versionJob.versionId).toBe(version.id);
+
+      for (const body of [{ status: "running" }, { status: "completed", fileCount: 1, extractedSize: 2 }]) {
+        const res = await fetch(`${BASE}/api/internal/jobs/${version.jobId}/status`, {
+          method: "POST",
+          headers: internalHeaders({ "Content-Type": "application/json" }),
+          body: JSON.stringify(body),
+        });
+        expect(res.status).toBe(200);
+      }
+
+      const versionAfter = await (await fetch(`${BASE}/api/v1/assets/${assetId}/versions/${version.id}`, { headers })).json() as any;
+      expect(versionAfter.version).toMatchObject({ status: "ready", fileCount: 1, extractedSize: 2 });
+
+      const assetAfter = await (await fetch(`${BASE}/api/v1/assets/${assetId}`, { headers })).json() as any;
+      expect(assetAfter.asset.status).toBe("pending");
+      expect(assetAfter.asset.fileCount).toBeUndefined();
+
+      const retryRes = await fetch(`${BASE}/api/v1/jobs/${version.jobId}/retry`, { method: "POST", headers });
+      expect(retryRes.status).toBe(400);
+    });
+
     test("Container extraction: upload ZIP, wait for extraction, verify files", { timeout: 120_000, skip: !containerAvailable }, async () => {
       const files = {
         "tileset.json": '{"root":"test"}',

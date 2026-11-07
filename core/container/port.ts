@@ -27,7 +27,9 @@ export interface ContainerLauncher {
 }
 
 export interface ArchiveExtractorParams {
+  jobId: string;
   assetId: string;
+  versionId?: string;
   archiveKey: string;
   archiveFilename: string;
   archiveFormat: ArchiveFormat;

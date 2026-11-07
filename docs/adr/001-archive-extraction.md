@@ -124,6 +124,8 @@ assets/{assetId}/_archive/_manifest_chunks/       # Manifest chunks (during extr
 assets/{assetId}/files/{path}                     # Extracted files
 ```
 
+A version's job writes the same tree under `assets/{assetId}/v/{versionId}/` and reports to its own job ID, not the asset's (ADR-005, amendment 2026-11-05).
+
 ### Manifest format (`_manifest.jsonl`)
 
 ```jsonl

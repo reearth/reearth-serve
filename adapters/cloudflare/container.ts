@@ -1,5 +1,5 @@
 import { Container } from "@cloudflare/containers";
-import { objectStoreEnv, type ObjectStoreCredentials } from "./container-env";
+import { archiveExtractorEnv, objectStoreEnv, type ObjectStoreCredentials } from "./container-env";
 import type {
   ArchiveExtractorParams,
   ContainerLauncher,
@@ -115,15 +115,15 @@ export class CloudflareContainerLauncher implements ContainerLauncher {
       throw new Error("archive extractor container is not configured");
     }
 
-    const id = archiveExtractor.idFromName(params.assetId);
+    // One instance per job, so a version's run never lands on the instance
+    // extracting the asset's own archive. An asset's job ID is its asset ID,
+    // so those instances keep their names.
+    const id = archiveExtractor.idFromName(params.jobId);
     const stub = archiveExtractor.get(id) as DurableObjectStub & ArchiveExtractorContainer;
 
     const envVars = {
       ...objectStoreEnv(objectStore),
-      ASSET_ID: params.assetId,
-      ARCHIVE_KEY: params.archiveKey,
-      ARCHIVE_FILENAME: params.archiveFilename,
-      ARCHIVE_FORMAT: params.archiveFormat,
+      ...archiveExtractorEnv(params),
       WORKER_API_URL: this.config.baseUrl,
       INTERNAL_API_SECRET: internalApiSecret,
     };

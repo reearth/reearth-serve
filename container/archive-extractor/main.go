@@ -43,11 +43,24 @@ func main() {
 		log.Fatalf("failed to create R2 client: %v", err)
 	}
 
+	extraction := ExtractionConfig{
+		JobID:             cfg.JobID,
+		AssetID:           cfg.AssetID,
+		VersionID:         cfg.VersionID,
+		ArchiveKey:        cfg.ArchiveKey,
+		ArchiveFilename:   cfg.ArchiveFilename,
+		ArchiveFormat:     cfg.ArchiveFormat,
+		WorkerAPIURL:      cfg.WorkerAPIURL,
+		InternalAPISecret: cfg.InternalAPISecret,
+		MaxConcurrency:    cfg.MaxConcurrency,
+		CheckpointEvery:   cfg.CheckpointEvery,
+	}
+
 	// Set up log writer that captures output for R2
 	logBuf := &logBuffer{}
 	log.SetOutput(io.MultiWriter(os.Stderr, logBuf))
 	flushLogs := func() {
-		logKey := fmt.Sprintf("assets/%s/_archive/_log.txt", cfg.AssetID)
+		logKey := extraction.keyRoot() + "/_archive/_log.txt"
 		logStr := logBuf.String()
 		if err := r2.PutObject(ctx, logKey, strings.NewReader(logStr), int64(len(logStr)), "text/plain", nil); err != nil {
 			log.Printf("WARNING: failed to write log to R2: %v", err)
@@ -60,21 +73,12 @@ func main() {
 		log.Print(msg)
 	}
 
-	log.Printf("config: endpoint=%s bucket=%s region=%s pathStyle=%t assetId=%s archiveKey=%s format=%s workerAPI=%s accessKeyId=%s...",
+	log.Printf("config: endpoint=%s bucket=%s region=%s pathStyle=%t jobId=%s assetId=%s versionId=%s archiveKey=%s format=%s workerAPI=%s accessKeyId=%s...",
 		cfg.ObjectStore.Endpoint, cfg.ObjectStore.Bucket, cfg.ObjectStore.Region, cfg.ObjectStore.PathStyle,
-		cfg.AssetID, cfg.ArchiveKey, cfg.ArchiveFormat, cfg.WorkerAPIURL,
+		extraction.jobID(), cfg.AssetID, cfg.VersionID, cfg.ArchiveKey, cfg.ArchiveFormat, cfg.WorkerAPIURL,
 		maskString(cfg.ObjectStore.AccessKeyID))
 
-	worker := NewExtractionWorker(r2, ExtractionConfig{
-		AssetID:           cfg.AssetID,
-		ArchiveKey:        cfg.ArchiveKey,
-		ArchiveFilename:   cfg.ArchiveFilename,
-		ArchiveFormat:     cfg.ArchiveFormat,
-		WorkerAPIURL:      cfg.WorkerAPIURL,
-		InternalAPISecret: cfg.InternalAPISecret,
-		MaxConcurrency:    cfg.MaxConcurrency,
-		CheckpointEvery:   cfg.CheckpointEvery,
-	})
+	worker := NewExtractionWorker(r2, extraction)
 
 	if err := worker.Run(ctx); err != nil {
 		log.Printf("extraction failed: %v", err)
@@ -108,7 +112,9 @@ type envConfig struct {
 	Deprecations []string
 
 	// Extraction parameters
+	JobID           string
 	AssetID         string
+	VersionID       string
 	ArchiveKey      string
 	ArchiveFilename string
 	ArchiveFormat   string
@@ -137,7 +143,9 @@ func loadConfig(env getenv) (*envConfig, error) {
 	cfg := &envConfig{
 		ObjectStore:       objectStore,
 		Deprecations:      deprecations,
+		JobID:             env("JOB_ID"),
 		AssetID:           env("ASSET_ID"),
+		VersionID:         env("VERSION_ID"),
 		ArchiveKey:        env("ARCHIVE_KEY"),
 		ArchiveFilename:   env("ARCHIVE_FILENAME"),
 		ArchiveFormat:     env("ARCHIVE_FORMAT"),
