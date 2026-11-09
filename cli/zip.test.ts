@@ -100,7 +100,7 @@ describe("round trip", () => {
     const files = {
       "index.html": "<!doctype html><title>site</title>",
       "assets/app.js": "console.log('hi')",
-      "data/cities.json": JSON.stringify({ cities: ["kawasaki"] }),
+      "data/cities.json": JSON.stringify({ cities: ["harbor"] }),
     };
     const entries = await zipOf(files);
 
@@ -121,10 +121,10 @@ describe("round trip", () => {
   });
 
   test("non-ASCII names and empty files are fine", async () => {
-    const entries = await zipOf({ "データ/川崎.txt": "", "ok.txt": "x" });
+    const entries = await zipOf({ "データ/港.txt": "", "ok.txt": "x" });
     const names = entries.map((e) => e.name).sort();
-    expect(names).toEqual(["ok.txt", "データ/川崎.txt"]);
-    const empty = entries.find((e) => e.name === "データ/川崎.txt")!;
+    expect(names).toEqual(["ok.txt", "データ/港.txt"]);
+    const empty = entries.find((e) => e.name === "データ/港.txt")!;
     expect(empty.size).toBe(0);
     expect(empty.crc).toBe(0);
   });

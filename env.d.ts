@@ -38,7 +38,7 @@ interface Env {
   // Defaults to "true" — read & non-upload operations are not affected.
   ANONYMOUS_UPLOAD_ENABLED?: string;
   // Wildcard suffix that per-asset site hosts live under, e.g.
-  // ".serve.reearth.land" (ADR-013 B1). Unset ⇒ site hosts are off.
+  // ".sites.example.net" (ADR-013 B1). Unset ⇒ site hosts are off.
   SITE_HOST_SUFFIX?: string;
   // Required with SITE_HOST_SUFFIX: the registrable domain the site hosts live
   // under, e.g. "example.net". The Worker refuses to serve when the suffix is

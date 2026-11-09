@@ -122,6 +122,8 @@ echo "Running E2E tests against the Node runtime..."
 # Features this runtime does not have: presigned uploads need an S3-compatible
 # store, archive extraction needs a container launcher, and thumbnail
 # generation needs the bundled jSquash wasm. Each is skipped by its own flag.
+# E2E_NODE_RUNTIME marks what only this runtime shows end to end: under
+# wrangler dev the Vite dev server answers preflights itself.
 E2E_ENDPOINT="${ENDPOINT}" \
 E2E_MOCK_OIDC="http://localhost:${MOCK_OIDC_PORT}" \
 E2E_INTERNAL_API_SECRET="${INTERNAL_API_SECRET}" \
@@ -130,4 +132,5 @@ E2E_MOCK_DOH="http://localhost:${MOCK_DOH_PORT}" \
 E2E_PRESIGNED="false" \
 E2E_CONTAINER="false" \
 E2E_THUMBNAILS="false" \
+E2E_NODE_RUNTIME="true" \
   npm run test:e2e -- "$@"

@@ -23,6 +23,7 @@ try {
 }
 
 const PASSWORD = "e2e-site-password";
+const NODE_RUNTIME = process.env.E2E_NODE_RUNTIME === "true";
 const BROWSER = { Accept: "text/html,application/xhtml+xml" };
 
 function basic(password: string): Record<string, string> {
@@ -35,6 +36,19 @@ describe("password-protected sites", { skip: !mockOidcAvailable }, () => {
   let assetId: string;
   let fileUrl: string;
   let configDir: string;
+  let ownOrigin: string;
+
+  async function formCookie(): Promise<string> {
+    expect((await setAccess({ access: "password", password: PASSWORD })).status).toBe(200);
+    const posted = await fetch(`${BASE}/files/${assetId}/_serve/auth`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ password: PASSWORD, next: "/" }),
+      redirect: "manual",
+    });
+    expect(posted.status).toBe(303);
+    return (posted.headers.get("Set-Cookie") ?? "").split(";")[0];
+  }
 
   /** Protect or unprotect through the API. */
   async function setAccess(body: unknown): Promise<Response> {
@@ -66,6 +80,8 @@ describe("password-protected sites", { skip: !mockOidcAvailable }, () => {
     // Public until someone says otherwise.
     expect(body.asset.access ?? "public").toBe("public");
     fileUrl = `${BASE}/files/${assetId}/site.zip`;
+    // BASE_URL, not BASE: wrangler dev keeps the production BASE_URL.
+    ownOrigin = new URL(body.url).origin;
 
     // The CLI writes credentials under REEARTH_SERVE_CONFIG_DIR; a throwaway
     // directory keeps this suite out of the developer's real config.
@@ -135,6 +151,40 @@ describe("password-protected sites", { skip: !mockOidcAvailable }, () => {
     const res = await fetch(fileUrl, { headers: { Cookie: cookie } });
     expect(res.status).toBe(200);
     await res.body?.cancel();
+  });
+
+  test("a cookie read is credentialed for Serve's own origin only", async () => {
+    const cookie = await formCookie();
+    expect(cookie.startsWith("serve_access=")).toBe(true);
+
+    const foreign = await fetch(fileUrl, { headers: { Cookie: cookie, Origin: "https://other.example.com" } });
+    expect(foreign.status).toBe(200);
+    expect(foreign.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(foreign.headers.get("Access-Control-Allow-Credentials")).toBeNull();
+    expect(foreign.headers.get("Cross-Origin-Resource-Policy")).toBe("same-origin");
+    await foreign.body?.cancel();
+
+    const own = await fetch(fileUrl, { headers: { Cookie: cookie, Origin: ownOrigin } });
+    expect(own.status).toBe(200);
+    expect(own.headers.get("Access-Control-Allow-Origin")).toBe(ownOrigin);
+    expect(own.headers.get("Access-Control-Allow-Credentials")).toBe("true");
+    expect(own.headers.get("Vary")).toContain("Origin");
+    await own.body?.cancel();
+  });
+
+  test("a preflight allows the fixed headers, not the requested ones", { skip: !NODE_RUNTIME }, async () => {
+    const res = await fetch(fileUrl, {
+      method: "OPTIONS",
+      headers: {
+        Origin: "https://other.example.com",
+        "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Headers": "x-evil, range",
+      },
+    });
+    expect(res.status).toBe(204);
+    expect(res.headers.get("Access-Control-Allow-Headers"))
+      .toBe("range, if-none-match, if-modified-since, authorization, x-serve-token");
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
   });
 
   test("a wrong password re-renders the form", async () => {

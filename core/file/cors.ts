@@ -33,7 +33,7 @@ export interface CorsPolicy {
 }
 
 const PREFLIGHT_METHODS = "GET, HEAD, OPTIONS";
-const PREFLIGHT_HEADERS = "range, if-none-match, if-modified-since, authorization";
+const PREFLIGHT_HEADERS = "range, if-none-match, if-modified-since, authorization, x-serve-token";
 const PREFLIGHT_MAX_AGE = "86400";
 
 function credentialed(policy: CorsPolicy): boolean {
