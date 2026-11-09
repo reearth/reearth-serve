@@ -412,3 +412,24 @@ not vouch for is now hashed once by Serve.
 - **P5**: the CLI declaring `X-Content-SHA256` / `sha256` on every upload.
   Once it does, a client that uploads a version right after a large
   presigned first upload must expect `409` until verification settles.
+
+**Open issues.**
+
+- R2's store-side check on a presigned single `PUT` is still unconfirmed
+  against a real bucket. Upload with `x-amz-checksum-sha256`, then head the
+  object: if R2 keeps the hash, such uploads are `verified` at completion;
+  if not, they all go through the verification job.
+- The R2 adapter recognises a checksum mismatch by the error message
+  (`/sha-?256|checksum|digest|10037/i`). R2 has no typed error for it; if
+  the wording changes, a mismatch surfaces as 500 instead of 422.
+- A presigned upload's hash is of the stored bytes, but whether the server
+  gzips is decided by the server and returned only in the session response.
+  A client declaring a hash has to predict that decision (as the CLI's
+  `shouldCompress` does). P5 has to settle this, for example by letting the
+  client state the encoding it will upload.
+- Verification runs in the archive-extractor container and shares its
+  `max_instances`, so it competes with extraction for capacity.
+- A rejected upload is recorded only on its job. There is no channel to
+  notify the uploader (ADR-018 §6 asks for one).
+- `deleteAsset` leaves job rows behind, so the jobs of a deleted asset stay
+  listed. This predates ADR-017.
