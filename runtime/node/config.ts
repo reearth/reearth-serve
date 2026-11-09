@@ -47,7 +47,7 @@ export type NodeConfig = {
   tenancy: TenancyConfig;
   /**
    * Wildcard suffix per-asset site hosts live under, e.g.
-   * `.serve.reearth.land` or `.localhost:8788` locally (ADR-013 B1). Unset ⇒
+   * `.sites.example.net` or `.localhost:8788` locally (ADR-013 B1). Unset ⇒
    * site hosts are off. Validated (leading dot) when the app is built.
    */
   siteHostSuffix: string | undefined;

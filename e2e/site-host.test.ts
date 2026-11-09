@@ -111,7 +111,7 @@ describe.skipIf(!SUFFIX)("site hosts", () => {
   });
 
   test("a label that is not an ID is a plain-text 404", async () => {
-    const res = await get(`kawasaki-flood-map${suffix}`, "/");
+    const res = await get(`flood-map${suffix}`, "/");
     expect(res.status).toBe(404);
     expect(res.contentType).toContain("text/plain");
     expect(res.body).toBe("Not found");
@@ -386,6 +386,42 @@ describe.skipIf(!SUFFIX)("site hosts", () => {
     cli(`asset host disable ${assetId} ${first}`);
     expect((await get(`${first}${suffix}`, "/site.zip")).status).toBe(503);
     expect((await get(`${second}${suffix}`, "/site.zip")).status).toBe(200);
+  });
+
+  test("the password form on a site host sets a __Host- cookie", async () => {
+    const token = await signToken();
+    const projectId = await createProjectForAuth(token, "e2e-site-password");
+    const { assetId, hostname } = await claimedSite(token, projectId, "e2e-pw");
+    const patched = await fetch(`${BASE}/api/v1/assets/${assetId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ access: "password", password: "e2e-site-password" }),
+    });
+    expect(patched.status).toBe(200);
+
+    const base = new URL(BASE);
+    const form = new URLSearchParams({ password: "e2e-site-password", next: "/" }).toString();
+    const { status, setCookie } = await new Promise<{ status: number; setCookie: string[] }>((resolve, reject) => {
+      const req = httpRequest(
+        {
+          hostname: base.hostname, port: base.port, path: "/_serve/auth", method: "POST",
+          headers: { Host: hostname, "Content-Type": "application/x-www-form-urlencoded" },
+        },
+        (res) => {
+          res.resume();
+          res.on("end", () => resolve({ status: res.statusCode ?? 0, setCookie: res.headers["set-cookie"] ?? [] }));
+        },
+      );
+      req.on("error", reject);
+      req.end(form);
+    });
+    expect(status).toBe(303);
+    expect(setCookie).toHaveLength(1);
+    const attributes = setCookie[0].split(";").map((part) => part.trim());
+    expect(attributes[0].startsWith("__Host-serve_access=")).toBe(true);
+    expect(attributes).toContain("Secure");
+    expect(attributes).toContain("Path=/");
+    expect(attributes.some((part) => /^domain=/i.test(part))).toBe(false);
   });
 
   // Custom domains (ADR-013 B5). The Node runtime uses the real DoH adapter,

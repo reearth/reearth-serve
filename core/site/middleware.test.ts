@@ -95,7 +95,7 @@ describe("site hosts on", () => {
   test("a label that is not ID-shaped is a plain-text 404", async () => {
     const { app } = await on();
     // B2 will resolve names like this one from the site_hosts table.
-    const res = await app.request(...site("kawasaki-flood-map"));
+    const res = await app.request(...site("flood-map"));
     expect(res.status).toBe(404);
     expect(res.headers.get("Content-Type")).toContain("text/plain");
     expect(res.headers.get("Cache-Control")).toBe("no-store");

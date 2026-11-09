@@ -33,7 +33,7 @@ export interface CorsPolicy {
 }
 
 const PREFLIGHT_METHODS = "GET, HEAD, OPTIONS";
-const PREFLIGHT_HEADERS = "range, if-none-match, if-modified-since, authorization";
+const PREFLIGHT_HEADERS = "range, if-none-match, if-modified-since, authorization, x-serve-token";
 const PREFLIGHT_MAX_AGE = "86400";
 
 function credentialed(policy: CorsPolicy): boolean {
@@ -144,6 +144,17 @@ if (import.meta.vitest) {
       applyCors(headers, policy("cookie", origin));
       expect(headers.get("Access-Control-Allow-Origin")).toBe("*");
       expect(headers.get("Access-Control-Allow-Credentials")).toBeNull();
+    }
+  });
+
+  test("a site host trusts only itself, not a sibling site or the apex", () => {
+    const site = "https://a.sites.example.net";
+    for (const origin of ["https://b.sites.example.net", OWN]) {
+      const headers = new Headers();
+      applyCors(headers, { proof: "cookie", origin, trustedOrigins: [site] });
+      expect(headers.get("Access-Control-Allow-Origin")).toBe("*");
+      expect(headers.get("Access-Control-Allow-Credentials")).toBeNull();
+      expect(headers.get("Cross-Origin-Resource-Policy")).toBe("same-origin");
     }
   });
 

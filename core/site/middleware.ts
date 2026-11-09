@@ -398,7 +398,7 @@ if (import.meta.vitest) {
     const id = (label: string) => resolveIdLabel({ form: "label", label });
     expect(await id("3f9a1c2b4d5e6f70")).toEqual({ kind: "asset", id: "3f9a1c2b4d5e6f70" });
     expect(await id("3F9A1C2B4D5E6F70")).toBeNull();
-    expect(await id("kawasaki-flood-map")).toBeNull();
+    expect(await id("flood-map")).toBeNull();
     expect(await id("3f9a1c2b4d5e6f7")).toBeNull();
     // B1's resolver knows nothing about custom domains.
     expect(await resolveIdLabel({ form: "custom", hostname: "map.city.example.jp" })).toBeNull();
@@ -422,7 +422,7 @@ if (import.meta.vitest) {
     expect(isApexHost("localhost:8788", base, suffix)).toBe(true);
     expect(isApexHost("127.0.0.1:5173", base, suffix)).toBe(true);
 
-    expect(isApexHost("kawasaki.serve.example.com", base, suffix)).toBe(false);
+    expect(isApexHost("harbor.serve.example.com", base, suffix)).toBe(false);
     expect(isApexHost("map.city.example.jp", base, suffix)).toBe(false);
     // A site host under a loopback suffix is still a site host.
     expect(isApexHost("abc.localhost:8788", "http://localhost:8788", ".localhost:8788")).toBe(false);
@@ -430,7 +430,7 @@ if (import.meta.vitest) {
 
   test("isSiteHost is 'not the apex', and is off without a suffix", () => {
     const opts = { baseUrl: "https://serve.example.com", suffix: ".serve.example.com" };
-    expect(isSiteHost("kawasaki.serve.example.com", opts)).toBe(true);
+    expect(isSiteHost("harbor.serve.example.com", opts)).toBe(true);
     // B5: a custom domain is a site host although it ends with nothing of ours.
     expect(isSiteHost("map.city.example.jp", opts)).toBe(true);
     expect(isSiteHost("serve.example.com", opts)).toBe(false);

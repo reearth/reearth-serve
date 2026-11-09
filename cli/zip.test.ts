@@ -100,7 +100,7 @@ describe("round trip", () => {
     const files = {
       "index.html": "<!doctype html><title>site</title>",
       "assets/app.js": "console.log('hi')",
-      "data/cities.json": JSON.stringify({ cities: ["kawasaki"] }),
+      "data/cities.json": JSON.stringify({ cities: ["harbor"] }),
     };
     const entries = await zipOf(files);
 

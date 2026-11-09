@@ -173,7 +173,7 @@ if (import.meta.vitest) {
 
   describe("validateCustomHostname rejects our own domain", () => {
     test("anything under the configured suffix", () => {
-      expect(errorOf("kawasaki.serve.example.com")).toBe(CUSTOM_HOST_ERRORS.reserved);
+      expect(errorOf("harbor.serve.example.com")).toBe(CUSTOM_HOST_ERRORS.reserved);
       expect(errorOf("a.b.serve.example.com")).toBe(CUSTOM_HOST_ERRORS.reserved);
     });
 

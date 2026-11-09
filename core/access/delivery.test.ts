@@ -386,11 +386,11 @@ describe("every URL form obeys the check", () => {
     const claimed = await app.request(`/api/v1/assets/${ASSET_ID}/hosts`, {
       method: "POST",
       headers: { ...auth, "Content-Type": "application/json" },
-      body: JSON.stringify({ hostname: "kawasaki-flood-map" }),
+      body: JSON.stringify({ hostname: "flood-map" }),
     });
     expect(claimed.status).toBe(201);
 
-    const host = `kawasaki-flood-map${SUFFIX}`;
+    const host = `flood-map${SUFFIX}`;
     expect((await app.request(`http://${host}/`, { headers: { Host: host } })).status).toBe(401);
 
     // The form, posted on the site host, comes back through the middleware's
@@ -447,7 +447,7 @@ describe("CORS", () => {
       const res = await preflight(app, ASSET_ID, OWN_ORIGIN);
       // Fixed, not echoed from Access-Control-Request-Headers.
       expect(res.headers.get("Access-Control-Allow-Headers"))
-        .toBe("range, if-none-match, if-modified-since, authorization");
+        .toBe("range, if-none-match, if-modified-since, authorization, x-serve-token");
       expect(res.headers.get("Access-Control-Max-Age")).toBe("86400");
     }
   });
