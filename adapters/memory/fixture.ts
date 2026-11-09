@@ -212,12 +212,14 @@ export class MemorySiteHostStore implements SiteHostStore {
     if (!host || host.releasedAt !== null) return;
     this.hosts.set(hostname, { ...host, releasedAt, assetId: null });
   }
-  async releaseByAsset(assetId: string, releasedAt: number): Promise<string[]> {
-    const released: string[] = [];
+  /** What `SqlAtomicWrites.deleteAsset` does to `site_hosts`; not on the port. */
+  releaseByAsset(assetId: string, releasedAt: number): SiteHost[] {
+    const released: SiteHost[] = [];
     for (const host of this.active()) {
       if (host.assetId !== assetId) continue;
-      this.hosts.set(host.hostname, { ...host, releasedAt, assetId: null });
-      released.push(host.hostname);
+      const row = { ...host, releasedAt, assetId: null };
+      this.hosts.set(host.hostname, row);
+      released.push(row);
     }
     return released;
   }
@@ -246,7 +248,7 @@ export const SIGNING_SECRET = "test-signing-secret-at-least-32-bytes-long";
 /**
  * PBKDF2 iterations for tests.
  *
- * Production is 600 000, which is a few hundred milliseconds per check — fine
+ * Production is 100 000, which is tens of milliseconds per check — fine
  * once per login, ruinous across a suite that does it dozens of times. The
  * count travels inside the stored hash, so a test hash verifies through exactly
  * the same code path as a production one.
@@ -399,9 +401,10 @@ export async function fixture(overrides?: Partial<Deps>) {
       createAsset: () => { throw new Error('fake dependency "writes.createAsset" was called unexpectedly'); },
       createVersion: () => { throw new Error('fake dependency "writes.createVersion" was called unexpectedly'); },
       saveJob: () => { throw new Error('fake dependency "writes.saveJob" was called unexpectedly'); },
-      async deleteAsset({ asset }) {
+      async deleteAsset({ asset, releasedAt }) {
         metadata.assets.delete(asset.id);
         for (const [id, v] of versions.versions) if (v.assetId === asset.id) versions.versions.delete(id);
+        return { releasedSiteHosts: siteHosts.releaseByAsset(asset.id, releasedAt ?? Date.now()) };
       },
     },
     uploadSessions: unused("uploadSessions"),

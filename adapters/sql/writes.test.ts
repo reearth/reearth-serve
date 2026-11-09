@@ -4,6 +4,8 @@ import { describe, expect, test } from "vitest";
 import { createSqliteClient } from "../memory/sqlite-node";
 import { SqlAtomicWrites } from "./writes";
 import { SqlCleanupPendingStore, SqlJobStore, SqlMetadataStore, SqlStorageUsageStore, SqlVersionStore } from "./stores";
+import { SqlSiteHostStore } from "./site-hosts";
+import type { SiteHost } from "../../core/site/repository";
 import type { AssetMetadata } from "../../core/asset/model";
 import type { AssetVersion } from "../../core/asset/model";
 import type { Job } from "../../core/job/model";
@@ -11,6 +13,8 @@ import type { Job } from "../../core/job/model";
 function fixture() {
   const sql = createSqliteClient();
   return {
+    sql,
+    hosts: new SqlSiteHostStore(sql),
     writes: new SqlAtomicWrites(sql),
     assets: new SqlMetadataStore(sql),
     versions: new SqlVersionStore(sql),
@@ -158,5 +162,50 @@ describe("SqlAtomicWrites.deleteAsset", () => {
     await f.writes.deleteAsset({ asset, usageScopes: ["project:p1"], cleanupPrefix: "assets/a1/" });
 
     expect(await f.usage.get("project:p1")).toMatchObject({ totalSize: 500, assetCount: 1 });
+  });
+
+  function siteHost(over: Partial<SiteHost>): SiteHost {
+    return {
+      hostname: "map.serve.example.test", assetId: "a1", projectId: "p1", kind: "subdomain",
+      verifiedAt: null, disabledAt: null, previews: false, releasedAt: null, createdAt: 1000,
+      createdBy: "u1", verificationToken: null, certificateStatus: null, ...over,
+    };
+  }
+
+  test("releases the asset's active site hosts in the same write and returns them", async () => {
+    const f = fixture();
+    await f.writes.createAsset({ asset });
+    await f.hosts.insert(siteHost({}));
+    await f.hosts.insert(siteHost({ hostname: "maps.example.com", kind: "custom", verifiedAt: 1500 }));
+    await f.hosts.insert(siteHost({ hostname: "old.serve.example.test", releasedAt: 100, assetId: null }));
+    await f.hosts.insert(siteHost({ hostname: "other.serve.example.test", assetId: "a2" }));
+
+    const { releasedSiteHosts } = await f.writes.deleteAsset({ asset, cleanupPrefix: "assets/a1/", releasedAt: 9000 });
+
+    expect(releasedSiteHosts.map((h) => h.hostname).sort()).toEqual(["map.serve.example.test", "maps.example.com"]);
+    expect(releasedSiteHosts.find((h) => h.kind === "custom")).toMatchObject({ verifiedAt: 1500, releasedAt: 9000, assetId: null });
+    expect(await f.hosts.find("map.serve.example.test")).toMatchObject({ releasedAt: 9000, assetId: null });
+    // An earlier release keeps its own cooldown; another asset's name is untouched.
+    expect((await f.hosts.find("old.serve.example.test"))?.releasedAt).toBe(100);
+    expect(await f.hosts.find("other.serve.example.test")).toMatchObject({ releasedAt: null, assetId: "a2" });
+  });
+
+  // compliance#258 REL-11: the release used to commit on its own first.
+  test("a failed delete leaves the asset's site hosts serving it", async () => {
+    const f = fixture();
+    await f.writes.createAsset({ asset, usageScopes: ["project:p1"] });
+    await f.hosts.insert(siteHost({}));
+    await f.sql.execute(
+      "CREATE TRIGGER fail_asset_delete BEFORE DELETE ON assets BEGIN SELECT RAISE(ABORT, 'D1 down'); END",
+    );
+
+    await expect(
+      f.writes.deleteAsset({ asset, usageScopes: ["project:p1"], cleanupPrefix: "assets/a1/" }),
+    ).rejects.toThrow();
+
+    expect(await f.assets.find("a1")).not.toBeNull();
+    expect(await f.hosts.find("map.serve.example.test")).toMatchObject({ releasedAt: null, assetId: "a1" });
+    expect(await f.usage.get("project:p1")).toMatchObject({ totalSize: 500, assetCount: 1 });
+    expect(await f.pending.list(10)).toEqual([]);
   });
 });

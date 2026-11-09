@@ -2,8 +2,9 @@ import type { AssetMetadata } from "../model";
 import type { AtomicWrites, FileStorage } from "../repository";
 import type { CleanupPendingStore } from "../../cleanup/repository";
 import { deleteAllR2Objects, SubrequestBudget } from "../../cleanup/usecase";
-import { releaseAssetSiteHosts } from "../../site/usecase";
+import { settleReleasedSiteHosts } from "../../site/usecase";
 import type { SiteHostDeps } from "../../site/usecase";
+import type { SiteHost } from "../../site/repository";
 
 // Small inline budget so a DELETE doesn't monopolise the HTTP request's
 // subrequest cap. Archive assets with huge extractions overflow this and
@@ -23,19 +24,23 @@ export async function deleteAsset(
     now?: number;
   },
 ): Promise<void> {
-  // Release the asset's names before the row goes; ADR-013 B3: "asset deletion
-  // releases, it does not cascade". The rows live out their 30-day cooldown
-  // answering 410 and cannot be re-claimed meanwhile, which is what closes the
-  // subdomain-takeover window a cascading delete would reopen.
-  if (options?.siteHosts) {
-    await releaseAssetSiteHosts(options.siteHosts, asset.id, options.now);
-  }
-
-  // Rows, usage counters and the cleanup_pending entry go out in one atomic
-  // write (ADR-012 §3). The R2 prefix is queued before any object is touched,
-  // so a failure below can no longer orphan the bytes or skip the decrements.
+  // Rows, usage counters, the cleanup_pending entry and the release of the
+  // asset's site hosts go out in one atomic write (ADR-012 §3). The R2 prefix
+  // is queued before any object is touched, so a failure below can no longer
+  // orphan the bytes or skip the decrements. The names are released (ADR-013
+  // B3: "asset deletion releases, it does not cascade") in that same write, so
+  // a failed delete leaves them serving the asset that is still there
+  // (compliance#258 REL-11). Released rows live out their 30-day cooldown
+  // answering 410, which closes the subdomain-takeover window a cascading
+  // delete would reopen.
   const prefix = `assets/${asset.id}/`;
-  await writes.deleteAsset({ asset, usageScopes: options?.usageScopes, cleanupPrefix: prefix });
+  const { releasedSiteHosts } = await writes.deleteAsset({
+    asset,
+    usageScopes: options?.usageScopes,
+    cleanupPrefix: prefix,
+    releasedAt: options?.now,
+  });
+  if (options?.siteHosts) await settleReleasedSiteHosts(options.siteHosts, releasedSiteHosts);
 
   try {
     const budget = options?.budget ?? new SubrequestBudget(INLINE_DELETE_BUDGET);
@@ -58,7 +63,7 @@ if (import.meta.vitest) {
       createAsset: vi.fn(),
       createVersion: vi.fn(),
       saveJob: vi.fn(),
-      deleteAsset: vi.fn(async () => {}),
+      deleteAsset: vi.fn(async () => ({ releasedSiteHosts: [] as SiteHost[] })),
     } satisfies AtomicWrites;
   }
 
@@ -92,7 +97,9 @@ if (import.meta.vitest) {
 
     await deleteAsset(writes, st, asset, { usageScopes: ["project:p1"], pendingCleanup: pending });
 
-    expect(writes.deleteAsset).toHaveBeenCalledWith({ asset, usageScopes: ["project:p1"], cleanupPrefix: "assets/a1/" });
+    expect(writes.deleteAsset).toHaveBeenCalledWith({
+      asset, usageScopes: ["project:p1"], cleanupPrefix: "assets/a1/", releasedAt: undefined,
+    });
     expect(st.deleteMany).toHaveBeenCalledWith(["assets/a1/f.zip", "assets/a1/files/a.txt"]);
     expect(pending.remove).toHaveBeenCalledWith("assets/a1/");
   });
@@ -126,6 +133,54 @@ if (import.meta.vitest) {
     await expect(deleteAsset(mockWrites(), st, asset, { pendingCleanup: pending })).resolves.toBeUndefined();
     expect(pending.remove).not.toHaveBeenCalled();
     warn.mockRestore();
+  });
+
+  function siteHostDepsMock() {
+    return {
+      hosts: {} as SiteHostDeps["hosts"],
+      cache: { get: vi.fn(async () => null), put: vi.fn(async () => {}), delete: vi.fn(async () => {}) },
+      provisioner: {
+        provision: vi.fn(), status: vi.fn(), deprovision: vi.fn(async () => {}),
+      },
+      suffix: ".serve.example.test",
+    } satisfies SiteHostDeps;
+  }
+
+  function released(over: Partial<SiteHost>): SiteHost {
+    return {
+      hostname: "map.serve.example.test", assetId: null, projectId: "p1", kind: "subdomain",
+      verifiedAt: null, disabledAt: null, previews: false, releasedAt: 9000, createdAt: 1,
+      createdBy: null, verificationToken: null, certificateStatus: null, ...over,
+    };
+  }
+
+  test("deleteAsset drops the released names' cache and gives up verified custom certificates", async () => {
+    const writes = mockWrites();
+    writes.deleteAsset.mockResolvedValueOnce({
+      releasedSiteHosts: [
+        released({}),
+        released({ hostname: "maps.example.com", kind: "custom", verifiedAt: 5 }),
+        released({ hostname: "pending.example.com", kind: "custom" }),
+      ],
+    });
+    const siteHosts = siteHostDepsMock();
+
+    await deleteAsset(writes, mockStorageWithKeys([]), asset, { siteHosts, now: 9000 });
+
+    expect(writes.deleteAsset).toHaveBeenCalledWith(expect.objectContaining({ releasedAt: 9000 }));
+    expect(siteHosts.cache.delete).toHaveBeenCalledTimes(3);
+    expect(siteHosts.provisioner.deprovision).toHaveBeenCalledExactlyOnceWith("maps.example.com");
+  });
+
+  // compliance#258 REL-11: nothing about the names may change before the write commits.
+  test("deleteAsset leaves site hosts alone when the row write fails", async () => {
+    const writes = mockWrites();
+    writes.deleteAsset.mockRejectedValueOnce(new Error("D1 down"));
+    const siteHosts = siteHostDepsMock();
+
+    await expect(deleteAsset(writes, mockStorageWithKeys([]), asset, { siteHosts })).rejects.toThrow("D1 down");
+    expect(siteHosts.cache.delete).not.toHaveBeenCalled();
+    expect(siteHosts.provisioner.deprovision).not.toHaveBeenCalled();
   });
 
   test("deleteAsset propagates a failed row write without touching R2", async () => {

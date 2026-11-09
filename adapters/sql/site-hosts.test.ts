@@ -157,19 +157,6 @@ describe("SqlSiteHostStore", () => {
     expect((await s.find(`kawasaki-flood-map${SUFFIX}`))?.releasedAt).toBe(9000);
   });
 
-  test("releaseByAsset releases every active name and reports them", async () => {
-    const s = store();
-    await s.insert(host({ hostname: `a${SUFFIX}` }));
-    await s.insert(host({ hostname: `b${SUFFIX}` }));
-    await s.insert(host({ hostname: `c${SUFFIX}`, assetId: "fedcba9876543210" }));
-    await s.release(`b${SUFFIX}`, 100);
-
-    expect((await s.releaseByAsset("3f9a1c2b4d5e6f70", 9000)).sort()).toEqual([`a${SUFFIX}`]);
-    expect((await s.find(`a${SUFFIX}`))?.releasedAt).toBe(9000);
-    // Another asset's name is untouched.
-    expect((await s.find(`c${SUFFIX}`))?.releasedAt).toBeNull();
-  });
-
   test("purgeReleasedBefore takes only rows past the cutoff, bounded by limit", async () => {
     const s = store();
     await s.insert(host({ hostname: `old${SUFFIX}` }));

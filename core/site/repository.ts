@@ -75,12 +75,6 @@ export interface SiteHostStore {
   remove(hostname: string): Promise<void>;
   /** Start the cooldown: set `released_at`, null `asset_id`. */
   release(hostname: string, releasedAt: number): Promise<void>;
-  /**
-   * Release every name of an asset (asset deletion — B3: releases, does not
-   * cascade). Returns the hostnames released, so the caller can drop their
-   * cache entries.
-   */
-  releaseByAsset(assetId: string, releasedAt: number): Promise<string[]>;
   /** Active rows in a project, for the per-project quota. */
   countActiveByProject(projectId: string): Promise<number>;
   /** Purge released rows whose cooldown ended before `before`. Returns them. */

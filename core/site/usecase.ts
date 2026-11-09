@@ -421,18 +421,18 @@ async function takeVerifyAttempt(
 }
 
 /**
- * Release every name of an asset being deleted (B3: "asset deletion releases,
- * it does not cascade"). Returns the hostnames released.
+ * The side effects of an asset delete that released `released` (B3: "asset
+ * deletion releases, it does not cascade"). The rows themselves are released
+ * inside `AtomicWrites.deleteAsset`, so this runs only after that write has
+ * committed: drop each name's cache entry, and give up the certificate of a
+ * verified custom domain the way `releaseSiteHost` does.
  */
-export async function releaseAssetSiteHosts(
-  deps: SiteHostDeps,
-  assetId: string,
-  now: number = Date.now(),
-): Promise<string[]> {
-  const released = await deps.hosts.releaseByAsset(assetId, now);
-  await dropCache(deps.cache, released);
+export async function settleReleasedSiteHosts(deps: SiteHostDeps, released: SiteHost[]): Promise<void> {
+  await dropCache(deps.cache, released.map((host) => host.hostname));
+  for (const host of released) {
+    if (host.kind === "custom" && host.verifiedAt !== null) await deprovision(deps, host.hostname);
+  }
   // ADR-007: emit site_host.released here — there is no event store in core yet.
-  return released;
 }
 
 /**

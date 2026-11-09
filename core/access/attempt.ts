@@ -2,8 +2,8 @@
  * One password attempt, for the form and for `Authorization: Basic` alike
  * (ADR-013 B7).
  *
- * PBKDF2 stays at 600 000 iterations, which is a few hundred milliseconds of
- * CPU. A tool that sends Basic on every tile request would pay that per
+ * PBKDF2 runs at 100 000 iterations (the workerd cap), which is tens of
+ * milliseconds of CPU. A tool that sends Basic on every tile request would pay that per
  * request, so each isolate remembers the checks that succeeded. A memo hit
  * also skips the limiter's KV read and delete: the attempt already proved the
  * password, so there is nothing to throttle and no counter to clear.
