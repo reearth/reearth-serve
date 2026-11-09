@@ -267,7 +267,8 @@ token's remaining life (`immutable` only at a version-ID URL),
 Redirects and misses on a restricted asset are `no-store`. Serve strips
 `serve_token` from the query before any other use, except that the
 redirects it builds inside the asset (the directory redirect and
-`_redirects`) keep it, with a path-only `Location`. Serve's own logs
+`_redirects`) keep it. The directory redirect's `Location` is a path for
+every asset, never an absolute URL. Serve's own logs
 redact it. The OpenAPI document
 declares `serve_token` and `X-Serve-Token` as `apiKey` security schemes
 on `/files`.
@@ -347,7 +348,7 @@ POST   /api/v1/assets/:id/signed-urls     {prefix?, versionId?, expiresIn?}
 
 CLI: `asset protect <id> --restricted`, beside the existing
 `--password` and `--off`, and `asset sign <id> [prefix] [--expires 24h]
-[--version <versionId>]`, which prints the token, `expiresAt` and the URL
+[--version-id <versionId>]`, which prints the token, `expiresAt` and the URL
 template. `file cp` and `file sync` send the CLI's login
 JWT, so a member downloads a restricted asset with the same commands.
 
