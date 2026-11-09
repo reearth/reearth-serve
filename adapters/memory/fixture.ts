@@ -450,6 +450,7 @@ export async function fixture(overrides?: Partial<Deps>) {
     containers: unused("containers"),
     extractionStuckThresholdMs: 1000,
     limits: { subrequestBudget: 700 },
+    deliveryTokens: null,
     ...overrides,
   };
   return {

@@ -293,7 +293,7 @@ export const siteHostVerificationSchema = z.object({
 
 export const claimSiteHostBodySchema = component("ClaimSiteHostRequest", z.object({
   /**
-   * For `subdomain`: the bare label (`kawasaki-flood-map`) or the full host.
+   * For `subdomain`: the bare label (`flood-map`) or the full host.
    * For `custom`: the whole hostname the customer owns (`map.city.example.jp`).
    */
   hostname: z.string(),

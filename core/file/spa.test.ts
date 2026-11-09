@@ -34,7 +34,7 @@ describe("looksLikeAssetPath", () => {
       expect(looksLikeAssetPath(path)).toBe(true);
     }
     for (const path of [
-      "", "about", "map/kawasaki", "docs/", "users/42",
+      "", "about", "map/harbor", "docs/", "users/42",
       // A dot in a segment is not an extension when what follows is too long
       // to be one.
       "v1.2.3-release-candidate",
@@ -69,7 +69,7 @@ describe("spa: true", () => {
 
   test("a deep route and a trailing-slash route both reach it", async () => {
     const { app } = await spaFixture();
-    for (const path of ["/map/kawasaki", "/about/", "/users/42"]) {
+    for (const path of ["/map/harbor", "/about/", "/users/42"]) {
       const res = await app.request(`/files/${ASSET_ID}${path}`);
       expect(res.status).toBe(200);
       expect(await res.text()).toBe(INDEX_HTML);
@@ -230,11 +230,11 @@ describe("site hosts serve the fallback too", () => {
     const claimed = await app.request(`/api/v1/assets/${ASSET_ID}/hosts`, {
       method: "POST",
       headers: { ...auth, "Content-Type": "application/json" },
-      body: JSON.stringify({ hostname: "kawasaki-flood-map" }),
+      body: JSON.stringify({ hostname: "flood-map" }),
     });
     expect(claimed.status).toBe(201);
 
-    const host = `kawasaki-flood-map${SUFFIX}`;
+    const host = `flood-map${SUFFIX}`;
     const res = await app.request(`http://${host}/about`, { headers: { Host: host } });
     expect(res.status).toBe(200);
     expect(await res.text()).toBe(INDEX_HTML);
@@ -245,16 +245,16 @@ describe("site hosts serve the fallback too", () => {
     await app.request(`/api/v1/assets/${ASSET_ID}/hosts`, {
       method: "POST",
       headers: { ...auth, "Content-Type": "application/json" },
-      body: JSON.stringify({ hostname: "kawasaki-flood-map" }),
+      body: JSON.stringify({ hostname: "flood-map" }),
     });
-    const toggled = await app.request(`/api/v1/assets/${ASSET_ID}/hosts/kawasaki-flood-map`, {
+    const toggled = await app.request(`/api/v1/assets/${ASSET_ID}/hosts/flood-map`, {
       method: "PATCH",
       headers: { ...auth, "Content-Type": "application/json" },
       body: JSON.stringify({ previews: true }),
     });
     expect(toggled.status).toBe(200);
 
-    const host = `v1--kawasaki-flood-map${SUFFIX}`;
+    const host = `v1--flood-map${SUFFIX}`;
     const res = await app.request(`http://${host}/about`, { headers: { Host: host } });
     expect(res.status).toBe(200);
     expect(await res.text()).toBe(INDEX_HTML);

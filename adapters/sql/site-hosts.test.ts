@@ -29,7 +29,7 @@ function storeWith(assetIds: string[]): SqlSiteHostStore {
 
 function host(over: Partial<SiteHost> = {}): SiteHost {
   return {
-    hostname: `kawasaki-flood-map${SUFFIX}`,
+    hostname: `flood-map${SUFFIX}`,
     assetId: "3f9a1c2b4d5e6f70",
     projectId: "p1",
     kind: "subdomain",
@@ -49,19 +49,19 @@ describe("SqlSiteHostStore", () => {
   test("insert and find round-trip every column", async () => {
     const s = store();
     expect(await s.insert(host())).toBe(true);
-    expect(await s.find(`kawasaki-flood-map${SUFFIX}`)).toEqual(host());
+    expect(await s.find(`flood-map${SUFFIX}`)).toEqual(host());
     expect(await s.find(`nothing${SUFFIX}`)).toBeNull();
   });
 
   test("previews survives the 0/1 column round-trip", async () => {
     const s = store();
     await s.insert(host({ previews: true }));
-    expect((await s.find(`kawasaki-flood-map${SUFFIX}`))?.previews).toBe(true);
+    expect((await s.find(`flood-map${SUFFIX}`))?.previews).toBe(true);
   });
 
   test("update writes only the fields it was given (ADR-013 B3/B4)", async () => {
     const s = store();
-    const hostname = `kawasaki-flood-map${SUFFIX}`;
+    const hostname = `flood-map${SUFFIX}`;
     await s.insert(host());
 
     await s.update(hostname, { disabledAt: 4000 });
@@ -103,15 +103,15 @@ describe("SqlSiteHostStore", () => {
 
     // A subdomain keeps both columns null through a B3/B4 patch.
     await s.insert(host());
-    await s.update(`kawasaki-flood-map${SUFFIX}`, { previews: true });
-    const row = await s.find(`kawasaki-flood-map${SUFFIX}`);
+    await s.update(`flood-map${SUFFIX}`, { previews: true });
+    const row = await s.find(`flood-map${SUFFIX}`);
     expect(row?.verificationToken).toBeNull();
     expect(row?.certificateStatus).toBeNull();
   });
 
   test("update never revives a released row", async () => {
     const s = store();
-    const hostname = `kawasaki-flood-map${SUFFIX}`;
+    const hostname = `flood-map${SUFFIX}`;
     await s.insert(host({ disabledAt: 4000 }));
     await s.release(hostname, 9000);
 
@@ -127,13 +127,13 @@ describe("SqlSiteHostStore", () => {
     expect(await s.insert(host())).toBe(true);
     expect(await s.insert(host({ assetId: "fedcba9876543210", projectId: "p2" }))).toBe(false);
     // The first row is untouched — a lost race must not overwrite.
-    expect((await s.find(`kawasaki-flood-map${SUFFIX}`))?.projectId).toBe("p1");
+    expect((await s.find(`flood-map${SUFFIX}`))?.projectId).toBe("p1");
   });
 
   test("a released row still holds the name against a new claim", async () => {
     const s = store();
     await s.insert(host());
-    await s.release(`kawasaki-flood-map${SUFFIX}`, 9000);
+    await s.release(`flood-map${SUFFIX}`, 9000);
     expect(await s.insert(host({ createdAt: 9500 }))).toBe(false);
   });
 
@@ -160,24 +160,24 @@ describe("SqlSiteHostStore", () => {
   test("release sets released_at and nulls asset_id", async () => {
     const s = store();
     await s.insert(host());
-    await s.release(`kawasaki-flood-map${SUFFIX}`, 9000);
-    const row = await s.find(`kawasaki-flood-map${SUFFIX}`);
+    await s.release(`flood-map${SUFFIX}`, 9000);
+    const row = await s.find(`flood-map${SUFFIX}`);
     expect(row).toMatchObject({ releasedAt: 9000, assetId: null, projectId: "p1" });
   });
 
   test("release does not restart the cooldown of an already-released row", async () => {
     const s = store();
     await s.insert(host());
-    await s.release(`kawasaki-flood-map${SUFFIX}`, 9000);
-    await s.release(`kawasaki-flood-map${SUFFIX}`, 20000);
-    expect((await s.find(`kawasaki-flood-map${SUFFIX}`))?.releasedAt).toBe(9000);
+    await s.release(`flood-map${SUFFIX}`, 9000);
+    await s.release(`flood-map${SUFFIX}`, 20000);
+    expect((await s.find(`flood-map${SUFFIX}`))?.releasedAt).toBe(9000);
   });
 
   // compliance#258 REL-11 follow-up: a claim racing the asset's delete.
   test("insert refuses a row whose asset no longer exists", async () => {
     const s = storeWith([]);
     expect(await s.insert(host())).toBe(false);
-    expect(await s.find(`kawasaki-flood-map${SUFFIX}`)).toBeNull();
+    expect(await s.find(`flood-map${SUFFIX}`)).toBeNull();
   });
 
   test("released verified custom domains stay listed until their certificate is marked released", async () => {
@@ -225,8 +225,8 @@ describe("SqlSiteHostStore", () => {
   test("remove drops a row outright", async () => {
     const s = store();
     await s.insert(host());
-    await s.remove(`kawasaki-flood-map${SUFFIX}`);
-    expect(await s.find(`kawasaki-flood-map${SUFFIX}`)).toBeNull();
+    await s.remove(`flood-map${SUFFIX}`);
+    expect(await s.find(`flood-map${SUFFIX}`)).toBeNull();
     // …and the name is claimable again.
     expect(await s.insert(host())).toBe(true);
   });

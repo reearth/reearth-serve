@@ -21,7 +21,7 @@ export function registerHostCommands(program: Command, asset: Command) {
     .command("add")
     .description("Claim a name, or register a custom domain, for an asset")
     .argument("<id>", "Asset ID")
-    .argument("<name>", "Name, e.g. kawasaki-flood-map (or the full host); with --custom, the whole hostname")
+    .argument("<name>", "Name, e.g. flood-map (or the full host); with --custom, the whole hostname")
     .option("--custom", "Register a domain the customer owns (ADR-013 B5) instead of a name under the service's suffix")
     .action(async (id: string, name: string, cmdOpts: { custom?: boolean }) => {
       const opts = program.opts<{ endpoint: string; json: boolean }>();

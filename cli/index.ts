@@ -34,7 +34,7 @@ function registerUploadCommand(parent: Command, name: string, description: strin
     .option("--direct", "Force direct upload (skip presigned URL)")
     .option("--no-extract", "Skip automatic archive extraction")
     .option("--site", "Turn on the SPA fallback: unknown routes serve index.html (ADR-013 C1)")
-    .option("--name <slug>", "Claim a named site host for the upload, e.g. kawasaki-flood-map")
+    .option("--name <slug>", "Claim a named site host for the upload, e.g. flood-map")
     .option("--password", "Password-protect the site (prompts; never pass it on the command line)")
     .action(async (
       path: string,

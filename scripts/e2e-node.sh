@@ -16,6 +16,10 @@ INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-e2e-internal-secret}"
 # fail-closed 503 and the PATCH that protects one is refused, so the access
 # suite would be testing the missing-secret path rather than the feature.
 SIGNING_SECRET="${SIGNING_SECRET:-e2e-signing-secret}"
+# A valid delivery token key ring (ADR-014 §4), so every run proves the
+# runtime parses one and still serves.
+E2E_DELIVERY_TOKEN_KEYS='{"active":"e2e","keys":{"e2e":"ZTJlLWRlbGl2ZXJ5LXRva2VuLWtleS0zMi1ieXRlcyE="}}'
+DELIVERY_TOKEN_KEYS="${DELIVERY_TOKEN_KEYS:-$E2E_DELIVERY_TOKEN_KEYS}"
 # Site hosts (ADR-013 B1). The suffix carries the port because it is compared
 # against the Host header verbatim; the apex ("localhost:PORT") does not end
 # with it, so every other test is unaffected. Browsers treat an unlisted TLD
@@ -84,6 +88,7 @@ BASE_URL="${ENDPOINT}" \
 SQLITE_PATH=":memory:" \
 INTERNAL_API_SECRET="${INTERNAL_API_SECRET}" \
 SIGNING_SECRET="${SIGNING_SECRET}" \
+DELIVERY_TOKEN_KEYS="${DELIVERY_TOKEN_KEYS}" \
 ANONYMOUS_UPLOAD_ENABLED="true" \
 OIDC_ISSUER_URL="${OIDC_ISSUER}" \
 OIDC_AUDIENCE="e2e-audience" \
@@ -117,6 +122,8 @@ echo "Running E2E tests against the Node runtime..."
 # Features this runtime does not have: presigned uploads need an S3-compatible
 # store, archive extraction needs a container launcher, and thumbnail
 # generation needs the bundled jSquash wasm. Each is skipped by its own flag.
+# E2E_NODE_RUNTIME marks what only this runtime shows end to end: under
+# wrangler dev the Vite dev server answers preflights itself.
 E2E_ENDPOINT="${ENDPOINT}" \
 E2E_MOCK_OIDC="http://localhost:${MOCK_OIDC_PORT}" \
 E2E_INTERNAL_API_SECRET="${INTERNAL_API_SECRET}" \
@@ -125,4 +132,5 @@ E2E_MOCK_DOH="http://localhost:${MOCK_DOH_PORT}" \
 E2E_PRESIGNED="false" \
 E2E_CONTAINER="false" \
 E2E_THUMBNAILS="false" \
+E2E_NODE_RUNTIME="true" \
   npm run test:e2e -- "$@"
