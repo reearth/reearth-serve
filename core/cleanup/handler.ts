@@ -1,5 +1,5 @@
 import { cleanupExpiredAssets, drainPendingCleanups, SubrequestBudget } from "./usecase";
-import { purgeReleasedSiteHosts } from "../site/usecase";
+import { purgeReleasedSiteHosts, releaseOutstandingCertificates } from "../site/usecase";
 import type { Job } from "../job/model";
 import type { JobStore } from "../job/repository";
 import type { AtomicWrites, MetadataStore, VersionStore } from "../asset/repository";
@@ -45,7 +45,17 @@ export async function handleScheduled(deps: Deps): Promise<void> {
   // Released site names whose 30-day cooldown has run out (ADR-013 B3). One
   // indexed DELETE; the name becomes claimable again only here, which is what
   // makes the cooldown a real window rather than a suggestion.
-  const purged = await purgeReleasedSiteHosts({ hosts: deps.siteHosts, cache: deps.cache, suffix: deps.siteHostSuffix });
+  const siteHostDeps = {
+    hosts: deps.siteHosts, cache: deps.cache, suffix: deps.siteHostSuffix, provisioner: deps.customHostnames,
+  };
+  // Certificates of released custom domains that a release could not give up
+  // (provider error, or the process died right after the delete committed).
+  // Before the purge, so a row is retried for its whole cooldown.
+  const certificates = await releaseOutstandingCertificates(siteHostDeps);
+  if (certificates.length > 0) {
+    console.log(`Cleanup: released ${certificates.length} outstanding custom-domain certificates`);
+  }
+  const purged = await purgeReleasedSiteHosts(siteHostDeps);
   if (purged.length > 0) {
     console.log(`Cleanup: purged ${purged.length} released site hosts past their cooldown`);
   }

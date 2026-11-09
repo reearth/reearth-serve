@@ -78,10 +78,24 @@ export class CloudflareCustomHostnames implements CustomHostnameProvisioner {
     return found ? toState(found) : { status: "pending", instructions: pointCname(hostname) };
   }
 
+  /**
+   * Throws when Cloudflare could not confirm the hostname is gone, so the
+   * caller can keep the release outstanding and retry it from the cron. An
+   * id that is no longer there is success: a retry after a DELETE that did
+   * land must not fail forever.
+   */
   async deprovision(hostname: string): Promise<void> {
-    const found = await this.find(hostname);
-    if (!found?.id) return;
-    await this.call("DELETE", `/${found.id}`);
+    const lookup = await this.request<CustomHostnameResult[]>(
+      "GET",
+      `?hostname=${encodeURIComponent(hostname)}`,
+    );
+    if (!lookup.ok) throw new Error(`looking up custom hostname ${hostname} failed (${lookup.status})`);
+    const id = lookup.result?.find((r) => r.hostname === hostname)?.id;
+    if (!id) return;
+    const deleted = await this.request("DELETE", `/${id}`);
+    if (!deleted.ok && deleted.status !== 404) {
+      throw new Error(`deleting custom hostname ${hostname} failed (${deleted.status})`);
+    }
   }
 
   private async find(hostname: string): Promise<CustomHostnameResult | null> {
@@ -92,7 +106,17 @@ export class CloudflareCustomHostnames implements CustomHostnameProvisioner {
     return results?.find((r) => r.hostname === hostname) ?? null;
   }
 
+  /** `request`, with every failure folded into null (logged by `request`). */
   private async call<T>(method: string, path: string, body?: unknown): Promise<T | null> {
+    const res = await this.request<T>(method, path, body);
+    return res.ok ? res.result : null;
+  }
+
+  private async request<T>(
+    method: string,
+    path: string,
+    body?: unknown,
+  ): Promise<{ ok: true; result: T | null } | { ok: false; status: number }> {
     const url = `${this.apiBase}/zones/${this.options.zoneId}/custom_hostnames${path}`;
     const res = await this.fetcher(url, {
       method,
@@ -116,9 +140,9 @@ export class CloudflareCustomHostnames implements CustomHostnameProvisioner {
       console.warn(
         `Cloudflare custom_hostnames ${method} failed (${res.status})${detail ? `: ${detail}` : ""}`,
       );
-      return null;
+      return { ok: false, status: res.status };
     }
-    return payload.result ?? null;
+    return { ok: true, result: payload.result ?? null };
   }
 }
 
@@ -149,7 +173,7 @@ function pointCname(hostname: string): string {
 }
 
 if (import.meta.vitest) {
-  const { describe, test, expect } = import.meta.vitest;
+  const { describe, test, expect, vi } = import.meta.vitest;
 
   type Call = { url: string; method: string; auth: string | null; body: unknown };
 
@@ -225,6 +249,25 @@ if (import.meta.vitest) {
       await p.deprovision("map.example.jp");
       expect(calls[1].method).toBe("DELETE");
       expect(calls[1].url).toBe("https://api.test/client/v4/zones/zone1/custom_hostnames/ch1");
+    });
+
+    test("deprovision throws when the lookup or the delete fails, so the release stays outstanding", async () => {
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      const lookupFails = provisioner([{ success: false, errors: [{ message: "bad zone" }] }]);
+      await expect(lookupFails.p.deprovision("map.example.jp")).rejects.toThrow(/looking up/);
+
+      const deleteFails = provisioner([
+        { success: true, result: [{ id: "ch1", hostname: "map.example.jp" }] },
+        { success: false, errors: [{ message: "internal" }] },
+      ]);
+      await expect(deleteFails.p.deprovision("map.example.jp")).rejects.toThrow(/deleting/);
+      warn.mockRestore();
+    });
+
+    test("deprovision of a hostname Cloudflare no longer has is success", async () => {
+      const { calls, p } = provisioner([{ success: true, result: [] }]);
+      await expect(p.deprovision("map.example.jp")).resolves.toBeUndefined();
+      expect(calls).toHaveLength(1);
     });
 
     test("an API error is pending, not an exception, and never prints the token", async () => {

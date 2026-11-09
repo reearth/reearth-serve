@@ -7,7 +7,7 @@
  * — the work factor travels inside the stored hash, so these verify through
  * exactly the same code path a production hash does.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { TEST_ITERATIONS } from "../../adapters/memory/fixture";
 import {
   APEX_COOKIE,
@@ -25,6 +25,7 @@ import {
   DEFAULT_ITERATIONS,
   hashPassword,
   MAX_ITERATIONS,
+  toBase64,
   verifyPassword,
 } from "./password";
 import { safeNextPath } from "./resolve";
@@ -65,11 +66,32 @@ describe("PBKDF2 password hashing", () => {
     expect(await verifyPassword("pw", stored)).toBe(true);
   });
 
-  test("a count above the cap is refused when hashing and fails closed when verifying", async () => {
+  test("a count above the cap is refused when hashing", async () => {
     await expect(hashPassword("pw", { iterations: MAX_ITERATIONS + 1 })).rejects.toThrow(RangeError);
+  });
+
+  // A hash written above the cap before SCA-04 (Node only) keeps working on a
+  // runtime that can compute it, so its owner is not locked out by the fix.
+  test("a legacy hash above the cap still verifies where the runtime allows it", async () => {
+    const iterations = MAX_ITERATIONS + 1;
+    const salt = new Uint8Array(16).fill(7);
+    const key = await crypto.subtle.importKey("raw", new TextEncoder().encode("pw"), "PBKDF2", false, ["deriveBits"]);
+    const bits = await crypto.subtle.deriveBits({ name: "PBKDF2", hash: "SHA-256", salt, iterations }, key, 256);
+    const stored = { hash: `pbkdf2-sha256$${iterations}$${toBase64(new Uint8Array(bits))}`, salt: toBase64(salt) };
+    expect(await verifyPassword("pw", stored)).toBe(true);
+    expect(await verifyPassword("nope", stored)).toBe(false);
+  });
+
+  // ...and fails closed where it does not (workerd: NotSupportedError).
+  test("a runtime that refuses the count fails closed instead of throwing", async () => {
     const stored = await hashPassword("pw", { iterations: TEST_ITERATIONS });
-    const [, , key] = stored.hash.split("$");
-    expect(await verifyPassword("pw", { ...stored, hash: `pbkdf2-sha256$600000$${key}` })).toBe(false);
+    const spy = vi.spyOn(crypto.subtle, "deriveBits").mockRejectedValueOnce(
+      new DOMException("Pbkdf2 failed: iteration counts above 100000 are not supported", "NotSupportedError"),
+    );
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await verifyPassword("pw", stored)).toBe(false);
+    spy.mockRestore();
+    warn.mockRestore();
   });
 
   test("a malformed stored hash fails closed instead of throwing", async () => {

@@ -175,9 +175,11 @@ describe("SqlAtomicWrites.deleteAsset", () => {
   test("releases the asset's active site hosts in the same write and returns them", async () => {
     const f = fixture();
     await f.writes.createAsset({ asset });
+    await f.writes.createAsset({ asset: { ...asset, id: "a2", jobId: undefined } });
     await f.hosts.insert(siteHost({}));
     await f.hosts.insert(siteHost({ hostname: "maps.example.com", kind: "custom", verifiedAt: 1500 }));
-    await f.hosts.insert(siteHost({ hostname: "old.serve.example.test", releasedAt: 100, assetId: null }));
+    await f.hosts.insert(siteHost({ hostname: "old.serve.example.test" }));
+    await f.hosts.release("old.serve.example.test", 100);
     await f.hosts.insert(siteHost({ hostname: "other.serve.example.test", assetId: "a2" }));
 
     const { releasedSiteHosts } = await f.writes.deleteAsset({ asset, cleanupPrefix: "assets/a1/", releasedAt: 9000 });

@@ -16,7 +16,7 @@ import type { SiteHosting } from "../../shared/api";
 import type { AssetProtection, ListResult, MetadataStore, VersionStore } from "../../core/asset/repository";
 import { hashPassword } from "../../core/access/password";
 import type { Session, SessionStore } from "../../core/session/repository";
-import type { SiteHost, SiteHostPatch, SiteHostStore } from "../../core/site/repository";
+import { CERTIFICATE_RELEASED, type SiteHost, type SiteHostPatch, type SiteHostStore } from "../../core/site/repository";
 import { MemoryFileStorage } from "./storage";
 import { MemoryKeyValue } from "./memory-kv";
 import { MemoryDnsResolver } from "./dns";
@@ -178,6 +178,9 @@ export class MemorySessionStore implements SessionStore {
 export class MemorySiteHostStore implements SiteHostStore {
   readonly hosts = new Map<string, SiteHost>();
 
+  /** The `EXISTS (… assets …)` half of the SQL insert; omitted, every asset exists. */
+  constructor(private readonly assetExists?: (assetId: string) => boolean) {}
+
   async find(hostname: string): Promise<SiteHost | null> {
     return this.hosts.get(hostname) ?? null;
   }
@@ -190,6 +193,7 @@ export class MemorySiteHostStore implements SiteHostStore {
   async insert(host: SiteHost): Promise<boolean> {
     // The primary key wins, released rows included — same as INSERT OR IGNORE.
     if (this.hosts.has(host.hostname)) return false;
+    if (this.assetExists && host.assetId !== null && !this.assetExists(host.assetId)) return false;
     this.hosts.set(host.hostname, { ...host });
     return true;
   }
@@ -222,6 +226,18 @@ export class MemorySiteHostStore implements SiteHostStore {
       released.push(row);
     }
     return released;
+  }
+  async listCertificatesToRelease(limit: number): Promise<SiteHost[]> {
+    return [...this.hosts.values()]
+      .filter((h) => h.releasedAt !== null && h.kind === "custom" && h.verifiedAt !== null
+        && h.certificateStatus !== CERTIFICATE_RELEASED)
+      .sort((a, b) => (a.releasedAt ?? 0) - (b.releasedAt ?? 0))
+      .slice(0, limit);
+  }
+  async markCertificateReleased(hostname: string): Promise<void> {
+    const host = this.hosts.get(hostname);
+    if (!host || host.releasedAt === null) return;
+    this.hosts.set(hostname, { ...host, certificateStatus: CERTIFICATE_RELEASED });
   }
   async countActiveByProject(projectId: string): Promise<number> {
     return (await this.listByProject(projectId)).length;
@@ -343,7 +359,7 @@ export async function fixture(overrides?: Partial<Deps>) {
   const metadata = new MemoryMetadataStore();
   const versions = new MemoryVersionStore();
   const storage = new MemoryFileStorage();
-  const siteHosts = new MemorySiteHostStore();
+  const siteHosts = new MemorySiteHostStore((id) => metadata.assets.has(id));
   const cache = new MemoryKeyValue();
   // Custom domains (ADR-013 B5): a resolver with no records — a test publishes
   // the one it wants found — and a provisioner that issues instantly.

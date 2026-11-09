@@ -9,6 +9,9 @@
 
 export type SiteHostKind = "subdomain" | "custom";
 
+/** `certificateStatus` of a released row whose certificate is gone (B5). */
+export const CERTIFICATE_RELEASED = "released";
+
 export interface SiteHost {
   /** Full host, lowercase. Primary key. */
   hostname: string;
@@ -28,7 +31,8 @@ export interface SiteHost {
   /**
    * What the `CustomHostnameProvisioner` last reported for this hostname (B5).
    * Null until the row is verified; a cache of the provider's state, never the
-   * source of truth.
+   * source of truth. On a released row, `CERTIFICATE_RELEASED` once the
+   * certificate has been given up.
    */
   certificateStatus: string | null;
   /** Non-null ⇒ held but not serving (B3 disable; unused until then). */
@@ -62,7 +66,10 @@ export interface SiteHostStore {
   /**
    * Claim a hostname. Returns false when the hostname is already present —
    * including a released row inside its cooldown — so a lost race reports
-   * "name is taken" rather than overwriting someone else's row.
+   * "name is taken" rather than overwriting someone else's row. Also false
+   * when `host.assetId` no longer exists, checked in the same statement: a
+   * claim that races the asset's delete must not leave an active name pointing
+   * at nothing, since the delete's release has already run.
    */
   insert(host: SiteHost): Promise<boolean>;
   /**
@@ -75,6 +82,15 @@ export interface SiteHostStore {
   remove(hostname: string): Promise<void>;
   /** Start the cooldown: set `released_at`, null `asset_id`. */
   release(hostname: string, releasedAt: number): Promise<void>;
+  /**
+   * Released verified custom domains whose certificate has not been given up
+   * yet, oldest release first. The cleanup cron retries them, so a deprovision
+   * that failed, or never ran because the process died after the release
+   * committed, is not left behind.
+   */
+  listCertificatesToRelease(limit: number): Promise<SiteHost[]>;
+  /** Record that a released row's certificate is gone; see `CERTIFICATE_RELEASED`. */
+  markCertificateReleased(hostname: string): Promise<void>;
   /** Active rows in a project, for the per-project quota. */
   countActiveByProject(projectId: string): Promise<number>;
   /** Purge released rows whose cooldown ended before `before`. Returns them. */
