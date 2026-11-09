@@ -77,8 +77,8 @@ export type ContextDeps = {
   cache: KeyValue;
   /**
    * `SIGNING_SECRET` — the HMAC key the viewer-authentication cookie is signed
-   * with (ADR-013 B7). The name is the one ADR-014 §4 reserves for signed URLs,
-   * so both proofs share one deployment secret and one rotation.
+   * with (ADR-013 B7). Delivery tokens have their own keys, so the two
+   * rotate apart (ADR-014 §4, alternative H).
    *
    * Undefined ⇒ protected assets fail closed: serving them `503` is the only
    * safe answer, because no cookie could be minted or trusted, and handing the
@@ -91,6 +91,12 @@ export type ContextDeps = {
    * cookie-authorized file read answers with credentialed CORS (ADR-013 B7).
    */
   credentialedOrigins: readonly string[];
+  /**
+   * Signs and verifies delivery tokens (ADR-014 §4). Null when
+   * `DELIVERY_TOKEN_KEYS` is unset: the mint route answers `501` and a token
+   * on a read counts as absent.
+   */
+  deliveryTokens: DeliveryTokenCodec | null;
 };
 
 /**
@@ -121,7 +127,6 @@ export type Deps = ContextDeps & {
   /** How long an extraction job may sit untouched before the cron retriggers it. */
   extractionStuckThresholdMs: number;
   limits: Limits;
-  deliveryTokens: DeliveryTokenCodec | null;
 };
 
 export type AppEnv = {

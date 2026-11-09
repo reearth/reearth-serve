@@ -102,7 +102,7 @@ describe("_redirects", () => {
     const plain = await rulesFixture({ redirects: "/nothing /elsewhere 301" });
     const res = await plain.app.request(`http://localhost/files/${ASSET_ID}/docs`);
     expect(res.status).toBe(301);
-    expect(res.headers.get("Location")).toBe(`http://localhost/files/${ASSET_ID}/docs/`);
+    expect(res.headers.get("Location")).toBe(`/files/${ASSET_ID}/docs/`);
   });
 
   test("the site host gets a Location without the /files/{id} prefix", async () => {

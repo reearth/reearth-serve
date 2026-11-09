@@ -173,6 +173,7 @@ not persisted.
 | `POST` | `/api/v1/assets/uploads` | Create presigned upload session |
 | `POST` | `/api/v1/assets/uploads/:id/complete` | Complete upload session |
 | `POST` | `/api/v1/assets/:id/extract` | Start archive extraction |
+| `POST` | `/api/v1/assets/:id/signed-urls` | Mint a delivery token for a restricted asset (`{ prefix?, versionId?, expiresIn? }`) |
 | `GET` | `/api/v1/assets/:id/hosts` | List the asset's site hosts (named subdomains and custom domains) |
 | `GET` | `/api/v1/assets/:id/hosts/:hostname` | Get one host, with the DNS still to publish while a custom domain is unverified |
 | `POST` | `/api/v1/assets/:id/hosts` | Claim a name or register a custom domain (`{ hostname, kind? }`) |
@@ -288,11 +289,26 @@ reearth-serve asset protect <assetId> --restricted   # or PATCH {"access":"restr
 reearth-serve file cp <assetId>:data.geojson .       # members download with their login token
 ```
 
-- **Proof.** `Authorization: Bearer <OIDC access token>` on the apex `/files/…` path, from a member whose role holds `read_asset`. No other credential opens it yet; delivery tokens for browsers and site hosts come later.
-- **Answers.** No bearer, a bearer that does not verify, or another scheme: `401` JSON with `WWW-Authenticate: Bearer, ServeToken` (`ServeToken` alone on a site host, which ignores bearers), browser navigations included. A signed-in caller who may not read it: `404`, the same as a missing asset. Directory or Cerbos outage: `503` with `Retry-After: 5`. All refusals are `no-store`, and the bytes are never read before the decision.
-- **Caching and CORS.** A member's read is `private` with `Vary: Authorization` and `Access-Control-Allow-Origin: *` without credentials. Misses and redirects are `no-store`. Every `/files` response exposes `WWW-Authenticate` and `Retry-After` to cross-origin scripts.
-- **No secret needed.** Restricting does not need `SIGNING_SECRET`. It needs an OIDC issuer: without one no bearer verifies, so a restricted asset answers `401` to everyone.
+- **Proof.** A delivery token (below), or `Authorization: Bearer <OIDC access token>` on the apex `/files/…` path from a member whose role holds `read_asset`. A site host ignores bearers and accepts only a token.
+- **Answers.** No valid proof: `401` JSON with `WWW-Authenticate: Bearer, ServeToken` (`ServeToken` alone on a site host), browser navigations included. A signed-in caller who may not read it: `404`, the same as a missing asset. A token that verifies but does not cover the path or version: `403`, unless a bearer is also sent, which then decides. Two different tokens: `400`. Directory or Cerbos outage: `503` with `Retry-After: 5`. All refusals are `no-store`, and the bytes are never read before the decision.
+- **Caching and CORS.** A member's read is `private` with `Vary: Authorization, X-Serve-Token` and `Access-Control-Allow-Origin: *` without credentials. Misses and redirects are `no-store`. Every `/files` response exposes `WWW-Authenticate` and `Retry-After` to cross-origin scripts.
+- **No secret needed.** Restricting does not need `SIGNING_SECRET`. Bearer reads need an OIDC issuer, and tokens need `DELIVERY_TOKEN_KEYS`; with neither, a restricted asset answers `401` to everyone.
 - **Not a recall.** Restricting does not take back what shared caches already hold from when the asset was public, so restrict before sharing URLs.
+
+**Delivery tokens.** A browser viewer cannot attach a bearer to an `<img>` or a tile request, so a member mints a token that covers a path prefix and hands it to the viewer ([ADR-014 §4](./docs/adr/014-asset-access-control.md)). They are the recommended integration for browser viewers, because CORS stays `*`.
+
+```bash
+reearth-serve asset sign <assetId> tiles/ --expires 24h   # prints the token, its expiry and a URL template
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"prefix":"tiles/","expiresIn":86400}' https://serve.example.com/api/v1/assets/<assetId>/signed-urls
+# → {"token":"…","expiresAt":1767312000000,"urlTemplate":"https://serve.example.com/files/<assetId>/{path}?serve_token=…"}
+```
+
+- **Mint.** `POST /api/v1/assets/:id/signed-urls` with `{ prefix?, versionId?, expiresIn? }`. `id` is an asset ID or a version ID; a version ID, or `versionId` in the body, pins the token and the template to that version. `expiresIn` is 60 to 604 800 seconds, 3 600 by default, and `expiresAt` is Unix milliseconds. `prefix` is a decoded path (one leading `/` is stripped; `.`, `..`, backslashes and NUL are refused). The caller needs `read_asset`. Answers: `501` when `DELIVERY_TOKEN_KEYS` is unset, `400` for a bad body, `404` without access, `400` for a password-protected asset or a `versionId` of another asset. Every response, preflights and auth refusals included, carries `Access-Control-Allow-Origin: *`.
+- **Carry.** The `serve_token` query parameter (no preflight, and Cesium and PMTiles copy it to every child request) or the `X-Serve-Token` header (kept out of URLs and logs). Tokens open restricted assets only; a public or password asset ignores them.
+- **Match.** A prefix covers a path at a segment boundary: `tiles` covers `tiles` and `tiles/a`, `tiles/` covers `tiles/a` but not `tiles`, and neither covers `tiles-old/a`. The path is the request path decoded once, the same string the storage key is built from; `..`, a backslash or a double-encoded `%252F` answer `400`. A thumbnail is matched on its source file's name. Redirects Serve builds inside the asset (a directory's trailing slash, `_redirects`) keep a query token.
+- **Response.** `Access-Control-Allow-Origin: *` without credentials, `Cache-Control: private` with `max-age` no longer than the token's remaining life (`immutable` only at a version-ID URL), and `Referrer-Policy: no-referrer`.
+- **Key rotation, in two deploys.** `DELIVERY_TOKEN_KEYS` holds at most two keys. Add the new key as the inactive one and deploy, so every instance can verify it. Then make it active and deploy. Wait the longest token life (7 days at most) and remove the old key. To revoke a leaked key, remove it at once; every token it signed stops working, and clients mint again.
 
 **Named sites.** An ID-shaped host is correct but not printable, so an archive asset in a project can also be given a name:
 
@@ -409,7 +425,8 @@ npm run cli -- asset update <id> --description "My dataset" --user-meta '{"tag":
 npm run cli -- asset update <id> --spa on       # SPA fallback: unknown routes get index.html
 npm run cli -- asset delete <id>
 npm run cli -- asset protect <id> --password    # prompts twice; protects a site
-npm run cli -- asset protect <id> --restricted  # project members only (bearer)
+npm run cli -- asset protect <id> --restricted  # project members only (bearer or delivery token)
+npm run cli -- asset sign <id> [prefix] --expires 24h [--version-id <vid>]  # mint a delivery token
 npm run cli -- asset protect <id> --off         # public again
 
 # Versioning

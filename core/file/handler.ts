@@ -6,12 +6,15 @@ import type { AssetMetadata, AssetVersion, StoredFile } from "../asset/model";
 import type { FileStorage } from "../asset/repository";
 import { resolveAssetVersion } from "../asset/usecase";
 import { legacyThumbKey, versionThumbKey } from "../asset/usecase/shared";
-import { cacheControlFor, etagMatches, representationEtag } from "./caching";
+import { cacheControlFor, etagMatches, representationEtag, thumbnailCacheControl, type CachePolicy } from "./caching";
 import { addVary, applyCors, preflightResponse, type CorsPolicy } from "./cors";
 import { dispositionHeaders } from "./disposition";
 import { handleAuthSubmit } from "../access/form";
-import { AUTH_PATH_SEGMENT, accessModeOf, resolveAccess, type AccessDeps } from "../access/resolve";
+import { AUTH_PATH_SEGMENT, resolveAccess, type AccessDeps } from "../access/resolve";
 import type { BearerDecision } from "../access/restricted";
+import { deliveryPolicy } from "../access/grant";
+import { readDeliveryRequest } from "../access/request";
+import { toUnixSeconds, type AssetPath } from "../access/token";
 import type { VerifiedCaller } from "../auth/types";
 import { accessCtx, authorizeAsset, deniedResponse } from "../auth/access";
 import { enterCaller, TENANCY_RETRY_AFTER_SECONDS } from "../tenancy/middleware";
@@ -277,6 +280,7 @@ function accessDeps(c: Context<AppEnv>, asset: AssetMetadata): AccessDeps {
     // read from a header: a visitor cannot claim to be on a site host.
     siteHost: c.get("siteHost"),
     verifyBearer: c.get("bearerVerifier"),
+    tokens: c.get("deliveryTokens"),
     authorize: (caller) => authorizeBearer(c, asset, caller),
   };
 }
@@ -365,30 +369,33 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
   const versions = c.get("versions");
   const storage = c.get("storage");
   const id = c.req.param("id");
-  const filePath = c.req.param("path") ?? "";
   const rangeHeader = c.req.header("Range");
   const acceptEncoding = c.req.header("Accept-Encoding") ?? "";
   const clientAcceptsGzip = acceptEncoding.includes("gzip");
   const range = parseRange(rangeHeader);
 
-  // Thumbnail dispatch (query parameter or _thumbs/ path).
-  const thumb = detectThumbRequest(filePath, c.req.query("thumb"));
+  // `serve_token` leaves the query here, before anything reads it, and the
+  // storage key is built from the same parsed path a token is matched on
+  // (ADR-014 §4).
+  const delivery = readDeliveryRequest(c.req.raw);
+
   // Errors raised before the asset is known carry no proof, so they take the
   // refusal policy, which discloses nothing about the asset's mode.
   const refusalCors = corsPolicy(c, null);
-  if (thumb === "invalid") {
-    const res = c.json({ error: "Invalid thumbnail size" }, 400);
+  const refuse = (res: Response): Response => {
     applyCors(res.headers, refusalCors);
     return res;
-  }
+  };
+  if (delivery.path === null) return refuse(c.json({ error: "Invalid path" }, 400));
+  const filePath: AssetPath = delivery.path;
+
+  // Thumbnail dispatch (query parameter or _thumbs/ path).
+  const thumb = detectThumbRequest(filePath, delivery.url.searchParams.get("thumb") ?? undefined);
+  if (thumb === "invalid") return refuse(c.json({ error: "Invalid thumbnail size" }, 400));
 
   // Resolve asset + version
   const resolved = await resolveAssetVersion(metadataStore, versions, id);
-  if (!resolved) {
-    const res = c.json({ error: "File not found" }, 404);
-    applyCors(res.headers, refusalCors);
-    return res;
-  }
+  if (!resolved) return refuse(c.json({ error: "File not found" }, 404));
 
   const { asset, version } = resolved;
 
@@ -397,28 +404,29 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
   // leak as its index page. Every refusal comes back as the resolution's own
   // response; only the CORS headers are added to it, so a browser fetch can
   // read the 401 rather than seeing an opaque network error.
-  const access = await resolveAccess(asset, c.req.raw, accessDeps(c, asset));
-  if (access.kind === "challenge") {
-    applyCors(access.response.headers, refusalCors);
-    return access.response;
-  }
-  const isProtected = access.proof !== "none";
-  const restricted = accessModeOf(asset) === "restricted";
-  const cors = corsPolicy(c, access.proof);
+  const access = await resolveAccess(asset, {
+    request: delivery.request,
+    carry: delivery.carry,
+    versionId: version?.id ?? null,
+    // Both thumbnail forms stand for the file they were made from. Filenames
+    // are single validated segments, so the name is already an asset path.
+    matchPath: thumb ? (version?.filename ?? asset.filename) as AssetPath : filePath,
+  }, accessDeps(c, asset));
+  if (access.kind === "challenge") return refuse(access.response);
+  const policy = deliveryPolicy(access.grant, toUnixSeconds(Date.now()));
+  const cors = corsPolicy(c, policy.proof);
+  // Redirects Serve builds inside the asset keep a query token, so the next
+  // request carries the same proof (ADR-014 §4 Response).
+  const redirectSearch = access.grant.proof === "token" ? delivery.sentSearch : delivery.url.search;
 
   /** Everything that leaves this route goes through here. */
   const decorate = (res: Response): Response => {
-    if (isProtected) addVary(res.headers, "Cookie", "Authorization");
-    // A restricted asset's misses and redirects are not cached even
-    // privately (ADR-014 §4 Response).
-    if (restricted && res.status >= 300 && res.status !== 304) res.headers.set("Cache-Control", "no-store");
+    addVary(res.headers, ...policy.vary);
+    if (policy.noStoreMisses && res.status >= 300 && res.status !== 304) res.headers.set("Cache-Control", "no-store");
+    if (policy.noReferrer) res.headers.set("Referrer-Policy", "no-referrer");
     applyCors(res.headers, cors);
     return res;
   };
-
-  if (thumb) {
-    return decorate(await serveThumbnail(storage, asset, version, thumb, isProtected));
-  }
 
   // A URL that names a version ID is pinned: its bytes can never change, so
   // the response may be cached forever. Asset-ID URLs follow the active
@@ -430,6 +438,10 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
   // preview header, and the response stays revalidatable (ADR-013 B4).
   const preview = sitePreview(c.req.header(SITE_PREVIEW_HEADER));
   const pinned = version !== null && id === version.id && preview !== "latest";
+
+  if (thumb) {
+    return decorate(await serveThumbnail(storage, asset, version, thumb, pinned, policy));
+  }
 
   // Versioned layout first; assets from before ADR-005 have no version row and
   // live under the legacy prefix, which is also the fallback when the
@@ -451,7 +463,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
   // A forced rule (`!`) is consulted before the lookup, so it can shadow a file
   // that exists. Ordering matters beyond that: `resolveAccess` already ran, so
   // a protected site's redirect map cannot be probed without the password.
-  let servePath = filePath;
+  let servePath: string = filePath;
   let rewritten = false;
   if (hosting) {
     const forced = siteRedirect(hosting, servePath, "force");
@@ -461,7 +473,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
         rewritten = true;
       } else {
         return decorate(siteRedirectResponse(forced, {
-          assetId: id, requestUrl: c.req.url, protected: isProtected,
+          assetId: id, search: redirectSearch, protected: policy.private,
         }));
       }
     }
@@ -480,7 +492,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     const fallbackRule = siteRedirect(hosting, servePath, "fallback");
     if (fallbackRule && fallbackRule.status !== 200) {
       return decorate(siteRedirectResponse(fallbackRule, {
-        assetId: id, requestUrl: c.req.url, protected: isProtected,
+        assetId: id, search: redirectSearch, protected: policy.private,
       }));
     }
     // One rewrite, never a chain: a rule whose target is itself rewritten would
@@ -498,10 +510,9 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
   if (!located) {
     // `/files/:id/docs` where `docs/index.html` exists: redirect to the slash
     // form so relative links inside the page resolve against the directory.
+    // Path-only, so it never names a scheme a TLS-terminating proxy hid.
     if (servePath !== "" && !servePath.endsWith("/") && (await hasIndex(storage, layouts, servePath))) {
-      const url = new URL(c.req.url);
-      url.pathname = `${url.pathname}/`;
-      return decorate(c.redirect(url.toString(), 301));
+      return decorate(c.redirect(`${delivery.url.pathname}/${redirectSearch}`, 301));
     }
 
     // SPA fallback and `404.html` (ADR-013 C1). Both sit here: after the access
@@ -527,11 +538,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     rangeHeader,
     clientAcceptsGzip,
     ifNoneMatch: c.req.header("If-None-Match"),
-    cacheControl: cacheControlFor({
-      pinned,
-      contentType: located.contentType,
-      protected: isProtected,
-    }),
+    cacheControl: cacheControlFor({ pinned, contentType: located.contentType }, policy),
     storage,
     siteHost: c.get("siteHost"),
   });
@@ -557,7 +564,7 @@ const corsHeaders = {
   "Access-Control-Allow-Origin": stringHeader("`*`, or the request's `Origin` for a cookie-authorized read from Serve's own origin or one listed in `CREDENTIALED_ORIGINS`"),
   "Access-Control-Allow-Credentials": stringHeader("`true`, only alongside an echoed `Origin`"),
   "Access-Control-Expose-Headers": stringHeader("`WWW-Authenticate, Retry-After`, on every `/files` response"),
-  Vary: stringHeader("`Accept-Encoding` for a gzip-stored file; `Cookie, Authorization, Origin` for a protected asset"),
+  Vary: stringHeader("`Accept-Encoding` for a gzip-stored file; `Cookie, Authorization, Origin` for a password asset; `Authorization, X-Serve-Token, Origin` for a restricted asset"),
 };
 const fileHeaders = {
   ...nosniff,
@@ -569,8 +576,9 @@ const fileHeaders = {
   "Content-Security-Policy": stringHeader("`sandbox` on every `attachment` response"),
   ETag: stringHeader("The stored object's tag; weak (`W/`) when a gzip-stored file is decompressed. Not sent on thumbnails"),
   "Accept-Ranges": stringHeader("`bytes`. Not sent on gzip pass-through responses or thumbnails"),
-  "Cache-Control": stringHeader("`public, max-age=31536000, immutable` at a version-ID URL and for thumbnails; `public, max-age=0, must-revalidate` at an asset-ID URL. A password or restricted asset gets `private` in place of `public`"),
+  "Cache-Control": stringHeader("`public, max-age=31536000, immutable` at a version-ID URL and for thumbnails; `public, max-age=0, must-revalidate` at an asset-ID URL. A password or restricted asset gets `private` in place of `public`. A delivery token caps `max-age` at its remaining life and keeps `immutable` only at a version-ID URL"),
   "Cross-Origin-Resource-Policy": stringHeader("`same-origin` on a cookie-authorized read"),
+  "Referrer-Policy": stringHeader("`no-referrer` on a read authorized by a delivery token"),
 };
 const jsonError = (description: string) => ({
   description,
@@ -598,15 +606,16 @@ fileRoutes.get("/:id/:path{.+}",
       "Here, on the shared origin, only types a browser shows without running script are `inline`; HTML, SVG, XML, JavaScript, PDF and every other type download as an `attachment` with `Content-Security-Policy: sandbox`. A hosted site renders on its site host only.",
       "",
       "A public asset needs no credentials. A password-protected asset accepts the viewer cookie the password form sets, or `Authorization: Basic` with the password (the username is ignored); without either it answers `401`, and repeated wrong passwords from one client answer `429`.",
-      "A restricted asset accepts `Authorization: Bearer <OIDC access token>` from a project member who holds `read_asset`, on the apex host only. Without a valid bearer it answers `401`; a caller who may not read it gets `404`, the same answer as a missing asset. Its misses and redirects are `no-store`.",
+      "A restricted asset accepts a delivery token from `POST /api/v1/assets/{id}/signed-urls`, as the `serve_token` query parameter or the `X-Serve-Token` header, when it names this asset, its version is unset or the one served, and its prefix covers `path` (for a thumbnail, the source filename). Two different tokens answer `400`. A token that does not cover the read answers `403` unless a bearer is sent, which then decides.",
+      "It also accepts `Authorization: Bearer <OIDC access token>` from a project member who holds `read_asset`, on the apex host only. Without a valid proof it answers `401`; a caller who may not read it gets `404`, the same answer as a missing asset. Its misses and redirects are `no-store`. Public and password assets ignore delivery tokens.",
       "CORS: `Access-Control-Allow-Origin: *`, except that a cookie-authorized read from Serve's own origin or one in `CREDENTIALED_ORIGINS` gets its `Origin` echoed with `Access-Control-Allow-Credentials: true`.",
     ].join("\n"),
-    // Public and password assets need no bearer; a restricted asset needs one.
-    // The password proofs are described above.
-    security: [{}, { bearerAuth: [] }],
+    // Public and password assets need none of these; a restricted asset needs
+    // one. The password proofs are described above.
+    security: [{}, { serveTokenQuery: [] }, { serveTokenHeader: [] }, { bearerAuth: [] }],
     parameters: [
       { name: "id", in: "path", required: true, schema: { type: "string" }, description: "Asset ID or version ID" },
-      { name: "path", in: "path", required: true, schema: { type: "string" }, description: "Filename, or a path inside an extracted archive (may contain `/`, sent raw or escaped as `%2F`)" },
+      { name: "path", in: "path", required: true, schema: { type: "string" }, description: "Filename, or a path inside an extracted archive (may contain `/`, sent raw or escaped as `%2F`). Decoded once; a `.` or `..` segment, a backslash, NUL, or a `%2F` left after decoding answers 400" },
       { name: "thumb", in: "query", required: false, schema: { type: "string", enum: [...THUMBNAIL_SIZES] }, description: "Serve the WebP thumbnail of this size instead of the file. Any other value → 400" },
       { name: "Range", in: "header", required: false, schema: { type: "string", pattern: "^bytes=\\d+-\\d*$" }, description: "Single byte range, `bytes=<start>-` or `bytes=<start>-<end>`. Suffix (`bytes=-N`) and multi-range forms are ignored" },
       { name: "Accept-Encoding", in: "header", required: false, schema: { type: "string" }, description: "If it contains `gzip`, gzip-stored files are passed through compressed (non-Range requests only)" },
@@ -640,9 +649,9 @@ fileRoutes.get("/:id/:path{.+}",
           "Content-Disposition": fileHeaders["Content-Disposition"],
         },
       },
-      400: jsonError("Invalid thumbnail size"),
+      400: jsonError("Invalid path or thumbnail size, or two different delivery tokens on a restricted asset"),
       401: {
-        description: "Password-protected asset and no valid cookie or Basic password: a browser navigation (`Accept: text/html`) gets the password page and no `WWW-Authenticate`, every other request gets JSON and the Basic challenge. Restricted asset and no valid bearer: JSON for every request, browser navigations included",
+        description: "Password-protected asset and no valid cookie or Basic password: a browser navigation (`Accept: text/html`) gets the password page and no `WWW-Authenticate`, every other request gets JSON and the Basic challenge. Restricted asset and no valid token or bearer: JSON for every request, browser navigations included",
         headers: {
           ...nosniff,
           ...corsHeaders,
@@ -654,6 +663,7 @@ fileRoutes.get("/:id/:path{.+}",
           "text/html": { schema: { type: "string" } },
         },
       },
+      403: jsonError("A delivery token for this restricted asset that does not cover the path or the version, and no bearer"),
       404: jsonError("Asset, file, or thumbnail not found, or a restricted asset the bearer's caller may not read. An archive with a root `404.html` answers with that page instead"),
       429: {
         ...jsonError("Too many wrong passwords from this client for this asset; wait for `Retry-After`"),
@@ -673,7 +683,8 @@ async function serveThumbnail(
   asset: { id: string },
   version: { id: string } | null,
   size: ThumbnailSize,
-  isProtected: boolean,
+  pinned: boolean,
+  policy: CachePolicy,
 ): Promise<Response> {
   const filename = thumbnailFilename(size);
   const key = version
@@ -682,7 +693,7 @@ async function serveThumbnail(
   const file = await storage.get(key, undefined);
   // A thumbnail is derived from the asset, so it follows the asset's mode
   // (ADR-014 §1): protected assets get `private` here too.
-  const scope = isProtected ? "private" : "public";
+  const scope = policy.private ? "private" : "public";
   if (!file) {
     return new Response(JSON.stringify({ error: "Thumbnail not available" }), {
       status: 404,
@@ -695,7 +706,7 @@ async function serveThumbnail(
     headers: {
       "Content-Type": THUMBNAIL_CONTENT_TYPE,
       "Content-Length": String(file.size),
-      "Cache-Control": `${scope}, max-age=31536000, immutable`,
+      "Cache-Control": thumbnailCacheControl(pinned, policy),
     },
   });
 }

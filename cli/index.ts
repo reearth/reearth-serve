@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { PATHS } from "../shared/paths";
-import type { AssetMetadata, AssetVersion, Job } from "../shared/api";
-import { apiGet, apiPost, apiPatch, apiPut, apiDelete, output, formatAsset, formatJob, formatVersion, formatBytes, parseOnOff, promptPasswordTwice } from "./helpers";
+import type { AssetMetadata, AssetVersion, CreateSignedUrlBody, Job, SignedUrl } from "../shared/api";
+import { apiGet, apiPost, apiPatch, apiPut, apiDelete, output, formatAsset, formatJob, formatVersion, formatBytes, parseDuration, parseOnOff, promptPasswordTwice } from "./helpers";
 import { doUpload } from "./upload";
 import { registerFileCommands } from "./file";
 import { registerHostCommands } from "./host";
@@ -267,6 +267,36 @@ asset
     } else {
       console.log("Protected. Visitors now get a password page; tools can send HTTP Basic.");
       console.log("Changing the password signs every existing visitor out.");
+    }
+  });
+
+/**
+ * `asset sign <id> [prefix]` (ADR-014 §6): mint a delivery token for a
+ * restricted asset. The pin is `--version-id`, because the program's own
+ * `--version` is parsed anywhere on the command line and would print the CLI
+ * version instead.
+ */
+asset
+  .command("sign")
+  .description("Mint a delivery token that reads the asset's files under a prefix without logging in")
+  .argument("<id>", "Asset ID or version ID")
+  .argument("[prefix]", "Path inside the asset the token covers (default: the whole asset)")
+  .option("--expires <duration>", "Token lifetime: seconds, or a number with s, m, h or d (default: 1h, at most 7d)")
+  .option("--version-id <versionId>", "Pin the token to this version")
+  .action(async (id: string, prefix: string | undefined, cmdOpts: { expires?: string; versionId?: string }) => {
+    const opts = program.opts<{ endpoint: string; json: boolean }>();
+    const body: CreateSignedUrlBody = {};
+    if (cmdOpts.expires !== undefined) body.expiresIn = parseDuration(cmdOpts.expires, "--expires");
+    if (prefix !== undefined) body.prefix = prefix;
+    if (cmdOpts.versionId !== undefined) body.versionId = cmdOpts.versionId;
+    const data = await apiPost<SignedUrl>(opts.endpoint, PATHS.assetSignedUrls(id), body);
+    if (opts.json) {
+      output(data, true);
+    } else {
+      console.log(`Token:      ${data.token}`);
+      console.log(`Expires at: ${new Date(data.expiresAt).toISOString()}`);
+      console.log(`URL:        ${data.urlTemplate}`);
+      console.log("Replace {path} with a path inside the asset, or send the token as the X-Serve-Token header.");
     }
   });
 

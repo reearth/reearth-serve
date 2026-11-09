@@ -452,6 +452,32 @@ export const setActiveVersionBodySchema = component("SetActiveVersionRequest", z
   versionId: z.string().nullable(),
 }));
 
+// --- Signed URLs (ADR-014 §4) ---
+
+export const SIGNED_URL_MIN_EXPIRES_IN = 60;
+export const SIGNED_URL_MAX_EXPIRES_IN = 7 * 24 * 60 * 60;
+export const SIGNED_URL_DEFAULT_EXPIRES_IN = 3600;
+
+export const createSignedUrlBodySchema = component("CreateSignedUrlRequest", z.object({
+  prefix: z.string().optional().meta({
+    description: "Decoded path inside the asset the token covers, never percent-encoded. One leading `/` is stripped; a `.` or `..` segment, a backslash or NUL is refused. Empty or omitted covers the whole asset",
+  }),
+  versionId: z.string().min(1).optional().meta({
+    description: "Pin the token to this version of the asset. Must match the version ID in the URL when `id` is one",
+  }),
+  expiresIn: z.number().int().min(SIGNED_URL_MIN_EXPIRES_IN).max(SIGNED_URL_MAX_EXPIRES_IN)
+    .default(SIGNED_URL_DEFAULT_EXPIRES_IN)
+    .meta({ description: "Token lifetime in seconds" }),
+}));
+
+export const signedUrlSchema = component("SignedUrl", z.object({
+  token: z.string().meta({ description: "Send as the `serve_token` query parameter or the `X-Serve-Token` header" }),
+  expiresAt: z.number().meta({ description: "Unix milliseconds" }),
+  urlTemplate: z.string().meta({
+    description: "`<base>/files/<id>/{path}?serve_token=<token>`; `{path}` is the whole path inside the asset, each segment percent-encoded",
+  }),
+}));
+
 // --- Error response ---
 
 export const errorResponseSchema = component("Error", z.object({
@@ -469,6 +495,8 @@ export type UpdateMemberBody = z.infer<typeof updateMemberBodySchema>;
 export type Project = z.infer<typeof projectSchema>;
 export type CreateProjectBody = z.infer<typeof createProjectBodySchema>;
 export type AssetAccess = z.infer<typeof assetAccessSchema>;
+export type CreateSignedUrlBody = z.input<typeof createSignedUrlBodySchema>;
+export type SignedUrl = z.infer<typeof signedUrlSchema>;
 export type SiteHeaderRule = z.infer<typeof siteHeaderRuleSchema>;
 export type SiteRedirectRule = z.infer<typeof siteRedirectRuleSchema>;
 export type SiteHosting = z.infer<typeof siteHostingSchema>;
