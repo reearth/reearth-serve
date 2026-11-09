@@ -923,8 +923,9 @@ every URL form, cookie/Basic proof, `private` caching, credentialed CORS
 - **CORS moved into the handler.** The blanket `cors()` middleware could not
   express a policy that depends on the proof, because it runs before the row
   is read. The policy is the CORS rule above. Preflights read nothing and
-  allow the fixed headers `range`, `if-none-match`, `if-modified-since` and
-  `authorization`, with `Access-Control-Max-Age: 86400`.
+  allow the fixed headers `range`, `if-none-match`, `if-modified-since`,
+  `authorization` and `x-serve-token` (ADR-014 §8), with
+  `Access-Control-Max-Age: 86400`.
 - **An unknown `access` value fails closed.** The SQL store reads `NULL`
   and `public` as public and any other value as `password`, so a mode this
   build does not know is challenged rather than served.
