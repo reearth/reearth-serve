@@ -92,4 +92,15 @@ describe("loadConfig", () => {
       SITE_REGISTRABLE_DOMAIN: "localhost", SITE_DOMAIN_IS_PUBLIC_SUFFIX: "true",
     }).siteDomainIsPublicSuffix).toBe(true);
   });
+
+  test("DELIVERY_TOKEN_KEYS is off when unset and refuses a short key at startup", () => {
+    expect(loadConfig({}).deliveryTokenKeys).toBeNull();
+    expect(() =>
+      loadConfig({ DELIVERY_TOKEN_KEYS: '{"active":"k1","keys":{"k1":"c2hvcnQ="}}' }),
+    ).toThrow("DELIVERY_TOKEN_KEYS: key k1 is shorter than 32 bytes");
+    const secret = Buffer.alloc(32, 7).toString("base64");
+    const ring = loadConfig({ DELIVERY_TOKEN_KEYS: JSON.stringify({ active: "k1", keys: { k1: secret } }) })
+      .deliveryTokenKeys;
+    expect(ring?.active.kid).toBe("k1");
+  });
 });

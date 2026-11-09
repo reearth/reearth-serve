@@ -81,6 +81,7 @@ The production endpoint is `https://serve.reearth.land`. Point the CLI at it via
 | `adapters/sql/` | Provider-independent SQL layer: repositories, atomic writes, `SqlKeyValue`, `SqlJobQueue` |
 | `adapters/sql/migrations/` | `kv` / `queue_messages` tables — applied only where Cloudflare KV and Queues do not exist |
 | `adapters/memory/` | In-memory and `node:sqlite` adapters (tests, local runtimes) |
+| `adapters/webcrypto/` | WebCrypto adapters shared by every runtime (delivery token HMAC) |
 | `runtime/cloudflare/` | Cloudflare Worker entrypoint (`wrangler.toml` `main`) |
 | `runtime/node/` | Plain Node entrypoint (API only) |
 | `shared/` | Shared types (Zod schemas) and API path constants |
@@ -121,6 +122,7 @@ SSR on Node is out of scope, and any other path returns 404 saying so.
 | `INTERNAL_API_SECRET` | (unset) | Shared secret for `/api/internal/*` and `POST /internal/cron`; unset ⇒ both refuse every request |
 | `SIGNING_SECRET` | (unset) | HMAC key for the password cookie of protected sites (ADR-013 B7); unset ⇒ protected assets answer 503 and protecting one is refused |
 | `CREDENTIALED_ORIGINS` | (unset) | Comma-separated exact origins, besides Serve's own, whose pages may read a protected file with the visitor's cookie; an entry with a path, a wildcard or `null` fails at startup |
+| `DELIVERY_TOKEN_KEYS` | (unset) | Delivery token key ring, `{"active":"<kid>","keys":{"<kid>":"<base64 secret>"}}`: at most two keys of 32 bytes or more. Unset ⇒ delivery tokens are off; an invalid value fails at startup |
 | `ANONYMOUS_UPLOAD_ENABLED` | (unset) | `"true"` to allow uploads without a token |
 | `TRUST_PROXY` | (unset) | `"true"` when a reverse proxy in front sets `X-Forwarded-For`; otherwise an incoming `CF-Connecting-IP` is dropped and `X-Forwarded-For` is set to the socket address, so a client cannot pick its own rate-limit bucket |
 | `ASSET_TTL_SECONDS` | `3600` | TTL for assets that belong to no project |
