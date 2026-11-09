@@ -1,12 +1,19 @@
 # ADR-014: Asset Access Control for File Delivery
 
-- **Status:** Proposed
+- **Status:** Accepted (amended 2026-11-09)
 - **Date:** 2026-09-11 (revised 2026-11-06)
 - **Deciders:** @rot1024, @pyshx
 - **Related:** [ADR-002](002-auth-sessions-projects.md) (auth, sessions,
   projects), ADR-007 (events, webhooks), [ADR-012](012-multi-cloud-portability.md)
   (ports), ADR-013 B1 and B7 (site hosts, password-protected sites),
   ADR-016 (accounts authorization)
+
+## Amendment 2026-11-09: Mint and read details
+
+Settles what the restricted read and the mint route left open, folded into
+§1, §4, §5, §6 and Consequences: the mint route's ID, check order, CORS
+and `expiresAt`; the prefix rule; token and bearer order; the challenge on
+site hosts; two-deploy key rotation; and a client contract.
 
 ## Context
 
@@ -80,13 +87,16 @@ model and audience are different and the simpler UI matters to the
 hosting use case.
 
 Mode is settable on **project assets only**: `PATCH /api/v1/assets/:id`
-refuses `restricted` elsewhere. Demo-mode assets are always `public` (no
-owner, no project, one-hour TTL). Changing the mode is an
-`asset.access.changed` event.
+refuses `restricted` elsewhere. `restricted` applies to single files and
+archives; `password` stays limited to archives (ADR-013 B7). Demo-mode
+assets are always `public` (no owner, no project, one-hour TTL). Changing
+the mode is an `asset.access.changed` event once the event log (ADR-007)
+exists.
 
 **Derived assets** (ADR-006) default to the most restrictive mode among
 their sources at creation and record that they inherited it; an explicit
-override is allowed and logged. Thumbnails always follow their asset.
+override is allowed and logged. This waits for derived assets (ADR-006).
+Thumbnails always follow their asset.
 
 ### 2. Grants (deferred)
 
@@ -138,8 +148,10 @@ two keys, and an `active` ID missing from `keys`, each with a message that
 starts `DELIVERY_TOKEN_KEYS: `. A rejected ring is a config error under
 ADR-016 decision 8, so the change that adds the ring also makes the
 Worker catch a `buildDeps` throw. The codec signs with the active key and
-verifies with either. To rotate: add the new key, make it active, wait
-the longest token life, remove the old key. The cookie secret is separate,
+verifies with either. To rotate, add the new key as the inactive one and
+deploy, then make it active and deploy, wait the longest token life, and
+remove the old key. The first deploy lets every instance verify the new
+key before any instance signs with it. The cookie secret is separate,
 so tokens rotate without logging out password visitors.
 
 **Lifetime.** `expiresIn` is 60 to 604,800 seconds, 3,600 by default. The
@@ -173,18 +185,49 @@ the same segment rules.
 `Deps.deliveryTokens` is `null` and the mint route answers `501`.
 
 **Mint.** `POST /api/v1/assets/{id}/signed-urls` with
-`{ prefix?, versionId?, expiresIn? }`. The caller must hold `read_asset`
-on the asset, the same check as a restricted read. The response is
-`{ token, expiresAt, urlTemplate }`, where `urlTemplate` is
-`<base>/files/<id>/{path}?serve_token=<token>` on the deployment's
-resolved base URL, with the version ID in place of the asset ID when the
-body pins one. A bad `prefix`, an out-of-range `expiresIn` or a
-`password` asset is `400`.
+`{ prefix?, versionId?, expiresIn? }`. `id` is an asset ID or a version
+ID, resolved the way `/files/{id}` resolves it, so a client can mint with
+whatever ID its URL holds. A version ID pins the token, and a body
+`versionId` must then be absent or the same ID.
+
+The route answers the first failing check, in this order:
+
+1. No codec is `501`.
+2. A body that fails validation is `400`. `expiresIn` must be an integer.
+3. A caller without `read_asset` on the asset is `404` through
+   `deniedResponse`, the same answer as a missing ID.
+4. A `password` asset is `400`.
+5. A `versionId` that is not a version of the asset is `400`.
+
+Public and restricted assets mint, so a token minted before a switch to
+`restricted` works after it. The response is
+`{ token, expiresAt, urlTemplate }`. `expiresAt` is Unix milliseconds,
+like every timestamp in the API, and equals `exp` times 1000.
+`urlTemplate` is `<BASE_URL>/files/<id>/{path}?serve_token=<token>`, with
+the version ID in place of the asset ID when the token is pinned. `{path}`
+stands for the whole path inside the asset, prefix included, with each
+segment percent-encoded as in any `/files` URL.
+
+`prefix` is a decoded path, never percent-encoded. One leading `/` is
+stripped. A `.` or `..` segment, a backslash or NUL is `400`. Empty
+segments and a trailing `/` stay as sent, and the token stores the
+result.
+
+Every response from the route, middleware errors included, carries
+`Access-Control-Allow-Origin: *`, no credentials header, and
+`Access-Control-Expose-Headers: Retry-After`. Its preflight is answered
+before auth and allows `POST`, `authorization` and `content-type`. The
+proof is a bearer the caller attaches, so no origin gains anything a
+cookie would give it.
 
 **Carry.** The query parameter `serve_token` or the header
 `X-Serve-Token`. The query form needs no preflight and works with Cesium
 `queryParameters` and PMTiles URLs; the header form keeps the token out of
-URLs and logs. Both with different values is `400`.
+URLs and logs. Serve reads them on `restricted` assets only. Every
+non-empty `serve_token` value and the header count, and more than one
+distinct value is `400` with `no-store`. An empty header counts as
+absent. `Authorization` never carries a
+delivery token.
 
 ```http
 GET /files/01hx/tiles/3/4/5.b3dm HTTP/1.1
@@ -194,25 +237,56 @@ X-Serve-Token: <token>
 
 **Match.** Serve allows the read when the token verifies, `assetId`
 matches, `versionId` is `null` or equals the resolved version, and
-`prefix` is a segment-boundary prefix of the parsed path: `tiles/` covers
-`tiles/3/4/5.b3dm` and not `tiles-old/a.b3dm`. A thumbnail maps to its
-source path before the match. A token for another asset counts as no
-token, and Serve goes on to the bearer. A matching `assetId` with the
-wrong version or prefix is `403`, because its holder already knows the
-asset exists. Tokens open `restricted` assets only; Serve ignores a token
-on a `password` asset.
+`prefix` covers the parsed path. A `null` version covers every version of
+the asset at any URL form; deleting a version is how its bytes stop being
+served. A prefix covers a path when the prefix is empty, when the path
+equals it, when the prefix ends in `/` and the path starts with it, or
+when the path starts with the prefix plus `/`. So `tiles` covers `tiles`
+and `tiles/a`, `tiles/` covers `tiles/a` and `tiles/` but not `tiles`, and
+neither covers `tiles-old/a`.
+
+The match uses the request path. Both thumbnail forms map to the asset's
+filename first. A single-file asset is matched on the request path too,
+though it serves the same bytes at any path. A `_redirects` rewrite, the
+SPA fallback and `404.html` serve what the site maps under a covered
+path, so a rewrite rule opens its target to tokens for its source.
+
+A token that fails `verify`, for any reason, or names another asset counts
+as no token, and Serve goes on to the bearer. A verified token for this
+asset with the wrong version or an uncovered path does not decide either.
+When the request carries a bearer, the bearer's answer stands (§5).
+Without one, Serve answers `403` with `no-store`. That status is not a
+`deniedResponse` denial: the holder already knows the asset exists. Tokens
+open `restricted` assets only; Serve ignores and strips a token on a
+public or `password` asset.
 
 **Response.** `Access-Control-Allow-Origin: *` with no credentials
 header, `Cache-Control: private` with a `max-age` no longer than the
-token's remaining life (a pinned token may add `immutable`), and
-`Referrer-Policy: no-referrer`. Serve strips `serve_token` from the query
-before any other use and redacts it from logs. The OpenAPI document
+token's remaining life (`immutable` only at a version-ID URL),
+`Referrer-Policy: no-referrer`, and `X-Serve-Token` added to `Vary`.
+Redirects and misses on a restricted asset are `no-store`. Serve strips
+`serve_token` from the query before any other use, except that the
+redirects it builds inside the asset (the directory redirect and
+`_redirects`) keep it, with a path-only `Location`. Serve's own logs
+redact it. The OpenAPI document
 declares `serve_token` and `X-Serve-Token` as `apiKey` security schemes
 on `/files`.
 
 **Names.** Wire names, env vars, errors and examples name no product
 host: `serve_token`, `X-Serve-Token`, `ServeToken`, `serve_access`.
 Examples use `example.com` hosts, and `.test` hosts for local setups.
+
+**Clients.** This section and §5 are the whole delivery protocol. A client
+mints with the empty prefix unless it knows a narrower one. It mints again
+before `expiresAt`, or once after a `401` whose challenge names
+`ServeToken`, and passes a second `401` through. It treats a `403` as
+final. From the mint route, `501` means tokens are off, `404` means no
+access, `401` means the bearer needs renewing, and `503` means retry after
+`Retry-After`. It parses
+`WWW-Authenticate` as an RFC 9110 challenge list, compares scheme names
+without case, and accepts parameters and schemes Serve may add. A `401`
+names no asset ID, so on a named site host only a client that already
+knows the ID can mint.
 
 ### 5. Enforcement in the file handler
 
@@ -227,27 +301,39 @@ One function, `resolveAccess(asset, request)`, before any storage I/O:
 2. `password` → ADR-013 B7 (cookie, then Basic).
 3. `restricted` → try proofs in this order, stop at the first that
    decides:
-   1. A delivery token (§4). Pure computation, with no table and no
-      storage read.
-   2. `Authorization: Bearer <jwt>`. The auth middleware skips `/files`,
-      because `Authorization: Basic` is a credential there (ADR-013 B7), so
-      this branch verifies the token itself, then calls
+   1. A delivery token (§4) that covers the read. Pure computation, with
+      no table and no storage read.
+   2. `Authorization: Bearer <jwt>`, on the apex only. The auth
+      middleware skips `/files`, because `Authorization: Basic` is a
+      credential there (ADR-013 B7), so this branch verifies the token
+      itself with the auth middleware's verifier, then calls
       `enterCaller(c, caller)` and
       `authorizeAsset(ctx, asset, "read_asset")` (ADR-016). This is the only
       branch on `/files` that binds a caller; public, password and token
       reads make no directory call, and `/files` runs no session
       (ADR-002, 2026-11-05 amendment).
-   3. Nothing valid → `401` with `WWW-Authenticate: Bearer, ServeToken`,
-      so a client knows a minted token would help. Every `/files`
-      response sends `Access-Control-Expose-Headers: WWW-Authenticate`.
+   3. Nothing valid → a JSON `401` with `WWW-Authenticate: Bearer,
+      ServeToken` on the apex and `ServeToken` on a site host, whether or
+      not the deployment has a key ring, so a client knows a minted token
+      would help. Browser navigations get the same JSON; a sign-in page
+      waits for Follow-up 6. Every `/files` response sends
+      `Access-Control-Expose-Headers: WWW-Authenticate, Retry-After`.
 
-A denial answers `404` for both not-found and forbidden, through
-ADR-016's `deniedResponse`. A tenancy outage answers `503` with
-`Retry-After: 5`. Refusals send `Cache-Control: no-store`. Serve caches no
-access decision across requests. Responses from restricted assets carry
-`Cache-Control: private` (A2 policy otherwise unchanged), and token and
-bearer responses send `Access-Control-Allow-Origin: *` without
-credentials.
+A site host runs no auth middleware and binds no tenancy (ADR-013 B1), so
+a restricted asset there accepts a delivery token only and ignores a
+bearer. Members read with a bearer through the apex `/files` path.
+
+A denial answers `404` for both not-found and forbidden, through ADR-016's
+`deniedResponse`. A bearer that fails verification, a JWKS fetch failure
+included, is the `401` above. A verified caller the directory does not
+know is `404` like a non-member, where the API answers `401`, so every
+failed membership on `/files` reads as `deniedResponse` does. A tenancy
+outage answers `503` with `Retry-After: 5`. The handler answers all of
+these itself, with the refusal CORS headers of §8. Refusals send
+`Cache-Control: no-store`. Serve caches no access decision across
+requests. Responses from restricted assets carry `Cache-Control: private`
+(A2 policy otherwise unchanged), and token and bearer responses send
+`Access-Control-Allow-Origin: *` without credentials.
 
 The `/files/` handler's "no access checks" note becomes: *capability by
 default; `resolveAccess` when the asset's mode says so.*
@@ -259,8 +345,10 @@ PATCH  /api/v1/assets/:id                 {"access": "restricted"}
 POST   /api/v1/assets/:id/signed-urls     {prefix?, versionId?, expiresIn?}
 ```
 
-CLI: `asset access <id> public|password|restricted` and `asset sign <id>
-[prefix] [--expires 24h]`. `file cp` and `file sync` send the CLI's login
+CLI: `asset protect <id> --restricted`, beside the existing
+`--password` and `--off`, and `asset sign <id> [prefix] [--expires 24h]
+[--version <versionId>]`, which prints the token, `expiresAt` and the URL
+template. `file cp` and `file sync` send the CLI's login
 JWT, so a member downloads a restricted asset with the same commands.
 
 ### 7. The marketplace flow (deferred)
@@ -386,6 +474,18 @@ skips the password.
 - Bearer- and cookie-authorized pinned files keep the year-long `private`
   browser cache, so a member who loses access keeps what they already
   fetched.
+- Revoking a leaked token's key skips the two-deploy rotation: remove
+  the key at once, and clients re-mint after one failed read.
+- A token's prefix bounds request paths, not bytes. A `null`-version token
+  reaches old versions, whose own `_redirects` rewrites and SPA fallback
+  apply under a covered path.
+- Restricting an asset does not recall what shared caches already hold.
+  Version-ID URLs of a public asset were served `public, immutable` for a
+  year, so an asset that must stay private is restricted before its URLs
+  are shared.
+- The start check covers `SITE_HOST_SUFFIX` only. A custom domain (ADR-013
+  B5) under the API's registrable domain shares the API's site, and no
+  check refuses it.
 
 ## Follow-ups
 
