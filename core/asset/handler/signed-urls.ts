@@ -37,6 +37,22 @@ function tokensOff(c: Context<AppEnv>): Response {
   return c.json({ error: "Delivery tokens are not configured" }, 501);
 }
 
+/** Hono's json validator's own test, so the two agree on what counts as JSON. */
+const JSON_CONTENT_TYPE = /^application\/([a-z-.]+\+)?json(;\s*[a-zA-Z0-9-]+=([^;]+))*$/;
+
+/**
+ * The json validator treats a body of any other type as `{}`, which here would
+ * mint a whole-asset, unpinned token the caller never asked for. An empty body
+ * still means the defaults.
+ */
+const refuseNonJsonBody: MiddlewareHandler<AppEnv> = async (c, next) => {
+  const type = c.req.header("Content-Type");
+  if ((!type || !JSON_CONTENT_TYPE.test(type)) && (await c.req.text()) !== "") {
+    return c.json({ error: "The body must be JSON (Content-Type: application/json)" }, 400);
+  }
+  await next();
+};
+
 export function registerSignedUrlsRoute(app: Hono<AppEnv>) {
   app.post("/:id/signed-urls",
     describeRoute({
@@ -59,6 +75,7 @@ export function registerSignedUrlsRoute(app: Hono<AppEnv>) {
     }),
     async (c, next) => (c.get("deliveryTokens") ? next() : tokensOff(c)),
     zValidator("param", idParamSchema),
+    refuseNonJsonBody,
     zValidator("json", createSignedUrlBodySchema),
     async (c) => {
       const tokens = c.get("deliveryTokens");

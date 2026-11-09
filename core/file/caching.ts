@@ -50,9 +50,14 @@ export function cacheControlFor(
   return applyPolicy(base, policy, at.pinned);
 }
 
-/** Thumbnails never change for a version, so they take the pinned lifetime at any URL. */
+/**
+ * Thumbnails never change for a version, so they take the pinned lifetime at
+ * any URL. Under a token an asset-ID URL revalidates like an entry document,
+ * which no token's remaining life can undercut.
+ */
 export function thumbnailCacheControl(pinned: boolean, policy: CachePolicy): string {
-  return applyPolicy(PINNED_CACHE_CONTROL, policy, pinned);
+  const base = pinned || policy.maxAgeCap === null ? PINNED_CACHE_CONTROL : ENTRY_CACHE_CONTROL;
+  return applyPolicy(base, policy, pinned);
 }
 
 function applyPolicy(base: string, policy: CachePolicy, pinned: boolean): string {
@@ -139,7 +144,7 @@ if (import.meta.vitest) {
     expect(cacheControlFor({ pinned: true, contentType: "text/html" }, token)).toBe("private, max-age=600, immutable");
     expect(cacheControlFor({ pinned: false, contentType: "text/html" }, token)).toBe("private, max-age=0, must-revalidate");
     expect(thumbnailCacheControl(true, token)).toBe("private, max-age=600, immutable");
-    expect(thumbnailCacheControl(false, token)).toBe("private, max-age=600");
+    expect(thumbnailCacheControl(false, token)).toBe("private, max-age=0, must-revalidate");
     expect(thumbnailCacheControl(false, { private: true, maxAgeCap: null })).toBe("private, max-age=31536000, immutable");
   });
 

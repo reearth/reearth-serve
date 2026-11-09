@@ -79,6 +79,22 @@ describe("refusals, in the ADR's order", () => {
     expect((await mint(ASSET_ID, { expiresIn: 604_800 })).status).toBe(200);
   });
 
+  test("a body that is not JSON is 400, not a default token", async () => {
+    const { app, auth } = await mintFixture();
+    const res = await app.request(`/api/v1/assets/${ASSET_ID}/signed-urls`, {
+      method: "POST",
+      headers: { ...auth, "Content-Type": "text/plain" },
+      body: JSON.stringify({ prefix: "tiles/" }),
+    });
+    expect(res.status).toBe(400);
+  });
+
+  test("no body at all mints with the defaults", async () => {
+    const { app, auth } = await mintFixture();
+    const res = await app.request(`/api/v1/assets/${ASSET_ID}/signed-urls`, { method: "POST", headers: auth });
+    expect(res.status).toBe(200);
+  });
+
   test("a caller without read_asset gets the 404 a missing asset gets", async () => {
     const { mint } = await mintFixture();
     const stranger = { Authorization: `Bearer ${await token("stranger")}` };

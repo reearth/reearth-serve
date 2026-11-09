@@ -17,8 +17,8 @@ import { readDeliveryRequest } from "../access/request";
 import { toUnixSeconds, type AssetPath } from "../access/token";
 import type { VerifiedCaller } from "../auth/types";
 import { accessCtx, authorizeAsset, deniedResponse } from "../auth/access";
-import { enterCaller, TENANCY_RETRY_AFTER_SECONDS } from "../tenancy/middleware";
-import { TenancyUnavailableError, UnknownAccountError } from "../tenancy/port";
+import { enterCaller, tenancyErrorResponse } from "../tenancy/middleware";
+import { UnknownAccountError } from "../tenancy/port";
 import { SITE_PREVIEW_HEADER, type SitePreview } from "../site/middleware";
 import { hostingFor, isControlFile } from "../site/hosting";
 import {
@@ -306,12 +306,8 @@ async function authorizeBearer(
     return decision.ok ? { ok: true } : refuse(deniedResponse(c, decision, { notFound: "File not found" }));
   } catch (err) {
     if (err instanceof UnknownAccountError) return refuse(c.json({ error: "File not found" }, 404));
-    if (err instanceof TenancyUnavailableError) {
-      console.error(err);
-      const res = c.json({ error: "Authorization service unavailable" }, 503);
-      res.headers.set("Retry-After", String(TENANCY_RETRY_AFTER_SECONDS));
-      return refuse(res);
-    }
+    const outage = tenancyErrorResponse(err as Error, c);
+    if (outage) return refuse(outage);
     throw err;
   }
 }
@@ -377,7 +373,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
   // `serve_token` leaves the query here, before anything reads it, and the
   // storage key is built from the same parsed path a token is matched on
   // (ADR-014 §4).
-  const delivery = readDeliveryRequest(c.req.raw);
+  const delivery = readDeliveryRequest(c.req.raw, id);
 
   // Errors raised before the asset is known carry no proof, so they take the
   // refusal policy, which discloses nothing about the asset's mode.
