@@ -225,11 +225,20 @@ describe("OpenAPI document", () => {
     type Media = { examples?: Record<string, { value: unknown }> };
     const { paths } = await loadSpec() as unknown as { paths: Record<string, Record<string, { requestBody?: { content: Record<string, Media> }; responses: Record<string, { content?: Record<string, Media> }> }>> };
     const create = paths["/api/v1/assets/uploads"].post;
-    expect(Object.keys(create.requestBody?.content["application/json"].examples ?? {})).toEqual(["single", "declared", "multipart"]);
+    expect(Object.keys(create.requestBody?.content["application/json"].examples ?? {})).toEqual(["single", "declared", "stated", "multipart"]);
     expect(Object.keys(create.responses["201"].content?.["application/json"].examples ?? {})).toEqual(["single", "declared", "multipart"]);
     expect(paths["/api/v1/assets/uploads/{id}/complete"].post.requestBody?.content["application/json"].examples).toHaveProperty("multipart");
     const ndjson = paths["/api/v1/assets/{id}/files"].get.responses["200"].content?.["application/x-ndjson"].examples ?? {};
     expect(typeof ndjson.archive?.value).toBe("string");
+  });
+
+  test("publishes the error codes and the stated upload encoding", async () => {
+    const spec = await loadSpec() as unknown as { components: { schemas: Record<string, { properties?: Record<string, unknown>; enum?: string[] }> } };
+    expect(spec.components.schemas.Error.properties).toHaveProperty("code");
+    expect(spec.components.schemas.ErrorCode.enum).toEqual(["checksum_mismatch", "upload_under_verification", "blob_claimed", "blob_unavailable"]);
+    expect(spec.components.schemas.CreateUploadSessionRequest.properties).toHaveProperty("contentEncoding");
+    expect(spec.components.schemas.UploadEncoding.enum).toEqual(["gzip", "identity"]);
+    expect(spec.components.schemas.FileEntry.properties).toHaveProperty("sha256");
   });
 
   test("names no product in its title", async () => {

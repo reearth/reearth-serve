@@ -57,6 +57,20 @@ describe("X-Content-SHA256 on direct uploads", () => {
       "X-Content-SHA256": "0".repeat(64),
     });
     expect(res.status).toBe(422);
+    // A stable code for programs (ADR-017 P5); the message may change.
+    expect(await res.json()).toMatchObject({ code: "checksum_mismatch" });
+  });
+
+  test("the file listing carries the stored bytes' SHA-256 and integrity", async () => {
+    const res = await upload("/api/v1/assets", body, "listed.txt", {
+      "X-Session-Id": sessionId,
+      "X-Content-SHA256": sha256(body),
+    });
+    expect(res.status).toBe(201);
+    const { asset } = await res.json() as { asset: { id: string } };
+    const list = await fetch(`${BASE}/api/v1/assets/${asset.id}/files`, { headers: { "X-Session-Id": sessionId } });
+    const [entry] = (await list.text()).trim().split("\n").map((l) => JSON.parse(l));
+    expect(entry).toMatchObject({ path: "listed.txt", sha256: sha256(body), integrity: "verified" });
   });
 
   test("a malformed hash is 400", async () => {

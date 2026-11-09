@@ -24,7 +24,14 @@ export function uploadExpirySeconds(size: number): number {
 export async function createUploadSession(
   sessions: UploadSessionStore,
   presignedUrls: PresignedUrlGenerator,
-  params: { filename: string; contentType: string; size: number; partCount?: number; sha256?: string },
+  params: {
+    filename: string; contentType: string; size: number; partCount?: number; sha256?: string;
+    /**
+     * The encoding the client states it will upload (ADR-017 P5). Honoured as
+     * given; omitted, the server decides with `shouldCompress`.
+     */
+    contentEncoding?: "gzip" | "identity";
+  },
   _ttlSeconds: number,
   options?: {
     sessionId?: string | null; projectId?: string | null; skipExtraction?: boolean;
@@ -42,7 +49,11 @@ export async function createUploadSession(
   const now = Date.now();
   const urlExpirySeconds = uploadExpirySeconds(params.size);
   const contentType = params.contentType || "application/octet-stream";
-  const compress = shouldCompress(params.filename, params.size);
+  // A stated encoding is the client's description of the bytes its declared
+  // hash names, exactly like a direct upload's `Content-Encoding`; without
+  // one the encoding is the server's decision and the client is told it.
+  const stated = params.contentEncoding !== undefined;
+  const compress = stated ? params.contentEncoding === "gzip" : shouldCompress(params.filename, params.size);
   const sha256 = params.sha256?.toLowerCase();
   const expiresAt = now + urlExpirySeconds * 1000;
 
@@ -55,7 +66,7 @@ export async function createUploadSession(
   const placement: Placement = options?.blob
     ? await placeSessionUpload(
       options.blob.refs, options.blob.scope, sha256, storageKey(id, params.filename), { id, expiresAt }, now,
-      compress ? (key) => isGzipBlob(options.storage, key) : undefined,
+      compress && !stated ? (key) => isGzipBlob(options.storage, key) : undefined,
     )
     : { key: storageKey(id, params.filename) };
   if (placement.reuse && placement.ref) {
@@ -77,7 +88,10 @@ export async function createUploadSession(
 
 /**
  * Whether stored bytes are gzip, by their magic number — the guard on reusing
- * them for a session the server compresses.
+ * them for a session the server decided to compress.
+ *
+ * Only for that case: a session whose client stated `contentEncoding` gets no
+ * guard, for the same reason a direct upload gets none (below).
  *
  * A session's encoding is the server's decision, not a description of the
  * client's bytes: the client is told to gzip, and its declared hash must be
@@ -367,6 +381,73 @@ if (import.meta.vitest) {
     );
 
     expect(vi.mocked(sessions.save).mock.calls[0][0].sha256).toBe("c".repeat(64));
+  });
+
+  test("a stated encoding overrides the server's decision, both ways", async () => {
+    const presigned = mockPresignedUrls();
+    // A compressible name the server would gzip, stated identity.
+    const plain = await createUploadSession(
+      mockSessions(), presigned,
+      { filename: "big.geojson", contentType: "application/geo+json", size: 5000, contentEncoding: "identity" },
+      3600,
+    ) as PresignedUploadResult;
+    expect(plain.contentEncoding).toBeUndefined();
+    expect(plain.headers["Content-Encoding"]).toBeUndefined();
+    expect(vi.mocked(presigned.generatePutUrl).mock.calls[0][3]).toEqual({});
+
+    // A name the server would not gzip, stated gzip.
+    const sessions = mockSessions();
+    const gz = await createUploadSession(
+      sessions, presigned,
+      { filename: "photo.png", contentType: "image/png", size: 5000, partCount: 2, contentEncoding: "gzip" },
+      3600,
+    ) as MultipartUploadResult;
+    expect(gz.contentEncoding).toBe("gzip");
+    expect(presigned.createMultipartUpload).toHaveBeenCalledWith(expect.any(String), "image/png", { contentEncoding: "gzip" });
+    expect(vi.mocked(sessions.save).mock.calls[0][0].contentEncoding).toBe("gzip");
+  });
+
+  test("a stated gzip session reuses bytes without the magic-number guard; an unstated one keeps it", async () => {
+    const { blobKey } = await import("../../blob/model");
+    const sha = "d".repeat(64);
+    const key = blobKey("ws1", sha);
+    // Not gzip: the bytes the stated client hashed are what it says it sends.
+    const storage = {
+      get: vi.fn(async () => ({ body: new Response(new TextEncoder().encode("plain bytes")).body! })),
+    } as unknown as FileStorage;
+    const ready = { key, scope: "ws1", sha256: sha, refCount: 1, state: "ready" as const };
+    const refs = {
+      find: vi.fn(async () => ready),
+      claim: vi.fn(async () => "claimed" as const),
+      reserve: vi.fn(async () => true),
+      releaseClaim: vi.fn(async () => {}),
+    } as unknown as import("../../blob/repository").BlobRefStore;
+
+    const stated = await createUploadSession(
+      mockSessions(), mockPresignedUrls(),
+      { filename: "data.json", contentType: "application/json", size: 5000, sha256: sha, contentEncoding: "gzip" },
+      3600, { blob: { refs, scope: "ws1" }, storage },
+    ) as MultipartUploadResult;
+    expect(stated.parts).toEqual([]);
+    expect(stated.contentEncoding).toBe("gzip");
+    expect(storage.get).not.toHaveBeenCalled();
+
+    const unstated = await createUploadSession(
+      mockSessions(), mockPresignedUrls(),
+      { filename: "data.json", contentType: "application/json", size: 5000, sha256: sha },
+      3600, { blob: { refs, scope: "ws1" }, storage },
+    );
+    expect("url" in unstated).toBe(true);
+  });
+
+  test("upload session body accepts only gzip or identity as contentEncoding", async () => {
+    const { createUploadSessionBodySchema } = await import("../../../shared/api");
+    for (const contentEncoding of ["gzip", "identity"]) {
+      expect(createUploadSessionBodySchema.safeParse({ filename: "a", size: 1, contentEncoding }).success).toBe(true);
+    }
+    for (const contentEncoding of ["br", "deflate", "GZIP", ""]) {
+      expect(createUploadSessionBodySchema.safeParse({ filename: "a", size: 1, contentEncoding }).success, contentEncoding).toBe(false);
+    }
   });
 
   test("upload session body accepts only a hex sha256", async () => {

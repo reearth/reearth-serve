@@ -94,6 +94,35 @@ export const jobStatusSchema = z.enum(["pending", "running", "completed", "faile
 // (oapi-codegen only reuses a parameter's type when its schema is a $ref).
 export const contentEncodingHeaderSchema = enumComponent("ContentEncoding", z.enum(["gzip"]));
 export const skipExtractionHeaderSchema = enumComponent("XSkipExtraction", z.enum(["true"]));
+/**
+ * The encoding a client states it will upload in an upload session
+ * (ADR-017 P5). `gzip`: the client gzips the file and the declared `sha256` is
+ * of the gzipped bytes. `identity`: the bytes are sent as they are. Omitted,
+ * the server decides by file name and size, as before.
+ */
+export const uploadEncodingSchema = enumComponent("UploadEncoding", z.enum(["gzip", "identity"]));
+
+/**
+ * A machine-readable reason on an error response, for the errors a client
+ * acts on differently (ADR-017 P5). Most errors carry none; the message in
+ * `error` is for people and may change, the code does not.
+ *
+ * - `checksum_mismatch` (422) — the declared SHA-256 does not match the bytes;
+ *   nothing was stored. Also the answer to a hash-only (empty-body) upload
+ *   when the workspace does not hold those bytes.
+ * - `upload_under_verification` (409) — a new version while the asset's
+ *   declared first upload is still `integrity: pending`. Retry once the
+ *   asset's `integrity` is `verified`; if the asset is gone, the first upload
+ *   was rejected.
+ * - `blob_claimed` (409) — another upload session is uploading the same
+ *   declared hash into the same workspace. Retry once it completes or expires.
+ * - `blob_unavailable` (409) — the stored copy this upload reused was deleted
+ *   while the request was in progress. Retry at once (a session is spent:
+ *   create a new one); the retry uploads the bytes.
+ */
+export const errorCodeSchema = enumComponent("ErrorCode", z.enum([
+  "checksum_mismatch", "upload_under_verification", "blob_claimed", "blob_unavailable",
+]));
 
 // --- Role ---
 
@@ -422,6 +451,15 @@ export const fileEntrySchema = component("FileEntry", z.object({
   contentType: z.string(),
   contentEncoding: z.string().optional(),
   hash: z.string().optional(),
+  /**
+   * SHA-256 of the stored bytes and its `integrity` (ADR-017), on the entry of
+   * a non-archive asset only; absent for rows stored before ADR-017 that the
+   * backfill has not reached, and for extracted archive entries. When
+   * `contentEncoding` is set the hash is of the encoded bytes, not of what a
+   * decompressing client ends up with.
+   */
+  sha256: z.string().optional(),
+  integrity: integritySchema.optional(),
 }));
 
 // --- Request bodies ---
@@ -443,6 +481,14 @@ export const createUploadSessionBodySchema = component("CreateUploadSessionReque
    * `headers`).
    */
   sha256: z.string().regex(/^[0-9a-fA-F]{64}$/, "sha256 must be 64 hex characters").optional(),
+  /**
+   * The encoding the client will upload (ADR-017 P5). When given, the server
+   * stores the file with exactly that encoding and the response's
+   * `contentEncoding` echoes it (`gzip`) or is absent (`identity`), so a
+   * client declaring `sha256` knows which bytes it hashes without predicting
+   * the server. Omitted, the server decides as before.
+   */
+  contentEncoding: uploadEncodingSchema.optional(),
 }));
 
 export const completeUploadBodySchema = component("CompleteUploadSessionRequest", z.object({
@@ -506,6 +552,7 @@ export const setActiveVersionBodySchema = component("SetActiveVersionRequest", z
 
 export const errorResponseSchema = component("Error", z.object({
   error: z.string(),
+  code: errorCodeSchema.optional(),
 }));
 
 // --- Inferred types ---
@@ -537,6 +584,8 @@ export type CreateUploadSessionBody = z.infer<typeof createUploadSessionBodySche
 export type CompleteUploadBody = z.infer<typeof completeUploadBodySchema>;
 export type UpdateJobStatusBody = z.infer<typeof updateJobStatusBodySchema>;
 export type ErrorResponse = z.infer<typeof errorResponseSchema>;
+export type ErrorCode = z.infer<typeof errorCodeSchema>;
+export type UploadEncoding = z.infer<typeof uploadEncodingSchema>;
 export type FileEntry = z.infer<typeof fileEntrySchema>;
 export type UpdateAssetBody = z.infer<typeof updateAssetBodySchema>;
 export type SiteHostKind = z.infer<typeof siteHostKindSchema>;

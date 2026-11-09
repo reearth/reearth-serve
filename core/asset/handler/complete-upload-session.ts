@@ -9,8 +9,8 @@ import { usageScopes } from "./shared";
 import { assetUploadResultExamples, completeUploadExamples } from "../../openapi-examples";
 import { completeUploadBodySchema, uploadResultResponseSchema, idParamSchema } from "../../../shared/openapi";
 import { jsonError, jsonResponse, schemaRef } from "../../openapi";
-import { ChecksumMismatchError } from "../../asset/integrity";
-import { BLOB_UNAVAILABLE_MESSAGE, BlobUnavailableError } from "../../blob/usecase";
+import { BLOB_UNAVAILABLE_MESSAGE } from "../../blob/usecase";
+import { uploadErrorResponse } from "./errors";
 
 
 export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
@@ -29,7 +29,7 @@ export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
       responses: {
         201: jsonResponse("Upload completed", uploadResultResponseSchema, assetUploadResultExamples),
         404: jsonError("Upload session not found"),
-        409: jsonError(`${BLOB_UNAVAILABLE_MESSAGE} (the session is spent; create a new one)`),
+        409: jsonError(`${BLOB_UNAVAILABLE_MESSAGE} (\`code: blob_unavailable\`; the session is spent; create a new one)`),
         422: jsonError("Declared SHA-256 does not match the uploaded bytes; nothing was stored"),
       },
     }),
@@ -75,10 +75,8 @@ export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
     try {
       result = await completeUploadSession(sessions, writes, c.get("metadata"), storage, presignedUrls, id, ttlSeconds, baseUrl, parts, { sessionId, extractionQueue, verificationQueue: c.get("verificationQueue"), thumbnailQueue, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix"), blobRefs: c.get("blobRefs") });
     } catch (e) {
-      if (e instanceof ChecksumMismatchError) {
-        return c.json({ error: "Declared SHA-256 does not match the uploaded bytes; nothing was stored" }, 422);
-      }
-      if (e instanceof BlobUnavailableError) return c.json({ error: e.message }, 409);
+      const known = uploadErrorResponse(e);
+      if (known) return c.json(known.body, known.status);
       throw e;
     }
     if (!result) {

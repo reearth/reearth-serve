@@ -6,8 +6,8 @@ import { uploadAsset } from "../usecase";
 import { blobContext, denyAnonymousUpload, parseDirectUploadHeaders, resolveUploadProject, usageScopes } from "./shared";
 import { assetUploadResultExamples } from "../../openapi-examples";
 import { uploadResultResponseSchema } from "../../../shared/openapi";
-import { ChecksumMismatchError } from "../../asset/integrity";
-import { BLOB_UNAVAILABLE_MESSAGE, BlobUnavailableError } from "../../blob/usecase";
+import { BLOB_UNAVAILABLE_MESSAGE } from "../../blob/usecase";
+import { uploadErrorResponse } from "./errors";
 import { contentEncodingHeaderParam, contentLengthHeaderParam, contentSha256HeaderParam, filenameHeaderParam, jsonError, jsonResponse, originalSizeHeaderParam, projectIdHeaderParam, skipExtractionHeaderParam } from "../../openapi";
 
 export function registerUploadRoute(app: Hono<AppEnv>) {
@@ -35,7 +35,7 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
         400: jsonError("Bad request (missing/invalid headers, or X-Project-Id missing for an authenticated caller)"),
         401: jsonError("Anonymous upload disabled, or invalid token / session ID"),
         404: jsonError("Project not found"),
-        409: jsonError(BLOB_UNAVAILABLE_MESSAGE),
+        409: jsonError(`${BLOB_UNAVAILABLE_MESSAGE} (\`code: blob_unavailable\`)`),
         413: jsonError("Upload exceeds storage capacity"),
         422: jsonError("Declared SHA-256 does not match the uploaded bytes; nothing was stored"),
       },
@@ -85,10 +85,8 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
 
       return c.json(toUploadResponse(result), 201);
     } catch (e) {
-      if (e instanceof ChecksumMismatchError) {
-        return c.json({ error: "Declared SHA-256 does not match the uploaded bytes; nothing was stored" }, 422);
-      }
-      if (e instanceof BlobUnavailableError) return c.json({ error: e.message }, 409);
+      const known = uploadErrorResponse(e);
+      if (known) return c.json(known.body, known.status);
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.includes("exceeds storage capacity")) {
         return c.json({ error: "Upload exceeds storage capacity" }, 413);

@@ -618,11 +618,82 @@ usage accounting do not change, and nothing moves into the blob layer.
   transient and retried; when the retries run out the job is closed and the
   row stays as it was. `POST /api/v1/jobs/{id}/retry` re-runs either.
 
-**Remaining.**
+**P5 — the CLI declares every upload (done).** Every CLI upload now
+declares the SHA-256 of the bytes it sends, uses deduplication where it can,
+and handles the 409s by their reason. `file sync` compares by SHA-256 where
+the ledger has a confirmed one. Code: `cli/transfer.ts` (uploads),
+`cli/hash.ts` (streaming hashes), `cli/sync-compare.ts` (sync).
 
-- **P5**: the CLI declaring `X-Content-SHA256` / `sha256` on every upload.
-  Once it does, a client that uploads a version right after a large
-  presigned first upload must expect `409` until verification settles.
+- When the hash is computed: before the first request, always. An upload
+  session needs it at creation (the blob key is fixed before a byte is
+  written), and so does the hash-only request below. A file of up to 1 GiB is
+  already read into memory for the upload, so it is hashed from that buffer
+  and costs only CPU. A larger file is streamed from disk, so it is read
+  twice: once to hash it, with a progress line on stderr, and once to upload
+  it. A local disk is much faster than any upload link, and that first pass
+  is what lets an upload of bytes the workspace holds skip the transfer.
+  Hashing while uploading and sending the hash at completion would need the
+  blob key to be decided at completion, which §3 rules out.
+- What the hash covers: the bytes sent, after the CLI's own gzip. Direct
+  uploads already stated their encoding (`Content-Encoding`). Upload sessions
+  now take it too (below), so the CLI never predicts the server.
+- Gzip on sessions (the open issue from P3). `POST /api/v1/assets/uploads`
+  takes an optional `contentEncoding`, `gzip` or `identity`. When given, the
+  server stores exactly that encoding and the response's `contentEncoding`
+  echoes it; any other value is refused by the body schema (400). When
+  omitted, the server decides with `shouldCompress`, as before, so old
+  clients are unaffected. The CLI always states it. If a server answers a
+  different encoding (one that predates the field), the CLI stops with an
+  explanation instead of uploading bytes its hash does not name. Mirroring
+  `shouldCompress` in the CLI was not chosen: the two copies would have to
+  agree forever, and they already disagreed for files over 1 GiB, which the
+  CLI streams without gzip. Those were stored raw under a `gzip` label; they
+  are now stated `identity` and stored correctly.
+- The P3 gzip guard (`isGzipBlob`) now runs only for a session whose encoding
+  the server decided. A stated encoding is the client's own description of
+  the bytes its hash names, like a direct upload's `Content-Encoding`, so
+  reusing a blob for it records what a full upload of those bytes would.
+- Direct uploads (first upload with `--direct` or when presigned uploads are
+  unavailable, and every new version) of 1 MiB or more send the hash alone
+  first (`Content-Length: 0`). A 201 means the workspace held the bytes and
+  nothing else is sent; a 422 (not held) or a 400 (a server older than P3)
+  is followed by the full upload. Below 1 MiB the probe would cost about as
+  much as the transfer it might save, so the file is sent at once. A version
+  upload probes too, so a 409 for a pending first upload costs no transfer.
+- Sessions for bytes the workspace holds come back with `parts: []`; the CLI
+  uploads nothing and completes with `{ "parts": [] }`. The CLI now also
+  computes `partCount` from the bytes it sends, not from the raw size; a
+  compressible file between 100 MB and 1 GiB used to request parts for its
+  raw size and then send empty trailing parts, which multipart completion
+  refuses.
+- Error codes. The `Error` schema gained an optional `code` (`ErrorCode` in
+  the OpenAPI document): `checksum_mismatch` (422), `upload_under_verification`,
+  `blob_claimed` and `blob_unavailable` (409). One mapper
+  (`core/asset/handler/errors.ts`) turns the four errors into status, message
+  and code for all four upload routes, so an error has one code everywhere.
+  The CLI branches on the code, never on the message.
+- What the CLI does with each 409:
+  - `upload_under_verification`: it waits, polling `GET /api/v1/assets/{id}`
+    (5 s, doubling to 60 s) rather than re-sending the body, and uploads the
+    version once the asset is no longer `pending`. `--wait <minutes>` on
+    `asset upload` bounds the wait (default 30; 0 fails at once). A 404 while
+    waiting means the first upload failed verification and was deleted, and
+    the CLI says that.
+  - `blob_claimed`: a file the Worker accepts directly (100 MB or less after
+    gzip) is uploaded directly at once; a direct upload stores at the classic
+    key when the blob is claimed, so it succeeds. A larger file retries the
+    session after 10, 20, 40, 60, 60 and 60 s, then stops with an explanation.
+  - `blob_unavailable`: retried at once, up to twice. On a session the retry
+    is a new session, since the old one is spent; it finds no reusable blob
+    and uploads.
+- `file sync`: the file listing's entry for a single-file asset now carries
+  `sha256`, `integrity` and `contentEncoding`. Sync compares by SHA-256 when
+  the hash is `verified` and the file is not stored gzipped (the hash names
+  the stored bytes; the download is decompressed). A size mismatch decides
+  without reading the local file. Otherwise it falls back to the listing's
+  MD5 `hash`, then to size, as before. Local hashes are streamed.
+
+All five phases are implemented.
 
 **Open issues.**
 
@@ -633,11 +704,6 @@ usage accounting do not change, and nothing moves into the blob layer.
 - The R2 adapter recognises a checksum mismatch by the error message
   (`/sha-?256|checksum|digest|10037/i`). R2 has no typed error for it; if
   the wording changes, a mismatch surfaces as 500 instead of 422.
-- A presigned upload's hash is of the stored bytes, but whether the server
-  gzips is decided by the server and returned only in the session response.
-  A client declaring a hash has to predict that decision (as the CLI's
-  `shouldCompress` does). P5 has to settle this, for example by letting the
-  client state the encoding it will upload.
 - Verification runs in the archive-extractor container and shares its
   `max_instances`, so it competes with extraction for capacity. The P4
   backfill does too; `INTEGRITY_BACKFILL_BATCH_SIZE` bounds its share, but
@@ -678,9 +744,26 @@ usage accounting do not change, and nothing moves into the blob layer.
 - An empty file can be uploaded directly only with
   `X-Content-SHA256: e3b0c442…b855` (the hash of zero bytes); without a
   declaration `Content-Length: 0` is still 400, as before P3.
-- The gzip check on reusing bytes for a compressed session looks at the magic
-  number only. It rules out the likely mistake (a hash of the raw file), not
-  every byte sequence that starts with `1f 8b`.
+- The gzip check on reusing bytes for a session the server decided to
+  compress looks at the magic number only. It rules out the likely mistake (a
+  hash of the raw file), not every byte sequence that starts with `1f 8b`.
+  Since P5 it applies only to clients that do not state `contentEncoding`.
+- A session's claim cannot be given up early. An interrupted upload (a CLI
+  killed mid-transfer) keeps the blob claimed until its session expires, up to
+  24 hours for a large file, and every other session for the same bytes in the
+  workspace gets `blob_claimed` meanwhile. The CLI works around it only for
+  files small enough to upload directly. An abort endpoint would release it.
+- The CLI's wait for a pending first upload is 30 minutes by default. Hashing
+  a 250 GiB upload can take about that long once the container is running, so
+  a version uploaded right after such an upload may need a longer `--wait`.
+- New versions have no upload session. `asset upload` reads the file into
+  memory and sends it through the Worker, so versions are limited to what the
+  Worker accepts (100 MB on Cloudflare), as before P5.
+- Files over 1 GiB are uploaded by the CLI without gzip: compressing them
+  would take another full pass to learn the size before the parts are cut.
+- `file sync` cannot use the SHA-256 of a gzip-stored file (it names the
+  compressed bytes, and the download is decompressed), and extracted archive
+  entries carry only the extractor's MD5. Both fall back to MD5 or size.
 - A blob's object metadata (`Content-Type`, `Content-Encoding`) is whatever its
   first writer sent. `/files` does not read it, but readers that go through
   the S3 API (the extractor and the verifier) get it with the bytes. This

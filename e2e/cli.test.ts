@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeAll } from "vitest";
 import { execSync } from "node:child_process";
 import { writeFileSync, readFileSync, mkdirSync, mkdtempSync, existsSync } from "node:fs";
+import { createHash, randomBytes } from "node:crypto";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import { BASE, fetchRetrying, MOCK_OIDC, rewriteUrl, signToken } from "./helpers";
@@ -83,6 +84,23 @@ describe("CLI", () => {
     const parsed = JSON.parse(out);
     expect(parsed.asset).toBeDefined();
     expect(parsed.url).toContain("/files/");
+  });
+
+  test("CLI upload declares the file's SHA-256 (ADR-017 P5)", () => {
+    const { asset } = JSON.parse(cli(`--json upload "${tmpFile}"`));
+    expect(asset.sha256).toBe(createHash("sha256").update("cli test content").digest("hex"));
+  });
+
+  test("CLI asset upload of the same bytes creates a version via the hash-only request", () => {
+    // Over the CLI's probe threshold (1 MiB) and not a compressible name, so
+    // the version is created from the hash alone: the bytes are already there.
+    const big = join(tmpDir, "blob.dat");
+    const bytes = randomBytes(1536 * 1024);
+    writeFileSync(big, bytes);
+    const { asset } = JSON.parse(cli(`--json upload "${big}"`));
+    const { version } = JSON.parse(cli(`--json asset upload ${asset.id} "${big}"`));
+    expect(version.sha256).toBe(createHash("sha256").update(bytes).digest("hex"));
+    expect(version.size).toBe(bytes.byteLength);
   });
 
   test("CLI asset create works same as upload", async () => {
@@ -372,6 +390,17 @@ describe("CLI", () => {
       const out = cli(`file sync ${asset.id} "${destDir}"`);
       expect(out).toContain("unchanged");
       expect(out).not.toContain("downloaded");
+    });
+
+    test("file sync re-downloads a local file with different bytes of the same size", () => {
+      const { asset } = JSON.parse(cli(`--json upload "${tmpFile}"`));
+      const destDir = mkdtempSync(join(tmpdir(), "serve-sync-"));
+      const local = join(destDir, "sample.txt");
+      writeFileSync(local, "CLI TEST CONTENT"); // same length, other bytes
+
+      const out = cli(`file sync ${asset.id} "${destDir}"`);
+      expect(out).toContain("downloaded");
+      expect(readFileSync(local, "utf-8")).toBe("cli test content");
     });
 
     test("file sync --delete removes extra local files", () => {

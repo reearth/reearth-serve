@@ -7,8 +7,7 @@ import { getAssetMetadata, uploadVersion } from "../usecase";
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { blobContext, denyAnonymousUpload, parseDirectUploadHeaders, usageScopes } from "./shared";
 import { versionUploadResultResponseSchema, idParamSchema } from "../../../shared/openapi";
-import { ChecksumMismatchError, UPLOAD_UNDER_VERIFICATION_MESSAGE, UploadUnderVerificationError } from "../../asset/integrity";
-import { BLOB_UNAVAILABLE_MESSAGE, BlobUnavailableError } from "../../blob/usecase";
+import { uploadErrorResponse } from "./errors";
 import { contentEncodingHeaderParam, contentLengthHeaderParam, contentSha256HeaderParam, filenameHeaderParam, jsonError, jsonResponse, originalSizeHeaderParam, skipExtractionHeaderParam } from "../../openapi";
 
 export function registerUploadVersionRoute(app: Hono<AppEnv>) {
@@ -36,7 +35,7 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
         401: jsonError("Anonymous upload disabled, or invalid token / session ID"),
         404: jsonError("Asset not found"),
         413: jsonError("Upload exceeds storage capacity"),
-        409: jsonError("The asset's first upload is still being verified against its declared SHA-256, or the stored copy this upload matched was deleted while it was in progress; upload again later"),
+        409: jsonError("The asset's first upload is still being verified against its declared SHA-256 (`code: upload_under_verification`), or the stored copy this upload matched was deleted while it was in progress (`code: blob_unavailable`); upload again later"),
         422: jsonError("Declared SHA-256 does not match the uploaded bytes; nothing was stored"),
       },
     }),
@@ -76,21 +75,12 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
         baseUrl,
         { extractionQueue, thumbnailQueue, skipExtraction, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix"), blob },
       ).catch((e: unknown) => {
-        if (e instanceof ChecksumMismatchError) return "checksum-mismatch" as const;
-        if (e instanceof UploadUnderVerificationError) return "under-verification" as const;
-        if (e instanceof BlobUnavailableError) return "blob-unavailable" as const;
+        const known = uploadErrorResponse(e);
+        if (known) return known;
         if (e instanceof Error && e.message.includes("exceeds storage capacity")) return "over-capacity" as const;
         throw e;
       });
-      if (result === "checksum-mismatch") {
-        return c.json({ error: "Declared SHA-256 does not match the uploaded bytes; nothing was stored" }, 422);
-      }
-      if (result === "under-verification") {
-        return c.json({ error: UPLOAD_UNDER_VERIFICATION_MESSAGE }, 409);
-      }
-      if (result === "blob-unavailable") {
-        return c.json({ error: BLOB_UNAVAILABLE_MESSAGE }, 409);
-      }
+      if (typeof result === "object" && result && "status" in result) return c.json(result.body, result.status);
       if (result === "over-capacity") {
         return c.json({ error: "Upload exceeds storage capacity" }, 413);
       }

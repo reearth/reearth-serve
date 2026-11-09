@@ -1,4 +1,4 @@
-import { existsSync, rmSync, statSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { Command } from "commander";
 import { PATHS } from "../shared/paths";
@@ -10,13 +10,13 @@ import {
   downloadFile,
   formatBytes,
   listLocalFiles,
-  localMd5,
   output,
   parseSrc,
   resolveSitePassword,
   SITE_PASSWORD_ENV,
   streamNdjson,
 } from "./helpers";
+import { isUnchanged } from "./sync-compare";
 
 /**
  * `--password` on the download commands (ADR-013 B7).
@@ -219,7 +219,7 @@ export function registerFileCommands(program: Command, file: Command) {
 
   file
     .command("sync")
-    .description("Sync asset files to a local directory (hash-based diff)")
+    .description("Sync asset files to a local directory (SHA-256 / MD5 / size diff)")
     .argument("<asset-id>", "Asset ID")
     .argument("<dest-dir>", "Local destination directory")
     .option("--delete", "Remove local files not present in the remote asset")
@@ -253,20 +253,9 @@ export function registerFileCommands(program: Command, file: Command) {
         remotePaths.add(entry.path);
         const localPath = join(destDir, entry.path);
 
-        if (existsSync(localPath)) {
-          if (entry.hash) {
-            const localHash = localMd5(localPath);
-            if (localHash === entry.hash) {
-              skipped++;
-              continue;
-            }
-          } else {
-            const localSize = statSync(localPath).size;
-            if (localSize === entry.size) {
-              skipped++;
-              continue;
-            }
-          }
+        if (await isUnchanged(entry, localPath)) {
+          skipped++;
+          continue;
         }
 
         toDownload.push(entry);
