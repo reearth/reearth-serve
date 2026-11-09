@@ -16,6 +16,7 @@ import {
 } from "../../core/access/token";
 
 const HMAC = { name: "HMAC", hash: "SHA-256" } as const;
+const MAC_BYTES = 32;
 
 /** HMAC-SHA256 delivery tokens (ADR-014 §4). Keys are imported once, when the codec is built. */
 export class WebCryptoDeliveryTokenCodec implements DeliveryTokenCodec {
@@ -35,7 +36,7 @@ export class WebCryptoDeliveryTokenCodec implements DeliveryTokenCodec {
     if (claims.exp - now > MAX_TOKEN_LIFETIME_SECONDS) {
       throw new RangeError(`delivery token lifetime exceeds ${MAX_TOKEN_LIFETIME_SECONDS} seconds`);
     }
-    const encoded = encodeClaims({ v: 1, kid: this.activeKid, ...claims });
+    const encoded = encodeClaims({ ...claims, v: 1, kid: this.activeKid });
     if (!decodeClaims(encoded)) throw new TypeError("delivery token claims are invalid");
     const mac = await crypto.subtle.sign("HMAC", await this.activeKey, labelledMacInput(encoded));
     return `${encoded}.${bytesToBase64Url(new Uint8Array(mac))}`;
@@ -47,7 +48,7 @@ export class WebCryptoDeliveryTokenCodec implements DeliveryTokenCodec {
     const encoded = token.slice(0, dot);
     const claims = decodeClaims(encoded);
     const mac = decodeCanonicalBase64Url(token.slice(dot + 1));
-    if (!claims || !mac) return { ok: false, reason: "malformed" };
+    if (!claims || mac?.length !== MAC_BYTES) return { ok: false, reason: "malformed" };
     const key = this.keys.get(claims.kid);
     if (!key) return { ok: false, reason: "unknown_kid" };
     if (!(await crypto.subtle.verify("HMAC", await key, mac, labelledMacInput(encoded)))) {

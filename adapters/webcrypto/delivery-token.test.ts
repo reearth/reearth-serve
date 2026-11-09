@@ -101,6 +101,12 @@ describe("WebCryptoDeliveryTokenCodec", () => {
     expect(await retired.verify(signedAfterRotation, NOW)).toEqual({ ok: true, claims: { v: 1, kid: "k2", ...claims } });
   });
 
+  test("answers malformed for a MAC that is not 32 bytes", async () => {
+    const token = await k1.sign(claims, NOW);
+    expect(await k1.verify(token.slice(0, -4), NOW)).toEqual({ ok: false, reason: "malformed" });
+    expect(await k1.verify(`${token.split(".")[0]}.`, NOW)).toEqual({ ok: false, reason: "malformed" });
+  });
+
   test.each(["", ".", "abc", "a.b.c", "!!.!!", "e30.", ".AAAA"])("answers malformed for %j", async (token) => {
     expect(await k1.verify(token, NOW)).toEqual({ ok: false, reason: "malformed" });
   });

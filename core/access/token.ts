@@ -59,7 +59,7 @@ function decodeOnce(raw: string): string | null {
 }
 
 function toAssetPath(decoded: string): AssetPath | null {
-  if (/[\\\0]|%2f/i.test(decoded)) return null;
+  if (decoded.startsWith("/") || /[\\\0]|%2f/i.test(decoded)) return null;
   if (decoded.split("/").some((segment) => segment === "." || segment === "..")) return null;
   return decoded as AssetPath;
 }
@@ -84,7 +84,7 @@ export function decodeClaims(encoded: string): DeliveryClaims | null {
   if (typeof kid !== "string" || kid === "") return null;
   if (typeof assetId !== "string" || assetId === "") return null;
   if (versionId !== null && (typeof versionId !== "string" || versionId === "")) return null;
-  if (typeof prefix !== "string" || prefix.startsWith("/")) return null;
+  if (typeof prefix !== "string") return null;
   if (typeof exp !== "number" || !Number.isSafeInteger(exp) || exp < 0) return null;
   const path = toAssetPath(prefix);
   if (path === null) return null;

@@ -38,6 +38,9 @@ describe("parseAssetPath", () => {
     "a%5Cb",
     "a%00b",
     "%E5%9C",
+    "//a",
+    "%2Fa",
+    "/%2Fa",
   ])("refuses %j", (raw) => {
     expect(parseAssetPath(raw)).toBeNull();
   });

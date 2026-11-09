@@ -92,7 +92,7 @@ export function buildDeps(env: Env): Deps {
     siteFallbackOrigin: env.SITE_FALLBACK_ORIGIN || undefined,
     cache: kv,
     // Password-protected sites (ADR-013 B7): the key their auth cookie is
-    // signed with, and the secret ADR-014 §4 reserves for signed URLs.
+    // signed with. Delivery tokens have their own ring (ADR-014 §4).
     // A wrangler secret, not a [vars] entry — `wrangler secret put
     // SIGNING_SECRET`. Unset ⇒ protected assets answer 503 and the PATCH that
     // would protect one is refused, rather than minting cookies nobody can
