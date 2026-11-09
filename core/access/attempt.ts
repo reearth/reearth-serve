@@ -119,6 +119,16 @@ if (import.meta.vitest) {
     expect(memo.has(c, 1)).toBe(true);
   });
 
+  test("the default memo holds 1,000 entries and evicts at 1,001", () => {
+    const memo = new PasswordMemo();
+    for (let i = 0; i < 1_000; i++) memo.add(`k${i}`, 0);
+    expect(memo.has("k0", 1)).toBe(true);
+    memo.add("k1000", 0);
+    expect(memo.has("k1", 1)).toBe(false);
+    expect(memo.has("k0", 1)).toBe(true);
+    expect(memo.has("k1000", 1)).toBe(true);
+  });
+
   test("the key binds asset, password version and password", async () => {
     const memo = new PasswordMemo();
     const key = await memo.keyFor("a", 1, "pw");

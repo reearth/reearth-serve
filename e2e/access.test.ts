@@ -25,6 +25,7 @@ try {
 const PASSWORD = "e2e-site-password";
 const NODE_RUNTIME = process.env.E2E_NODE_RUNTIME === "true";
 const BROWSER = { Accept: "text/html,application/xhtml+xml" };
+const EMPTY_ZIP = new Uint8Array([0x50, 0x4b, 0x05, 0x06, ...new Array(18).fill(0)]);
 
 function basic(password: string): Record<string, string> {
   return { Authorization: `Basic ${Buffer.from(`viewer:${password}`).toString("base64")}` };
@@ -59,6 +60,22 @@ describe("password-protected sites", { skip: !mockOidcAvailable }, () => {
     });
   }
 
+  /** A fresh archive behind `password`, so a test can spend its limiter budget alone. */
+  async function protectedFile(password: string): Promise<{ id: string; url: string }> {
+    const { status, body } = await uploadFileWithAuth(
+      EMPTY_ZIP, "site.zip", "application/zip", token, projectId,
+    );
+    expect(status).toBe(201);
+    const id = body.asset.id as string;
+    const res = await fetch(`${BASE}/api/v1/assets/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ access: "password", password }),
+    });
+    expect(res.status).toBe(200);
+    return { id, url: `${BASE}/files/${id}/site.zip` };
+  }
+
   beforeAll(async () => {
     const health = await fetch(`${BASE}/api/v1/health`);
     if (!health.ok) throw new Error(`Server not reachable at ${BASE}`);
@@ -70,9 +87,8 @@ describe("password-protected sites", { skip: !mockOidcAvailable }, () => {
     // runs here — no container launcher on this runtime — but the archive
     // itself is served at its own filename, which is enough to prove the
     // access check without depending on the extractor.
-    const zip = new Uint8Array([0x50, 0x4b, 0x05, 0x06, ...new Array(18).fill(0)]);
     const { status, body } = await uploadFileWithAuth(
-      zip, "site.zip", "application/zip", token, projectId,
+      EMPTY_ZIP, "site.zip", "application/zip", token, projectId,
     );
     expect(status).toBe(201);
     assetId = body.asset.id;
@@ -197,6 +213,45 @@ describe("password-protected sites", { skip: !mockOidcAvailable }, () => {
     expect(res.status).toBe(401);
     expect(res.headers.get("Set-Cookie")).toBeNull();
     expect(await res.text()).toContain("Wrong password");
+  });
+
+  test("after a password change the old password is refused", async () => {
+    const { id, url } = await protectedFile(PASSWORD);
+    const before = await fetch(url, { headers: basic(PASSWORD) });
+    expect(before.status).toBe(200);
+    await before.body?.cancel();
+
+    const changed = await fetch(`${BASE}/api/v1/assets/${id}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ access: "password", password: "e2e-site-password-2" }),
+    });
+    expect(changed.status).toBe(200);
+
+    const old = await fetch(url, { headers: basic(PASSWORD) });
+    expect(old.status).toBe(401);
+    await old.body?.cancel();
+    const current = await fetch(url, { headers: basic("e2e-site-password-2") });
+    expect(current.status).toBe(200);
+    await current.body?.cancel();
+  });
+
+  test("a client cannot pick its own limiter bucket", { skip: !NODE_RUNTIME }, async () => {
+    const { url } = await protectedFile(PASSWORD);
+    const statuses: number[] = [];
+    for (let i = 1; i <= 11; i++) {
+      const res = await fetch(url, {
+        headers: {
+          ...basic(`wrong-password-${i}`),
+          "X-Forwarded-For": `198.51.100.${i}`,
+          "CF-Connecting-IP": `198.51.100.${i}`,
+        },
+      });
+      statuses.push(res.status);
+      await res.body?.cancel();
+    }
+    expect(statuses.slice(0, 10)).toEqual(new Array(10).fill(401));
+    expect(statuses[10]).toBe(429);
   });
 
   test("`asset protect --off` makes it public again", () => {
