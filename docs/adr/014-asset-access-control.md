@@ -1,6 +1,6 @@
 # ADR-014: Asset Access Control for File Delivery
 
-- **Status:** Proposed
+- **Status:** Accepted
 - **Date:** 2026-09-11 (revised 2026-11-06)
 - **Deciders:** @rot1024, @pyshx
 - **Related:** [ADR-002](002-auth-sessions-projects.md) (auth, sessions,
