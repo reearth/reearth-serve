@@ -9,7 +9,7 @@ const generator = new R2PresignedUrlGenerator({
 });
 
 async function putPath(key: string): Promise<URL> {
-  return new URL(await generator.generatePutUrl(key, "text/plain", 60));
+  return new URL((await generator.generatePutUrl(key, "text/plain", 60)).url);
 }
 
 describe("R2PresignedUrlGenerator object URLs", () => {
@@ -27,5 +27,23 @@ describe("R2PresignedUrlGenerator object URLs", () => {
   test("ordinary filenames keep their usual encoding", async () => {
     const url = await putPath("assets/abc/my file.json");
     expect(url.pathname).toBe("/bkt/assets/abc/my%20file.json");
+  });
+});
+
+describe("R2PresignedUrlGenerator checksum (ADR-017 §2)", () => {
+  // sha256("hello")
+  const HELLO = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+
+  test("a declared sha256 is signed in as x-amz-checksum-sha256 and returned for the client", async () => {
+    const put = await generator.generatePutUrl("assets/abc/a.txt", "text/plain", 60, { sha256: HELLO });
+    const url = new URL(put.url);
+    expect(url.searchParams.get("X-Amz-SignedHeaders")?.split(";")).toContain("x-amz-checksum-sha256");
+    expect(put.headers).toEqual({ "x-amz-checksum-sha256": "LPJNul+wow4m6DsqxbninhsWHlwfp0JecwQzYpOLmCQ=" });
+  });
+
+  test("without a declared sha256 no checksum header is signed or returned", async () => {
+    const put = await generator.generatePutUrl("assets/abc/a.txt", "text/plain", 60);
+    expect(new URL(put.url).searchParams.get("X-Amz-SignedHeaders")).toBe("host");
+    expect(put.headers).toEqual({});
   });
 });

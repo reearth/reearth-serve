@@ -61,6 +61,16 @@ export const archiveFormatSchema = enumComponent("ArchiveFormat", z.enum(["zip",
  * ADR-014's `restricted` mode joins this enum without a shape change.
  */
 export const assetAccessSchema = enumComponent("AssetAccess", z.enum(["public", "password"]));
+/**
+ * Whether a version's `sha256` has been confirmed over the stored bytes
+ * (ADR-017 §1). Absent on versions stored before ADR-017.
+ *
+ * - `verified` — the store or Serve hashed the stored bytes and they match.
+ * - `pending` — the bytes are in place and servable, the hash is not yet
+ *   confirmed (presigned multipart; confirmed later, ADR-017 §2).
+ * - `failed` — a declared hash did not match; such a version is deleted.
+ */
+export const integritySchema = enumComponent("Integrity", z.enum(["verified", "pending", "failed"]));
 export const jobTypeSchema = z.literal("archive-extraction");
 export const jobStatusSchema = z.enum(["pending", "running", "completed", "failed"]);
 
@@ -175,6 +185,13 @@ export const assetVersionSchema = component("AssetVersion", z.object({
   fileCount: z.number().optional(),
   extractedSize: z.number().optional(),
   jobId: z.string().optional(),
+  /**
+   * SHA-256 of the stored bytes, lowercase hex (ADR-017 §1) — after the
+   * client's gzip when the object is stored gzip. Absent on objects stored
+   * before ADR-017.
+   */
+  sha256: z.string().optional(),
+  integrity: integritySchema.optional(),
   userMeta: z.record(z.string(), z.unknown()).optional(),
   /**
    * `_headers` / `_redirects` as parsed at extraction time (ADR-013 C3).
@@ -199,6 +216,14 @@ export const assetMetadataSchema = component("Asset", z.object({
   fileCount: z.number().optional(),
   extractedSize: z.number().optional(),
   jobId: z.string().optional(),
+  /**
+   * SHA-256 of the stored bytes, lowercase hex (ADR-017 §1) — after the
+   * client's gzip when the object is stored gzip. Absent on objects stored
+   * before ADR-017. On the asset it describes the first upload, which has
+   * no version row; each version carries its own.
+   */
+  sha256: z.string().optional(),
+  integrity: integritySchema.optional(),
   sessionId: z.string().optional(),
   projectId: z.string().optional(),
   activeVersionId: z.string().optional(),
@@ -395,6 +420,14 @@ export const createUploadSessionBodySchema = component("CreateUploadSessionReque
   contentType: z.string().optional(),
   size: z.number(),
   partCount: z.number().int().positive().max(MAX_UPLOAD_PARTS).optional(),
+  /**
+   * Declared SHA-256 of the bytes that will be uploaded, hex (ADR-017 §1) —
+   * of the stored bytes, i.e. after gzip when the session answers
+   * `contentEncoding: gzip`. On a single-PUT session it is signed into the URL
+   * as `x-amz-checksum-sha256`, which the client must send (see the response's
+   * `headers`).
+   */
+  sha256: z.string().regex(/^[0-9a-fA-F]{64}$/, "sha256 must be 64 hex characters").optional(),
 }));
 
 export const completeUploadBodySchema = component("CompleteUploadSessionRequest", z.object({
@@ -473,6 +506,7 @@ export type SiteHeaderRule = z.infer<typeof siteHeaderRuleSchema>;
 export type SiteRedirectRule = z.infer<typeof siteRedirectRuleSchema>;
 export type SiteHosting = z.infer<typeof siteHostingSchema>;
 export type AssetType = z.infer<typeof assetTypeSchema>;
+export type Integrity = z.infer<typeof integritySchema>;
 export type AssetStatus = z.infer<typeof assetStatusSchema>;
 export type ArchiveFormat = z.infer<typeof archiveFormatSchema>;
 export type AssetVersion = z.infer<typeof assetVersionSchema>;

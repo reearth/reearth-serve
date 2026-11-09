@@ -308,3 +308,48 @@ route — is small.
   duplicate-storage bill exists.
 - A `sha256` on `derivedFrom` links (ADR-015 §3a) so a loose link can at
   least say which bytes it meant.
+
+## Implementation status
+
+**P1a — integrity, no storage layout change (done).** Object keys are as
+before; there is no `blobs/` layer yet.
+
+- Ledger: migration `0008_content_sha256.sql` adds `sha256` (lowercase hex)
+  and `integrity` to `asset_versions` **and** `assets`. The asset row needs
+  them because a first upload creates no version row (ADR-005); its hash
+  lives where its `size` does. NULL on both means "stored before ADR-017";
+  the API omits the fields for such rows.
+- Declaring: `X-Content-SHA256` on `POST /api/v1/assets` and
+  `POST /api/v1/assets/{id}` (64 hex characters, any case, stored lowercase;
+  malformed → 400), and a `sha256` field on `POST /api/v1/assets/uploads`.
+- Direct `PUT` through the Worker: `FileStorage.put` takes the declared hash
+  and returns the SHA-256 of what it stored. The R2 adapter passes a declared
+  hash to `bucket.put(…, { sha256 })` and otherwise hashes in line through
+  `crypto.DigestStream`; the memory adapter (Node) hashes with `node:crypto`
+  and writes nothing on a mismatch. A mismatch is `ChecksumMismatchError` →
+  **422**, with no object and no row. Either way the row is `verified`.
+- Presigned single `PUT`: a declared hash is signed into the URL as
+  `x-amz-checksum-sha256` (base64), and the session response lists it in
+  `headers`. R2's S3 API reference does not list the `x-amz-checksum-*`
+  headers under `PutObject`, though its checksum table names SHA-256, so
+  store-side verification there is not confirmed. Completion therefore
+  trusts only what the store itself reports: when `head` returns a SHA-256
+  for the object (R2 `checksums.sha256`), the row is `verified` (a
+  different hash from the declared one deletes the object and answers 422);
+  when it does not, the declared hash is recorded as `pending`.
+- Reads: `/files` sends `X-Content-SHA256` (CORS-exposed) only when the body
+  is the upload's own stored bytes — whole, ranged, or gzip passed through —
+  and never for extracted entries, decompressed bodies, thumbnails or
+  `404.html`. Asset and version JSON carry `sha256` and `integrity`.
+
+**Remaining.**
+
+- **P1b**: the verification derivation of §2 for `pending` rows (presigned
+  multipart, and presigned single PUTs the store did not confirm) and for
+  undeclared presigned uploads, which currently record no hash; flipping rows
+  to `verified` / `failed` and deleting failed versions.
+- **P2**: the `blobs/{scope}/{sha256}` layer for declared uploads (§3), with
+  the version row recording which key holds its bytes.
+- **P3**: workspace-scoped deduplication and `blob_refs` claims (§3–§5).
+- **P4**: backfill of `sha256` for versions stored before ADR-017.
+- **P5**: the CLI declaring `X-Content-SHA256` / `sha256` on every upload.

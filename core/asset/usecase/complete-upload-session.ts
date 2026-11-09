@@ -3,6 +3,7 @@ import { detectArchiveFormat } from "../model";
 import type { AtomicWrites, FileStorage, MetadataStore, PresignedUrlGenerator, UploadSessionStore } from "../repository";
 import type { Job } from "../../job/model";
 import { storageKey } from "./shared";
+import { ChecksumMismatchError } from "../integrity";
 import { siteUrlFor } from "../../site/url";
 import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
@@ -53,6 +54,14 @@ export async function completeUploadSession(
   }
   if (!head) return null;
 
+  const integrity = await sessionIntegrity(session, head, async () => {
+    // A store that holds a different hash than the one declared would have
+    // refused the write; reaching here means the bytes are not what the client
+    // promised, so they are not kept and the session is spent (ADR-017 §2).
+    await storage.delete(key);
+    await sessions.delete(id);
+  });
+
   const now = Date.now();
 
   // projectId is bound at createUploadSession time (after membership check)
@@ -67,6 +76,7 @@ export async function completeUploadSession(
     size: head.size,
     createdAt: session.createdAt,
     expiresAt: projectId ? 0 : now + ttlSeconds * 1000,
+    ...integrity,
     ...(head.contentEncoding && { contentEncoding: head.contentEncoding }),
     ...(head.contentEncoding && session.size && { originalSize: session.size }),
     ...(archiveFormat && {
@@ -129,6 +139,42 @@ export async function completeUploadSession(
   return { asset, url, ...(siteUrl && { siteUrl }) };
 }
 
+/**
+ * The `sha256` / `integrity` a completed presigned upload is recorded with
+ * (ADR-017 §2).
+ *
+ * - Single PUT, and the store reports a SHA-256 for the object: that hash is
+ *   the store's own, so the row is `verified`. R2 keeps one when the PUT
+ *   carried `x-amz-checksum-sha256`, which the session signed into the URL.
+ *   If it differs from the declared one, `onMismatch` runs and the upload is
+ *   refused.
+ * - Declared, but the store reports none (multipart, or a store that did not
+ *   keep the checksum): the declared hash is recorded as `pending`.
+ * - Neither: nothing is recorded.
+ *
+ * TODO(ADR-017 §2, P1b): `pending` rows and undeclared presigned uploads are
+ * confirmed by a background job that streams the object once and flips the row
+ * to `verified` or `failed`. That job does not exist yet.
+ */
+async function sessionIntegrity(
+  session: UploadSession,
+  head: { sha256?: string },
+  onMismatch: () => Promise<void>,
+): Promise<Pick<AssetMetadata, "sha256" | "integrity">> {
+  // A multipart object's store-side checksum, if any, is composite (a hash of
+  // part hashes), never the whole-object SHA-256.
+  const storeHash = session.s3UploadId ? undefined : head.sha256?.toLowerCase();
+  if (storeHash) {
+    if (session.sha256 && session.sha256 !== storeHash) {
+      await onMismatch();
+      throw new ChecksumMismatchError(session.sha256, storeHash);
+    }
+    return { sha256: storeHash, integrity: "verified" };
+  }
+  if (session.sha256) return { sha256: session.sha256, integrity: "pending" };
+  return {};
+}
+
 if (import.meta.vitest) {
   const { test, expect, vi } = import.meta.vitest;
 
@@ -150,9 +196,9 @@ if (import.meta.vitest) {
     findProtection: vi.fn(async () => null), setProtection: vi.fn(),
   };
 
-  function mockStorage(headResult: { size: number; contentEncoding?: string } | null = null): FileStorage {
+  function mockStorage(headResult: { size: number; contentEncoding?: string; sha256?: string } | null = null): FileStorage {
     return {
-      put: vi.fn(async () => {}),
+      put: vi.fn(async () => ({ sha256: "" })),
       get: vi.fn(async () => null),
       head: vi.fn(async () => headResult),
       delete: vi.fn(async () => {}),
@@ -171,7 +217,7 @@ if (import.meta.vitest) {
 
   function mockPresignedUrls(): PresignedUrlGenerator {
     return {
-      generatePutUrl: vi.fn(async (key: string, _ct: string, _exp: number) => `https://r2.example.com/${key}?signed=true`),
+      generatePutUrl: vi.fn(async (key: string, _ct: string, _exp: number) => ({ url: `https://r2.example.com/${key}?signed=true`, headers: {} })),
       createMultipartUpload: vi.fn(async () => "mp-upload-id"),
       generateUploadPartUrl: vi.fn(async (key: string, _uid: string, part: number, _exp: number) => `https://r2.example.com/${key}?partNumber=${part}`),
       completeMultipartUpload: vi.fn(async () => {}),
@@ -336,5 +382,92 @@ if (import.meta.vitest) {
     expect(result?.asset).toBe(existing);
     expect(writes.createAsset).not.toHaveBeenCalled();
     expect(sessions.delete).toHaveBeenCalledOnce();
+  });
+
+  // --- ADR-017 §2: integrity at completion ---
+
+  const DECLARED = "d".repeat(64);
+
+  async function singleSession(sessions: UploadSessionStore, presigned: PresignedUrlGenerator, sha256?: string) {
+    const { createUploadSession } = await import("./create-upload-session");
+    return createUploadSession(
+      sessions, presigned,
+      { filename: "data.bin", contentType: "application/octet-stream", size: 100, ...(sha256 && { sha256 }) },
+      3600,
+    );
+  }
+
+  test("a single PUT whose store reports the declared hash is verified", async () => {
+    const sessions = mockSessions();
+    const { writes, calls } = mockWrites();
+    const presigned = mockPresignedUrls();
+    const session = await singleSession(sessions, presigned, DECLARED);
+
+    await completeUploadSession(sessions, writes, noAssets, mockStorage({ size: 100, sha256: DECLARED }), presigned, session.uploadId, 3600, "https://example.com");
+
+    expect(calls[0].asset.sha256).toBe(DECLARED);
+    expect(calls[0].asset.integrity).toBe("verified");
+  });
+
+  test("a declared single PUT the store kept no hash for is recorded pending", async () => {
+    const sessions = mockSessions();
+    const { writes, calls } = mockWrites();
+    const presigned = mockPresignedUrls();
+    const session = await singleSession(sessions, presigned, DECLARED);
+
+    await completeUploadSession(sessions, writes, noAssets, mockStorage({ size: 100 }), presigned, session.uploadId, 3600, "https://example.com");
+
+    expect(calls[0].asset.sha256).toBe(DECLARED);
+    expect(calls[0].asset.integrity).toBe("pending");
+  });
+
+  test("a store hash that differs from the declared one deletes the object and writes no row", async () => {
+    const sessions = mockSessions();
+    const { writes } = mockWrites();
+    const presigned = mockPresignedUrls();
+    const st = mockStorage({ size: 100, sha256: "e".repeat(64) });
+    const session = await singleSession(sessions, presigned, DECLARED);
+
+    await expect(
+      completeUploadSession(sessions, writes, noAssets, st, presigned, session.uploadId, 3600, "https://example.com"),
+    ).rejects.toBeInstanceOf(ChecksumMismatchError);
+    expect(st.delete).toHaveBeenCalledOnce();
+    expect(sessions.delete).toHaveBeenCalledOnce();
+    expect(writes.createAsset).not.toHaveBeenCalled();
+  });
+
+  test("an undeclared single PUT records the store's hash when it has one, nothing otherwise", async () => {
+    const presigned = mockPresignedUrls();
+
+    const withHash = mockWrites();
+    let sessions = mockSessions();
+    let session = await singleSession(sessions, presigned);
+    await completeUploadSession(sessions, withHash.writes, noAssets, mockStorage({ size: 100, sha256: "f".repeat(64) }), presigned, session.uploadId, 3600, "https://example.com");
+    expect(withHash.calls[0].asset).toMatchObject({ sha256: "f".repeat(64), integrity: "verified" });
+
+    const without = mockWrites();
+    sessions = mockSessions();
+    session = await singleSession(sessions, presigned);
+    await completeUploadSession(sessions, without.writes, noAssets, mockStorage({ size: 100 }), presigned, session.uploadId, 3600, "https://example.com");
+    expect(without.calls[0].asset.sha256).toBeUndefined();
+    expect(without.calls[0].asset.integrity).toBeUndefined();
+  });
+
+  test("a declared multipart upload is recorded pending, whatever the store reports", async () => {
+    const sessions = mockSessions();
+    const { writes, calls } = mockWrites();
+    const { st, presigned } = multipartFixture();
+    st.head = vi.fn(async () => ({ size: 1000, sha256: "0".repeat(64) }));
+
+    const { createUploadSession } = await import("./create-upload-session");
+    const session = await createUploadSession(
+      sessions, presigned,
+      { filename: "huge.tar", contentType: "application/x-tar", size: 10_000_000_000, partCount: 2, sha256: DECLARED },
+      3600,
+    );
+    await completeUploadSession(sessions, writes, noAssets, st, presigned, session.uploadId, 3600, "https://example.com",
+      [{ partNumber: 1, etag: '"e1"' }, { partNumber: 2, etag: '"e2"' }]);
+
+    expect(calls[0].asset).toMatchObject({ sha256: DECLARED, integrity: "pending" });
   });
 }

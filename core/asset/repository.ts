@@ -159,10 +159,33 @@ export interface StorageUsageStore {
   recalculate(scope: string, totalSize: number, assetCount: number): Promise<void>;
 }
 
+/** What a `FileStorage.put` reports about the bytes it stored (ADR-017 §2). */
+export interface PutResult {
+  /** SHA-256 of the stored bytes, lowercase hex, as computed or confirmed by the store. */
+  sha256: string;
+}
+
 export interface FileStorage {
-  put(key: string, body: ReadableStream<Uint8Array>, contentType: string, size: number, options?: { contentEncoding?: string }): Promise<void>;
+  /**
+   * Store `body` under `key`.
+   *
+   * Integrity (ADR-017 §2) lives here because hashing a stream is runtime
+   * specific (`crypto.DigestStream` on Workers, `node:crypto` on Node):
+   *
+   * - `options.sha256` declared → the store verifies the bytes against it and,
+   *   on a mismatch, throws `ChecksumMismatchError` having written **nothing**.
+   * - not declared → the store hashes the stream as it is written.
+   *
+   * Either way the result carries the SHA-256 of what was stored.
+   */
+  put(key: string, body: ReadableStream<Uint8Array>, contentType: string, size: number, options?: { contentEncoding?: string; sha256?: string }): Promise<PutResult>;
   get(key: string, range?: { offset: number; length: number }): Promise<StoredFile | null>;
-  head(key: string): Promise<{ size: number; contentEncoding?: string; etag?: string } | null>;
+  /**
+   * `sha256` (lowercase hex) is present only when the store itself holds a
+   * SHA-256 for the object — R2 does when the upload supplied one, which is
+   * how a presigned single PUT's checksum is confirmed at completion.
+   */
+  head(key: string): Promise<{ size: number; contentEncoding?: string; etag?: string; sha256?: string } | null>;
   delete(key: string): Promise<void>;
   /**
    * Optional batch delete. R2 supports up to 1000 keys per call; cleanup paths
@@ -179,8 +202,20 @@ export interface UploadSessionStore {
   delete(id: string): Promise<void>;
 }
 
+/** A presigned single PUT: the URL, plus any headers the signature binds that the client must send verbatim. */
+export interface PresignedPut {
+  url: string;
+  /** Extra headers beyond `Content-Type` / `Content-Encoding`, e.g. `x-amz-checksum-sha256`. */
+  headers: Record<string, string>;
+}
+
 export interface PresignedUrlGenerator {
-  generatePutUrl(key: string, contentType: string, expiresInSeconds: number, options?: { contentEncoding?: string }): Promise<string>;
+  /**
+   * `options.sha256` (lowercase hex) asks the store to verify the upload
+   * against it on write (ADR-017 §2); the header that carries it is signed into
+   * the URL and returned in `headers`.
+   */
+  generatePutUrl(key: string, contentType: string, expiresInSeconds: number, options?: { contentEncoding?: string; sha256?: string }): Promise<PresignedPut>;
   createMultipartUpload(key: string, contentType: string, options?: { contentEncoding?: string }): Promise<string>;
   generateUploadPartUrl(key: string, uploadId: string, partNumber: number, expiresInSeconds: number): Promise<string>;
   completeMultipartUpload(key: string, uploadId: string, parts: UploadPart[]): Promise<void>;

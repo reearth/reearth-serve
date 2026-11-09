@@ -19,6 +19,11 @@ export async function uploadAsset(
     size: number;
     contentEncoding?: string;
     originalSize?: number;
+    /**
+     * Declared SHA-256 of the body, lowercase hex (ADR-017 §1). The store
+     * verifies it and writes nothing on a mismatch (`ChecksumMismatchError`).
+     */
+    sha256?: string;
   },
   ttlSeconds: number,
   baseUrl: string,
@@ -29,9 +34,13 @@ export async function uploadAsset(
   const contentType = file.type || "application/octet-stream";
   const key = storageKey(id, file.name);
 
-  await storage.put(key, file.body, contentType, file.size,
-    file.contentEncoding ? { contentEncoding: file.contentEncoding } : undefined,
-  );
+  // Declared or not, the store hands back the hash of what it stored, so the
+  // row is `verified` either way (ADR-017 §2). A declared mismatch throws
+  // here, before any row exists and with nothing stored.
+  const stored = await storage.put(key, file.body, contentType, file.size, {
+    ...(file.contentEncoding && { contentEncoding: file.contentEncoding }),
+    ...(file.sha256 && { sha256: file.sha256 }),
+  });
 
   const archiveFormat = detectArchiveFormat(file.name);
 
@@ -42,6 +51,8 @@ export async function uploadAsset(
     size: file.size,
     createdAt: now,
     expiresAt: options?.projectId ? 0 : now + ttlSeconds * 1000,
+    sha256: stored.sha256,
+    integrity: "verified",
     ...(file.contentEncoding && { contentEncoding: file.contentEncoding }),
     ...(file.contentEncoding && file.originalSize && { originalSize: file.originalSize }),
     ...(archiveFormat && {
@@ -132,6 +143,8 @@ if (import.meta.vitest) {
   }
 
   type CreateAssetInput = Parameters<AtomicWrites["createAsset"]>[0];
+  const COMPUTED_SHA256 = "a".repeat(64);
+  const DECLARED_SHA256 = "b".repeat(64);
 
   function mockWrites() {
     const calls: CreateAssetInput[] = [];
@@ -146,9 +159,10 @@ if (import.meta.vitest) {
 
   function mockStorage(): FileStorage {
     return {
-      put: vi.fn(async (_key: string, body: ReadableStream<Uint8Array>, _ct: string, _size: number) => {
+      put: vi.fn(async (_key: string, body: ReadableStream<Uint8Array>, _ct: string, _size: number, opts?: { sha256?: string }) => {
         const reader = body.getReader();
         while (!(await reader.read()).done) {}
+        return { sha256: opts?.sha256 ?? COMPUTED_SHA256 };
       }),
       get: vi.fn(async () => null),
       head: vi.fn(async () => null),
@@ -311,5 +325,52 @@ if (import.meta.vitest) {
     expect(result.asset.status).toBeUndefined();
     expect(result.asset.jobId).toBeUndefined();
     expect(calls[0].job).toBeUndefined();
+  });
+
+  // --- ADR-017 §1–§2: integrity ---
+
+  test("uploadAsset records the store's hash as verified when none is declared", async () => {
+    const { writes, calls } = mockWrites();
+    const st = mockStorage();
+
+    const result = await uploadAsset(
+      writes, st,
+      { name: "a.txt", type: "text/plain", body: toStream(new Uint8Array(3)), size: 3 },
+      3600, "https://example.com",
+    );
+
+    expect(vi.mocked(st.put).mock.calls[0][4]?.sha256).toBeUndefined();
+    expect(result.asset.sha256).toBe(COMPUTED_SHA256);
+    expect(result.asset.integrity).toBe("verified");
+    expect(calls[0].asset.sha256).toBe(COMPUTED_SHA256);
+  });
+
+  test("uploadAsset hands a declared hash to the store and records it", async () => {
+    const { writes, calls } = mockWrites();
+    const st = mockStorage();
+
+    await uploadAsset(
+      writes, st,
+      { name: "a.txt", type: "text/plain", body: toStream(new Uint8Array(3)), size: 3, sha256: DECLARED_SHA256 },
+      3600, "https://example.com",
+    );
+
+    expect(vi.mocked(st.put).mock.calls[0][4]?.sha256).toBe(DECLARED_SHA256);
+    expect(calls[0].asset.sha256).toBe(DECLARED_SHA256);
+    expect(calls[0].asset.integrity).toBe("verified");
+  });
+
+  test("uploadAsset writes no row when the store rejects the declared hash", async () => {
+    const { ChecksumMismatchError } = await import("../integrity");
+    const { writes } = mockWrites();
+    const st = mockStorage();
+    vi.mocked(st.put).mockRejectedValueOnce(new ChecksumMismatchError(DECLARED_SHA256));
+
+    await expect(uploadAsset(
+      writes, st,
+      { name: "a.txt", type: "text/plain", body: toStream(new Uint8Array(3)), size: 3, sha256: DECLARED_SHA256 },
+      3600, "https://example.com",
+    )).rejects.toBeInstanceOf(ChecksumMismatchError);
+    expect(writes.createAsset).not.toHaveBeenCalled();
   });
 }

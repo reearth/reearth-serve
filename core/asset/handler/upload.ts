@@ -6,7 +6,8 @@ import { denyAnonymousUpload, resolveUploadProject, usageScopes } from "./shared
 import { assetUploadResultExamples } from "../../openapi-examples";
 import { uploadResultResponseSchema } from "../../../shared/openapi";
 import { isSafeFilename } from "../../../shared/api";
-import { contentEncodingHeaderParam, contentLengthHeaderParam, filenameHeaderParam, jsonError, jsonResponse, originalSizeHeaderParam, projectIdHeaderParam, skipExtractionHeaderParam } from "../../openapi";
+import { ChecksumMismatchError, CONTENT_SHA256_HEADER, parseSha256Header } from "../../asset/integrity";
+import { contentEncodingHeaderParam, contentLengthHeaderParam, contentSha256HeaderParam, filenameHeaderParam, jsonError, jsonResponse, originalSizeHeaderParam, projectIdHeaderParam, skipExtractionHeaderParam } from "../../openapi";
 
 export function registerUploadRoute(app: Hono<AppEnv>) {
   app.post("/",
@@ -20,6 +21,7 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
         contentEncodingHeaderParam,
         originalSizeHeaderParam,
         skipExtractionHeaderParam,
+        contentSha256HeaderParam,
         projectIdHeaderParam,
       ],
       requestBody: {
@@ -33,6 +35,7 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
         401: jsonError("Anonymous upload disabled, or invalid token / session ID"),
         404: jsonError("Project not found"),
         413: jsonError("Upload exceeds storage capacity"),
+        422: jsonError("Declared SHA-256 does not match the uploaded bytes; nothing was stored"),
       },
     }),
     async (c) => {
@@ -57,6 +60,11 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
     const size = parseInt(contentLength, 10);
     if (isNaN(size) || size <= 0) {
       return c.json({ error: "Invalid Content-Length" }, 400);
+    }
+
+    const sha256 = parseSha256Header(c.req.header(CONTENT_SHA256_HEADER));
+    if (sha256 === "invalid") {
+      return c.json({ error: `Invalid ${CONTENT_SHA256_HEADER}: expected 64 hex characters` }, 400);
     }
 
     const body = c.req.raw.body;
@@ -87,7 +95,7 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
       const result = await uploadAsset(
         writes,
         storage,
-        { name: filename, type: contentType, body, size, contentEncoding, originalSize },
+        { name: filename, type: contentType, body, size, contentEncoding, originalSize, sha256 },
         ttlSeconds,
         baseUrl,
         { sessionId, projectId, extractionQueue, thumbnailQueue, skipExtraction, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix") },
@@ -95,6 +103,9 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
 
       return c.json(result, 201);
     } catch (e) {
+      if (e instanceof ChecksumMismatchError) {
+        return c.json({ error: "Declared SHA-256 does not match the uploaded bytes; nothing was stored" }, 422);
+      }
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.includes("exceeds storage capacity")) {
         return c.json({ error: "Upload exceeds storage capacity" }, 413);

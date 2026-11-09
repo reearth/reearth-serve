@@ -8,6 +8,7 @@ import { usageScopes } from "./shared";
 import { assetUploadResultExamples, completeUploadExamples } from "../../openapi-examples";
 import { completeUploadBodySchema, uploadResultResponseSchema, idParamSchema } from "../../../shared/openapi";
 import { jsonError, jsonResponse, schemaRef } from "../../openapi";
+import { ChecksumMismatchError } from "../../asset/integrity";
 
 
 export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
@@ -26,6 +27,7 @@ export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
       responses: {
         201: jsonResponse("Upload completed", uploadResultResponseSchema, assetUploadResultExamples),
         404: jsonError("Upload session not found"),
+        422: jsonError("Declared SHA-256 does not match the uploaded bytes; nothing was stored"),
       },
     }),
     zValidator("param", idParamSchema),
@@ -66,7 +68,15 @@ export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
     const thumbnailQueue = c.get("thumbnailQueue");
     // Resolved up front so the counters ride along in the asset's batch.
     const scopes = await usageScopes(c, session.projectId);
-    const result = await completeUploadSession(sessions, writes, c.get("metadata"), storage, presignedUrls, id, ttlSeconds, baseUrl, parts, { sessionId, extractionQueue, thumbnailQueue, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix") });
+    let result;
+    try {
+      result = await completeUploadSession(sessions, writes, c.get("metadata"), storage, presignedUrls, id, ttlSeconds, baseUrl, parts, { sessionId, extractionQueue, thumbnailQueue, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix") });
+    } catch (e) {
+      if (e instanceof ChecksumMismatchError) {
+        return c.json({ error: "Declared SHA-256 does not match the uploaded bytes; nothing was stored" }, 422);
+      }
+      throw e;
+    }
     if (!result) {
       return c.json({ error: "Upload session not found or file not yet uploaded" }, 404);
     }

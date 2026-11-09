@@ -1,5 +1,5 @@
 import type { MultipartUploadResult, PresignedUploadResult, UploadSession } from "../model";
-import type { PresignedUrlGenerator, UploadSessionStore } from "../repository";
+import type { PresignedPut, PresignedUrlGenerator, UploadSessionStore } from "../repository";
 import { shouldCompress } from "../compression";
 import { generateId, storageKey } from "./shared";
 
@@ -22,7 +22,7 @@ export function uploadExpirySeconds(size: number): number {
 export async function createUploadSession(
   sessions: UploadSessionStore,
   presignedUrls: PresignedUrlGenerator,
-  params: { filename: string; contentType: string; size: number; partCount?: number },
+  params: { filename: string; contentType: string; size: number; partCount?: number; sha256?: string },
   _ttlSeconds: number,
   options?: { sessionId?: string | null; projectId?: string | null; skipExtraction?: boolean },
 ): Promise<PresignedUploadResult | MultipartUploadResult> {
@@ -33,6 +33,7 @@ export async function createUploadSession(
   const key = storageKey(id, params.filename);
   const compress = shouldCompress(params.filename, params.size);
   const encodingOpts = compress ? { contentEncoding: "gzip" as const } : undefined;
+  const sha256 = params.sha256?.toLowerCase();
 
   // Multipart upload
   if (params.partCount && params.partCount > 1) {
@@ -55,6 +56,10 @@ export async function createUploadSession(
       s3UploadId,
       partCount: params.partCount,
       ...(compress && { contentEncoding: "gzip" }),
+      // TODO(ADR-017 §2, P1b): the store checks parts, not the whole object,
+      // so a multipart upload's declared hash is only recorded (`pending`)
+      // at completion; the verification job that confirms it is P1b.
+      ...(sha256 && { sha256 }),
       ...(options?.sessionId && { sessionId: options.sessionId }),
       ...(options?.projectId && { projectId: options.projectId }),
       ...(options?.skipExtraction && { skipExtraction: true }),
@@ -70,8 +75,13 @@ export async function createUploadSession(
     };
   }
 
-  // Single PUT upload
-  const url = await presignedUrls.generatePutUrl(key, contentType, urlExpirySeconds, encodingOpts);
+  // Single PUT upload. A declared hash is signed into the URL so the store
+  // verifies the body on write (ADR-017 §2); the header that carries it comes
+  // back from the generator and is handed to the client below.
+  const put = await presignedUrls.generatePutUrl(key, contentType, urlExpirySeconds, {
+    ...encodingOpts,
+    ...(sha256 && { sha256 }),
+  });
 
   const session: UploadSession = {
     id,
@@ -83,16 +93,17 @@ export async function createUploadSession(
     ...(compress && { contentEncoding: "gzip" }),
     ...(options?.sessionId && { sessionId: options.sessionId }),
     ...(options?.projectId && { projectId: options.projectId }),
+    ...(sha256 && { sha256 }),
   };
 
   await sessions.save(session, urlExpirySeconds);
 
-  const headers: Record<string, string> = { "Content-Type": contentType };
+  const headers: Record<string, string> = { "Content-Type": contentType, ...put.headers };
   if (compress) headers["Content-Encoding"] = "gzip";
 
   return {
     uploadId: id,
-    url,
+    url: put.url,
     method: "PUT",
     headers,
     ...(compress && { contentEncoding: "gzip" }),
@@ -114,7 +125,10 @@ if (import.meta.vitest) {
 
   function mockPresignedUrls(): PresignedUrlGenerator {
     return {
-      generatePutUrl: vi.fn(async (key: string, _ct: string, _exp: number, _opts?: { contentEncoding?: string }) => `https://r2.example.com/${key}?signed=true`),
+      generatePutUrl: vi.fn(async (key: string, _ct: string, _exp: number, opts?: { contentEncoding?: string; sha256?: string }): Promise<PresignedPut> => ({
+        url: `https://r2.example.com/${key}?signed=true`,
+        headers: opts?.sha256 ? { "x-amz-checksum-sha256": `b64(${opts.sha256})` } : {},
+      })),
       createMultipartUpload: vi.fn(async (_key: string, _ct: string, _opts?: { contentEncoding?: string }) => "mp-upload-id-123"),
       generateUploadPartUrl: vi.fn(async (key: string, _uid: string, part: number, _exp: number) => `https://r2.example.com/${key}?partNumber=${part}&signed=true`),
       completeMultipartUpload: vi.fn(async () => {}),
@@ -197,5 +211,42 @@ if (import.meta.vitest) {
     expect(presigned.createMultipartUpload).toHaveBeenCalledWith(
       expect.any(String), "application/geo+json", { contentEncoding: "gzip" },
     );
+  });
+
+  test("createUploadSession signs a declared sha256 into a single PUT and tells the client the header", async () => {
+    const sessions = mockSessions();
+    const presigned = mockPresignedUrls();
+    const declared = "AB".repeat(32);
+
+    const result = await createUploadSession(
+      sessions, presigned,
+      { filename: "big.zip", contentType: "application/zip", size: 1000, sha256: declared },
+      3600,
+    ) as PresignedUploadResult;
+
+    expect(vi.mocked(presigned.generatePutUrl).mock.calls[0][3]).toEqual({ sha256: declared.toLowerCase() });
+    expect(result.headers["x-amz-checksum-sha256"]).toBe(`b64(${declared.toLowerCase()})`);
+    const saved = vi.mocked(sessions.save).mock.calls[0][0];
+    expect(saved.sha256).toBe(declared.toLowerCase());
+  });
+
+  test("createUploadSession records a declared sha256 on a multipart session", async () => {
+    const sessions = mockSessions();
+    const presigned = mockPresignedUrls();
+
+    await createUploadSession(
+      sessions, presigned,
+      { filename: "huge.tar", contentType: "application/x-tar", size: 10_000_000_000, partCount: 3, sha256: "c".repeat(64) },
+      3600,
+    );
+
+    expect(vi.mocked(sessions.save).mock.calls[0][0].sha256).toBe("c".repeat(64));
+  });
+
+  test("upload session body accepts only a hex sha256", async () => {
+    const { createUploadSessionBodySchema } = await import("../../../shared/api");
+    expect(createUploadSessionBodySchema.safeParse({ filename: "a", size: 1, sha256: "A".repeat(64) }).success).toBe(true);
+    expect(createUploadSessionBodySchema.safeParse({ filename: "a", size: 1, sha256: "g".repeat(64) }).success).toBe(false);
+    expect(createUploadSessionBodySchema.safeParse({ filename: "a", size: 1, sha256: "a".repeat(63) }).success).toBe(false);
   });
 }

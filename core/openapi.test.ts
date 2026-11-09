@@ -225,8 +225,8 @@ describe("OpenAPI document", () => {
     type Media = { examples?: Record<string, { value: unknown }> };
     const { paths } = await loadSpec() as unknown as { paths: Record<string, Record<string, { requestBody?: { content: Record<string, Media> }; responses: Record<string, { content?: Record<string, Media> }> }>> };
     const create = paths["/api/v1/assets/uploads"].post;
-    expect(Object.keys(create.requestBody?.content["application/json"].examples ?? {})).toEqual(["single", "multipart"]);
-    expect(Object.keys(create.responses["201"].content?.["application/json"].examples ?? {})).toEqual(["single", "multipart"]);
+    expect(Object.keys(create.requestBody?.content["application/json"].examples ?? {})).toEqual(["single", "declared", "multipart"]);
+    expect(Object.keys(create.responses["201"].content?.["application/json"].examples ?? {})).toEqual(["single", "declared", "multipart"]);
     expect(paths["/api/v1/assets/uploads/{id}/complete"].post.requestBody?.content["application/json"].examples).toHaveProperty("multipart");
     const ndjson = paths["/api/v1/assets/{id}/files"].get.responses["200"].content?.["application/x-ndjson"].examples ?? {};
     expect(typeof ndjson.archive?.value).toBe("string");

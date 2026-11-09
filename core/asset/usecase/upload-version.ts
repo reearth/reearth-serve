@@ -28,6 +28,11 @@ export async function uploadVersion(
     size: number;
     contentEncoding?: string;
     originalSize?: number;
+    /**
+     * Declared SHA-256 of the body, lowercase hex (ADR-017 §1). The store
+     * verifies it and writes nothing on a mismatch (`ChecksumMismatchError`).
+     */
+    sha256?: string;
   },
   baseUrl: string,
   options?: { extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string },
@@ -40,9 +45,13 @@ export async function uploadVersion(
   const contentType = file.type || "application/octet-stream";
   const key = versionStorageKey(assetId, versionId, file.name);
 
-  await storage.put(key, file.body, contentType, file.size,
-    file.contentEncoding ? { contentEncoding: file.contentEncoding } : undefined,
-  );
+  // Declared or not, the store hands back the hash of what it stored, so the
+  // row is `verified` either way (ADR-017 §2). A declared mismatch throws
+  // here, before any row exists and with nothing stored.
+  const stored = await storage.put(key, file.body, contentType, file.size, {
+    ...(file.contentEncoding && { contentEncoding: file.contentEncoding }),
+    ...(file.sha256 && { sha256: file.sha256 }),
+  });
 
   const archiveFormat = detectArchiveFormat(file.name);
 
@@ -57,6 +66,8 @@ export async function uploadVersion(
     contentType,
     size: file.size,
     createdAt: now,
+    sha256: stored.sha256,
+    integrity: "verified",
     ...(file.contentEncoding && { contentEncoding: file.contentEncoding }),
     ...(file.contentEncoding && file.originalSize && { originalSize: file.originalSize }),
     ...(archiveFormat && {

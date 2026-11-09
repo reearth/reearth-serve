@@ -1,12 +1,14 @@
 import { createHash } from "node:crypto";
 import type { StoredFile } from "../../core/asset/model";
-import type { FileStorage } from "../../core/asset/repository";
+import type { FileStorage, PutResult } from "../../core/asset/repository";
+import { ChecksumMismatchError } from "../../core/asset/integrity";
 
 type Entry = {
   data: Uint8Array;
   contentType: string;
   contentEncoding?: string;
   etag: string;
+  sha256: string;
 };
 
 /**
@@ -20,6 +22,11 @@ type Entry = {
  * It enforces the declared size the way R2's `FixedLengthStream` does: a body
  * that does not deliver exactly `size` bytes is a client error, and the upload
  * route turns the thrown message into a 400.
+ *
+ * Integrity (ADR-017 §2): Node has no store-side checksum, so the body is
+ * hashed in-process. A declared SHA-256 that does not match throws
+ * `ChecksumMismatchError` before anything is stored, the same contract as R2's
+ * `put(key, body, { sha256 })`.
  *
  * Total bytes held are capped at `capacityBytes`, checked against the declared
  * size before any byte is read, so one large Content-Length cannot exhaust the
@@ -36,8 +43,8 @@ export class MemoryFileStorage implements FileStorage {
     body: ReadableStream<Uint8Array>,
     contentType: string,
     size: number,
-    options?: { contentEncoding?: string },
-  ): Promise<void> {
+    options?: { contentEncoding?: string; sha256?: string },
+  ): Promise<PutResult> {
     if (this.usedBytes + size > this.capacityBytes) {
       await body.cancel().catch(() => {});
       throw new Error(`upload of ${size} bytes exceeds storage capacity (${this.usedBytes}/${this.capacityBytes} bytes used)`);
@@ -51,13 +58,20 @@ export class MemoryFileStorage implements FileStorage {
       this.usedBytes -= size;
       throw e;
     }
+    const sha256 = createHash("sha256").update(data).digest("hex");
+    if (options?.sha256 && options.sha256.toLowerCase() !== sha256) {
+      this.usedBytes -= size;
+      throw new ChecksumMismatchError(options.sha256.toLowerCase(), sha256);
+    }
     this.release(key);
     this.objects.set(key, {
       data,
       contentType,
       contentEncoding: options?.contentEncoding,
       etag: `"${md5(data)}"`,
+      sha256,
     });
+    return { sha256 };
   }
 
   async get(key: string, range?: { offset: number; length: number }): Promise<StoredFile | null> {
@@ -88,10 +102,10 @@ export class MemoryFileStorage implements FileStorage {
     };
   }
 
-  async head(key: string): Promise<{ size: number; contentEncoding?: string; etag?: string } | null> {
+  async head(key: string): Promise<{ size: number; contentEncoding?: string; etag?: string; sha256?: string } | null> {
     const entry = this.objects.get(key);
     if (!entry) return null;
-    return { size: entry.data.byteLength, contentEncoding: entry.contentEncoding, etag: entry.etag };
+    return { size: entry.data.byteLength, contentEncoding: entry.contentEncoding, etag: entry.etag, sha256: entry.sha256 };
   }
 
   async delete(key: string): Promise<void> {

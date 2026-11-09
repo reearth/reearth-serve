@@ -44,7 +44,7 @@ describe("MemoryFileStorage", () => {
 
     const a = await storage.head("a");
     const b = await storage.head("b");
-    expect(a).toEqual({ size: 5, contentEncoding: "gzip", etag: expect.any(String) });
+    expect(a).toEqual({ size: 5, contentEncoding: "gzip", etag: expect.any(String), sha256: expect.stringMatching(/^[0-9a-f]{64}$/) });
     expect(a!.etag).not.toBe(b!.etag);
   });
 
@@ -117,5 +117,42 @@ describe("MemoryFileStorage", () => {
     await storage.delete("a");
     await storage.put("b", stream(bytes("123")), "text/plain", 3);
     expect(await storage.head("b")).not.toBeNull();
+  });
+
+  // ADR-017 §2: the Node runtime verifies in-process what R2 verifies on write.
+  const HELLO_SHA256 = "2cf24dba5fb0a30e26e83b2ac5b9e29e1b161e5c1fa7425e73043362938b9824";
+
+  test("put without a declared hash returns the SHA-256 of the stored bytes", async () => {
+    const storage = new MemoryFileStorage();
+    const result = await storage.put("a", stream(bytes("hel"), bytes("lo")), "text/plain", 5);
+    expect(result.sha256).toBe(HELLO_SHA256);
+    expect((await storage.head("a"))?.sha256).toBe(HELLO_SHA256);
+  });
+
+  test("put with a matching declared hash stores the object", async () => {
+    const storage = new MemoryFileStorage();
+    const result = await storage.put("a", stream(bytes("hello")), "text/plain", 5, { sha256: HELLO_SHA256.toUpperCase() });
+    expect(result.sha256).toBe(HELLO_SHA256);
+    expect(await storage.get("a")).not.toBeNull();
+  });
+
+  test("put with a mismatched declared hash stores nothing and frees its reservation", async () => {
+    const storage = new MemoryFileStorage(5);
+    await expect(
+      storage.put("a", stream(bytes("world")), "text/plain", 5, { sha256: HELLO_SHA256 }),
+    ).rejects.toMatchObject({ name: "ChecksumMismatchError" });
+    expect(storage.size).toBe(0);
+    expect(await storage.head("a")).toBeNull();
+    // The reserved bytes were released: a full-capacity put still fits.
+    await storage.put("b", stream(bytes("hello")), "text/plain", 5);
+  });
+
+  test("a mismatched put does not replace an existing object at the same key", async () => {
+    const storage = new MemoryFileStorage();
+    await storage.put("a", stream(bytes("hello")), "text/plain", 5);
+    await expect(
+      storage.put("a", stream(bytes("world")), "text/plain", 5, { sha256: HELLO_SHA256 }),
+    ).rejects.toThrow("SHA-256 mismatch");
+    expect(await read((await storage.get("a"))!.body)).toBe("hello");
   });
 });

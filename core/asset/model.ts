@@ -5,6 +5,7 @@ export type {
   AssetStatus,
   ArchiveFormat,
   AssetMetadata,
+  Integrity,
   AssetVersion,
   AssetUploadResult,
   PresignedUploadResult,
@@ -56,4 +57,6 @@ export interface UploadSession {
   sessionId?: string;
   projectId?: string;
   skipExtraction?: boolean;
+  /** Declared SHA-256 of the stored bytes, lowercase hex (ADR-017 §1). */
+  sha256?: string;
 }

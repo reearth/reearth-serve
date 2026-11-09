@@ -41,8 +41,18 @@ function credentialed(policy: CorsPolicy): boolean {
   return policy.origin !== null && policy.origin !== "null" && policy.trustedOrigins.includes(policy.origin);
 }
 
+/**
+ * Response headers a cross-origin script may read beyond the safelisted ones.
+ * Exposed only when present, so responses that do not carry them are
+ * unchanged. `X-Content-SHA256` is the ledger's hash of the bytes (ADR-017 §2);
+ * a browser consumer verifying after fetch needs to read it.
+ */
+const EXPOSABLE_HEADERS = ["X-Content-SHA256"];
+
 /** Add the access headers for `policy` to `headers`, in place. */
 export function applyCors(headers: Headers, policy: CorsPolicy): void {
+  const expose = EXPOSABLE_HEADERS.filter((name) => headers.has(name));
+  if (expose.length > 0) headers.set("Access-Control-Expose-Headers", expose.join(", "));
   if (policy.proof !== "none") addVary(headers, "Origin");
   if (policy.proof === "cookie") headers.set("Cross-Origin-Resource-Policy", "same-origin");
   if (credentialed(policy)) {

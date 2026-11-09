@@ -18,6 +18,7 @@ import {
 } from "./site-routing";
 import { errorResponseSchema } from "../../shared";
 import { parseRange, sliceStream } from "./stream";
+import { CONTENT_SHA256_HEADER } from "../asset/integrity";
 import {
   THUMBNAIL_SIZES,
   isThumbnailSize,
@@ -86,6 +87,8 @@ interface Layout {
   contentType: string;
   contentEncoding?: string;
   originalSize?: number;
+  /** Ledger SHA-256 of `mainKey`'s bytes (ADR-017), when recorded. */
+  sha256?: string;
 }
 
 function versionedLayout(asset: AssetMetadata, version: AssetVersion): Layout {
@@ -98,6 +101,7 @@ function versionedLayout(asset: AssetMetadata, version: AssetVersion): Layout {
     contentType: version.contentType,
     contentEncoding: version.contentEncoding,
     originalSize: version.originalSize,
+    sha256: version.sha256,
   };
 }
 
@@ -111,6 +115,7 @@ function legacyLayout(asset: AssetMetadata): Layout {
     contentType: asset.contentType,
     contentEncoding: asset.contentEncoding,
     originalSize: asset.originalSize,
+    sha256: asset.sha256,
   };
 }
 
@@ -121,6 +126,12 @@ interface Located {
   contentEncoding?: string;
   displayName: string;
   originalSize?: number;
+  /**
+   * The ledger's SHA-256 of these bytes (ADR-017 §2). Set only when the object
+   * is the version's original upload — never for an extracted entry, whose
+   * hash the ledger does not hold.
+   */
+  sha256?: string;
 }
 
 /**
@@ -147,6 +158,7 @@ async function locate(storage: FileStorage, layout: Layout, filePath: string): P
       contentEncoding: layout.contentEncoding,
       displayName: layout.filename,
       originalSize: layout.originalSize,
+      sha256: layout.sha256,
     };
   }
 
@@ -160,6 +172,7 @@ async function locate(storage: FileStorage, layout: Layout, filePath: string): P
       contentEncoding: layout.contentEncoding,
       displayName: layout.filename,
       originalSize: layout.originalSize,
+      sha256: layout.sha256,
     };
   }
 
@@ -527,6 +540,7 @@ const fileHeaders = {
   "Content-Disposition": stringHeader("`inline; filename=\"<name>\"` on a site host, and on the apex for an inline type (images, text/plain, text/csv, JSON, GeoJSON, glTF, vector tiles, octet-stream, MP4/WebM, MP3/Ogg); `attachment; filename=\"<name>\"` for every other type. Not sent on thumbnails"),
   "Content-Security-Policy": stringHeader("`sandbox` on every `attachment` response"),
   ETag: stringHeader("The stored object's tag; weak (`W/`) when a gzip-stored file is decompressed. Not sent on thumbnails"),
+  "X-Content-SHA256": stringHeader("SHA-256 (lowercase hex) of the stored object, from the ledger (ADR-017). Sent only when the response carries the uploaded object's own bytes (whole, as a `Range` slice of them, or gzip passed through) and a hash is recorded; not sent for extracted archive entries, decompressed bodies, thumbnails or a `404.html` page. Exposed to cross-origin scripts"),
   "Accept-Ranges": stringHeader("`bytes`. Not sent on gzip pass-through responses or thumbnails"),
   "Cache-Control": stringHeader("`public, max-age=31536000, immutable` at a version-ID URL and for thumbnails; `public, max-age=0, must-revalidate` at an asset-ID URL. A password-protected asset gets `private` in place of `public`"),
   "Cross-Origin-Resource-Policy": stringHeader("`same-origin` on a cookie-authorized read"),
@@ -680,6 +694,10 @@ async function serveFile(located: Located, opts: ServeOptions): Promise<Response
     ...dispositionHeaders(contentType, displayName, opts.siteHost),
   };
   if (etag) common["ETag"] = etag;
+  // The ledger's hash (ADR-017 §2) describes the stored bytes, so it is sent
+  // only when those are what goes out — whole, or as a `Range` slice of them.
+  // A decompressed body is a different byte sequence and gets no hash.
+  const contentSha256 = located.sha256 && (!isGzipStored || passthrough) ? located.sha256 : undefined;
   // The body differs by Accept-Encoding whenever gzip is on disk.
   if (isGzipStored) common["Vary"] = "Accept-Encoding";
 
@@ -691,6 +709,7 @@ async function serveFile(located: Located, opts: ServeOptions): Promise<Response
   // --- Non-gzip file ---
   if (!isGzipStored) {
     const headers: Record<string, string> = { ...common, "Accept-Ranges": "bytes" };
+    if (contentSha256) headers[CONTENT_SHA256_HEADER] = contentSha256;
     if (range) {
       // The first read fetched the whole object to learn its metadata; the
       // range itself is a second, bounded read.
@@ -721,6 +740,7 @@ async function serveFile(located: Located, opts: ServeOptions): Promise<Response
       ...common,
       "Content-Encoding": "gzip",
       "Content-Length": String(file.size),
+      ...(contentSha256 && { [CONTENT_SHA256_HEADER]: contentSha256 }),
     };
     // encodeBody "manual" tells the runtime the body is ALREADY gzip. The
     // default ("automatic") treats the body as plain and re-encodes per
