@@ -474,7 +474,7 @@ classDiagram
 
 # Upload without logging in → demo mode (ephemeral, 1-hour TTL, no project)
 <cli> upload myfile.geojson
-# → https://serve.reearth.land/d/abc123/myfile.geojson  (expires in 1 hour)
+# → https://api.example.com/d/abc123/myfile.geojson  (expires in 1 hour)
 ```
 
 - `login` stores credentials locally (`~/.config/reearth-serve/`).
@@ -607,7 +607,7 @@ Operate on asset contents using familiar filesystem-style commands. Asset paths 
 
 # Quiet — print only IDs or URLs (for piping)
 <cli> asset create myfile.tif --quiet
-# → https://serve.reearth.land/p/proj1/a/xyz123/myfile.tif
+# → https://api.example.com/p/proj1/a/xyz123/myfile.tif
 ```
 
 ### Error Messages

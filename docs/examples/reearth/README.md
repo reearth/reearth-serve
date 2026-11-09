@@ -16,8 +16,9 @@ REEARTH_SERVE_ENDPOINT=https://serve.reearth.land reearth-serve upload ./data.ge
 Site hosts are off (`SITE_HOST_SUFFIX` unset).
 
 `serve.reearth.land` sits on the registrable domain `reearth.land`, so any
-suffix under `reearth.land`, such as `.serve.reearth.land`, would be the same
-site as the API, and Serve refuses to start with it (ADR-014 §8). Turning site
+suffix under it, such as `.serve.reearth.land`, would be the same site as the
+API. Serve refuses to start when `SITE_REGISTRABLE_DOMAIN` is `reearth.land`
+and `BASE_URL` is `https://serve.reearth.land` (ADR-014 §8). Turning site
 hosts on needs one of:
 
 - a separate registrable domain for sites, with `SITE_HOST_SUFFIX` under it
@@ -32,7 +33,6 @@ main README.
 
 ## Delivery tokens
 
-Tokens are on once `DELIVERY_TOKEN_KEYS` is set as a Worker secret
-(`wrangler secret put DELIVERY_TOKEN_KEYS`). Unset, the mint route answers
-`501` and restricted assets open with a member's bearer only. Rotate in two
-deploys, as the main README describes.
+Whether `DELIVERY_TOKEN_KEYS` is set in production is an operator setting this
+repository does not record. Set it with `wrangler secret put
+DELIVERY_TOKEN_KEYS`.
