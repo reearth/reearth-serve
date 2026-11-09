@@ -55,7 +55,7 @@ When calling with `Authorization: Bearer <jwt>`, add
 and the caller needs `create_asset` on that project (see [Authorization](#authorization)). Anonymous
 (demo-mode) uploads omit both headers and are tracked by `X-Session-Id`.
 
-The production endpoint is `https://serve.reearth.land`. Point the CLI at it via `REEARTH_SERVE_ENDPOINT=https://serve.reearth.land` (or `--endpoint` per command).
+Point the CLI at a deployment with `REEARTH_SERVE_ENDPOINT=https://api.example.com` (or `--endpoint` per command). Values for the Re:Earth deployment are in [docs/examples/reearth](./docs/examples/reearth/README.md).
 
 ## Architecture
 
@@ -334,7 +334,7 @@ steps, and the domain does not resolve until the second one passes:
 reearth-serve asset host add <assetId> map.city.example.jp --custom
 #   prints the two DNS records to publish:
 #     _reearth-serve-verify.map.city.example.jp  TXT    reearth-serve-verify=<token>
-#     map.city.example.jp                        CNAME  serve.reearth.land
+#     map.city.example.jp                        CNAME  fallback.sites.example.net
 reearth-serve asset host verify <assetId> map.city.example.jp
 reearth-serve asset host show <assetId> map.city.example.jp   # certificate: pending | active
 ```
