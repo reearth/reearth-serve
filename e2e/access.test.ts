@@ -24,6 +24,8 @@ try {
 
 const PASSWORD = "e2e-site-password";
 const NODE_RUNTIME = process.env.E2E_NODE_RUNTIME === "true";
+/** `RATE_LIMIT_PER_IP` in core/access/ratelimit.ts; e2e tests talk to the server only. */
+const RATE_LIMIT_PER_IP = 10;
 const BROWSER = { Accept: "text/html,application/xhtml+xml" };
 const EMPTY_ZIP = new Uint8Array([0x50, 0x4b, 0x05, 0x06, ...new Array(18).fill(0)]);
 
@@ -52,8 +54,8 @@ describe("password-protected sites", { skip: !mockOidcAvailable }, () => {
   }
 
   /** Protect or unprotect through the API. */
-  async function setAccess(body: unknown): Promise<Response> {
-    return fetch(`${BASE}/api/v1/assets/${assetId}`, {
+  async function setAccess(body: unknown, id = assetId): Promise<Response> {
+    return fetch(`${BASE}/api/v1/assets/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify(body),
@@ -67,12 +69,7 @@ describe("password-protected sites", { skip: !mockOidcAvailable }, () => {
     );
     expect(status).toBe(201);
     const id = body.asset.id as string;
-    const res = await fetch(`${BASE}/api/v1/assets/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ access: "password", password }),
-    });
-    expect(res.status).toBe(200);
+    expect((await setAccess({ access: "password", password }, id)).status).toBe(200);
     return { id, url: `${BASE}/files/${id}/site.zip` };
   }
 
@@ -221,12 +218,7 @@ describe("password-protected sites", { skip: !mockOidcAvailable }, () => {
     expect(before.status).toBe(200);
     await before.body?.cancel();
 
-    const changed = await fetch(`${BASE}/api/v1/assets/${id}`, {
-      method: "PATCH",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ access: "password", password: "e2e-site-password-2" }),
-    });
-    expect(changed.status).toBe(200);
+    expect((await setAccess({ access: "password", password: "e2e-site-password-2" }, id)).status).toBe(200);
 
     const old = await fetch(url, { headers: basic(PASSWORD) });
     expect(old.status).toBe(401);
@@ -236,23 +228,24 @@ describe("password-protected sites", { skip: !mockOidcAvailable }, () => {
     await current.body?.cancel();
   });
 
-  test("a client cannot pick its own limiter bucket", { skip: !NODE_RUNTIME }, async () => {
-    const { url } = await protectedFile(PASSWORD);
-    const statuses: number[] = [];
-    for (let i = 1; i <= 11; i++) {
-      const res = await fetch(url, {
-        headers: {
-          ...basic(`wrong-password-${i}`),
-          "X-Forwarded-For": `198.51.100.${i}`,
-          "CF-Connecting-IP": `198.51.100.${i}`,
-        },
-      });
-      statuses.push(res.status);
-      await res.body?.cancel();
-    }
-    expect(statuses.slice(0, 10)).toEqual(new Array(10).fill(401));
-    expect(statuses[10]).toBe(429);
-  });
+  for (const header of ["X-Forwarded-For", "CF-Connecting-IP"]) {
+    test(`a client cannot pick its own limiter bucket with ${header}`, { skip: !NODE_RUNTIME }, async () => {
+      const { url } = await protectedFile(PASSWORD);
+      const statuses: number[] = [];
+      let retryAfter: string | null = null;
+      for (let i = 1; i <= RATE_LIMIT_PER_IP + 1; i++) {
+        const res = await fetch(url, {
+          headers: { ...basic(`wrong-password-${i}`), [header]: `198.51.100.${i}` },
+        });
+        statuses.push(res.status);
+        retryAfter = res.headers.get("Retry-After");
+        await res.body?.cancel();
+      }
+      expect(statuses.slice(0, RATE_LIMIT_PER_IP)).toEqual(new Array(RATE_LIMIT_PER_IP).fill(401));
+      expect(statuses[RATE_LIMIT_PER_IP]).toBe(429);
+      expect(Number(retryAfter)).toBeGreaterThan(0);
+    });
+  }
 
   test("`asset protect --off` makes it public again", () => {
     const out = execSync(
