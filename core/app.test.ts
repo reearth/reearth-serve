@@ -97,6 +97,7 @@ function fakeDeps(overrides: Partial<Deps> = {}): Deps {
     projects: strictFake("projects"),
     extractionQueue: null,
     thumbnailQueue: null,
+    verificationQueue: null,
     storageUsage: strictFake("storageUsage"),
     pendingCleanup: strictFake("pendingCleanup"),
     anonymousUploadEnabled: false,

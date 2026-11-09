@@ -435,6 +435,7 @@ export async function fixture(overrides?: Partial<Deps>) {
     tenancy: memberTenancy(unused("members")),
     extractionQueue: null,
     thumbnailQueue: null,
+    verificationQueue: null,
     storageUsage: unused("storageUsage"),
     pendingCleanup: { add: async () => {}, list: async () => [], remove: async () => {} },
     anonymousUploadEnabled: false,

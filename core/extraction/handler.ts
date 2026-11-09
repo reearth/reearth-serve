@@ -5,6 +5,8 @@ import { storageKey, versionStorageKey } from "../asset/usecase/shared";
 import type { Job } from "../job/model";
 import type { Deps } from "../types";
 import type { QueueMessage } from "../queue/port";
+import { touchPendingJob } from "../job/usecase";
+import { handleVerificationQueue, isVerificationMessage, type VerificationMessage } from "../integrity/verification";
 
 /** One extraction run, addressed by job (ADR-005, amendment 2026-11-05). */
 export interface ExtractionMessage {
@@ -50,7 +52,26 @@ export async function extractionMessageForJob(
 // Delay applied to every message when the extractor cannot be launched at all.
 const MISCONFIGURED_RETRY_DELAY_SECONDS = 300;
 
+/**
+ * Consumer of the extraction queue. The queue also carries hash verification
+ * runs (ADR-017 §2), which use the same container image and launcher; they are
+ * split off first so a deployment without the extractor does not hold them back.
+ */
 export async function handleQueue(
+  messages: QueueMessage<ExtractionMessage | VerificationMessage>[],
+  deps: Deps,
+): Promise<void> {
+  const verification: QueueMessage<VerificationMessage>[] = [];
+  const extraction: QueueMessage<ExtractionMessage>[] = [];
+  for (const m of messages) {
+    if (isVerificationMessage(m.body)) verification.push(m as QueueMessage<VerificationMessage>);
+    else extraction.push(m as QueueMessage<ExtractionMessage>);
+  }
+  if (verification.length > 0) await handleVerificationQueue(verification, deps);
+  if (extraction.length > 0) await handleExtractionMessages(extraction, deps);
+}
+
+async function handleExtractionMessages(
   messages: QueueMessage<ExtractionMessage>[],
   deps: Deps,
 ): Promise<void> {
@@ -72,25 +93,8 @@ export async function handleQueue(
       message.ack();
     } catch (e) {
       console.error(`Failed to launch extractor for job ${params.jobId} (attempt ${message.attempts}):`, e);
-      // Refresh the job's updated_at so the cleanup cron can tell "waiting
-      // for capacity, queue is on it" from "orphaned" — without this, the
-      // cron re-enqueues the still-pending job every tick and each pass
-      // burns one of its MAX_RETRIES. The cron only takes over once the
-      // queue gives up (max_retries → DLQ) and the touches stop.
-      await touchPendingJob(deps, params.jobId);
+      await touchPendingJob(deps.jobs, params.jobId);
       message.retry({ delaySeconds: retryDelaySeconds(message.attempts) });
     }
-  }
-}
-
-async function touchPendingJob(deps: Deps, jobId: string): Promise<void> {
-  try {
-    const job = await deps.jobs.find(jobId);
-    if (job && job.status === "pending") {
-      job.updatedAt = Date.now();
-      await deps.jobs.save(job);
-    }
-  } catch (e) {
-    console.error(`Failed to touch pending job ${jobId}:`, e);
   }
 }

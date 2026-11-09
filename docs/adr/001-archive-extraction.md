@@ -93,6 +93,8 @@ The container cannot access Worker bindings (`env.STORAGE`, `env.KV`), so:
 
 The internal API endpoints are reachable from the public internet (asset IDs double as job IDs and are embedded in `/files/:id/*` permalinks), so every callback must carry `Authorization: Bearer $INTERNAL_API_SECRET`. The Worker rejects unauthenticated calls and the launcher refuses to start a container if the secret is not configured.
 
+The same image has a second mode, `MODE=verify`, that hashes one stored object for ADR-017 §2's verification job and reports the hash through the same callback. See ADR-017, "Implementation status".
+
 ### Path normalization
 
 - Backslash separators are converted to forward slashes

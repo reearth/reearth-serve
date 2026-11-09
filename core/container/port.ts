@@ -1,7 +1,7 @@
 /**
  * Provider-independent port for the out-of-process workers (ADR-012 §1).
  *
- * Archive extraction and large-image thumbnailing run outside the request
+ * Archive extraction, hash verification and large-image thumbnailing run outside the request
  * process. On Cloudflare that is a Container bound to a Durable Object
  * (`adapters/cloudflare/container.ts`); elsewhere it could be a `docker run`, a
  * Cloud Run job, or nothing at all. The consumers only need to know whether a
@@ -24,7 +24,31 @@ export interface ContainerLauncher {
   readonly thumbnailGeneratorAvailable: boolean;
   /** Runs the out-of-process thumbnail generator. Throws if it is unavailable. */
   generateThumbnails(params: ThumbnailGeneratorParams): Promise<void>;
+  /**
+   * Whether `verifyIntegrity` can run. False has the same meaning as for the
+   * extractor: deploy-time configuration is missing, so back off.
+   */
+  readonly integrityVerifierAvailable: boolean;
+  /**
+   * Hash a stored object once (ADR-017 §2). A verifier that can do it in
+   * process returns the hash; one that starts an out-of-process run returns
+   * `{ started: true }`, and the run reports through
+   * `POST /api/internal/jobs/:id/status` instead. Either way the result reaches
+   * the same use case (`core/integrity/verification.ts`), so nothing above the
+   * port knows which runtime it is on. Throws on a transient failure — the
+   * caller retries.
+   */
+  verifyIntegrity(params: IntegrityVerifierParams): Promise<IntegrityVerifierOutcome>;
 }
+
+export interface IntegrityVerifierParams {
+  jobId: string;
+  assetId: string;
+  /** The stored object to hash, as stored (gzip included). */
+  objectKey: string;
+}
+
+export type IntegrityVerifierOutcome = { started: true } | { sha256: string };
 
 export interface ArchiveExtractorParams {
   jobId: string;

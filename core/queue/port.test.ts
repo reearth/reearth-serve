@@ -32,6 +32,8 @@ function launcher(overrides: Partial<ContainerLauncher> = {}): ContainerLauncher
     thumbnailGeneratorAvailable: true,
     launchArchiveExtractor: async () => {},
     generateThumbnails: async () => {},
+    integrityVerifierAvailable: true,
+    verifyIntegrity: async () => ({ started: true }),
     ...overrides,
   };
 }

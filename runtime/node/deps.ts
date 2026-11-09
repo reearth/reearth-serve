@@ -1,6 +1,7 @@
 import type { Deps } from "../../core/types";
 import type { ExtractionMessage } from "../../core/extraction/handler";
 import type { ThumbnailMessage } from "../../core/thumbnail/queue";
+import type { VerificationMessage } from "../../core/integrity/verification";
 import { KeyValueSessionStore, KeyValueUploadSessionStore } from "../../core/kv/stores";
 import {
   SqlCleanupPendingStore, SqlJobStore, SqlMetadataStore,
@@ -34,8 +35,11 @@ const CLEANUP_SUBREQUEST_BUDGET = 100_000;
 export type NodeRuntime = {
   config: NodeConfig;
   deps: Deps;
-  /** Concrete queues, so the cron can drain them (the port has no consumer side). */
-  extractionQueue: SqlJobQueue<ExtractionMessage>;
+  /**
+   * Concrete queues, so the cron can drain them (the port has no consumer side).
+   * The extraction queue also carries hash verification runs (ADR-017 §2).
+   */
+  extractionQueue: SqlJobQueue<ExtractionMessage | VerificationMessage>;
   thumbnailQueue: SqlJobQueue<ThumbnailMessage>;
   /** Concrete KeyValue, so the cron can sweep expired rows. */
   kv: SqlKeyValue;
@@ -66,14 +70,15 @@ export function buildNodeRuntime(env: Env = process.env): NodeRuntime {
   }
 
   const kv = new SqlKeyValue(sql);
-  const extractionQueue = new SqlJobQueue<ExtractionMessage>(sql, "extraction");
+  const extractionQueue = new SqlJobQueue<ExtractionMessage | VerificationMessage>(sql, "extraction");
+  const storage = new MemoryFileStorage();
   const thumbnailQueue = new SqlJobQueue<ThumbnailMessage>(sql, "thumbnail");
 
   const deps: Deps = {
     metadata: new SqlMetadataStore(sql),
     versions: new SqlVersionStore(sql),
     writes: new SqlAtomicWrites(sql),
-    storage: new MemoryFileStorage(),
+    storage,
     uploadSessions: new KeyValueUploadSessionStore(kv),
     // No presigned uploads without an object store that can sign URLs; the
     // create-session route reports the feature off, as it does on a Cloudflare
@@ -84,6 +89,7 @@ export function buildNodeRuntime(env: Env = process.env): NodeRuntime {
     baseUrl: config.baseUrl,
     projects: new SqlProjectStore(sql),
     extractionQueue,
+    verificationQueue: extractionQueue,
     thumbnailQueue,
     storageUsage: new SqlStorageUsageStore(sql),
     pendingCleanup: new SqlCleanupPendingStore(sql),
@@ -112,7 +118,7 @@ export function buildNodeRuntime(env: Env = process.env): NodeRuntime {
       jwksCache: kv,
     },
     tenancy: buildTenancy(config.tenancy, { sql }),
-    containers: new UnavailableContainerLauncher(),
+    containers: new UnavailableContainerLauncher(storage),
     extractionStuckThresholdMs: STUCK_THRESHOLD_MS,
     limits: { subrequestBudget: CLEANUP_SUBREQUEST_BUDGET },
   };

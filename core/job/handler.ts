@@ -9,6 +9,11 @@ import {
 import { jobSchema } from "../../shared/api";
 import { hostingOnExtractionComplete } from "../site/hosting";
 import { extractionMessageForJob } from "../extraction/handler";
+import {
+  applyVerificationResult, VERIFICATION_JOB_TYPE, verificationMessageForJob, type VerificationDeps,
+} from "../integrity/verification";
+import { isSha256Hex } from "../asset/integrity";
+import type { Context } from "hono";
 import { jsonError, jsonResponse } from "../openapi";
 
 // --- Public API routes (mounted at /api/v1/jobs) ---
@@ -84,7 +89,7 @@ jobRoutes.post("/:id/retry",
     summary: "Retry a stalled job",
     responses: {
       200: jsonResponse("Job restarted", jobSchema),
-      400: jsonError("Job already completed"),
+      400: jsonError("Job already completed, or nothing left to verify"),
       404: jsonError("Job not found"),
     },
   }),
@@ -97,6 +102,18 @@ jobRoutes.post("/:id/retry",
     const job = access.value;
     if (job.status === "completed") {
       return c.json({ error: "Job already completed" }, 400);
+    }
+
+    if (job.type === VERIFICATION_JOB_TYPE) {
+      // A rejected upload is gone and a verified one is settled: either way
+      // there is nothing to run again.
+      const message = await verificationMessageForJob(job, c.get("metadata"));
+      if (!message) return c.json({ error: "Nothing left to verify" }, 400);
+      job.status = "pending";
+      job.updatedAt = Date.now();
+      await jobs.save(job);
+      await c.get("verificationQueue")?.send(message);
+      return c.json(job);
     }
 
     job.status = "pending";
@@ -131,7 +148,23 @@ jobInternalRoutes.post("/:id/status", async (c) => {
     fileCount?: number;
     extractedSize?: number;
     error?: string;
+    sha256?: string;
   }>();
+
+  // Hash verification (ADR-017 §2): the container reports the hash it
+  // computed, and the comparison with the declared one is made here.
+  if (job.type === VERIFICATION_JOB_TYPE) {
+    if (body.status === "completed" && !(body.sha256 && isSha256Hex(body.sha256))) {
+      return c.json({ error: "completed verification requires a 64-hex sha256" }, 400);
+    }
+    const report = body.status === "completed"
+      ? { status: "completed" as const, sha256: body.sha256! }
+      : body.status === "failed"
+        ? { status: "failed" as const, error: body.error || "verification failed" }
+        : { status: "running" as const };
+    const outcome = await applyVerificationResult(verificationDeps(c), job, report);
+    return c.json({ ok: true, outcome });
+  }
 
   job.status = body.status;
   job.updatedAt = Date.now();
@@ -184,8 +217,10 @@ jobInternalRoutes.post("/:id/status", async (c) => {
   // `reconcileStuckAssets`. So a failed read or batch falls back to writing
   // the job alone instead of losing the status.
   const ttl = c.get("ttlSeconds");
+  let mirrorReadFailed = false;
   const readFailed = (e: unknown) => {
     console.warn(`job ${job.id}: mirror read failed, saving job only:`, e);
+    mirrorReadFailed = true;
     return null;
   };
   const asset = await c.get("metadata").find(job.assetId).catch(readFailed);
@@ -235,5 +270,35 @@ jobInternalRoutes.post("/:id/status", async (c) => {
     await c.get("versions").update(placement.versionId, { hosting: placement.hosting });
   }
 
+  // The asset (or version) was deleted while the extractor was running — by
+  // its owner, by expiry, or because hash verification rejected the upload.
+  // The delete cleared the prefix, but the extractor kept writing until its
+  // next existence check, and wrote its log on the way out. Its final report
+  // comes after all of that, so queueing the prefix now catches every key.
+  const terminal = body.status === "completed" || body.status === "failed";
+  if (terminal && !mirrorReadFailed && !mirror) {
+    await c.get("pendingCleanup").add(extractionPrefix(job));
+  }
+
   return c.json({ ok: true });
 });
+
+/** The prefix an extraction job writes under (container/archive-extractor keyRoot). */
+function extractionPrefix(job: { assetId: string; versionId?: string }): string {
+  return job.versionId ? `assets/${job.assetId}/v/${job.versionId}/` : `assets/${job.assetId}/`;
+}
+
+function verificationDeps(c: Context<AppEnv>): VerificationDeps {
+  return {
+    jobs: c.get("jobs"),
+    metadata: c.get("metadata"),
+    writes: c.get("writes"),
+    storage: c.get("storage"),
+    pendingCleanup: c.get("pendingCleanup"),
+    projects: c.get("projects"),
+    siteHosts: c.get("siteHosts"),
+    cache: c.get("cache"),
+    customHostnames: c.get("customHostnames"),
+    siteHostSuffix: c.get("siteHostSuffix"),
+  };
+}

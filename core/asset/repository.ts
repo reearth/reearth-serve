@@ -105,8 +105,11 @@ export interface VersionStore {
  * the size of the asset or version being written.
  */
 export interface AtomicWrites {
-  /** A new asset, its optional extraction job, and storage-usage increments. */
-  createAsset(input: { asset: AssetMetadata; job?: Job; usageScopes?: string[] }): Promise<void>;
+  /**
+   * A new asset, its optional extraction job, its optional hash verification
+   * job (ADR-017 §2), and storage-usage increments.
+   */
+  createAsset(input: { asset: AssetMetadata; job?: Job; verificationJob?: Job; usageScopes?: string[] }): Promise<void>;
   /**
    * A new version, its optional extraction job, and storage-usage increments.
    * Returns the version with the number the store assigned (see `VersionStore.save`).

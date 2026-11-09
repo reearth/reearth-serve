@@ -7,7 +7,7 @@ import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { denyAnonymousUpload, usageScopes } from "./shared";
 import { versionUploadResultResponseSchema, idParamSchema } from "../../../shared/openapi";
 import { isSafeFilename } from "../../../shared/api";
-import { ChecksumMismatchError, CONTENT_SHA256_HEADER, parseSha256Header } from "../../asset/integrity";
+import { ChecksumMismatchError, CONTENT_SHA256_HEADER, parseSha256Header, UPLOAD_UNDER_VERIFICATION_MESSAGE, UploadUnderVerificationError } from "../../asset/integrity";
 import { contentEncodingHeaderParam, contentLengthHeaderParam, contentSha256HeaderParam, filenameHeaderParam, jsonError, jsonResponse, originalSizeHeaderParam, skipExtractionHeaderParam } from "../../openapi";
 
 export function registerUploadVersionRoute(app: Hono<AppEnv>) {
@@ -35,6 +35,7 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
         401: jsonError("Anonymous upload disabled, or invalid token / session ID"),
         404: jsonError("Asset not found"),
         413: jsonError("Upload exceeds storage capacity"),
+        409: jsonError(UPLOAD_UNDER_VERIFICATION_MESSAGE),
         422: jsonError("Declared SHA-256 does not match the uploaded bytes; nothing was stored"),
       },
     }),
@@ -95,11 +96,15 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
         { extractionQueue, thumbnailQueue, skipExtraction, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix") },
       ).catch((e: unknown) => {
         if (e instanceof ChecksumMismatchError) return "checksum-mismatch" as const;
+        if (e instanceof UploadUnderVerificationError) return "under-verification" as const;
         if (e instanceof Error && e.message.includes("exceeds storage capacity")) return "over-capacity" as const;
         throw e;
       });
       if (result === "checksum-mismatch") {
         return c.json({ error: "Declared SHA-256 does not match the uploaded bytes; nothing was stored" }, 422);
+      }
+      if (result === "under-verification") {
+        return c.json({ error: UPLOAD_UNDER_VERIFICATION_MESSAGE }, 409);
       }
       if (result === "over-capacity") {
         return c.json({ error: "Upload exceeds storage capacity" }, 413);

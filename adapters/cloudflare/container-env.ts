@@ -1,4 +1,4 @@
-import type { ArchiveExtractorParams } from "../../core/container/port";
+import type { ArchiveExtractorParams, IntegrityVerifierParams } from "../../core/container/port";
 
 export interface ObjectStoreCredentials {
   endpoint: string;
@@ -46,6 +46,20 @@ export function archiveExtractorEnv(params: ArchiveExtractorParams): Record<stri
   };
 }
 
+/**
+ * The archive-extractor image's verification mode (ADR-017 §2): `MODE=verify`
+ * hashes `OBJECT_KEY` and reports to `JOB_ID`. See
+ * container/archive-extractor/verify.go.
+ */
+export function integrityVerifierEnv(params: IntegrityVerifierParams): Record<string, string> {
+  return {
+    MODE: "verify",
+    JOB_ID: params.jobId,
+    ASSET_ID: params.assetId,
+    OBJECT_KEY: params.objectKey,
+  };
+}
+
 if (import.meta.vitest) {
   const { describe, expect, it } = import.meta.vitest;
 
@@ -71,6 +85,17 @@ if (import.meta.vitest) {
 
     it("omits VERSION_ID for an asset's own job", () => {
       expect(archiveExtractorEnv(params)).not.toHaveProperty("VERSION_ID");
+    });
+  });
+
+  describe("integrityVerifierEnv", () => {
+    it("selects verify mode and names the object and the job to report to", () => {
+      expect(integrityVerifierEnv({ jobId: "j9", assetId: "a1", objectKey: "assets/a1/big.zip" })).toEqual({
+        MODE: "verify",
+        JOB_ID: "j9",
+        ASSET_ID: "a1",
+        OBJECT_KEY: "assets/a1/big.zip",
+      });
     });
   });
 

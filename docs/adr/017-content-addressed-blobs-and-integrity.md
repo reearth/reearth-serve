@@ -342,14 +342,73 @@ before; there is no `blobs/` layer yet.
   and never for extracted entries, decompressed bodies, thumbnails or
   `404.html`. Asset and version JSON carry `sha256` and `integrity`.
 
+**P1b — the verification job (done).** Every presigned upload the store did
+not vouch for is now hashed once by Serve.
+
+- Scope: only first uploads go through upload sessions; a new version is
+  uploaded through the Worker and verified in line (P1a). So the job always
+  settles an **asset** row. Completion records `integrity: "pending"` for a
+  declared multipart or unconfirmed single PUT (with the declared `sha256`)
+  and, new in P1b, for an undeclared presigned upload (no `sha256`), and
+  writes an `integrity-verification` job in the same batch as the asset.
+- Job: a new job type, `integrity-verification` (`JobType` in the OpenAPI
+  document), on the existing machinery: the extraction queue carries its
+  messages (`kind: "integrity-verification"`), the cleanup cron re-sends it
+  when it is stuck or failed, and `/api/v1/jobs` lists it. Its ID is its own;
+  the asset's `jobId` stays the extraction's. The failure class of ADR-018 §6
+  is derived from the job type (`jobFailureClass`, `core/job/model.ts`)
+  rather than stored, since every job of a type has the same class:
+  extraction is "missing feature", verification "rejected version".
+- Verdict (`core/integrity/verification.ts`): the verifier only reports the
+  hash; Serve compares. Nothing declared, or a match → `verified` with the
+  computed hash. A mismatch → the asset is deleted through the ordinary
+  `deleteAsset` use case (rows, bytes, extracted output, usage counters, site
+  hosts released), the archive's extraction job is closed, and the
+  verification job ends `failed` with both hashes in `error` and its retry
+  count past the budget, so nothing re-runs it. A mismatch is final. A read
+  error is transient: the job fails with budget left and the cron re-runs it;
+  if it runs out of retries the upload stays `pending` and servable and no
+  `status` is touched. `failed` is therefore never written to a row: a
+  rejected upload has no row left to carry it. The uploader is not notified
+  beyond the job record; there is no notification channel yet.
+- Active version: a rejected first upload has no versions to protect,
+  because while a *declared* first upload is pending the asset refuses new
+  versions with `409` (`UploadUnderVerificationError`). An undeclared one
+  cannot fail, so it does not block. "The active version is left where it
+  was" then holds trivially: the only thing deleted is the asset that never
+  had another version.
+- Archives: verification runs in parallel with extraction, since a pending
+  upload is servable. A rejection deletes the asset while the extractor may
+  still be writing; the extractor checks `/api/internal/assets/:id/exists`
+  at every checkpoint and stops at the 404. Its final status report, which
+  comes after its last write and its log, finds the asset gone and re-queues
+  the asset's prefix in `cleanup_pending`, so the cron removes what it wrote
+  after the delete. The cron also now closes extraction and verification jobs
+  whose asset is gone instead of skipping them every tick.
+- Where it runs. Cloudflare: the archive-extractor image in `MODE=verify`
+  (`container/archive-extractor/verify.go`), launched through the extractor's
+  Durable Object class under its own name (`verify:{jobId}`). It needs what
+  extraction needs (S3 credentials, the callback secret, long lifetimes), so a
+  separate container class would duplicate the image and the lifetime
+  handling for nothing. It streams the object over the S3 API, resumes a
+  broken read at the offset it reached (up to five attempts), posts
+  `running` every two minutes, and reports `completed` with `sha256` or
+  `failed` to `POST /api/internal/jobs/:id/status` with
+  `INTERNAL_API_SECRET`. Node: `ContainerLauncher.verifyIntegrity` hashes in
+  process and returns the hash, which the queue consumer settles at once.
+  `core/` sees one port and does not branch on the runtime. Verifying small
+  objects inside the Worker queue consumer was not done: every object still
+  goes to the container.
+- Ledger safety: the job-status callback rewrites the asset row from a copy
+  read earlier, so the asset upsert keeps `sha256` / `integrity` once the row
+  is `verified`, whatever the copy says.
+
 **Remaining.**
 
-- **P1b**: the verification derivation of §2 for `pending` rows (presigned
-  multipart, and presigned single PUTs the store did not confirm) and for
-  undeclared presigned uploads, which currently record no hash; flipping rows
-  to `verified` / `failed` and deleting failed versions.
 - **P2**: the `blobs/{scope}/{sha256}` layer for declared uploads (§3), with
   the version row recording which key holds its bytes.
 - **P3**: workspace-scoped deduplication and `blob_refs` claims (§3–§5).
 - **P4**: backfill of `sha256` for versions stored before ADR-017.
 - **P5**: the CLI declaring `X-Content-SHA256` / `sha256` on every upload.
+  Once it does, a client that uploads a version right after a large
+  presigned first upload must expect `409` until verification settles.

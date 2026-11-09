@@ -56,9 +56,9 @@ export async function createUploadSession(
       s3UploadId,
       partCount: params.partCount,
       ...(compress && { contentEncoding: "gzip" }),
-      // TODO(ADR-017 §2, P1b): the store checks parts, not the whole object,
-      // so a multipart upload's declared hash is only recorded (`pending`)
-      // at completion; the verification job that confirms it is P1b.
+      // The store checks parts, not the whole object, so a multipart upload's
+      // declared hash is recorded `pending` at completion and confirmed by
+      // the verification job (ADR-017 §2).
       ...(sha256 && { sha256 }),
       ...(options?.sessionId && { sessionId: options.sessionId }),
       ...(options?.projectId && { projectId: options.projectId }),

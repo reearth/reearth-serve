@@ -67,11 +67,22 @@ export const assetAccessSchema = enumComponent("AssetAccess", z.enum(["public", 
  *
  * - `verified` — the store or Serve hashed the stored bytes and they match.
  * - `pending` — the bytes are in place and servable, the hash is not yet
- *   confirmed (presigned multipart; confirmed later, ADR-017 §2).
- * - `failed` — a declared hash did not match; such a version is deleted.
+ *   confirmed (presigned uploads the store did not vouch for; `sha256` is the
+ *   declared hash, or absent when none was declared). An
+ *   `integrity-verification` job settles it (ADR-017 §2).
+ * - `failed` — a declared hash did not match. Reserved: such an upload is
+ *   deleted outright, so no row is ever served with this value today.
  */
 export const integritySchema = enumComponent("Integrity", z.enum(["verified", "pending", "failed"]));
-export const jobTypeSchema = z.literal("archive-extraction");
+/**
+ * What a job does.
+ *
+ * - `archive-extraction` — unpacks an archive upload into its files (ADR-001).
+ * - `integrity-verification` — streams a presigned upload once and confirms its
+ *   SHA-256 (ADR-017 §2). Its failure class is "rejected version" (ADR-018
+ *   §6): a mismatch deletes the upload, which is final and not retried.
+ */
+export const jobTypeSchema = enumComponent("JobType", z.enum(["archive-extraction", "integrity-verification"]));
 export const jobStatusSchema = z.enum(["pending", "running", "completed", "failed"]);
 
 // Upload request headers (`Content-Encoding`, `X-Skip-Extraction`). Named so
@@ -439,6 +450,8 @@ export const updateJobStatusBodySchema = z.object({
   fileCount: z.number().optional(),
   extractedSize: z.number().optional(),
   error: z.string().optional(),
+  /** `integrity-verification` jobs: the SHA-256 the verifier computed, sent with `completed`. */
+  sha256: z.string().optional(),
 });
 
 // --- Asset update ---

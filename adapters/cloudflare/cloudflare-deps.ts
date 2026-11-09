@@ -11,6 +11,8 @@ import { CloudflareContainerLauncher, type ObjectStoreCredentials } from "./cont
 import { CloudflareKeyValue } from "./kv";
 import { KeyValueUploadSessionStore, KeyValueSessionStore } from "../../core/kv/stores";
 import { CloudflareJobQueue } from "./queues";
+import type { ExtractionMessage } from "../../core/extraction/handler";
+import type { VerificationMessage } from "../../core/integrity/verification";
 import { D1SqlClient } from "./sql";
 import { SqlAtomicWrites } from "../sql/writes";
 import { SqlSiteHostStore } from "../sql/site-hosts";
@@ -53,6 +55,11 @@ export function buildDeps(env: Env): Deps {
   const kv = new CloudflareKeyValue(env.KV);
   // One SqlClient per invocation; every repository speaks the port, not D1 (ADR-012 §3).
   const sql = new D1SqlClient(env.DB);
+  // Extraction and hash verification share one queue and one consumer
+  // (core/extraction/handler.ts tells them apart by `kind`).
+  const containerJobs = env.EXTRACTION_QUEUE
+    ? new CloudflareJobQueue<ExtractionMessage | VerificationMessage>(env.EXTRACTION_QUEUE)
+    : null;
 
   return {
     metadata: new SqlMetadataStore(sql),
@@ -65,7 +72,8 @@ export function buildDeps(env: Env): Deps {
     ttlSeconds: parseInt(env.ASSET_TTL_SECONDS, 10) || 3600,
     baseUrl: env.BASE_URL,
     projects: new SqlProjectStore(sql),
-    extractionQueue: env.EXTRACTION_QUEUE ? new CloudflareJobQueue(env.EXTRACTION_QUEUE) : null,
+    extractionQueue: containerJobs,
+    verificationQueue: containerJobs,
     thumbnailQueue: env.THUMBNAIL_QUEUE ? new CloudflareJobQueue(env.THUMBNAIL_QUEUE) : null,
     storageUsage: new SqlStorageUsageStore(sql),
     pendingCleanup: new SqlCleanupPendingStore(sql),

@@ -24,6 +24,11 @@ func main() {
 		log.Fatal(http.ListenAndServe(":8080", mux))
 	}()
 
+	if os.Getenv("MODE") == modeVerify {
+		runVerify(context.Background())
+		return
+	}
+
 	cfg, err := loadConfigFromEnv()
 	if err != nil {
 		log.Fatalf("configuration error: %v", err)
@@ -101,6 +106,26 @@ func main() {
 	}
 
 	flushLogs()
+}
+
+// runVerify is the MODE=verify entry point: hash one object and report it
+// (ADR-017 §2). See verify.go.
+func runVerify(ctx context.Context) {
+	cfg, objectStore, deprecations, err := loadVerifyConfig(os.Getenv)
+	if err != nil {
+		log.Fatalf("configuration error: %v", err)
+	}
+	if msg := deprecationMessage(deprecations); msg != "" {
+		log.Print(msg)
+	}
+	r2, err := NewR2Client(ctx, R2Config(objectStore))
+	if err != nil {
+		log.Fatalf("failed to create R2 client: %v", err)
+	}
+	if err := NewIntegrityVerifier(r2, cfg).Run(ctx); err != nil {
+		log.Printf("verification failed: %v", err)
+		os.Exit(1)
+	}
 }
 
 type envConfig struct {

@@ -1,6 +1,7 @@
 import type { Context } from "hono";
 import type { AppEnv } from "../../types";
 import { accessCtx, authorizeProject } from "../../auth/access";
+import { usageScopesFor } from "../usecase/shared";
 
 /**
  * Block uploads from unauthenticated callers when anonymous uploads are
@@ -68,9 +69,5 @@ export async function usageScopes(
   c: Context<AppEnv>,
   projectId: string | null | undefined,
 ): Promise<string[]> {
-  if (!projectId) return [];
-  const scopes = [`project:${projectId}`];
-  const project = await c.get("projects").find(projectId);
-  if (project?.workspaceId) scopes.push(`workspace:${project.workspaceId}`);
-  return scopes;
+  return usageScopesFor(c.get("projects"), projectId);
 }

@@ -15,6 +15,7 @@ import type { DnsResolver } from "./site/dns";
 import type { CustomHostnameProvisioner } from "./site/provisioner";
 import type { ExtractionMessage } from "./extraction/handler";
 import type { ThumbnailMessage } from "./thumbnail/queue";
+import type { VerificationMessage } from "./integrity/verification";
 
 /**
  * Dependencies that route handlers read off the request context.
@@ -36,6 +37,13 @@ export type ContextDeps = {
   projects: ProjectStore;
   extractionQueue: JobQueue<ExtractionMessage> | null;
   thumbnailQueue: JobQueue<ThumbnailMessage> | null;
+  /**
+   * Hash verification runs (ADR-017 §2). The same queue as `extractionQueue`
+   * on both runtimes — the runs share its container and consumer, which tells
+   * them apart by `kind` — typed separately so neither producer can send the
+   * other's message.
+   */
+  verificationQueue: JobQueue<VerificationMessage> | null;
   storageUsage: StorageUsageStore;
   pendingCleanup: CleanupPendingStore;
   anonymousUploadEnabled: boolean;

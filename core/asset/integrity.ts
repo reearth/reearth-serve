@@ -44,6 +44,22 @@ export class ChecksumMismatchError extends Error {
   }
 }
 
+/**
+ * Thrown by `uploadVersion` while the asset's first upload declared a hash
+ * that is still being verified (ADR-017 §2). A mismatch deletes that upload
+ * and the asset with it, so a version put on top could not survive it; the
+ * route answers 409 and the client uploads again once the asset settles.
+ */
+export class UploadUnderVerificationError extends Error {
+  constructor(readonly assetId: string) {
+    super(UPLOAD_UNDER_VERIFICATION_MESSAGE);
+    this.name = "UploadUnderVerificationError";
+  }
+}
+
+export const UPLOAD_UNDER_VERIFICATION_MESSAGE =
+  "The asset's first upload is still being verified against its declared SHA-256; upload the version once its integrity is verified";
+
 /** Hex digest → the base64 form S3's `x-amz-checksum-sha256` header carries. */
 export function sha256HexToBase64(hex: string): string {
   let binary = "";

@@ -3,6 +3,7 @@ import { detectArchiveFormat } from "../model";
 import type { AtomicWrites, FileStorage, MetadataStore } from "../repository";
 import type { Job } from "../../job/model";
 import { generateId, versionStorageKey } from "./shared";
+import { UploadUnderVerificationError } from "../integrity";
 import { siteUrlFor } from "../../site/url";
 import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
@@ -39,6 +40,9 @@ export async function uploadVersion(
 ): Promise<UploadVersionResult | null> {
   const asset = await metadata.find(assetId);
   if (!asset) return null;
+  // Undeclared pending uploads cannot fail verification, so only a declared
+  // hash holds versions back.
+  if (asset.integrity === "pending" && asset.sha256) throw new UploadUnderVerificationError(assetId);
 
   const versionId = generateId();
   const now = Date.now();

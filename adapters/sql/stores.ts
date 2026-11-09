@@ -271,7 +271,7 @@ export class SqlJobStore implements JobStore {
     const rows = await queryAll(
       this.db,
       `SELECT * FROM jobs
-         WHERE type = 'archive-extraction'
+         WHERE type IN ('archive-extraction', 'integrity-verification')
            AND (retry_count <= ?1
                 OR COALESCE(json_extract(meta, '$.fileCount'), 0) >
                    COALESCE(json_extract(meta, '$.retryFileCount'), 0)
@@ -288,12 +288,15 @@ export class SqlJobStore implements JobStore {
 
   async listStuckAssets(limit: number): Promise<Job[]> {
     // `extracting` captures the running-phase drift; `pending` catches the
-    // rarer case where the first (running) mirror write was lost too.
+    // rarer case where the first (running) mirror write was lost too. Only
+    // extraction jobs mirror onto `status`: a completed verification job says
+    // nothing about extraction (ADR-017 §2).
     const rows = await queryAll(
       this.db,
       `SELECT j.* FROM jobs j
          JOIN assets a ON a.id = j.asset_id
          WHERE j.status = 'completed'
+           AND j.type = 'archive-extraction'
            AND j.version_id IS NULL
            AND a.status IN ('pending', 'extracting')
          ORDER BY j.updated_at ASC
@@ -322,7 +325,10 @@ export class SqlJobStore implements JobStore {
  *
  * `sha256` / `integrity` (ADR-017) are written from the model when it carries
  * them and kept from the existing row otherwise, so an upsert built from a
- * model that predates the columns cannot erase a recorded hash.
+ * model that predates the columns cannot erase a recorded hash. A `verified`
+ * row keeps both no matter what the model says: the job-status callback
+ * rewrites the whole row from a copy it read earlier, and a copy read while
+ * verification was still `pending` must not undo the verdict (P1b).
  *
  * Protection is therefore written by exactly one statement,
  * `SqlMetadataStore.setProtection`, and nothing else can move it by accident.
@@ -340,8 +346,12 @@ export const ASSET_UPSERT_SQL =
                  (SELECT password_salt FROM assets WHERE id = ?1),
                  COALESCE((SELECT password_version FROM assets WHERE id = ?1), 0),
                  COALESCE((SELECT spa FROM assets WHERE id = ?1), 0),
-                 COALESCE(?15, (SELECT sha256 FROM assets WHERE id = ?1)),
-                 COALESCE(?16, (SELECT integrity FROM assets WHERE id = ?1)))`;
+                 CASE WHEN (SELECT integrity FROM assets WHERE id = ?1) = 'verified'
+                      THEN (SELECT sha256 FROM assets WHERE id = ?1)
+                      ELSE COALESCE(?15, (SELECT sha256 FROM assets WHERE id = ?1)) END,
+                 CASE WHEN (SELECT integrity FROM assets WHERE id = ?1) = 'verified'
+                      THEN 'verified'
+                      ELSE COALESCE(?16, (SELECT integrity FROM assets WHERE id = ?1)) END)`;
 
 export function assetUpsertArgs(asset: AssetMetadata): SqlValue[] {
   const { userMeta, currentVersion: _cv, versionCount: _vc, ...rest } =

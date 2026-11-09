@@ -30,10 +30,11 @@ const USAGE_DECREMENT_FOR_ASSET_SQL =
 export class SqlAtomicWrites implements AtomicWrites {
   constructor(private db: SqlClient) {}
 
-  async createAsset({ asset, job, usageScopes }: Parameters<AtomicWrites["createAsset"]>[0]): Promise<void> {
+  async createAsset({ asset, job, verificationJob, usageScopes }: Parameters<AtomicWrites["createAsset"]>[0]): Promise<void> {
     const statements: SqlStatement[] = [];
     // The job row first: the asset's `jobId` points at it.
     if (job) statements.push({ sql: JOB_UPSERT_SQL, args: jobUpsertArgs(job) });
+    if (verificationJob) statements.push({ sql: JOB_UPSERT_SQL, args: jobUpsertArgs(verificationJob) });
     statements.push({ sql: ASSET_UPSERT_SQL, args: assetUpsertArgs(asset) });
     statements.push(...usageStatements(usageScopes, asset.size));
     await this.db.batch(statements);

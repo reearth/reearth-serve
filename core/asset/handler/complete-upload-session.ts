@@ -70,7 +70,7 @@ export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
     const scopes = await usageScopes(c, session.projectId);
     let result;
     try {
-      result = await completeUploadSession(sessions, writes, c.get("metadata"), storage, presignedUrls, id, ttlSeconds, baseUrl, parts, { sessionId, extractionQueue, thumbnailQueue, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix") });
+      result = await completeUploadSession(sessions, writes, c.get("metadata"), storage, presignedUrls, id, ttlSeconds, baseUrl, parts, { sessionId, extractionQueue, verificationQueue: c.get("verificationQueue"), thumbnailQueue, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix") });
     } catch (e) {
       if (e instanceof ChecksumMismatchError) {
         return c.json({ error: "Declared SHA-256 does not match the uploaded bytes; nothing was stored" }, 422);
