@@ -3,6 +3,7 @@ import { describeRoute } from "hono-openapi";
 import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata, updateAsset, setAssetAccess, checkSpaChange, enrichAssetWithVersion } from "../usecase";
+import type { SetAccessInput } from "../usecase/set-access";
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { assetResponseSchema, idParamSchema, updateAssetBodySchema } from "../../../shared/openapi";
 import { jsonError, jsonResponse } from "../../openapi";
@@ -50,11 +51,10 @@ export function registerUpdateAssetRoute(app: Hono<AppEnv>) {
       }
 
       if (body.access !== undefined) {
-        // The schema refuses `password` without one, so `""` never reaches the
-        // store: the use case rejects it as missing.
-        const input = body.access === "password"
-          ? { access: body.access, password: body.password ?? "" }
-          : { access: body.access };
+        let input: SetAccessInput;
+        if (body.access !== "password") input = { access: body.access };
+        else if (body.password !== undefined) input = { access: "password", password: body.password };
+        else return c.json({ error: "access \"password\" requires a password" }, 400);
         const result = await setAssetAccess(metadata, existing, input, {
           signingSecret: c.get("signingSecret"),
         });

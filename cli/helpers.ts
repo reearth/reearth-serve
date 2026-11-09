@@ -411,11 +411,25 @@ export function basicAuthHeader(password: string | undefined): Record<string, st
  * The `Authorization` a file download sends: Basic when a site password is
  * configured, else the login token, so a project member reads a restricted
  * asset with the same commands (ADR-014 §6). Public files ignore either.
+ *
+ * Returns a resolver to call per request, because a long `cp -r` or `sync`
+ * can outlive the login token. Concurrent callers share one in-flight
+ * resolution, so parallel workers trigger at most one refresh.
  */
-export async function downloadAuthHeader(password: string | undefined): Promise<Record<string, string>> {
-  if (password) return basicAuthHeader(password);
-  const creds = await freshCredentials();
-  return creds ? { Authorization: `Bearer ${creds.accessToken}` } : {};
+export function downloadAuth(password: string | undefined): () => Promise<Record<string, string>> {
+  if (password) {
+    const header = basicAuthHeader(password);
+    return async () => header;
+  }
+  let pending: Promise<Record<string, string>> | null = null;
+  return () => {
+    pending ??= freshCredentials()
+      .then((creds): Record<string, string> => (creds ? { Authorization: `Bearer ${creds.accessToken}` } : {}))
+      .finally(() => {
+        pending = null;
+      });
+    return pending;
+  };
 }
 
 /**

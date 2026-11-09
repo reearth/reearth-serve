@@ -103,16 +103,37 @@ describe("without a valid bearer", () => {
     expect(get).not.toHaveBeenCalled();
     expect(head).not.toHaveBeenCalled();
   });
+
+  test.each([
+    ["a version-ID URL", `/files/${VERSION_ID}/index.html`, "GET"],
+    ["a thumbnail query", `/files/${ASSET_ID}?thumb=md`, "GET"],
+    ["a HEAD request", `/files/${ASSET_ID}`, "HEAD"],
+  ])("%s is refused the same way, without reading storage", async (_, path, method) => {
+    const { app, storage } = await restrictedFixture();
+    const get = vi.spyOn(storage, "get");
+    const head = vi.spyOn(storage, "head");
+    const anonymous = await app.request(path, { method });
+    expectRefusal(anonymous, 401);
+    expect(anonymous.headers.get("WWW-Authenticate")).toBe("Bearer, ServeToken");
+    const stranger = await app.request(path, {
+      method,
+      headers: { Authorization: `Bearer ${await token("stranger")}` },
+    });
+    expectRefusal(stranger, 404);
+    expect(get).not.toHaveBeenCalled();
+    expect(head).not.toHaveBeenCalled();
+  });
 });
 
 describe("a verified caller", () => {
-  test("a non-member gets the 404 a missing asset gets", async () => {
+  test("a non-member gets the status and body a missing asset gets", async () => {
     const { app } = await restrictedFixture();
-    const res = await app.request(`/files/${ASSET_ID}`, {
-      headers: { Authorization: `Bearer ${await token("stranger")}` },
-    });
+    const stranger = { Authorization: `Bearer ${await token("stranger")}` };
+    const res = await app.request(`/files/${ASSET_ID}`, { headers: stranger });
+    const missing = await app.request("/files/0000000000000000", { headers: stranger });
     expectRefusal(res, 404);
-    expect(await res.json()).toEqual({ error: "File not found" });
+    expect(missing.status).toBe(404);
+    expect(await res.json()).toEqual(await missing.json());
   });
 
   test("a member the authorizer refuses gets the same 404", async () => {
@@ -206,6 +227,22 @@ describe("a site host accepts no bearer", () => {
     expectRefusal(res, 401);
     expect(res.headers.get("WWW-Authenticate")).toBe("ServeToken");
     expect(spy.bound()).toBe(0);
+  });
+
+  test("a named host ignores the bearer too", async () => {
+    const { app, auth, spy } = await restrictedFixture();
+    const claimed = await app.request(`/api/v1/assets/${ASSET_ID}/hosts`, {
+      method: "POST",
+      headers: { ...auth, "Content-Type": "application/json" },
+      body: JSON.stringify({ hostname: "flood-map" }),
+    });
+    expect(claimed.status).toBe(201);
+    const before = spy.bound();
+    const host = `flood-map${SUFFIX}`;
+    const res = await app.request(`http://${host}/`, { headers: { Host: host, ...auth } });
+    expectRefusal(res, 401);
+    expect(res.headers.get("WWW-Authenticate")).toBe("ServeToken");
+    expect(spy.bound()).toBe(before);
   });
 });
 

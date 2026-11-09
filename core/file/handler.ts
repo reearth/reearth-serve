@@ -14,8 +14,8 @@ import { AUTH_PATH_SEGMENT, accessModeOf, resolveAccess, type AccessDeps } from 
 import type { BearerDecision } from "../access/restricted";
 import type { VerifiedCaller } from "../auth/types";
 import { accessCtx, authorizeAsset, deniedResponse } from "../auth/access";
-import { enterCaller, TENANCY_RETRY_AFTER_SECONDS } from "../tenancy/middleware";
-import { TenancyUnavailableError, UnknownAccountError } from "../tenancy/port";
+import { enterCaller, tenancyErrorResponse } from "../tenancy/middleware";
+import { UnknownAccountError } from "../tenancy/port";
 import { SITE_PREVIEW_HEADER, type SitePreview } from "../site/middleware";
 import { hostingFor, isControlFile } from "../site/hosting";
 import {
@@ -302,12 +302,8 @@ async function authorizeBearer(
     return decision.ok ? { ok: true } : refuse(deniedResponse(c, decision, { notFound: "File not found" }));
   } catch (err) {
     if (err instanceof UnknownAccountError) return refuse(c.json({ error: "File not found" }, 404));
-    if (err instanceof TenancyUnavailableError) {
-      console.error(err);
-      const res = c.json({ error: "Authorization service unavailable" }, 503);
-      res.headers.set("Retry-After", String(TENANCY_RETRY_AFTER_SECONDS));
-      return refuse(res);
-    }
+    const outage = tenancyErrorResponse(err as Error, c);
+    if (outage) return refuse(outage);
     throw err;
   }
 }
