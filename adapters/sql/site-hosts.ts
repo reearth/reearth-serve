@@ -11,7 +11,7 @@ import type { SqlClient, SqlValue } from "../../core/sql/port";
 import type { Row } from "../../core/sql/port";
 import { queryAll, queryFirst } from "./helpers";
 
-const COLUMNS =
+export const SITE_HOST_COLUMNS =
   "hostname, asset_id, project_id, kind, verified_at, disabled_at, previews, released_at, " +
   "created_at, created_by, verification_token, certificate_status";
 
@@ -19,26 +19,26 @@ export class SqlSiteHostStore implements SiteHostStore {
   constructor(private db: SqlClient) {}
 
   async find(hostname: string): Promise<SiteHost | null> {
-    const row = await queryFirst(this.db, `SELECT ${COLUMNS} FROM site_hosts WHERE hostname = ?1`, [hostname]);
-    return row ? parse(row) : null;
+    const row = await queryFirst(this.db, `SELECT ${SITE_HOST_COLUMNS} FROM site_hosts WHERE hostname = ?1`, [hostname]);
+    return row ? parseSiteHost(row) : null;
   }
 
   async listByAsset(assetId: string): Promise<SiteHost[]> {
     const rows = await queryAll(
       this.db,
-      `SELECT ${COLUMNS} FROM site_hosts WHERE asset_id = ?1 AND released_at IS NULL ORDER BY created_at ASC`,
+      `SELECT ${SITE_HOST_COLUMNS} FROM site_hosts WHERE asset_id = ?1 AND released_at IS NULL ORDER BY created_at ASC`,
       [assetId],
     );
-    return rows.map(parse);
+    return rows.map(parseSiteHost);
   }
 
   async listByProject(projectId: string): Promise<SiteHost[]> {
     const rows = await queryAll(
       this.db,
-      `SELECT ${COLUMNS} FROM site_hosts WHERE project_id = ?1 AND released_at IS NULL ORDER BY created_at ASC`,
+      `SELECT ${SITE_HOST_COLUMNS} FROM site_hosts WHERE project_id = ?1 AND released_at IS NULL ORDER BY created_at ASC`,
       [projectId],
     );
-    return rows.map(parse);
+    return rows.map(parseSiteHost);
   }
 
   async insert(host: SiteHost): Promise<boolean> {
@@ -46,7 +46,7 @@ export class SqlSiteHostStore implements SiteHostStore {
     // stops two projects from holding one name, released rows included. A
     // caller that loses the race is told the name is taken.
     const result = await this.db.execute(
-      `INSERT OR IGNORE INTO site_hosts (${COLUMNS})
+      `INSERT OR IGNORE INTO site_hosts (${SITE_HOST_COLUMNS})
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)`,
       [
         host.hostname, host.assetId, host.projectId, host.kind,
@@ -99,19 +99,6 @@ export class SqlSiteHostStore implements SiteHostStore {
     );
   }
 
-  async releaseByAsset(assetId: string, releasedAt: number): Promise<string[]> {
-    // One statement so a concurrent claim cannot slip between the read and the
-    // write; RETURNING gives back the hostnames whose cache entries must go.
-    const rows = await queryAll(
-      this.db,
-      `UPDATE site_hosts SET released_at = ?2, asset_id = NULL
-         WHERE asset_id = ?1 AND released_at IS NULL
-         RETURNING hostname`,
-      [assetId, releasedAt],
-    );
-    return rows.map((row) => row.hostname as string);
-  }
-
   async countActiveByProject(projectId: string): Promise<number> {
     const row = await queryFirst(
       this.db,
@@ -137,7 +124,20 @@ export class SqlSiteHostStore implements SiteHostStore {
   }
 }
 
-function parse(row: Row): SiteHost {
+/**
+ * Release every active name of an asset (B3: asset deletion releases, it does
+ * not cascade). Binds `?1` asset id, `?2` release time. Not a store method:
+ * it runs inside `SqlAtomicWrites.deleteAsset`'s batch, so the names go only
+ * if the asset row goes too. One statement, so a concurrent claim cannot slip
+ * between a read and the write; RETURNING hands back the rows for cache drops
+ * and certificate deprovisioning.
+ */
+export const SITE_HOSTS_RELEASE_BY_ASSET_SQL =
+  `UPDATE site_hosts SET released_at = ?2, asset_id = NULL
+     WHERE asset_id = ?1 AND released_at IS NULL
+     RETURNING ${SITE_HOST_COLUMNS}`;
+
+export function parseSiteHost(row: Row): SiteHost {
   return {
     hostname: row.hostname as string,
     assetId: (row.asset_id as string | null) ?? null,

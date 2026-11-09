@@ -1,5 +1,6 @@
 import type { AssetMetadata, AssetVersion, StoredFile, UploadSession, UploadPart } from "./model";
 import type { Job } from "../job/model";
+import type { SiteHost } from "../site/repository";
 
 export interface ListResult<T> {
   items: T[];
@@ -123,8 +124,20 @@ export interface AtomicWrites {
    * `cleanupPrefix` in `cleanup_pending`, so the R2 objects are always
    * reclaimed even if the inline delete that follows fails. Decrements apply
    * only while the asset row still exists, so a repeated delete is a no-op.
+   *
+   * The asset's active site hosts are released (ADR-013 B3) in the same write,
+   * stamped `releasedAt` (default now). Releasing them in a write of their own
+   * first meant a failed row delete left the asset alive with its names
+   * answering 410 and locked in cooldown for 30 days (compliance#258 REL-11).
+   * Returns the released rows so the caller can drop their cache entries and
+   * give up certificates once the write has committed.
    */
-  deleteAsset(input: { asset: AssetMetadata; usageScopes?: string[]; cleanupPrefix: string }): Promise<void>;
+  deleteAsset(input: {
+    asset: AssetMetadata;
+    usageScopes?: string[];
+    cleanupPrefix: string;
+    releasedAt?: number;
+  }): Promise<{ releasedSiteHosts: SiteHost[] }>;
 }
 
 /**

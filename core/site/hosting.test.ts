@@ -49,7 +49,7 @@ function memoryWrites(assets: Map<string, AssetMetadata>, jobs: MemoryJobStore):
       await jobs.save(job);
       if (asset) assets.set(asset.id, asset);
     },
-    async deleteAsset() {},
+    async deleteAsset() { return { releasedSiteHosts: [] }; },
   };
 }
 

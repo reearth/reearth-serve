@@ -428,9 +428,14 @@ states: they are capability URLs and stay reachable while the asset exists.
   cooldown has run out but before the cron sweeps also purges the stale row,
   so a free name is claimable immediately rather than on the cron's
   schedule.
-- **Asset deletion releases.** `deleteAsset` releases the asset's names
-  before dropping its row, in one `UPDATE … RETURNING` so a concurrent claim
-  cannot slip between a read and a write.
+- **Asset deletion releases.** The asset's names are released by one
+  `UPDATE … RETURNING`, so a concurrent claim cannot slip between a read and
+  a write, and that statement runs inside `AtomicWrites.deleteAsset`'s
+  batch with the row deletes. The first cut released them in a write of its
+  own before the batch: a batch that then failed left the asset alive and
+  its names answering 410, unrecoverable for 30 days (compliance#258
+  REL-11). The cache drops and the certificate deprovisioning of verified
+  custom domains run only after the batch commits.
 - Releasing frees a slot against the per-project quota immediately, even
   though the row is still held.
 
@@ -728,7 +733,7 @@ session state. The HMAC secret is a deployment secret alongside
 
 **Password storage.** `hosting.passwordHash` on the asset as PBKDF2-SHA256
 (WebCrypto, available on every runtime per ADR-012) with a per-asset salt
-and ≥ 600k iterations — checked once per form submit or Basic header, not
+and 100k iterations, the most workerd allows (see Implementation) — checked once per form submit or Basic header, not
 per file; the cookie carries the result. The hash is stripped from every
 API response.
 
@@ -857,11 +862,19 @@ every URL form, cookie/Basic proof, `private` caching, credentialed CORS
   (ADR-014 §4), so the two rotate apart. Unset, `PATCH` to `password`
   is `503` and a protected asset answers `503 "SIGNING_SECRET not
   configured"` rather than serving its bytes.
-- **Password storage.** PBKDF2-SHA256 via WebCrypto, 600 000 iterations,
+- **Password storage.** PBKDF2-SHA256 via WebCrypto, 100 000 iterations,
   16-byte random salt, both base64. The work factor is encoded *inside* the
-  stored hash (`pbkdf2-sha256$600000$…`) so it can be raised without a
-  migration and old hashes still verify; the unit suite injects a low count
-  for speed and therefore exercises the same code path. The hash and salt are
+  stored hash (`pbkdf2-sha256$100000$…`); the unit suite injects a low count
+  for speed and therefore exercises the same code path. 100 000 is a hard
+  ceiling (`MAX_ITERATIONS`), not a starting point: workerd throws
+  `NotSupportedError` for PBKDF2 above it, and `wrangler dev` and Node do not.
+  The first cut used 600 000 (the OWASP figure), passed every local run, and
+  failed every password set on a deployed Worker (compliance#258 SCA-04). The
+  cap is enforced on every runtime: `hashPassword` refuses a higher count and
+  `verifyPassword` treats one as malformed and answers false, so a hash
+  written on Node always verifies on Workers. Below OWASP's figure, the
+  limiter below is what keeps a shared password from being guessed online;
+  the hash only matters if the row leaks. The hash and salt are
   deliberately **not** on `AssetMetadata` — they are read by their own
   statement, for protected assets only — which makes "never in an API
   response" a property of the store rather than a rule to remember at each
@@ -879,16 +892,14 @@ every URL form, cookie/Basic proof, `private` caching, credentialed CORS
   socket address before the app runs, so a client that reaches the process
   directly cannot pick its own bucket. On Workers the edge sets
   `CF-Connecting-IP`.
-- **Successful checks are memoized.** 600 000 iterations cost tens of
+- **Successful checks are memoized.** 100 000 iterations cost tens of
   milliseconds of CPU, and a tool sending Basic pays them on every tile.
   Each isolate remembers successful checks for 300 seconds, at most 1,000
   entries with least-recently-used eviction, keyed by
   `HMAC-SHA256(isolateKey, assetId | password_version | password)` under a
   random 32-byte key. The form and Basic share the memo. A hit skips the
   limiter's KV read and delete. A password change misses at once, because
-  the version is in the key. workerd's source caps PBKDF2 at 100 000
-  iterations, which `wrangler dev` does not enforce, so a deployed Worker
-  must be checked once before a password is set in production.
+  the version is in the key.
 - **The OIDC middleware no longer runs on `/files/*`.** It rejects every
   `Authorization` header that is not a Bearer token with `401`, so `curl -u`
   against a protected asset never reached the file handler. Those requests

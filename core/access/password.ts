@@ -9,15 +9,24 @@
  * The work factor travels *inside* the stored hash rather than in a column of
  * its own:
  *
- *     pbkdf2-sha256$600000$<base64 derived key>
+ *     pbkdf2-sha256$100000$<base64 derived key>
  *
- * so raising the iteration count later re-verifies old hashes unchanged, and a
- * test can hash at 1 000 iterations without a second storage field. Only the
- * salt is stored separately, because that is the column ADR-013 B7 names.
+ * so a test can hash at 1 000 iterations without a second storage field. Only
+ * the salt is stored separately, because that is the column ADR-013 B7 names.
+ *
+ * The count is capped at {@link MAX_ITERATIONS} on every runtime, not only on
+ * Workers. workerd rejects PBKDF2 above 100 000 iterations with
+ * `NotSupportedError`, and `wrangler dev` and Node do not, so the old 600 000
+ * default worked in every local run and failed every password set on a
+ * deployed Worker (compliance#258 SCA-04). Enforcing the cap here keeps a hash
+ * written on one runtime verifiable on the other.
  */
 
-/** ADR-013 B7: "≥ 600k iterations". */
-export const DEFAULT_ITERATIONS = 600_000;
+/** workerd's PBKDF2 ceiling; the most any runtime in ADR-012 can verify. */
+export const MAX_ITERATIONS = 100_000;
+
+/** ADR-013 B7. As high as {@link MAX_ITERATIONS} allows. */
+export const DEFAULT_ITERATIONS = MAX_ITERATIONS;
 
 /** Bounds the API enforces on a submitted password. */
 export const PASSWORD_MIN_LENGTH = 8;
@@ -74,6 +83,9 @@ export async function hashPassword(
   opts: { iterations?: number; salt?: Uint8Array } = {},
 ): Promise<PasswordHash> {
   const iterations = opts.iterations ?? DEFAULT_ITERATIONS;
+  if (!Number.isSafeInteger(iterations) || iterations <= 0 || iterations > MAX_ITERATIONS) {
+    throw new RangeError(`PBKDF2 iterations must be 1..${MAX_ITERATIONS}, got ${iterations}`);
+  }
   const salt = opts.salt ?? crypto.getRandomValues(new Uint8Array(SALT_BYTES));
   const derived = await derive(password, salt, iterations);
   return {
@@ -87,13 +99,15 @@ export async function hashPassword(
  *
  * A malformed or unknown-algorithm hash is `false` rather than an exception:
  * this runs on the request path, and a row we cannot read must fail closed
- * without taking the response down with it.
+ * without taking the response down with it. A count above
+ * {@link MAX_ITERATIONS} counts as malformed: workerd would throw on it, and
+ * the answer must not depend on which runtime is asking.
  */
 export async function verifyPassword(password: string, stored: PasswordHash): Promise<boolean> {
   const parts = stored.hash.split("$");
   if (parts.length !== 3 || parts[0] !== ALGORITHM) return false;
   const iterations = Number.parseInt(parts[1], 10);
-  if (!Number.isSafeInteger(iterations) || iterations <= 0) return false;
+  if (!Number.isSafeInteger(iterations) || iterations <= 0 || iterations > MAX_ITERATIONS) return false;
 
   let salt: Uint8Array;
   try {

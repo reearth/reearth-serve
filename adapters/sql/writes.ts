@@ -8,6 +8,7 @@ import {
   USAGE_INCREMENT_SQL, usageIncrementArgs,
   CLEANUP_PENDING_ADD_SQL,
 } from "./stores";
+import { parseSiteHost, SITE_HOSTS_RELEASE_BY_ASSET_SQL } from "./site-hosts";
 
 // Runs before the version and asset rows are deleted in the same batch: it
 // reads their sizes, and the EXISTS guard skips it once the asset is gone.
@@ -49,18 +50,21 @@ export class SqlAtomicWrites implements AtomicWrites {
     return { ...version, version: assignedVersion(results[versionIndex].rows) };
   }
 
-  async deleteAsset({ asset, usageScopes, cleanupPrefix }: Parameters<AtomicWrites["deleteAsset"]>[0]): Promise<void> {
+  async deleteAsset({ asset, usageScopes, cleanupPrefix, releasedAt }: Parameters<AtomicWrites["deleteAsset"]>[0]) {
     const now = Date.now();
     const statements: SqlStatement[] = (usageScopes ?? []).map((scope) => ({
       sql: USAGE_DECREMENT_FOR_ASSET_SQL,
       args: [scope, asset.size, asset.id, now],
     }));
+    const releaseIndex = statements.length;
     statements.push(
+      { sql: SITE_HOSTS_RELEASE_BY_ASSET_SQL, args: [asset.id, releasedAt ?? now] },
       { sql: "DELETE FROM asset_versions WHERE asset_id = ?1", args: [asset.id] },
       { sql: "DELETE FROM assets WHERE id = ?1", args: [asset.id] },
       { sql: CLEANUP_PENDING_ADD_SQL, args: [cleanupPrefix, now] },
     );
-    await this.db.batch(statements);
+    const results = await this.db.batch(statements);
+    return { releasedSiteHosts: results[releaseIndex].rows.map(parseSiteHost) };
   }
 
   async saveJob({ job, asset, version }: Parameters<AtomicWrites["saveJob"]>[0]): Promise<void> {

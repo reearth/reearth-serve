@@ -3,7 +3,7 @@
  * cookie, the `Authorization: Basic` decode, and the open-redirect guard on
  * `next`.
  *
- * All of it runs at {@link TEST_ITERATIONS} rather than the production 600 000
+ * All of it runs at {@link TEST_ITERATIONS} rather than the production 100 000
  * — the work factor travels inside the stored hash, so these verify through
  * exactly the same code path a production hash does.
  */
@@ -24,6 +24,7 @@ import {
   constantTimeEqual,
   DEFAULT_ITERATIONS,
   hashPassword,
+  MAX_ITERATIONS,
   verifyPassword,
 } from "./password";
 import { safeNextPath } from "./resolve";
@@ -52,8 +53,23 @@ describe("PBKDF2 password hashing", () => {
   test("the work factor is inside the hash, so it can be raised later", async () => {
     const stored = await hashPassword("pw", { iterations: TEST_ITERATIONS });
     expect(stored.hash.startsWith(`pbkdf2-sha256$${TEST_ITERATIONS}$`)).toBe(true);
-    // Production hashes at 600k unless a caller says otherwise.
-    expect(DEFAULT_ITERATIONS).toBe(600_000);
+    // Production hashes at 100k unless a caller says otherwise.
+    expect(DEFAULT_ITERATIONS).toBe(100_000);
+  });
+
+  // compliance#258 SCA-04: workerd throws NotSupportedError above 100 000.
+  test("the production default stays within the Workers PBKDF2 cap", async () => {
+    expect(DEFAULT_ITERATIONS).toBeLessThanOrEqual(MAX_ITERATIONS);
+    const stored = await hashPassword("pw");
+    expect(stored.hash.startsWith(`pbkdf2-sha256$${MAX_ITERATIONS}$`)).toBe(true);
+    expect(await verifyPassword("pw", stored)).toBe(true);
+  });
+
+  test("a count above the cap is refused when hashing and fails closed when verifying", async () => {
+    await expect(hashPassword("pw", { iterations: MAX_ITERATIONS + 1 })).rejects.toThrow(RangeError);
+    const stored = await hashPassword("pw", { iterations: TEST_ITERATIONS });
+    const [, , key] = stored.hash.split("$");
+    expect(await verifyPassword("pw", { ...stored, hash: `pbkdf2-sha256$600000$${key}` })).toBe(false);
   });
 
   test("a malformed stored hash fails closed instead of throwing", async () => {
