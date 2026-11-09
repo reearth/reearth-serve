@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
 import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
+import { toVersionResponse } from "../response";
 import { getAssetMetadata, updateVersion } from "../usecase";
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { versionResponseSchema, versionParamSchema, updateVersionBodySchema } from "../../../shared/openapi";
@@ -35,7 +36,7 @@ export function registerUpdateVersionRoute(app: Hono<AppEnv>) {
         return c.json({ error: "Version not found" }, 404);
       }
 
-      return c.json({ version: updated });
+      return c.json({ version: toVersionResponse(updated) });
     },
   );
 }

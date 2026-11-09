@@ -5,6 +5,7 @@ import { decompressStream } from "../asset/compression";
 import type { AssetMetadata, AssetVersion, StoredFile } from "../asset/model";
 import type { FileStorage } from "../asset/repository";
 import { resolveAssetVersion } from "../asset/usecase";
+import { originalKey } from "../blob/model";
 import { legacyThumbKey, versionThumbKey } from "../asset/usecase/shared";
 import { cacheControlFor, etagMatches, representationEtag } from "./caching";
 import { addVary, applyCors, preflightResponse, type CorsPolicy } from "./cors";
@@ -75,7 +76,8 @@ function detectThumbRequest(
  * `assets/{asset}/v/{version}/…`; assets that predate ADR-005 use
  * `assets/{asset}/…`. The two differ only in prefix and in where the main
  * file's HTTP metadata comes from, so the delivery code works against this
- * shape and never against the raw asset/version rows.
+ * shape and never against the raw asset/version rows. The main file itself
+ * may be a blob outside either prefix (ADR-017 §3); `originalKey` says which.
  */
 interface Layout {
   archive: boolean;
@@ -96,7 +98,7 @@ function versionedLayout(asset: AssetMetadata, version: AssetVersion): Layout {
   return {
     archive: version.type === "archive",
     filename: version.filename,
-    mainKey: `${prefix}/${version.filename}`,
+    mainKey: originalKey(version),
     entryKey: (path) => `${prefix}/files/${path}`,
     contentType: version.contentType,
     contentEncoding: version.contentEncoding,
@@ -110,7 +112,7 @@ function legacyLayout(asset: AssetMetadata): Layout {
   return {
     archive: asset.type === "archive",
     filename: asset.filename,
-    mainKey: `${prefix}/${asset.filename}`,
+    mainKey: originalKey(asset),
     entryKey: (path) => `${prefix}/files/${path}`,
     contentType: asset.contentType,
     contentEncoding: asset.contentEncoding,

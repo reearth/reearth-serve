@@ -300,5 +300,6 @@ function verificationDeps(c: Context<AppEnv>): VerificationDeps {
     cache: c.get("cache"),
     customHostnames: c.get("customHostnames"),
     siteHostSuffix: c.get("siteHostSuffix"),
+    blobRefs: c.get("blobRefs"),
   };
 }

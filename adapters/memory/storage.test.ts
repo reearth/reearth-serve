@@ -37,14 +37,19 @@ describe("MemoryFileStorage", () => {
     expect(await storage.head("nope")).toBeNull();
   });
 
-  test("head reports size, encoding and a content-dependent etag", async () => {
+  test("head reports size, encoding, a content-dependent etag and the write time", async () => {
     const storage = new MemoryFileStorage();
+    const before = Date.now();
     await storage.put("a", stream(bytes("hello")), "text/plain", 5, { contentEncoding: "gzip" });
     await storage.put("b", stream(bytes("world")), "text/plain", 5);
 
     const a = await storage.head("a");
     const b = await storage.head("b");
-    expect(a).toEqual({ size: 5, contentEncoding: "gzip", etag: expect.any(String), sha256: expect.stringMatching(/^[0-9a-f]{64}$/) });
+    expect(a).toEqual({
+      size: 5, contentEncoding: "gzip", etag: expect.any(String), sha256: expect.stringMatching(/^[0-9a-f]{64}$/),
+      uploadedAt: expect.any(Number),
+    });
+    expect(a!.uploadedAt).toBeGreaterThanOrEqual(before);
     expect(a!.etag).not.toBe(b!.etag);
   });
 

@@ -4,6 +4,7 @@ import type { AtomicWrites, FileStorage, MetadataStore } from "../repository";
 import type { Job } from "../../job/model";
 import { generateId, versionStorageKey } from "./shared";
 import { UploadUnderVerificationError } from "../integrity";
+import { placeDirectUpload, type BlobContext } from "../../blob/usecase";
 import { siteUrlFor } from "../../site/url";
 import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
@@ -36,7 +37,12 @@ export async function uploadVersion(
     sha256?: string;
   },
   baseUrl: string,
-  options?: { extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string },
+  options?: {
+    extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null;
+    skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string;
+    /** Blob ledger and the asset's scope: a declared upload is stored at its blob key (ADR-017 §3). */
+    blob?: BlobContext;
+  },
 ): Promise<UploadVersionResult | null> {
   const asset = await metadata.find(assetId);
   if (!asset) return null;
@@ -47,7 +53,10 @@ export async function uploadVersion(
   const versionId = generateId();
   const now = Date.now();
   const contentType = file.type || "application/octet-stream";
-  const key = versionStorageKey(assetId, versionId, file.name);
+  const placement = options?.blob
+    ? await placeDirectUpload(options.blob.refs, options.blob.scope, file.sha256, versionStorageKey(assetId, versionId, file.name), now)
+    : { key: versionStorageKey(assetId, versionId, file.name) };
+  const key = placement.key;
 
   // Declared or not, the store hands back the hash of what it stored, so the
   // row is `verified` either way (ADR-017 §2). A declared mismatch throws
@@ -79,6 +88,7 @@ export async function uploadVersion(
       ...(!options?.skipExtraction && { status: "pending" as const }),
       archiveFormat,
     }),
+    ...(placement.ref && { blobKey: placement.ref.key }),
   };
 
   // Create extraction job for archives
@@ -107,6 +117,7 @@ export async function uploadVersion(
       version: versionInput,
       job,
       usageScopes: asset.projectId ? options?.usageScopes : [],
+      ...(placement.ref && { blob: { ref: placement.ref, state: "ready" as const } }),
     });
 
     // Enqueue only after the rows are committed: the consumer reads them.
@@ -134,11 +145,14 @@ export async function uploadVersion(
     });
   } catch (e) {
     // Compensation: drop the orphaned R2 object so it doesn't leak forever
-    // if the D1 version row failed to persist.
-    try {
-      await storage.delete(key);
-    } catch (delErr) {
-      console.error("Failed to clean up R2 object after version save failure:", delErr);
+    // if the D1 version row failed to persist. Never a blob: other rows may
+    // reference it, and the grace and orphan sweeps reclaim it if none does.
+    if (!placement.ref) {
+      try {
+        await storage.delete(key);
+      } catch (delErr) {
+        console.error("Failed to clean up R2 object after version save failure:", delErr);
+      }
     }
     throw e;
   }

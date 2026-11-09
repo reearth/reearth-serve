@@ -9,6 +9,7 @@ type Entry = {
   contentEncoding?: string;
   etag: string;
   sha256: string;
+  uploadedAt: number;
 };
 
 /**
@@ -70,6 +71,7 @@ export class MemoryFileStorage implements FileStorage {
       contentEncoding: options?.contentEncoding,
       etag: `"${md5(data)}"`,
       sha256,
+      uploadedAt: Date.now(),
     });
     return { sha256 };
   }
@@ -102,10 +104,16 @@ export class MemoryFileStorage implements FileStorage {
     };
   }
 
-  async head(key: string): Promise<{ size: number; contentEncoding?: string; etag?: string; sha256?: string } | null> {
+  async head(key: string): Promise<{ size: number; contentEncoding?: string; etag?: string; sha256?: string; uploadedAt?: number } | null> {
     const entry = this.objects.get(key);
     if (!entry) return null;
-    return { size: entry.data.byteLength, contentEncoding: entry.contentEncoding, etag: entry.etag, sha256: entry.sha256 };
+    return { size: entry.data.byteLength, contentEncoding: entry.contentEncoding, etag: entry.etag, sha256: entry.sha256, uploadedAt: entry.uploadedAt };
+  }
+
+  /** Backdate an object's write time, so a test can age it past a grace period. For tests only. */
+  setUploadedAt(key: string, uploadedAt: number): void {
+    const entry = this.objects.get(key);
+    if (entry) entry.uploadedAt = uploadedAt;
   }
 
   async delete(key: string): Promise<void> {

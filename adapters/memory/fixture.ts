@@ -420,6 +420,7 @@ export async function fixture(overrides?: Partial<Deps>) {
       createAsset: () => { throw new Error('fake dependency "writes.createAsset" was called unexpectedly'); },
       createVersion: () => { throw new Error('fake dependency "writes.createVersion" was called unexpectedly'); },
       saveJob: () => { throw new Error('fake dependency "writes.saveJob" was called unexpectedly'); },
+      deleteVersion: () => { throw new Error('fake dependency "writes.deleteVersion" was called unexpectedly'); },
       async deleteAsset({ asset, releasedAt }) {
         metadata.assets.delete(asset.id);
         for (const [id, v] of versions.versions) if (v.assetId === asset.id) versions.versions.delete(id);
@@ -438,6 +439,7 @@ export async function fixture(overrides?: Partial<Deps>) {
     verificationQueue: null,
     storageUsage: unused("storageUsage"),
     pendingCleanup: { add: async () => {}, list: async () => [], remove: async () => {} },
+    blobRefs: unused("blobRefs"),
     anonymousUploadEnabled: false,
     siteHostSuffix: undefined,
     siteHosts,

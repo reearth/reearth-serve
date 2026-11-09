@@ -403,11 +403,84 @@ not vouch for is now hashed once by Serve.
   read earlier, so the asset upsert keeps `sha256` / `integrity` once the row
   is `verified`, whatever the copy says.
 
+**P2 — the blob layer (done).** Declared uploads are stored at
+`blobs/{scope}/{sha256}`; undeclared ones keep their per-asset key. URLs,
+responses and usage accounting do not change.
+
+- Ledger: migration `0009_blob_layer.sql` adds `blob_key` to `assets` and
+  `asset_versions` (NULL = the classic key) and the `blob_refs` table (`key`,
+  `scope`, `sha256`, `ref_count`, `state`, `claim_id`, `claim_expires_at`,
+  `zero_since`). `blob_key` is written when the row is created and never moves:
+  the asset upsert keeps an existing value over the model's. Every reader
+  resolves the original object through `originalKey` (`core/blob/model.ts`):
+  `/files`, the file listing, extraction launches and retries, thumbnail
+  messages, the verification message's `objectKey`. Extracted entries,
+  thumbnails and slots stay under the asset's prefix, so site hosting
+  (`core/site/hosting.ts`), which reads only extracted entries, is unchanged.
+  The extractor and verifier read the key they are given (`ARCHIVE_KEY`,
+  `OBJECT_KEY`) and derive only their output prefix from IDs, so the container
+  contract is unchanged. `blobKey` is on the domain model but not in the API:
+  responses go through `core/asset/response.ts`, which drops it.
+- Scope: `blobScope` (`core/blob/model.ts`) — the project's workspace,
+  `p_{projectId}` when the project has none, `_demo` without a project.
+- States: `uploading` (claimed by a session, no reference yet), `verifying`
+  (claim completed, hash not yet confirmed), `ready`, and `deleting` — the lock
+  a sweep takes before it removes an object. Nothing reserves, claims or
+  attaches to a key in `deleting`, so an object cannot be rewritten between a
+  sweep's decision and its delete.
+- Direct uploads (first upload and new version) are store-verified, so they
+  *reserve* the key: allowed when it is free, `ready`, or held by an expired
+  claim. Reserving a key no row references restarts its grace clock, so no
+  sweep can take it while the bytes are in flight. The body is always written,
+  which rewrites identical bytes when the blob exists; skipping the write is
+  P3. When the key is claimed, unverified or being deleted, the upload goes to
+  its classic key instead. The reference is taken in the same batch as the row
+  (`AtomicWrites.createAsset` / `createVersion`, `blob` input), after the bytes.
+  A failed row write no longer deletes the object when it is a blob: other
+  rows may reference it, and the sweeps reclaim it if none does.
+- Presigned sessions with a declared hash, single PUT or multipart, *claim*
+  the key (R2 keeping the single PUT's checksum is still unconfirmed, so it is
+  not treated as store-verified). A live claim by another session → **409**;
+  the claim lasts as long as the session. When the blob already holds bytes
+  (`ready`, `verifying`, `deleting`) the session falls back to its classic key:
+  refusing would break a client that uploads the same file twice, and
+  overwriting is what §3 forbids. P3 replaces the fallback with the
+  short-circuit. Completion checks the claim is still the session's, then
+  turns it into the first reference — `ready` if the store vouched for the
+  hash, `verifying` otherwise. A store-reported mismatch at completion deletes
+  the object before releasing the claim.
+- P1b on a blob: a match marks it `ready`. A mismatch deletes the asset
+  through `deleteAsset` (which releases its reference) and then the object
+  only if no other row references the key (`discardRejectedBlob`). In P2
+  nothing can — only a `ready` blob takes new references — but the rule is in
+  place for P3.
+- Deletes: `deleteAsset` releases the references the asset row and its
+  versions hold, counted from the rows inside the batch so a version created
+  meanwhile is not missed. Version deletion is now one atomic write
+  (`AtomicWrites.deleteVersion`): row, blob reference and usage decrement; the
+  usage decrement used to be separate calls in the route. Demo TTL expiry goes
+  through `AtomicWrites.deleteAsset` too. No path deletes a blob object inline.
+  A blob at zero gets `zero_since`.
+- Cleanup cron (`sweepBlobs`, `core/blob/usecase.ts`), after the prefix
+  drain and on the same subrequest budget: drop `uploading` claims past their
+  expiry (a partial multipart upload is left to the store's abort policy);
+  delete blobs with `ref_count = 0` for `BLOB_GRACE_MS` (24 h), finishing any
+  `deleting` lock a crashed sweep left; then reconcile one page of 200 `blobs/`
+  keys against `blob_refs`, deleting objects with no row whose store-reported
+  write time (`FileStorage.head().uploadedAt`, R2 `uploaded`) is older than the
+  grace period. The listing cursor lives in the `cache` KeyValue; losing it
+  restarts the listing.
+- Usage (ADR-004) is unchanged: counters move per asset and version row by
+  the row's size, whether or not the bytes are shared.
+
 **Remaining.**
 
-- **P2**: the `blobs/{scope}/{sha256}` layer for declared uploads (§3), with
-  the version row recording which key holds its bytes.
-- **P3**: workspace-scoped deduplication and `blob_refs` claims (§3–§5).
+- **P3**: workspace-scoped deduplication (§4): a direct upload whose blob is
+  `ready` skips the write after reading the body (or, with an empty body,
+  creates the version without transfer); a session for an existing blob
+  short-circuits instead of falling back to the classic key. Only a `ready`
+  blob with `ref_count > 0` may be short-circuited to: a `ready` row at zero
+  can be a reservation whose upload failed and left no object.
 - **P4**: backfill of `sha256` for versions stored before ADR-017.
 - **P5**: the CLI declaring `X-Content-SHA256` / `sha256` on every upload.
   Once it does, a client that uploads a version right after a large
@@ -433,3 +506,17 @@ not vouch for is now hashed once by Serve.
   notify the uploader (ADR-018 §6 asks for one).
 - `deleteAsset` leaves job rows behind, so the jobs of a deleted asset stay
   listed. This predates ADR-017.
+- A blob whose verification runs out of retries stays `verifying`: it keeps
+  serving, is never reused (later uploads of it go to their classic key), and
+  is swept once nothing references it. Marking a verified blob `ready` is a
+  write of its own after the row's; if it is lost, the blob is in that same
+  state.
+- The orphan sweep needs the store to report when an object was written. R2
+  and the memory adapter do; a store that does not leaves orphans alone. A full
+  pass over `blobs/` takes one tick per 200 keys.
+- Rows stored before P2 have `blob_key` NULL and stay at their classic keys.
+  Moving them into the blob layer would need the backfilled hash (P4) and a
+  copy per object; nothing does it yet.
+- The scope is fixed when the bytes are stored. A project that later moved to
+  another workspace would keep its blobs in the old scope (reads still work,
+  because the row records the key). No API moves a project today.

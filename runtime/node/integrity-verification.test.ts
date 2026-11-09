@@ -119,6 +119,8 @@ describe("presigned multipart uploads", () => {
     expect((await call("GET", `/api/v1/assets/${asset.id}`)).status).toBe(404);
     expect((await call("GET", `/files/${asset.id}/site.zip`)).status).toBe(404);
     expect((await runtime.deps.storage.list(`assets/${asset.id}/`)).keys).toEqual([]);
+    // The declared upload was a blob (ADR-017 §3), referenced by nothing else.
+    expect((await runtime.deps.storage.list("blobs/")).keys).toEqual([]);
 
     const job = await verificationJobOf(asset.id);
     expect(job.status).toBe("failed");

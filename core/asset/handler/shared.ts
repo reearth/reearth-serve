@@ -2,6 +2,7 @@ import type { Context } from "hono";
 import type { AppEnv } from "../../types";
 import { accessCtx, authorizeProject } from "../../auth/access";
 import { usageScopesFor } from "../usecase/shared";
+import { blobScopeFor, type BlobContext } from "../../blob/usecase";
 
 /**
  * Block uploads from unauthenticated callers when anonymous uploads are
@@ -70,4 +71,18 @@ export async function usageScopes(
   projectId: string | null | undefined,
 ): Promise<string[]> {
   return usageScopesFor(c.get("projects"), projectId);
+}
+
+/**
+ * The blob ledger and scope an upload into `projectId` is placed with
+ * (ADR-017 §3). Resolved only when the upload declared a hash: an undeclared
+ * one never touches the blob layer, so it pays no project lookup for it.
+ */
+export async function blobContext(
+  c: Context<AppEnv>,
+  projectId: string | null | undefined,
+  sha256: string | undefined,
+): Promise<BlobContext | undefined> {
+  if (!sha256) return undefined;
+  return { refs: c.get("blobRefs"), scope: await blobScopeFor(c.get("projects"), projectId) };
 }

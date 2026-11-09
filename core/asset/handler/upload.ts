@@ -1,8 +1,9 @@
 import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
 import type { AppEnv } from "../../types";
+import { toUploadResponse } from "../response";
 import { uploadAsset } from "../usecase";
-import { denyAnonymousUpload, resolveUploadProject, usageScopes } from "./shared";
+import { blobContext, denyAnonymousUpload, resolveUploadProject, usageScopes } from "./shared";
 import { assetUploadResultExamples } from "../../openapi-examples";
 import { uploadResultResponseSchema } from "../../../shared/openapi";
 import { isSafeFilename } from "../../../shared/api";
@@ -90,6 +91,7 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
 
     // Resolved up front so the counters ride along in the upload's batch.
     const scopes = await usageScopes(c, projectId);
+    const blob = await blobContext(c, projectId, sha256);
 
     try {
       const result = await uploadAsset(
@@ -98,10 +100,10 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
         { name: filename, type: contentType, body, size, contentEncoding, originalSize, sha256 },
         ttlSeconds,
         baseUrl,
-        { sessionId, projectId, extractionQueue, thumbnailQueue, skipExtraction, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix") },
+        { sessionId, projectId, extractionQueue, thumbnailQueue, skipExtraction, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix"), blob },
       );
 
-      return c.json(result, 201);
+      return c.json(toUploadResponse(result), 201);
     } catch (e) {
       if (e instanceof ChecksumMismatchError) {
         return c.json({ error: "Declared SHA-256 does not match the uploaded bytes; nothing was stored" }, 422);

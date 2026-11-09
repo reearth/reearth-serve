@@ -4,7 +4,8 @@ import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { createUploadSession } from "../usecase";
 import { createUploadSessionExamples, uploadSessionExamples } from "../../openapi-examples";
-import { denyAnonymousUpload, resolveUploadProject } from "./shared";
+import { blobContext, denyAnonymousUpload, resolveUploadProject } from "./shared";
+import { BlobClaimedError } from "../../blob/usecase";
 import {
   uploadSessionResponseSchema, createUploadSessionBodySchema,
 } from "../../../shared/openapi";
@@ -19,7 +20,7 @@ export function registerCreateUploadSessionRoute(app: Hono<AppEnv>) {
     describeRoute({
       tags: ["Assets"],
       summary: "Create upload session with presigned URL",
-      description: "Step 1 of a presigned upload. Without `partCount` (or with 1) the response is a single presigned PUT URL; with `partCount` > 1 it is one URL per part (multipart). An optional `sha256` declares the hash of the bytes to be stored (after gzip when the response says `contentEncoding: gzip`): on a single PUT it is signed into the URL, the client must send every header in the response's `headers` (including `x-amz-checksum-sha256`), and the store rejects a body that does not match; on multipart it is recorded and the version stays `integrity: pending` until verified. Upload the bytes straight to storage, then call `POST /api/v1/assets/uploads/{id}/complete`.",
+      description: "Step 1 of a presigned upload. Without `partCount` (or with 1) the response is a single presigned PUT URL; with `partCount` > 1 it is one URL per part (multipart). An optional `sha256` declares the hash of the bytes to be stored (after gzip when the response says `contentEncoding: gzip`): on a single PUT it is signed into the URL, the client must send every header in the response's `headers` (including `x-amz-checksum-sha256`), and the store rejects a body that does not match; on multipart it is recorded and the version stays `integrity: pending` until verified. While another session uploads the same declared hash into the same workspace, the request answers 409 until that session completes or expires. Upload the bytes straight to storage, then call `POST /api/v1/assets/uploads/{id}/complete`.",
       parameters: [projectIdHeaderParam],
       requestBody: {
         required: true,
@@ -30,6 +31,7 @@ export function registerCreateUploadSessionRoute(app: Hono<AppEnv>) {
         400: jsonError("Bad request (invalid body, or X-Project-Id missing for an authenticated caller)"),
         401: jsonError("Anonymous upload disabled, or invalid token / session ID"),
         404: jsonError("Project not found"),
+        409: jsonError("Another upload session for the same declared sha256 is in progress in this workspace"),
         501: jsonError("Presigned uploads not available"),
       },
     }),
@@ -53,15 +55,20 @@ export function registerCreateUploadSessionRoute(app: Hono<AppEnv>) {
         return c.json({ error: projectResult.error }, projectResult.status);
       }
 
-      const result = await createUploadSession(sessions, presignedUrls, {
-        filename: body.filename,
-        contentType: body.contentType || "application/octet-stream",
-        size: body.size,
-        partCount: body.partCount,
-        sha256: body.sha256,
-      }, ttlSeconds, { sessionId, projectId: projectResult.projectId });
-
-      return c.json(result, 201);
+      const blob = await blobContext(c, projectResult.projectId, body.sha256?.toLowerCase());
+      try {
+        const result = await createUploadSession(sessions, presignedUrls, {
+          filename: body.filename,
+          contentType: body.contentType || "application/octet-stream",
+          size: body.size,
+          partCount: body.partCount,
+          sha256: body.sha256,
+        }, ttlSeconds, { sessionId, projectId: projectResult.projectId, blob });
+        return c.json(result, 201);
+      } catch (e) {
+        if (e instanceof BlobClaimedError) return c.json({ error: e.message }, 409);
+        throw e;
+      }
     },
   );
 }

@@ -80,7 +80,7 @@ export class R2FileStorage implements FileStorage {
     return result;
   }
 
-  async head(key: string): Promise<{ size: number; contentEncoding?: string; etag?: string; sha256?: string } | null> {
+  async head(key: string): Promise<{ size: number; contentEncoding?: string; etag?: string; sha256?: string; uploadedAt?: number } | null> {
     const obj = await this.bucket.head(key);
     if (!obj) return null;
     // R2 keeps a SHA-256 only when the upload supplied one (binding `sha256`
@@ -90,6 +90,7 @@ export class R2FileStorage implements FileStorage {
       size: obj.size,
       contentEncoding: obj.httpMetadata?.contentEncoding,
       etag: obj.etag,
+      uploadedAt: obj.uploaded.getTime(),
       ...(sha256 && { sha256: bytesToHex(sha256) }),
     };
   }

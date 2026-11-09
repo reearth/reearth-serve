@@ -1,6 +1,18 @@
 import type { AssetMetadata, AssetVersion, StoredFile, UploadSession, UploadPart } from "./model";
 import type { Job } from "../job/model";
 import type { SiteHost } from "../site/repository";
+import type { BlobRefKey } from "../blob/model";
+
+/**
+ * A reference to a blob, taken in the same batch as the row that holds it
+ * (ADR-017 §5). The row's `blobKey` is `ref.key`. `state` is what a claimed
+ * key becomes: `ready` when the store vouched for the bytes, `verifying` when
+ * the integrity job has yet to.
+ */
+export interface BlobAttach {
+  ref: BlobRefKey;
+  state: "ready" | "verifying";
+}
 
 export interface ListResult<T> {
   items: T[];
@@ -109,12 +121,20 @@ export interface AtomicWrites {
    * A new asset, its optional extraction job, its optional hash verification
    * job (ADR-017 §2), and storage-usage increments.
    */
-  createAsset(input: { asset: AssetMetadata; job?: Job; verificationJob?: Job; usageScopes?: string[] }): Promise<void>;
+  createAsset(input: { asset: AssetMetadata; job?: Job; verificationJob?: Job; usageScopes?: string[]; blob?: BlobAttach }): Promise<void>;
   /**
-   * A new version, its optional extraction job, and storage-usage increments.
+   * A new version, its optional extraction job, storage-usage increments, and
+   * the reference to its blob when it has one.
    * Returns the version with the number the store assigned (see `VersionStore.save`).
    */
-  createVersion(input: { version: AssetVersion; job?: Job; usageScopes?: string[] }): Promise<AssetVersion>;
+  createVersion(input: { version: AssetVersion; job?: Job; usageScopes?: string[]; blob?: BlobAttach }): Promise<AssetVersion>;
+  /**
+   * Removes one version row, releases its blob reference (a blob at zero
+   * starts its grace period; the object is never deleted here) and decrements
+   * each usage scope by the version's size. Returns false when the row was
+   * already gone, in which case nothing changed.
+   */
+  deleteVersion(input: { version: AssetVersion; usageScopes?: string[] }): Promise<boolean>;
   /**
    * A job row plus the row that mirrors its status: the version for a
    * version's job, the asset otherwise. A version's job may still pass the
@@ -127,6 +147,11 @@ export interface AtomicWrites {
    * `cleanupPrefix` in `cleanup_pending`, so the R2 objects are always
    * reclaimed even if the inline delete that follows fails. Decrements apply
    * only while the asset row still exists, so a repeated delete is a no-op.
+   *
+   * The blob references the asset row and its versions hold are released in
+   * the same write (ADR-017 §5). Blob objects are not under `cleanupPrefix`
+   * and are never deleted here: one that reaches zero references is swept by
+   * the cleanup cron after `BLOB_GRACE_MS`.
    *
    * The asset's active site hosts are released (ADR-013 B3) in the same write,
    * stamped `releasedAt` (default now). Releasing them in a write of their own
@@ -187,8 +212,11 @@ export interface FileStorage {
    * `sha256` (lowercase hex) is present only when the store itself holds a
    * SHA-256 for the object — R2 does when the upload supplied one, which is
    * how a presigned single PUT's checksum is confirmed at completion.
+   * `uploadedAt` (epoch ms) is when the object was last written, when the
+   * store reports it; the blob orphan sweep (ADR-017 §5) leaves an object
+   * alone without it.
    */
-  head(key: string): Promise<{ size: number; contentEncoding?: string; etag?: string; sha256?: string } | null>;
+  head(key: string): Promise<{ size: number; contentEncoding?: string; etag?: string; sha256?: string; uploadedAt?: number } | null>;
   delete(key: string): Promise<void>;
   /**
    * Optional batch delete. R2 supports up to 1000 keys per call; cleanup paths

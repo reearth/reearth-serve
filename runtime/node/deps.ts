@@ -10,6 +10,7 @@ import {
 import { buildTenancy } from "../../adapters/tenancy";
 import { SqlAtomicWrites } from "../../adapters/sql/writes";
 import { SqlSiteHostStore } from "../../adapters/sql/site-hosts";
+import { SqlBlobRefStore } from "../../adapters/sql/blob-refs";
 import { DohDnsResolver } from "../../adapters/doh/dns";
 import { NoopProvisioner } from "../../core/site/provisioner";
 import { apexHost } from "../../core/site/middleware";
@@ -93,6 +94,7 @@ export function buildNodeRuntime(env: Env = process.env): NodeRuntime {
     thumbnailQueue,
     storageUsage: new SqlStorageUsageStore(sql),
     pendingCleanup: new SqlCleanupPendingStore(sql),
+    blobRefs: new SqlBlobRefStore(sql),
     anonymousUploadEnabled: config.anonymousUploadEnabled,
     siteHostSuffix: config.siteHostSuffix,
     siteHosts: new SqlSiteHostStore(sql),

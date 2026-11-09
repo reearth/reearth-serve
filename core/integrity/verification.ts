@@ -12,7 +12,8 @@
  *   computed hash recorded;
  * - the declared hash differs → the upload is deleted (rows, bytes, extracted
  *   output, usage counters) and the job is closed `failed`. The mismatch is
- *   final: it is not retried.
+ *   final: it is not retried. Bytes in the blob layer are deleted only while
+ *   no other row references them.
  * - the object could not be read → the job fails transiently and the cleanup
  *   cron re-runs it within the usual retry budget. The row stays `pending`.
  *
@@ -29,7 +30,9 @@
 import type { AssetMetadata } from "../asset/model";
 import { ChecksumMismatchError, isSha256Hex } from "../asset/integrity";
 import { deleteAsset } from "../asset/usecase/delete";
-import { generateId, storageKey, usageScopesFor } from "../asset/usecase/shared";
+import { generateId, usageScopesFor } from "../asset/usecase/shared";
+import { originalKey } from "../blob/model";
+import { discardRejectedBlob } from "../blob/usecase";
 import type { MetadataStore } from "../asset/repository";
 import { retryDelaySeconds } from "../extraction/backoff";
 import { JOB_MAX_RETRIES, type Job } from "../job/model";
@@ -76,6 +79,7 @@ export type VerificationOutcome =
 export type VerificationDeps = Pick<
   ContextDeps,
   "jobs" | "metadata" | "writes" | "storage" | "pendingCleanup" | "projects" | "siteHosts" | "cache" | "customHostnames" | "siteHostSuffix"
+  | "blobRefs"
 >;
 
 /** The job a pending first upload gets, linked by asset (its `jobId` stays the extraction's). */
@@ -92,8 +96,8 @@ export function newVerificationJob(asset: AssetMetadata, now: number): Job {
   };
 }
 
-export function verificationMessage(job: Pick<Job, "id">, asset: Pick<AssetMetadata, "id" | "filename">): VerificationMessage {
-  return { kind: VERIFICATION_JOB_TYPE, jobId: job.id, assetId: asset.id, objectKey: storageKey(asset.id, asset.filename) };
+export function verificationMessage(job: Pick<Job, "id">, asset: Pick<AssetMetadata, "id" | "filename" | "blobKey">): VerificationMessage {
+  return { kind: VERIFICATION_JOB_TYPE, jobId: job.id, assetId: asset.id, objectKey: originalKey(asset) };
 }
 
 /** The message that re-runs `job`, or null when its asset is gone or already settled. */
@@ -152,6 +156,10 @@ export async function applyVerificationResult(
       job: { ...job, status: "completed", updatedAt: now, completedAt: now, startedAt: job.startedAt ?? now },
       asset: { ...asset, sha256: computed, integrity: "verified" },
     });
+    // A claimed blob becomes reusable once its bytes are confirmed. Outside
+    // the row's write, and harmless if lost: a blob stuck `verifying` is only
+    // never reused, and new uploads of it go to their classic key.
+    if (asset.blobKey) await deps.blobRefs.markVerified(asset.blobKey, now);
     return "verified";
   }
 
@@ -185,6 +193,15 @@ async function rejectUpload(deps: VerificationDeps, job: Job, asset: AssetMetada
     siteHosts: { hosts: deps.siteHosts, cache: deps.cache, suffix: deps.siteHostSuffix, provisioner: deps.customHostnames },
     now,
   });
+
+  // The rejected bytes are a blob outside the asset's prefix when the upload
+  // declared its hash. The delete above released the asset's reference; the
+  // object goes only if nothing else references the key (ADR-017 §3). In P2
+  // nothing can — only a `ready` blob takes new references — but the rule is
+  // what keeps a later short-circuit (P3) from losing someone else's bytes.
+  if (asset.blobKey && !(await discardRejectedBlob(deps.blobRefs, deps.storage, asset.blobKey, now))) {
+    console.warn(`integrity: kept blob ${asset.blobKey} of rejected asset ${asset.id}: other rows still reference it`);
+  }
 
   // The archive's extraction job, if any, must not be relaunched into a prefix
   // that no longer exists. A running extractor stops at its next existence

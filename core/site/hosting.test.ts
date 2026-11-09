@@ -50,6 +50,7 @@ function memoryWrites(assets: Map<string, AssetMetadata>, jobs: MemoryJobStore):
       if (asset) assets.set(asset.id, asset);
     },
     async deleteAsset() { return { releasedSiteHosts: [] }; },
+    async deleteVersion() { return true; },
   };
 }
 

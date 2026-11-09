@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
 import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
+import { toUploadResponse } from "../response";
 import { completeUploadSession } from "../usecase";
 import { accessCtx, authorizeProject } from "../../auth/access";
 import { usageScopes } from "./shared";
@@ -70,7 +71,7 @@ export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
     const scopes = await usageScopes(c, session.projectId);
     let result;
     try {
-      result = await completeUploadSession(sessions, writes, c.get("metadata"), storage, presignedUrls, id, ttlSeconds, baseUrl, parts, { sessionId, extractionQueue, verificationQueue: c.get("verificationQueue"), thumbnailQueue, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix") });
+      result = await completeUploadSession(sessions, writes, c.get("metadata"), storage, presignedUrls, id, ttlSeconds, baseUrl, parts, { sessionId, extractionQueue, verificationQueue: c.get("verificationQueue"), thumbnailQueue, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix"), blobRefs: c.get("blobRefs") });
     } catch (e) {
       if (e instanceof ChecksumMismatchError) {
         return c.json({ error: "Declared SHA-256 does not match the uploaded bytes; nothing was stored" }, 422);
@@ -81,6 +82,6 @@ export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
       return c.json({ error: "Upload session not found or file not yet uploaded" }, 404);
     }
 
-    return c.json(result, 201);
+    return c.json(toUploadResponse(result), 201);
   });
 }

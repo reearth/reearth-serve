@@ -62,6 +62,7 @@ if (import.meta.vitest) {
     return {
       createAsset: vi.fn(),
       createVersion: vi.fn(),
+      deleteVersion: vi.fn(),
       saveJob: vi.fn(),
       deleteAsset: vi.fn(async () => ({ releasedSiteHosts: [] as SiteHost[] })),
     } satisfies AtomicWrites;

@@ -11,6 +11,7 @@ import {
   SqlCleanupPendingStore, SqlJobStore, SqlMetadataStore, SqlProjectStore, SqlStorageUsageStore, SqlVersionStore,
 } from "../../adapters/sql/stores";
 import { SqlSiteHostStore } from "../../adapters/sql/site-hosts";
+import { SqlBlobRefStore } from "../../adapters/sql/blob-refs";
 import { NoopProvisioner } from "../site/provisioner";
 import type { AssetMetadata } from "../asset/model";
 import type { ContainerLauncher } from "../container/port";
@@ -63,6 +64,7 @@ beforeEach(async () => {
     jobs: new SqlJobStore(sql),
     storage,
     pendingCleanup: pending,
+    blobRefs: new SqlBlobRefStore(sql),
     storageUsage: usage,
     projects,
     siteHosts: new SqlSiteHostStore(sql),
@@ -136,6 +138,63 @@ describe("applyVerificationResult", () => {
     expect(await applyVerificationResult(deps, closed, { status: "completed", sha256: OTHER })).toBe("settled");
     await handleScheduled(deps);
     expect(queue.sent).toEqual([]);
+  });
+
+  describe("a declared upload stored as a blob (ADR-017 §3)", () => {
+    const KEY = `blobs/w1/${OTHER}`;
+
+    /** A completed claim: the asset references the blob, which is `verifying`. */
+    async function seedBlob(): Promise<Job> {
+      const asset: AssetMetadata = {
+        id: "a1", filename: "data.bin", contentType: "application/octet-stream", size: BODY.length, createdAt: 1,
+        expiresAt: 0, projectId: "p1", integrity: "pending", sha256: OTHER, blobKey: KEY,
+      };
+      const job = newVerificationJob(asset, 1);
+      expect(await deps.blobRefs.claim({ key: KEY, scope: "w1", sha256: OTHER }, "a1", Date.now() + 60_000, Date.now())).toBe("claimed");
+      await storage.put(KEY, new Blob([BODY]).stream(), "application/octet-stream", BODY.length);
+      await deps.writes.createAsset({
+        asset, verificationJob: job, usageScopes: ["project:p1", "workspace:w1"],
+        blob: { ref: { key: KEY, scope: "w1", sha256: OTHER }, state: "verifying" },
+      });
+      return job;
+    }
+
+    test("the verification message names the blob key", async () => {
+      const job = await seedBlob();
+      const asset = (await deps.metadata.find("a1"))!;
+      expect(verificationMessage(job, asset).objectKey).toBe(KEY);
+    });
+
+    test("a match marks the blob ready", async () => {
+      const job = await seedBlob();
+      expect(await applyVerificationResult(deps, job, { status: "completed", sha256: OTHER })).toBe("verified");
+      expect(await deps.blobRefs.find(KEY)).toMatchObject({ refCount: 1, state: "ready" });
+    });
+
+    test("a mismatch deletes the blob when the rejected upload was its only reference", async () => {
+      const job = await seedBlob();
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      expect(await applyVerificationResult(deps, job, { status: "completed", sha256: ACTUAL })).toBe("rejected");
+      warn.mockRestore();
+      expect(await storage.head(KEY)).toBeNull();
+      expect(await deps.blobRefs.find(KEY)).toBeNull();
+    });
+
+    test("a mismatch keeps the blob while another row still references it", async () => {
+      const job = await seedBlob();
+      // Nothing in P2 attaches to an unverified blob; another asset holding
+      // the key stands in for a later phase that might.
+      await deps.writes.createAsset({
+        asset: { id: "b1", filename: "x", contentType: "t", size: 1, createdAt: 1, expiresAt: 0, blobKey: KEY },
+        blob: { ref: { key: KEY, scope: "w1", sha256: OTHER }, state: "verifying" },
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      expect(await applyVerificationResult(deps, job, { status: "completed", sha256: ACTUAL })).toBe("rejected");
+      warn.mockRestore();
+      expect(await deps.metadata.find("a1")).toBeNull();
+      expect(await storage.head(KEY)).not.toBeNull();
+      expect(await deps.blobRefs.find(KEY)).toMatchObject({ refCount: 1 });
+    });
   });
 
   test("a read failure leaves the row pending and the job retriable", async () => {

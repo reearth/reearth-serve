@@ -1,4 +1,5 @@
 import { cleanupExpiredAssets, drainPendingCleanups, SubrequestBudget } from "./usecase";
+import { sweepBlobs } from "../blob/usecase";
 import { purgeReleasedSiteHosts, releaseOutstandingCertificates } from "../site/usecase";
 import { JOB_MAX_RETRIES, jobFailureClass, type Job } from "../job/model";
 import type { JobStore } from "../job/repository";
@@ -29,6 +30,7 @@ export async function handleScheduled(deps: Deps): Promise<void> {
     maxAssets: 100,
     versions,
     budget,
+    writes: deps.writes,
   });
 
   if (result.deletedAssets.length > 0 || result.budgetExhausted) {
@@ -43,6 +45,17 @@ export async function handleScheduled(deps: Deps): Promise<void> {
   if (drainResult.drainedPrefixes.length > 0 || drainResult.budgetExhausted) {
     const suffix = drainResult.budgetExhausted ? " (budget exhausted — resuming next tick)" : "";
     console.log(`Cleanup: drained ${drainResult.drainedPrefixes.length} pending prefixes${suffix}`);
+  }
+
+  // The blob layer (ADR-017 §5): expired upload claims, blobs past their
+  // grace period with no reference, and one page of orphan reconciliation.
+  // After the prefix drain, on whatever budget is left.
+  const blobs = await sweepBlobs({ blobRefs: deps.blobRefs, storage, cache: deps.cache }, budget);
+  if (blobs.droppedClaims + blobs.swept.length + blobs.orphans.length > 0 || blobs.budgetExhausted) {
+    const suffix = blobs.budgetExhausted ? " (budget exhausted — resuming next tick)" : "";
+    console.log(
+      `Cleanup: blobs — ${blobs.droppedClaims} expired claims dropped, ${blobs.swept.length} unreferenced and ${blobs.orphans.length} orphaned objects deleted${suffix}`,
+    );
   }
 
   // Released site names whose 30-day cooldown has run out (ADR-013 B3). One

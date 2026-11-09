@@ -3,6 +3,7 @@ import { detectArchiveFormat } from "../model";
 import type { AtomicWrites, FileStorage } from "../repository";
 import type { Job } from "../../job/model";
 import { generateId, storageKey } from "./shared";
+import { placeDirectUpload, type BlobContext } from "../../blob/usecase";
 import { siteUrlFor } from "../../site/url";
 import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
@@ -27,12 +28,24 @@ export async function uploadAsset(
   },
   ttlSeconds: number,
   baseUrl: string,
-  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string },
-): Promise<AssetUploadResult> {
+  options?: {
+    sessionId?: string | null; projectId?: string | null;
+    extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null;
+    skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string;
+    /** Blob ledger and scope: a declared upload is stored at its blob key (ADR-017 §3). Omitted, it is not. */
+    blob?: BlobContext;
+  },
+): Promise<AssetUploadResult & { asset: AssetMetadata }> {
   const id = generateId();
   const now = Date.now();
   const contentType = file.type || "application/octet-stream";
-  const key = storageKey(id, file.name);
+  // A declared hash goes to the blob layer when the ledger lets this upload
+  // write the key; otherwise, and always without a declaration, to the
+  // asset's own key.
+  const placement = options?.blob
+    ? await placeDirectUpload(options.blob.refs, options.blob.scope, file.sha256, storageKey(id, file.name), now)
+    : { key: storageKey(id, file.name) };
+  const key = placement.key;
 
   // Declared or not, the store hands back the hash of what it stored, so the
   // row is `verified` either way (ADR-017 §2). A declared mismatch throws
@@ -62,6 +75,7 @@ export async function uploadAsset(
     }),
     ...(options?.sessionId && { sessionId: options.sessionId }),
     ...(options?.projectId && { projectId: options.projectId }),
+    ...(placement.ref && { blobKey: placement.ref.key }),
   };
 
   // Create extraction job for archives (unless skipped)
@@ -84,7 +98,11 @@ export async function uploadAsset(
     // Job row, asset row and storage-usage counters in one atomic write, so a
     // failure never leaves an asset without its job or the counters short
     // (ADR-012 §3).
-    await writes.createAsset({ asset, job, usageScopes: options?.usageScopes });
+    // The blob reference rides in the same write: bytes first, ledger second (ADR-017 §5).
+    await writes.createAsset({
+      asset, job, usageScopes: options?.usageScopes,
+      ...(placement.ref && { blob: { ref: placement.ref, state: "ready" as const } }),
+    });
 
     // Enqueue only after the rows are committed: the consumer reads them.
     if (job && options?.extractionQueue) {
@@ -113,10 +131,16 @@ export async function uploadAsset(
     // compensation the R2 object is orphaned (cleanup drives off D1 rows),
     // so try to delete it. Best-effort: a delete failure here is logged
     // but the original error is what the caller cares about.
-    try {
-      await storage.delete(key);
-    } catch (delErr) {
-      console.error("Failed to clean up R2 object after metadata save failure:", delErr);
+    //
+    // A blob is never deleted here: other rows may reference the same key.
+    // The reservation's grace clock (or, failing that, the orphan sweep)
+    // reclaims it if nothing does.
+    if (!placement.ref) {
+      try {
+        await storage.delete(key);
+      } catch (delErr) {
+        console.error("Failed to clean up R2 object after metadata save failure:", delErr);
+      }
     }
     throw e;
   }
@@ -151,6 +175,7 @@ if (import.meta.vitest) {
     const writes: AtomicWrites = {
       createAsset: vi.fn(async (input: CreateAssetInput) => { calls.push(input); }),
       createVersion: vi.fn(async () => { throw new Error("not used"); }),
+      deleteVersion: vi.fn(async () => { throw new Error("not used"); }),
       saveJob: vi.fn(async () => { throw new Error("not used"); }),
       deleteAsset: vi.fn(async () => { throw new Error("not used"); }),
     };

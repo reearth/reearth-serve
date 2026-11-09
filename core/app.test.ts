@@ -100,6 +100,7 @@ function fakeDeps(overrides: Partial<Deps> = {}): Deps {
     verificationQueue: null,
     storageUsage: strictFake("storageUsage"),
     pendingCleanup: strictFake("pendingCleanup"),
+    blobRefs: strictFake("blobRefs"),
     anonymousUploadEnabled: false,
     siteHostSuffix: undefined,
     siteHosts: strictFake("siteHosts"),

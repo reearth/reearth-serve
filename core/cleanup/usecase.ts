@@ -1,4 +1,4 @@
-import type { FileStorage, MetadataStore, VersionStore } from "../asset/repository";
+import type { AtomicWrites, FileStorage, MetadataStore, VersionStore } from "../asset/repository";
 import type { JobStore } from "../job/repository";
 import type { CleanupPendingStore } from "./repository";
 
@@ -46,7 +46,15 @@ export async function cleanupExpiredAssets(
   metadata: MetadataStore & { listExpired?: (now: number, limit: number) => Promise<import("../asset/model").AssetMetadata[]> },
   storage: FileStorage,
   jobs: JobStore,
-  options?: { maxAssets?: number; versions?: VersionStore; budget?: SubrequestBudget },
+  options?: {
+    maxAssets?: number; versions?: VersionStore; budget?: SubrequestBudget;
+    /**
+     * When given, the rows go through `AtomicWrites.deleteAsset` — the same
+     * write a DELETE request uses — so an expired upload releases its blob
+     * references (ADR-017 §5) and site hosts like any other delete.
+     */
+    writes?: AtomicWrites;
+  },
 ): Promise<CleanupResult> {
   const maxAssets = options?.maxAssets ?? 100;
   // Default cap leaves headroom for the listExpired call itself and the
@@ -91,15 +99,22 @@ export async function cleanupExpiredAssets(
         break;
       }
 
-      // Delete all versions from D1
-      if (options?.versions) {
-        await options.versions.deleteByAssetId(asset.id);
+      if (options?.writes) {
+        // The prefix is already empty; the cleanup_pending entry the write
+        // adds is drained by the next pass at the cost of one list.
+        await options.writes.deleteAsset({ asset, cleanupPrefix: `assets/${asset.id}/` });
+        budget.charge();
+      } else {
+        // Delete all versions from D1
+        if (options?.versions) {
+          await options.versions.deleteByAssetId(asset.id);
+          budget.charge();
+        }
+
+        // Delete metadata from D1
+        await metadata.delete(asset.id);
         budget.charge();
       }
-
-      // Delete metadata from D1
-      await metadata.delete(asset.id);
-      budget.charge();
       deletedAssets.push(asset.id);
 
       // Clean up associated job

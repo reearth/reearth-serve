@@ -1,6 +1,6 @@
 import type { AssetMetadata, StoredFile } from "../model";
 import type { FileStorage, MetadataStore } from "../repository";
-import { storageKey } from "./shared";
+import { originalKey } from "../../blob/model";
 
 export async function getAssetFile(
   metadata: MetadataStore,
@@ -11,7 +11,7 @@ export async function getAssetFile(
   const asset = await metadata.find(id);
   if (!asset) return null;
 
-  const file = await storage.get(storageKey(id, asset.filename), range);
+  const file = await storage.get(originalKey(asset), range);
   if (!file) return null;
 
   return { asset, file };

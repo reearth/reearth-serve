@@ -219,6 +219,7 @@ function injectDeps(deps: Deps, opts: { siteHost: boolean }): MiddlewareHandler<
     c.set("writes", deps.writes);
     c.set("storageUsage", deps.storageUsage);
     c.set("pendingCleanup", deps.pendingCleanup);
+    c.set("blobRefs", deps.blobRefs);
     c.set("anonymousUploadEnabled", deps.anonymousUploadEnabled);
     c.set("siteHostSuffix", deps.siteHostSuffix);
     c.set("siteHosts", deps.siteHosts);

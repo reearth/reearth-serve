@@ -2,6 +2,7 @@ import type { MultipartUploadResult, PresignedUploadResult, UploadSession } from
 import type { PresignedPut, PresignedUrlGenerator, UploadSessionStore } from "../repository";
 import { shouldCompress } from "../compression";
 import { generateId, storageKey } from "./shared";
+import { placeSessionUpload, type BlobContext, type Placement } from "../../blob/usecase";
 
 // Upload window: scale with declared size so multi-GB archives uploaded over
 // slow links don't have their presigned URLs (and the KV session that the
@@ -24,16 +25,53 @@ export async function createUploadSession(
   presignedUrls: PresignedUrlGenerator,
   params: { filename: string; contentType: string; size: number; partCount?: number; sha256?: string },
   _ttlSeconds: number,
-  options?: { sessionId?: string | null; projectId?: string | null; skipExtraction?: boolean },
+  options?: {
+    sessionId?: string | null; projectId?: string | null; skipExtraction?: boolean;
+    /** Blob ledger and scope: a declared upload claims its blob key (ADR-017 §3). Omitted, it does not. */
+    blob?: BlobContext;
+  },
 ): Promise<PresignedUploadResult | MultipartUploadResult> {
   const id = generateId();
   const now = Date.now();
   const urlExpirySeconds = uploadExpirySeconds(params.size);
   const contentType = params.contentType || "application/octet-stream";
-  const key = storageKey(id, params.filename);
   const compress = shouldCompress(params.filename, params.size);
-  const encodingOpts = compress ? { contentEncoding: "gzip" as const } : undefined;
   const sha256 = params.sha256?.toLowerCase();
+  const expiresAt = now + urlExpirySeconds * 1000;
+
+  // Neither a multipart upload nor (on R2, unconfirmed) a presigned single PUT
+  // is verified by the store as it is written, so a declared hash claims the
+  // blob key for the session's lifetime instead of just reserving it. A live
+  // claim by another session throws `BlobClaimedError` (409); an existing blob
+  // sends this upload to the classic key (P3 will skip the transfer instead).
+  const placement: Placement = options?.blob
+    ? await placeSessionUpload(options.blob.refs, options.blob.scope, sha256, storageKey(id, params.filename), { id, expiresAt }, now)
+    : { key: storageKey(id, params.filename) };
+  try {
+    return await startSession(sessions, presignedUrls, {
+      id, now, expiresAt, urlExpirySeconds, contentType, compress, sha256, placement,
+      filename: params.filename, size: params.size, partCount: params.partCount,
+    }, options);
+  } catch (e) {
+    if (placement.ref && options?.blob) await options.blob.refs.releaseClaim(placement.ref.key, id).catch(() => {});
+    throw e;
+  }
+}
+
+async function startSession(
+  sessions: UploadSessionStore,
+  presignedUrls: PresignedUrlGenerator,
+  params: {
+    id: string; now: number; expiresAt: number; urlExpirySeconds: number; contentType: string;
+    compress: boolean; sha256: string | undefined; placement: Placement;
+    filename: string; size: number; partCount?: number;
+  },
+  options?: { sessionId?: string | null; projectId?: string | null; skipExtraction?: boolean },
+): Promise<PresignedUploadResult | MultipartUploadResult> {
+  const { id, now, urlExpirySeconds, contentType, compress, sha256, placement } = params;
+  const key = placement.key;
+  const encodingOpts = compress ? { contentEncoding: "gzip" as const } : undefined;
+  const blobFields = placement.ref ? { blobKey: placement.ref.key, blobScope: placement.ref.scope } : {};
 
   // Multipart upload
   if (params.partCount && params.partCount > 1) {
@@ -52,7 +90,7 @@ export async function createUploadSession(
       contentType,
       size: params.size,
       createdAt: now,
-      expiresAt: now + urlExpirySeconds * 1000,
+      expiresAt: params.expiresAt,
       s3UploadId,
       partCount: params.partCount,
       ...(compress && { contentEncoding: "gzip" }),
@@ -63,6 +101,7 @@ export async function createUploadSession(
       ...(options?.sessionId && { sessionId: options.sessionId }),
       ...(options?.projectId && { projectId: options.projectId }),
       ...(options?.skipExtraction && { skipExtraction: true }),
+      ...blobFields,
     };
 
     await sessions.save(session, urlExpirySeconds);
@@ -89,11 +128,12 @@ export async function createUploadSession(
     contentType,
     size: params.size,
     createdAt: now,
-    expiresAt: now + urlExpirySeconds * 1000,
+    expiresAt: params.expiresAt,
     ...(compress && { contentEncoding: "gzip" }),
     ...(options?.sessionId && { sessionId: options.sessionId }),
     ...(options?.projectId && { projectId: options.projectId }),
     ...(sha256 && { sha256 }),
+    ...blobFields,
   };
 
   await sessions.save(session, urlExpirySeconds);

@@ -8,6 +8,7 @@ import type { SessionStore } from "./session/repository";
 import type { ContainerLauncher } from "./container/port";
 import type { StorageUsageStore } from "./asset/repository";
 import type { CleanupPendingStore } from "./cleanup/repository";
+import type { BlobRefStore } from "./blob/repository";
 import type { JobQueue } from "./queue/port";
 import type { KeyValue } from "./kv/port";
 import type { SiteHostStore } from "./site/repository";
@@ -46,6 +47,8 @@ export type ContextDeps = {
   verificationQueue: JobQueue<VerificationMessage> | null;
   storageUsage: StorageUsageStore;
   pendingCleanup: CleanupPendingStore;
+  /** The blob ledger (ADR-017 §3, §5): reservations, claims and sweeps of `blobs/`. */
+  blobRefs: BlobRefStore;
   anonymousUploadEnabled: boolean;
   /**
    * `SITE_HOST_SUFFIX` — the wildcard suffix site hosts live under, e.g.

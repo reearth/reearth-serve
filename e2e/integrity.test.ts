@@ -1,9 +1,10 @@
-// Upload integrity over HTTP (ADR-017 §1–§2, phase P1a). Runs against both
+// Upload integrity over HTTP (ADR-017 §1–§2, phase P1a) and the blob layer
+// that declared uploads are stored in (§3, P2). Runs against both
 // runtimes: the R2 binding verifies a declared hash on Workers, the memory
 // store does it in-process on Node.
 import { createHash } from "node:crypto";
 import { beforeAll, describe, expect, test } from "vitest";
-import { BASE, rewriteUrl } from "./helpers";
+import { BASE, MOCK_OIDC, rewriteUrl, signToken } from "./helpers";
 
 const sha256 = (data: Uint8Array) => createHash("sha256").update(data).digest("hex");
 
@@ -76,5 +77,57 @@ describe("X-Content-SHA256 on direct uploads", () => {
     expect(version.status).toBe(201);
     const v = (await version.json()) as { version: { sha256: string; integrity: string } };
     expect(v.version).toMatchObject({ sha256: sha256(body), integrity: "verified" });
+  });
+});
+
+// The blob layer (ADR-017 §3, P2): declared uploads in one workspace share
+// their bytes, invisibly. Needs a workspace, so a real login.
+let mockOidcAvailable = false;
+try {
+  mockOidcAvailable = (await fetch(`${MOCK_OIDC}/.well-known/openid-configuration`)).ok;
+} catch {
+  // not reachable
+}
+
+describe("declared uploads in one workspace", { skip: !mockOidcAvailable }, () => {
+  let token: string;
+  let projectId: string;
+  const body = new TextEncoder().encode(`identical declared content ${Date.now()}`);
+
+  async function api(method: string, path: string, json?: unknown): Promise<Response> {
+    return fetch(`${BASE}/api/v1${path}`, {
+      method,
+      headers: { Authorization: `Bearer ${token}`, ...(json !== undefined && { "Content-Type": "application/json" }) },
+      ...(json !== undefined && { body: JSON.stringify(json) }),
+    });
+  }
+
+  beforeAll(async () => {
+    token = await signToken({ sub: "e2e-blob-user" });
+    const ws = (await (await api("POST", "/workspaces", { name: "e2e-blobs" })).json()) as { workspace: { id: string } };
+    const project = await api("POST", "/projects", { name: "e2e-blobs", workspaceId: ws.workspace.id });
+    expect(project.status).toBe(201);
+    projectId = ((await project.json()) as { project: { id: string } }).project.id;
+  });
+
+  test("two assets with identical declared content: deleting one leaves the other serving at its URL", async () => {
+    const headers = { Authorization: `Bearer ${token}`, "X-Project-Id": projectId, "X-Content-SHA256": sha256(body) };
+    const a = await upload("/api/v1/assets", body, "a.txt", headers);
+    const b = await upload("/api/v1/assets", body, "b.txt", headers);
+    expect(a.status).toBe(201);
+    expect(b.status).toBe(201);
+    const first = (await a.json()) as { asset: Record<string, unknown> & { id: string }; url: string };
+    const second = (await b.json()) as { asset: Record<string, unknown> & { id: string }; url: string };
+    // Same response shape as any upload; nothing says where the bytes live.
+    expect(first.asset).not.toHaveProperty("blobKey");
+    expect(new URL(second.url).pathname).toBe(`/files/${second.asset.id}/b.txt`);
+
+    expect((await api("DELETE", `/assets/${first.asset.id}`)).status).toBe(204);
+
+    const file = await fetch(rewriteUrl(second.url));
+    expect(file.status).toBe(200);
+    expect(new Uint8Array(await file.arrayBuffer())).toEqual(body);
+    expect(file.headers.get("X-Content-SHA256")).toBe(sha256(body));
+    expect((await fetch(rewriteUrl(first.url))).status).toBe(404);
   });
 });

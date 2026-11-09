@@ -16,6 +16,7 @@ import type { VerificationMessage } from "../../core/integrity/verification";
 import { D1SqlClient } from "./sql";
 import { SqlAtomicWrites } from "../sql/writes";
 import { SqlSiteHostStore } from "../sql/site-hosts";
+import { SqlBlobRefStore } from "../sql/blob-refs";
 import { DohDnsResolver } from "../doh/dns";
 import { CloudflareCustomHostnames } from "./custom-hostnames";
 import { NoopProvisioner, type CustomHostnameProvisioner } from "../../core/site/provisioner";
@@ -77,6 +78,7 @@ export function buildDeps(env: Env): Deps {
     thumbnailQueue: env.THUMBNAIL_QUEUE ? new CloudflareJobQueue(env.THUMBNAIL_QUEUE) : null,
     storageUsage: new SqlStorageUsageStore(sql),
     pendingCleanup: new SqlCleanupPendingStore(sql),
+    blobRefs: new SqlBlobRefStore(sql),
     // Fail closed: anonymous uploads stay off unless explicitly enabled. The
     // flag lives as a wrangler secret (not in [vars]) so test campaigns can
     // flip it without touching wrangler.toml: `wrangler secret put

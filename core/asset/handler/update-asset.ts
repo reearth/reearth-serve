@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
 import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
+import { toAssetResponse } from "../response";
 import { getAssetMetadata, updateAsset, setAssetAccess, checkSpaChange, enrichAssetWithVersion } from "../usecase";
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { assetResponseSchema, idParamSchema, updateAssetBodySchema } from "../../../shared/openapi";
@@ -60,7 +61,7 @@ export function registerUpdateAssetRoute(app: Hono<AppEnv>) {
       }
 
       const enriched = await enrichAssetWithVersion(metadata, versions, id);
-      return c.json({ asset: enriched ?? updated });
+      return c.json({ asset: toAssetResponse(enriched ?? updated) });
     },
   );
 }

@@ -2,9 +2,10 @@ import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
 import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
+import { toVersionResponse } from "../response";
 import { getAssetMetadata, uploadVersion } from "../usecase";
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
-import { denyAnonymousUpload, usageScopes } from "./shared";
+import { blobContext, denyAnonymousUpload, usageScopes } from "./shared";
 import { versionUploadResultResponseSchema, idParamSchema } from "../../../shared/openapi";
 import { isSafeFilename } from "../../../shared/api";
 import { ChecksumMismatchError, CONTENT_SHA256_HEADER, parseSha256Header, UPLOAD_UNDER_VERIFICATION_MESSAGE, UploadUnderVerificationError } from "../../asset/integrity";
@@ -88,12 +89,13 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
 
       // Resolved up front so the counters ride along in the version's batch.
       const scopes = await usageScopes(c, asset.projectId);
+      const blob = await blobContext(c, asset.projectId, sha256);
 
       const result = await uploadVersion(
         metadata, writes, storage, id,
         { name: filename, type: c.req.header("Content-Type") || "application/octet-stream", body, size, contentEncoding, originalSize, sha256 },
         baseUrl,
-        { extractionQueue, thumbnailQueue, skipExtraction, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix") },
+        { extractionQueue, thumbnailQueue, skipExtraction, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix"), blob },
       ).catch((e: unknown) => {
         if (e instanceof ChecksumMismatchError) return "checksum-mismatch" as const;
         if (e instanceof UploadUnderVerificationError) return "under-verification" as const;
@@ -115,7 +117,7 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
       }
 
       return c.json(
-        { version: result.version, url: result.url, ...(result.siteUrl && { siteUrl: result.siteUrl }) },
+        { version: toVersionResponse(result.version), url: result.url, ...(result.siteUrl && { siteUrl: result.siteUrl }) },
         201,
       );
     },

@@ -1,7 +1,7 @@
 import { retryDelaySeconds } from "./backoff";
 import type { ArchiveFormat } from "../asset/model";
 import type { MetadataStore, VersionStore } from "../asset/repository";
-import { storageKey, versionStorageKey } from "../asset/usecase/shared";
+import { originalKey } from "../blob/model";
 import type { Job } from "../job/model";
 import type { Deps } from "../types";
 import type { QueueMessage } from "../queue/port";
@@ -15,6 +15,11 @@ export interface ExtractionMessage {
   assetId: string;
   /** Set for a version's job: the run reads and writes under the version's prefix. */
   versionId?: string;
+  /**
+   * Storage key of the archive to read — `originalKey` of the row, which may
+   * be a blob outside the asset's prefix (ADR-017 §3). The extractor reads it
+   * as given and writes under its own prefix (`keyRoot`), derived from the IDs.
+   */
   archiveKey: string;
   archiveFilename: string;
   archiveFormat: ArchiveFormat;
@@ -33,7 +38,7 @@ export async function extractionMessageForJob(
       jobId: job.id,
       assetId: job.assetId,
       versionId: version.id,
-      archiveKey: versionStorageKey(job.assetId, version.id, version.filename),
+      archiveKey: originalKey(version),
       archiveFilename: version.filename,
       archiveFormat: version.archiveFormat,
     };
@@ -43,7 +48,7 @@ export async function extractionMessageForJob(
   return {
     jobId: job.id,
     assetId: job.assetId,
-    archiveKey: storageKey(job.assetId, asset.filename),
+    archiveKey: originalKey(asset),
     archiveFilename: asset.filename,
     archiveFormat: asset.archiveFormat,
   };

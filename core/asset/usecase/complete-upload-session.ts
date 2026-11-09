@@ -10,6 +10,8 @@ import type { ThumbnailMessage } from "../../thumbnail/queue";
 import type { JobQueue } from "../../queue/port";
 import type { ExtractionMessage } from "../../extraction/handler";
 import { newVerificationJob, verificationMessage, type VerificationMessage } from "../../integrity/verification";
+import type { BlobRefStore } from "../../blob/repository";
+import { discardClaimedUpload } from "../../blob/usecase";
 
 export async function completeUploadSession(
   sessions: UploadSessionStore,
@@ -21,15 +23,29 @@ export async function completeUploadSession(
   ttlSeconds: number,
   baseUrl: string,
   parts?: UploadPart[],
-  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; verificationQueue?: JobQueue<VerificationMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string },
-): Promise<AssetUploadResult | null> {
+  options?: {
+    sessionId?: string | null; projectId?: string | null;
+    extractionQueue?: JobQueue<ExtractionMessage> | null; verificationQueue?: JobQueue<VerificationMessage> | null;
+    thumbnailQueue?: JobQueue<ThumbnailMessage> | null;
+    skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string;
+    /** The blob ledger; required to complete a session that claimed a blob key. */
+    blobRefs?: BlobRefStore;
+  },
+): Promise<(AssetUploadResult & { asset: AssetMetadata }) | null> {
   const session = await sessions.find(id);
   if (!session) return null;
 
   // Verify session ownership
   if (session.sessionId && options?.sessionId && session.sessionId !== options.sessionId) return null;
 
-  const key = storageKey(id, session.filename);
+  // Where createUploadSession sent the bytes: the blob key it claimed, or the
+  // asset's own key.
+  const key = session.blobKey ?? storageKey(id, session.filename);
+  const blobRef = session.blobKey && session.blobScope && session.sha256
+    ? { key: session.blobKey, scope: session.blobScope, sha256: session.sha256 }
+    : undefined;
+  const blobRefs = options?.blobRefs;
+  if (blobRef && !blobRefs) throw new Error(`completeUploadSession: session ${id} claimed ${blobRef.key} but no blob ledger was given`);
   const url = `${baseUrl}/files/${id}/${encodeURIComponent(session.filename)}`;
   const archiveFormat = detectArchiveFormat(session.filename);
   const siteUrl = siteUrlFor({ assetId: id, baseUrl, siteHostSuffix: options?.siteHostSuffix, archive: Boolean(archiveFormat) });
@@ -55,11 +71,21 @@ export async function completeUploadSession(
   }
   if (!head) return null;
 
+  // A claim that lapsed (the session outlived its expiry in KV) may since
+  // have been taken by another upload, which may have rewritten the key. This
+  // session no longer owns those bytes, so it neither records nor deletes them.
+  if (blobRef) {
+    const claim = await blobRefs!.find(blobRef.key);
+    if (claim?.state !== "uploading" || claim.claimId !== id) return null;
+  }
+
   const integrity = await sessionIntegrity(session, head, async () => {
     // A store that holds a different hash than the one declared would have
     // refused the write; reaching here means the bytes are not what the client
     // promised, so they are not kept and the session is spent (ADR-017 §2).
-    await storage.delete(key);
+    // A claimed blob key is still this session's alone, so it goes too.
+    if (blobRef) await discardClaimedUpload(blobRefs!, storage, blobRef.key, id);
+    else await storage.delete(key);
     await sessions.delete(id);
   });
 
@@ -87,6 +113,7 @@ export async function completeUploadSession(
     }),
     ...(options?.sessionId && { sessionId: options.sessionId }),
     ...(projectId && { projectId }),
+    ...(blobRef && { blobKey: blobRef.key }),
   };
 
   // Create extraction job for archives (unless skipped)
@@ -118,7 +145,13 @@ export async function completeUploadSession(
   // leave rows pointing at nothing when the batch committed but reported an error.
   // ponytail: an upload whose client never retries leaves an object with no
   // row; sweep keys with no asset row from cron if that ever shows up in R2 usage.
-  await writes.createAsset({ asset, job, verificationJob, usageScopes: projectId ? options?.usageScopes : [] });
+  //
+  // The claim becomes the blob's first reference in the same write: `ready`
+  // when the store vouched for the hash, `verifying` until the job does.
+  await writes.createAsset({
+    asset, job, verificationJob, usageScopes: projectId ? options?.usageScopes : [],
+    ...(blobRef && { blob: { ref: blobRef, state: asset.integrity === "verified" ? "ready" as const : "verifying" as const } }),
+  });
 
   // Enqueue only after the rows are committed: the consumer reads them.
   if (job && archiveFormat && options?.extractionQueue) {
@@ -200,6 +233,7 @@ if (import.meta.vitest) {
     const writes: AtomicWrites = {
       createAsset: vi.fn(async (input: CreateAssetInput) => { calls.push(input); }),
       createVersion: vi.fn(async () => { throw new Error("not used"); }),
+      deleteVersion: vi.fn(async () => { throw new Error("not used"); }),
       saveJob: vi.fn(async () => { throw new Error("not used"); }),
       deleteAsset: vi.fn(async () => { throw new Error("not used"); }),
     };
