@@ -139,7 +139,7 @@ if (import.meta.vitest) {
       expect(errorOf("Harbor_Map")).toBe(NAME_ERRORS.format);
       expect(errorOf("flood.map")).toBe(NAME_ERRORS.format);
       expect(errorOf("harbor flood")).toBe(NAME_ERRORS.format);
-      expect(errorOf("川崎")).toBe(NAME_ERRORS.format);
+      expect(errorOf("港")).toBe(NAME_ERRORS.format);
       expect(errorOf("xn--p8j2a")).toBe(NAME_ERRORS.format); // punycode: also a `--`
     });
 

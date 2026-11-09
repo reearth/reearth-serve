@@ -144,11 +144,11 @@ describe("POST /assets/:id/hosts", () => {
 
   test("several names may point at one asset", async () => {
     const { app, auth } = await siteFixture();
-    expect((await claim(app, auth, { hostname: "flood-map" })).status).toBe(201);
     expect((await claim(app, auth, { hostname: "harbor" })).status).toBe(201);
+    expect((await claim(app, auth, { hostname: "flood-map" })).status).toBe(201);
     const list = await (await app.request(`/api/v1/assets/${ASSET_ID}/hosts`, { headers: auth })).json();
     expect((list as { hosts: SiteHost[] }).hosts.map((h) => h.hostname)).toEqual([
-      `flood-map${SUFFIX}`, `harbor${SUFFIX}`,
+      `harbor${SUFFIX}`, `flood-map${SUFFIX}`,
     ]);
   });
 

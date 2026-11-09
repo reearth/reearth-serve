@@ -39,6 +39,7 @@ describe("password-protected sites", { skip: !mockOidcAvailable }, () => {
   let ownOrigin: string;
 
   async function formCookie(): Promise<string> {
+    expect((await setAccess({ access: "password", password: PASSWORD })).status).toBe(200);
     const posted = await fetch(`${BASE}/files/${assetId}/_serve/auth`, {
       method: "POST",
       headers: { "Content-Type": "application/x-www-form-urlencoded" },
@@ -167,6 +168,7 @@ describe("password-protected sites", { skip: !mockOidcAvailable }, () => {
     expect(own.status).toBe(200);
     expect(own.headers.get("Access-Control-Allow-Origin")).toBe(ownOrigin);
     expect(own.headers.get("Access-Control-Allow-Credentials")).toBe("true");
+    expect(own.headers.get("Vary")).toContain("Origin");
     await own.body?.cancel();
   });
 

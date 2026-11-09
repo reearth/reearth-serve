@@ -484,9 +484,11 @@ describe("CORS", () => {
     expect(ok.headers.get("Access-Control-Allow-Origin")).toBe(`https://${host}`);
     expect(ok.headers.get("Access-Control-Allow-Credentials")).toBe("true");
 
-    for (const origin of [`http://${host}`, OWN_ORIGIN]) {
+    for (const origin of [`http://${host}`, OWN_ORIGIN, `https://sibling${SUFFIX}`]) {
       const res = await app.request(`http://${host}/`, { headers: { Host: host, Cookie: cookie, Origin: origin } });
+      expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
       expect(res.headers.get("Access-Control-Allow-Credentials")).toBeNull();
+      expect(res.headers.get("Cross-Origin-Resource-Policy")).toBe("same-origin");
     }
   });
 

@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import { execSync } from "node:child_process";
-import { request as httpRequest } from "node:http";
+import { request as httpRequest, type IncomingHttpHeaders } from "node:http";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,7 +26,9 @@ function get(
   host: string,
   path: string,
   extraHeaders: Record<string, string> = {},
-): Promise<{ status: number; contentType: string; cacheControl: string; robots: string; body: string }> {
+): Promise<{
+  status: number; contentType: string; cacheControl: string; robots: string; body: string; headers: IncomingHttpHeaders;
+}> {
   const base = new URL(BASE);
   return new Promise((resolve, reject) => {
     const req = httpRequest(
@@ -44,6 +46,7 @@ function get(
           cacheControl: res.headers["cache-control"] ?? "",
           robots: (res.headers["x-robots-tag"] as string | undefined) ?? "",
           body,
+          headers: res.headers,
         }));
       },
     );
@@ -422,6 +425,16 @@ describe.skipIf(!SUFFIX)("site hosts", () => {
     expect(attributes).toContain("Secure");
     expect(attributes).toContain("Path=/");
     expect(attributes.some((part) => /^domain=/i.test(part))).toBe(false);
+    expect(attributes).toContain("HttpOnly");
+    expect(attributes).toContain("SameSite=Lax");
+
+    const sibling = await get(hostname, "/site.zip", {
+      Cookie: attributes[0], Origin: `https://sibling${suffix}`,
+    });
+    expect(sibling.status).toBe(200);
+    expect(sibling.headers["access-control-allow-origin"]).toBe("*");
+    expect(sibling.headers["access-control-allow-credentials"]).toBeUndefined();
+    expect(sibling.headers["cross-origin-resource-policy"]).toBe("same-origin");
   });
 
   // Custom domains (ADR-013 B5). The Node runtime uses the real DoH adapter,

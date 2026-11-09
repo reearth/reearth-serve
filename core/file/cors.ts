@@ -147,17 +147,6 @@ if (import.meta.vitest) {
     }
   });
 
-  test("a site host trusts only itself, not a sibling site or the apex", () => {
-    const site = "https://a.sites.example.net";
-    for (const origin of ["https://b.sites.example.net", OWN]) {
-      const headers = new Headers();
-      applyCors(headers, { proof: "cookie", origin, trustedOrigins: [site] });
-      expect(headers.get("Access-Control-Allow-Origin")).toBe("*");
-      expect(headers.get("Access-Control-Allow-Credentials")).toBeNull();
-      expect(headers.get("Cross-Origin-Resource-Policy")).toBe("same-origin");
-    }
-  });
-
   test("Basic never gets credentialed CORS, even from a trusted origin", () => {
     const headers = new Headers();
     applyCors(headers, policy("basic", OWN));

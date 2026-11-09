@@ -152,7 +152,7 @@ if (import.meta.vitest) {
 
     test("characters outside [a-z0-9-.]", () => {
       expect(errorOf("map_1.example.jp")).toBe(CUSTOM_HOST_ERRORS.format);
-      expect(errorOf("川崎.example.jp")).toBe(CUSTOM_HOST_ERRORS.format);
+      expect(errorOf("港.example.jp")).toBe(CUSTOM_HOST_ERRORS.format);
       expect(errorOf("map.example.jp:8080")).toBe(CUSTOM_HOST_ERRORS.format);
       expect(errorOf("map .example.jp")).toBe(CUSTOM_HOST_ERRORS.format);
     });
