@@ -12,6 +12,7 @@ import { extractionMessageForJob } from "../extraction/handler";
 import {
   applyVerificationResult, VERIFICATION_JOB_TYPE, verificationMessageForJob, type VerificationDeps,
 } from "../integrity/verification";
+import { applyBackfillResult, BACKFILL_JOB_TYPE, backfillMessageForJob } from "../integrity/backfill";
 import { isSha256Hex } from "../asset/integrity";
 import type { Context } from "hono";
 import { jsonError, jsonResponse } from "../openapi";
@@ -116,6 +117,18 @@ jobRoutes.post("/:id/retry",
       return c.json(job);
     }
 
+    if (job.type === BACKFILL_JOB_TYPE) {
+      // A row that is gone or already hashed has nothing to backfill. A job
+      // closed because the object was missing can be re-armed here.
+      const message = await backfillMessageForJob(job, c.get("metadata"), c.get("versions"));
+      if (!message) return c.json({ error: "Nothing left to verify" }, 400);
+      job.status = "pending";
+      job.updatedAt = Date.now();
+      await jobs.save(job);
+      await c.get("backfillQueue")?.send(message);
+      return c.json(job);
+    }
+
     job.status = "pending";
     job.updatedAt = Date.now();
     await jobs.save(job);
@@ -151,9 +164,10 @@ jobInternalRoutes.post("/:id/status", async (c) => {
     sha256?: string;
   }>();
 
-  // Hash verification (ADR-017 §2): the container reports the hash it
-  // computed, and the comparison with the declared one is made here.
-  if (job.type === VERIFICATION_JOB_TYPE) {
+  // Hash verification (ADR-017 §2) and the hash backfill (P4) run the same
+  // container mode: it reports the hash it computed, and what it means —
+  // compared with a declared hash, or recorded as is — is decided here.
+  if (job.type === VERIFICATION_JOB_TYPE || job.type === BACKFILL_JOB_TYPE) {
     if (body.status === "completed" && !(body.sha256 && isSha256Hex(body.sha256))) {
       return c.json({ error: "completed verification requires a 64-hex sha256" }, 400);
     }
@@ -162,7 +176,10 @@ jobInternalRoutes.post("/:id/status", async (c) => {
       : body.status === "failed"
         ? { status: "failed" as const, error: body.error || "verification failed" }
         : { status: "running" as const };
-    const outcome = await applyVerificationResult(verificationDeps(c), job, report);
+    const deps = verificationDeps(c);
+    const outcome = job.type === BACKFILL_JOB_TYPE
+      ? await applyBackfillResult({ ...deps, versions: c.get("versions"), integrityBackfills: c.get("integrityBackfills") }, job, report)
+      : await applyVerificationResult(deps, job, report);
     return c.json({ ok: true, outcome });
   }
 

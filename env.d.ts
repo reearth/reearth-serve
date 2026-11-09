@@ -34,6 +34,10 @@ interface Env {
   CREDENTIALED_ORIGINS?: string;
   // Extraction settings
   EXTRACTION_STUCK_THRESHOLD_SECONDS?: string;
+  // SHA-256 backfill of rows stored before ADR-017 (P4): "true" turns it on;
+  // the batch size caps how many backfill jobs are open at once (default 2).
+  INTEGRITY_BACKFILL_ENABLED?: string;
+  INTEGRITY_BACKFILL_BATCH_SIZE?: string;
   // Anonymous (demo-mode) upload toggle. Set to "false" to require login for uploads.
   // Defaults to "true" — read & non-upload operations are not affected.
   ANONYMOUS_UPLOAD_ENABLED?: string;

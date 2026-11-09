@@ -271,7 +271,7 @@ export class SqlJobStore implements JobStore {
     const rows = await queryAll(
       this.db,
       `SELECT * FROM jobs
-         WHERE type IN ('archive-extraction', 'integrity-verification')
+         WHERE type IN ('archive-extraction', 'integrity-verification', 'integrity-backfill')
            AND (retry_count <= ?1
                 OR COALESCE(json_extract(meta, '$.fileCount'), 0) >
                    COALESCE(json_extract(meta, '$.retryFileCount'), 0)

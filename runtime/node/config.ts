@@ -6,6 +6,7 @@ import { parseTenancyConfig, type TenancyConfig } from "../../adapters/tenancy";
 
 import { parseCredentialedOrigins } from "../../core/file/cors";
 import { checkSiteIsolation } from "../../core/site/isolation";
+import { DEFAULT_BACKFILL_BATCH_SIZE } from "../../core/integrity/backfill";
 
 export type ContainerLauncherKind = "none";
 
@@ -72,6 +73,12 @@ export type NodeConfig = {
    */
   objectStore: ObjectStoreConfig | null;
   containerLauncher: ContainerLauncherKind;
+  /**
+   * `INTEGRITY_BACKFILL_ENABLED=true`: the cron hashes rows stored before
+   * ADR-017, at most `INTEGRITY_BACKFILL_BATCH_SIZE` jobs open at once
+   * (ADR-017 P4). Off by default.
+   */
+  backfill: { enabled: boolean; batchSize: number };
 };
 
 const DEFAULT_PORT = 8788;
@@ -105,6 +112,10 @@ export function loadConfig(env: Env): NodeConfig {
     tenancy: parseTenancyConfig(env),
     objectStore: objectStore(env),
     containerLauncher: containerLauncher(env.CONTAINER_LAUNCHER),
+    backfill: {
+      enabled: env.INTEGRITY_BACKFILL_ENABLED === "true",
+      batchSize: intOr(env.INTEGRITY_BACKFILL_BATCH_SIZE, DEFAULT_BACKFILL_BATCH_SIZE),
+    },
   };
 }
 

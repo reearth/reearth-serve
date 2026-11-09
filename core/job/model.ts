@@ -23,12 +23,17 @@ export const JOB_MAX_RETRIES = 5;
  *   verification, ADR-017 §2). Only transient read errors are retried; a
  *   mismatch is final and deletes the upload. A job that runs out of retries
  *   leaves the upload `pending`, never `failed`, and touches no `status`.
+ * - `slower-reads` — nothing a reader sees depends on the job (ADR-018 §6's
+ *   optimisation jobs). Today: the SHA-256 backfill of rows stored before
+ *   ADR-017 (P4), whose failure leaves the row without a hash, as it was.
+ *   Retry; a final failure closes the job and touches no row.
  */
-export type JobFailureClass = "missing-feature" | "rejected-version";
+export type JobFailureClass = "missing-feature" | "rejected-version" | "slower-reads";
 
 const FAILURE_CLASS: Record<JobType, JobFailureClass> = {
   "archive-extraction": "missing-feature",
   "integrity-verification": "rejected-version",
+  "integrity-backfill": "slower-reads",
 };
 
 export function jobFailureClass(job: Pick<Job, "type">): JobFailureClass {

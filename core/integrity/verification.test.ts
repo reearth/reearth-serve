@@ -76,6 +76,8 @@ beforeEach(async () => {
     containers: launcher(),
     extractionStuckThresholdMs: 30 * 60 * 1000,
     limits: { subrequestBudget: 1000 },
+    backfillQueue: null,
+    backfillSettings: { enabled: false, batchSize: 0 },
   } as unknown as Deps;
 });
 

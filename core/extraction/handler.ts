@@ -7,6 +7,7 @@ import type { Deps } from "../types";
 import type { QueueMessage } from "../queue/port";
 import { touchPendingJob } from "../job/usecase";
 import { handleVerificationQueue, isVerificationMessage, type VerificationMessage } from "../integrity/verification";
+import { handleBackfillQueue, isBackfillMessage, type BackfillMessage } from "../integrity/backfill";
 
 /** One extraction run, addressed by job (ADR-005, amendment 2026-11-05). */
 export interface ExtractionMessage {
@@ -59,21 +60,26 @@ const MISCONFIGURED_RETRY_DELAY_SECONDS = 300;
 
 /**
  * Consumer of the extraction queue. The queue also carries hash verification
- * runs (ADR-017 §2), which use the same container image and launcher; they are
- * split off first so a deployment without the extractor does not hold them back.
+ * runs (ADR-017 §2) and hash backfill runs (P4), which use the same container
+ * image and launcher; they are split off first so a deployment without the
+ * extractor does not hold them back.
  */
 export async function handleQueue(
-  messages: QueueMessage<ExtractionMessage | VerificationMessage>[],
+  messages: QueueMessage<ExtractionMessage | VerificationMessage | BackfillMessage>[],
   deps: Deps,
 ): Promise<void> {
   const verification: QueueMessage<VerificationMessage>[] = [];
+  const backfill: QueueMessage<BackfillMessage>[] = [];
   const extraction: QueueMessage<ExtractionMessage>[] = [];
   for (const m of messages) {
     if (isVerificationMessage(m.body)) verification.push(m as QueueMessage<VerificationMessage>);
+    else if (isBackfillMessage(m.body)) backfill.push(m as QueueMessage<BackfillMessage>);
     else extraction.push(m as QueueMessage<ExtractionMessage>);
   }
   if (verification.length > 0) await handleVerificationQueue(verification, deps);
   if (extraction.length > 0) await handleExtractionMessages(extraction, deps);
+  // Last: the backfill is the lowest-priority work on this queue.
+  if (backfill.length > 0) await handleBackfillQueue(backfill, deps);
 }
 
 async function handleExtractionMessages(

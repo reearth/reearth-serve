@@ -34,6 +34,12 @@ BASE_URL = "https://serve.reearth.land"
 # by a deploy rollout) and should be re-enqueued to resume from checkpoint.
 # The previous 24h default left orphaned extractions invisible for a day.
 EXTRACTION_STUCK_THRESHOLD_SECONDS = "1800"
+# SHA-256 backfill of assets and versions stored before ADR-017 (P4). Off
+# unless "true". Each run reads one whole object in an ArchiveExtractorContainer
+# instance (MODE=verify), so it takes instances from extraction; the batch size
+# caps how many backfill runs are open at once (default 2).
+# INTEGRITY_BACKFILL_ENABLED = "true"
+# INTEGRITY_BACKFILL_BATCH_SIZE = "2"
 # Per-asset site hosts (ADR-013 B1): every request whose Host is
 # "{assetId|versionId}.sites.example.net" is served as /files/{id}/… and
 # nothing else is reachable on that hostname. Commented out on purpose:

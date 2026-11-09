@@ -63,7 +63,8 @@ export const archiveFormatSchema = enumComponent("ArchiveFormat", z.enum(["zip",
 export const assetAccessSchema = enumComponent("AssetAccess", z.enum(["public", "password"]));
 /**
  * Whether a version's `sha256` has been confirmed over the stored bytes
- * (ADR-017 §1). Absent on versions stored before ADR-017.
+ * (ADR-017 §1). Absent on versions stored before ADR-017 until the backfill
+ * (P4) hashes them.
  *
  * - `verified` — the store or Serve hashed the stored bytes and they match.
  * - `pending` — the bytes are in place and servable, the hash is not yet
@@ -81,8 +82,11 @@ export const integritySchema = enumComponent("Integrity", z.enum(["verified", "p
  * - `integrity-verification` — streams a presigned upload once and confirms its
  *   SHA-256 (ADR-017 §2). Its failure class is "rejected version" (ADR-018
  *   §6): a mismatch deletes the upload, which is final and not retried.
+ * - `integrity-backfill` — hashes an asset or version stored before ADR-017
+ *   and records the result as `verified` (ADR-017 P4). Nothing was declared,
+ *   so there is nothing to reject: a failure leaves the row as it was.
  */
-export const jobTypeSchema = enumComponent("JobType", z.enum(["archive-extraction", "integrity-verification"]));
+export const jobTypeSchema = enumComponent("JobType", z.enum(["archive-extraction", "integrity-verification", "integrity-backfill"]));
 export const jobStatusSchema = z.enum(["pending", "running", "completed", "failed"]);
 
 // Upload request headers (`Content-Encoding`, `X-Skip-Extraction`). Named so

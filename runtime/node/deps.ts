@@ -2,6 +2,8 @@ import type { Deps } from "../../core/types";
 import type { ExtractionMessage } from "../../core/extraction/handler";
 import type { ThumbnailMessage } from "../../core/thumbnail/queue";
 import type { VerificationMessage } from "../../core/integrity/verification";
+import type { BackfillMessage } from "../../core/integrity/backfill";
+import { SqlIntegrityBackfillStore } from "../../adapters/sql/integrity-backfill";
 import { KeyValueSessionStore, KeyValueUploadSessionStore } from "../../core/kv/stores";
 import {
   SqlCleanupPendingStore, SqlJobStore, SqlMetadataStore,
@@ -38,9 +40,10 @@ export type NodeRuntime = {
   deps: Deps;
   /**
    * Concrete queues, so the cron can drain them (the port has no consumer side).
-   * The extraction queue also carries hash verification runs (ADR-017 §2).
+   * The extraction queue also carries hash verification runs (ADR-017 §2)
+   * and hash backfill runs (P4).
    */
-  extractionQueue: SqlJobQueue<ExtractionMessage | VerificationMessage>;
+  extractionQueue: SqlJobQueue<ExtractionMessage | VerificationMessage | BackfillMessage>;
   thumbnailQueue: SqlJobQueue<ThumbnailMessage>;
   /** Concrete KeyValue, so the cron can sweep expired rows. */
   kv: SqlKeyValue;
@@ -71,7 +74,7 @@ export function buildNodeRuntime(env: Env = process.env): NodeRuntime {
   }
 
   const kv = new SqlKeyValue(sql);
-  const extractionQueue = new SqlJobQueue<ExtractionMessage | VerificationMessage>(sql, "extraction");
+  const extractionQueue = new SqlJobQueue<ExtractionMessage | VerificationMessage | BackfillMessage>(sql, "extraction");
   const storage = new MemoryFileStorage();
   const thumbnailQueue = new SqlJobQueue<ThumbnailMessage>(sql, "thumbnail");
 
@@ -91,6 +94,8 @@ export function buildNodeRuntime(env: Env = process.env): NodeRuntime {
     projects: new SqlProjectStore(sql),
     extractionQueue,
     verificationQueue: extractionQueue,
+    backfillQueue: extractionQueue,
+    integrityBackfills: new SqlIntegrityBackfillStore(sql),
     thumbnailQueue,
     storageUsage: new SqlStorageUsageStore(sql),
     pendingCleanup: new SqlCleanupPendingStore(sql),
@@ -123,6 +128,7 @@ export function buildNodeRuntime(env: Env = process.env): NodeRuntime {
     containers: new UnavailableContainerLauncher(storage),
     extractionStuckThresholdMs: STUCK_THRESHOLD_MS,
     limits: { subrequestBudget: CLEANUP_SUBREQUEST_BUDGET },
+    backfillSettings: config.backfill,
   };
 
   return { config, deps, extractionQueue, thumbnailQueue, kv };

@@ -216,6 +216,8 @@ function injectDeps(deps: Deps, opts: { siteHost: boolean }): MiddlewareHandler<
     c.set("extractionQueue", deps.extractionQueue);
     c.set("thumbnailQueue", deps.thumbnailQueue);
     c.set("verificationQueue", deps.verificationQueue);
+    c.set("backfillQueue", deps.backfillQueue);
+    c.set("integrityBackfills", deps.integrityBackfills);
     c.set("writes", deps.writes);
     c.set("storageUsage", deps.storageUsage);
     c.set("pendingCleanup", deps.pendingCleanup);

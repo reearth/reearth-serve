@@ -13,6 +13,8 @@ import { KeyValueUploadSessionStore, KeyValueSessionStore } from "../../core/kv/
 import { CloudflareJobQueue } from "./queues";
 import type { ExtractionMessage } from "../../core/extraction/handler";
 import type { VerificationMessage } from "../../core/integrity/verification";
+import { DEFAULT_BACKFILL_BATCH_SIZE, type BackfillMessage } from "../../core/integrity/backfill";
+import { SqlIntegrityBackfillStore } from "../sql/integrity-backfill";
 import { D1SqlClient } from "./sql";
 import { SqlAtomicWrites } from "../sql/writes";
 import { SqlSiteHostStore } from "../sql/site-hosts";
@@ -56,10 +58,10 @@ export function buildDeps(env: Env): Deps {
   const kv = new CloudflareKeyValue(env.KV);
   // One SqlClient per invocation; every repository speaks the port, not D1 (ADR-012 §3).
   const sql = new D1SqlClient(env.DB);
-  // Extraction and hash verification share one queue and one consumer
-  // (core/extraction/handler.ts tells them apart by `kind`).
+  // Extraction, hash verification and the hash backfill share one queue and
+  // one consumer (core/extraction/handler.ts tells them apart by `kind`).
   const containerJobs = env.EXTRACTION_QUEUE
-    ? new CloudflareJobQueue<ExtractionMessage | VerificationMessage>(env.EXTRACTION_QUEUE)
+    ? new CloudflareJobQueue<ExtractionMessage | VerificationMessage | BackfillMessage>(env.EXTRACTION_QUEUE)
     : null;
 
   return {
@@ -75,6 +77,8 @@ export function buildDeps(env: Env): Deps {
     projects: new SqlProjectStore(sql),
     extractionQueue: containerJobs,
     verificationQueue: containerJobs,
+    backfillQueue: containerJobs,
+    integrityBackfills: new SqlIntegrityBackfillStore(sql),
     thumbnailQueue: env.THUMBNAIL_QUEUE ? new CloudflareJobQueue(env.THUMBNAIL_QUEUE) : null,
     storageUsage: new SqlStorageUsageStore(sql),
     pendingCleanup: new SqlCleanupPendingStore(sql),
@@ -130,6 +134,13 @@ export function buildDeps(env: Env): Deps {
     extractionStuckThresholdMs:
       parseInt(env.EXTRACTION_STUCK_THRESHOLD_SECONDS || "", 10) * 1000 || DEFAULT_STUCK_THRESHOLD_MS,
     limits: { subrequestBudget: CLEANUP_SUBREQUEST_BUDGET },
+    // Hashing rows stored before ADR-017 (P4). Off unless "true": each run
+    // reads a whole object in the extractor container, so turning it on is an
+    // operator's decision about capacity.
+    backfillSettings: {
+      enabled: env.INTEGRITY_BACKFILL_ENABLED === "true",
+      batchSize: parseInt(env.INTEGRITY_BACKFILL_BATCH_SIZE || "", 10) || DEFAULT_BACKFILL_BATCH_SIZE,
+    },
   };
 }
 

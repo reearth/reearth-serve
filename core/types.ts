@@ -17,6 +17,8 @@ import type { CustomHostnameProvisioner } from "./site/provisioner";
 import type { ExtractionMessage } from "./extraction/handler";
 import type { ThumbnailMessage } from "./thumbnail/queue";
 import type { VerificationMessage } from "./integrity/verification";
+import type { BackfillMessage, BackfillSettings } from "./integrity/backfill";
+import type { IntegrityBackfillStore } from "./integrity/repository";
 
 /**
  * Dependencies that route handlers read off the request context.
@@ -45,6 +47,13 @@ export type ContextDeps = {
    * other's message.
    */
   verificationQueue: JobQueue<VerificationMessage> | null;
+  /**
+   * SHA-256 backfill runs for rows stored before ADR-017 (P4). The same queue
+   * again, typed on its own like `verificationQueue`.
+   */
+  backfillQueue: JobQueue<BackfillMessage> | null;
+  /** Selection and the conditional write of the backfill (ADR-017 P4). */
+  integrityBackfills: IntegrityBackfillStore;
   storageUsage: StorageUsageStore;
   pendingCleanup: CleanupPendingStore;
   /** The blob ledger (ADR-017 §3, §5): reservations, claims and sweeps of `blobs/`. */
@@ -130,6 +139,12 @@ export type Deps = ContextDeps & {
   /** How long an extraction job may sit untouched before the cron retriggers it. */
   extractionStuckThresholdMs: number;
   limits: Limits;
+  /**
+   * `INTEGRITY_BACKFILL_ENABLED` / `INTEGRITY_BACKFILL_BATCH_SIZE`: whether the
+   * cleanup cron hashes rows stored before ADR-017, and how many such jobs may
+   * be open at once (ADR-017 P4).
+   */
+  backfillSettings: BackfillSettings;
 };
 
 export type AppEnv = {

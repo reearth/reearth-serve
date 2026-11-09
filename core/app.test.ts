@@ -98,6 +98,8 @@ function fakeDeps(overrides: Partial<Deps> = {}): Deps {
     extractionQueue: null,
     thumbnailQueue: null,
     verificationQueue: null,
+    backfillQueue: null,
+    integrityBackfills: strictFake("integrityBackfills"),
     storageUsage: strictFake("storageUsage"),
     pendingCleanup: strictFake("pendingCleanup"),
     blobRefs: strictFake("blobRefs"),
@@ -118,6 +120,7 @@ function fakeDeps(overrides: Partial<Deps> = {}): Deps {
     containers: strictFake("containers"),
     extractionStuckThresholdMs: 1000,
     limits: { subrequestBudget: 700 },
+    backfillSettings: { enabled: false, batchSize: 0 },
     ...overrides,
   };
 }

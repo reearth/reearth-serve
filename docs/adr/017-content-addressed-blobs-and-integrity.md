@@ -297,8 +297,8 @@ route — is small.
 
 ## Follow-ups
 
-- Migration plan: backfill order, whether `integrity` may be `unknown` for
-  pre-ADR versions during the backfill, and what the API shows meanwhile.
+- Migration plan: settled by P4 (see Implementation status). There is no
+  `unknown` state; a pre-ADR row omits both fields until it is hashed.
 - Content-addressing extracted archive entries and slot contents
   individually (a blob-per-file layout) — a separate cost question. If
   ADR-018 serves zip entries in place from the archive's blob, an entry is
@@ -558,9 +558,68 @@ accounting do not change.
   refuses a `verifying` blob, so the rejected upload's reference is normally
   its only one, and `markDeleting` still requires zero references.
 
+**P4 — backfill of pre-ADR rows (done).** Assets and versions stored before
+ADR-017 get their hash recorded by a background job. URLs, responses and
+usage accounting do not change, and nothing moves into the blob layer.
+
+- Where the hash is computed: the P1b verifier, unchanged. Cloudflare runs
+  the archive-extractor image in `MODE=verify` (the container only hashes
+  and reports, and never sees a declared hash, so it needed no change);
+  Node hashes in process through the same `ContainerLauncher.verifyIntegrity`
+  port. A small-object path inside the Worker was not added: it would be a
+  second hashing path to keep correct, for rows that the container handles
+  anyway.
+- Job: a new type, `integrity-backfill` (`JobType` in the OpenAPI document),
+  rather than a mode of `integrity-verification`. Verification settles only
+  asset rows and can delete the upload; the backfill settles asset and
+  version rows and must never delete anything, and the job type is what
+  `jobFailureClass` and the status callback branch on. Its failure class is
+  a new one, `slower-reads` (ADR-018 §6's optimisation class): nothing a
+  reader sees depends on the job, so a failure is retried and then closed,
+  and no `status` or `integrity` is ever written by it. It rides the
+  extraction queue (`kind: "integrity-backfill"`, `ContextDeps.backfillQueue`)
+  and is handled after extraction in a batch. The container reports to the
+  same `POST /api/internal/jobs/:id/status`, which dispatches on the job type.
+- Selection and pacing (`enqueueIntegrityBackfill`, `core/integrity/backfill.ts`):
+  a cleanup-cron step after the blob sweeps, on what is left of the shared
+  subrequest budget. It counts the backfill jobs still open (not completed,
+  retry budget left) and tops them up to `INTEGRITY_BACKFILL_BATCH_SIZE`
+  (default 2) with one page of rows that have no `sha256`, no `integrity`,
+  no blob key and **no `integrity-backfill` job of any status**: assets
+  first, then versions, oldest first, rather than workspace by workspace as
+  the Negative consequences above put it; nothing depends on the order. The
+  batch size bounds open jobs, not only new ones per tick, so a few
+  multi-hour reads cannot pile up and take the extractor's `max_instances`
+  from extraction. `INTEGRITY_BACKFILL_ENABLED=true` turns the step on; it is
+  off by default, because turning it on is a capacity decision. Migration
+  `0010_integrity_backfill.sql` adds partial indexes over the unhashed rows,
+  so the page does not scan every asset every tick and the index is empty
+  once the backfill is over.
+- No new row state. The job row is the only marker: it is saved before the
+  message is sent, so the next tick never selects the row again, and a
+  failed send leaves a `pending` job that the cron's retry pass re-sends once
+  it is stuck. Readers see either no hash (fields omitted, as for every
+  pre-ADR row) or `verified`. Marking the row `pending` while it is hashed
+  was considered and rejected: a row whose object is missing would then stay
+  `pending` for good, which claims a check is under way when none is.
+- Writing the result (`applyBackfillResult`): one batch of the job and a
+  conditional `UPDATE` (`SqlIntegrityBackfillStore.complete`) that sets
+  `sha256` and `integrity: verified` only while the row still has no hash, no
+  integrity and no blob key, and still has the filename its key was built
+  from. A row deleted meanwhile closes the job `failed` ("no longer exists");
+  a row hashed meanwhile closes it `completed` and keeps its hash. The asset
+  upsert's rule that a `verified` row keeps its hash protects the result from
+  stale rewrites (the extraction callback). `blob_key` stays NULL.
+- Missing objects: before starting a run the consumer `head`s the row's key,
+  and a `failed` report is checked the same way. When the store answers "no
+  such object", the job is closed (`retryCount` past the budget, the key in
+  `error`) and a warning is logged; nothing is written to the row. Because the
+  row now has a job, it is never selected again. Any other read failure is
+  transient and retried; when the retries run out the job is closed and the
+  row stays as it was. `POST /api/v1/jobs/{id}/retry` re-runs either.
+
 **Remaining.**
 
-- **P4**: backfill of `sha256` for versions stored before ADR-017.
 - **P5**: the CLI declaring `X-Content-SHA256` / `sha256` on every upload.
   Once it does, a client that uploads a version right after a large
   presigned first upload must expect `409` until verification settles.
@@ -580,7 +639,9 @@ accounting do not change.
   `shouldCompress` does). P5 has to settle this, for example by letting the
   client state the encoding it will upload.
 - Verification runs in the archive-extractor container and shares its
-  `max_instances`, so it competes with extraction for capacity.
+  `max_instances`, so it competes with extraction for capacity. The P4
+  backfill does too; `INTEGRITY_BACKFILL_BATCH_SIZE` bounds its share, but
+  nothing yields to extraction when the instances run out.
 - A rejected upload is recorded only on its job. There is no channel to
   notify the uploader (ADR-018 §6 asks for one).
 - `deleteAsset` leaves job rows behind, so the jobs of a deleted asset stay
@@ -593,9 +654,23 @@ accounting do not change.
 - The orphan sweep needs the store to report when an object was written. R2
   and the memory adapter do; a store that does not leaves orphans alone. A full
   pass over `blobs/` takes one tick per 200 keys.
-- Rows stored before P2 have `blob_key` NULL and stay at their classic keys.
-  Moving them into the blob layer would need the backfilled hash (P4) and a
-  copy per object; nothing does it yet.
+- Rows stored before P2 have `blob_key` NULL and stay at their classic keys,
+  and P4 leaves its rows there too. P4 provides the hash such a move needs,
+  so what is left is a copy per object into `blobs/{scope}/{sha256}` (a
+  multipart job for a large one) and switching the row's key with a
+  reference taken; nothing does it yet. Until then those rows take no part
+  in deduplication.
+- Backfill rows that cannot be hashed — the object is missing, or the reads
+  kept failing until the retries ran out — stay without a hash. They are
+  recorded only as closed `integrity-backfill` jobs; finding them means
+  listing those jobs, and only a manual retry runs one again.
+- Backfill jobs are listed under the asset's project or session like its
+  other jobs, so users see maintenance jobs they did not start. The OpenAPI
+  `JobType` enum gained `integrity-backfill`.
+- The backfill's selection and its job insert are separate statements. Two
+  cron ticks running at the same moment could both select a row; the result
+  is one duplicate read, and the second write finds the row hashed and does
+  nothing.
 - A direct upload that reuses bytes gets 409 if the last other row holding
   them is deleted while its body is in flight: the bytes are still there, but
   the attach requires a reference. Relaxing that would need a way to tell

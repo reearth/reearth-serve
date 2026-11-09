@@ -9,6 +9,9 @@ import { extractionMessageForJob, type ExtractionMessage } from "../extraction/h
 import {
   closedAsFailed, VERIFICATION_JOB_TYPE, verificationMessageForJob, type VerificationMessage,
 } from "../integrity/verification";
+import {
+  BACKFILL_JOB_TYPE, backfillMessageForJob, enqueueIntegrityBackfill, type BackfillMessage,
+} from "../integrity/backfill";
 import type { JobQueue } from "../queue/port";
 
 const MAX_RETRIES = JOB_MAX_RETRIES;
@@ -58,6 +61,16 @@ export async function handleScheduled(deps: Deps): Promise<void> {
     );
   }
 
+  // SHA-256 backfill of rows stored before ADR-017 (P4). Lowest priority of
+  // the budgeted steps, so it gets what the cleanup and the blob sweeps left.
+  // A few jobs at a time: each run is a whole-object read in the extractor
+  // container, competing with extraction and verification for instances.
+  const backfill = await enqueueIntegrityBackfill(deps, budget, deps.backfillSettings);
+  if (backfill.enqueued.length > 0 || backfill.budgetExhausted) {
+    const suffix = backfill.budgetExhausted ? " (budget exhausted — resuming next tick)" : "";
+    console.log(`Cleanup: integrity backfill — ${backfill.enqueued.length} jobs enqueued${suffix}`);
+  }
+
   // Released site names whose 30-day cooldown has run out (ADR-013 B3). One
   // indexed DELETE; the name becomes claimable again only here, which is what
   // makes the cooldown a real window rather than a suggestion.
@@ -88,6 +101,7 @@ export async function handleScheduled(deps: Deps): Promise<void> {
     await retriggerPendingJobs(metadata, versions, jobs, deps.writes, {
       extraction: deps.extractionQueue,
       verification: deps.verificationQueue,
+      backfill: deps.backfillQueue,
     }, deps.extractionStuckThresholdMs);
   }
 }
@@ -133,12 +147,18 @@ export function effectiveRetryCount(
   return progressed ? 0 : (job.retryCount ?? 0);
 }
 
+type RetryQueues = {
+  extraction: JobQueue<ExtractionMessage>;
+  verification: JobQueue<VerificationMessage> | null;
+  backfill: JobQueue<BackfillMessage> | null;
+};
+
 async function retriggerPendingJobs(
   metadata: MetadataStore,
   versions: VersionStore,
   jobs: JobStore,
   writes: AtomicWrites,
-  queues: { extraction: JobQueue<ExtractionMessage>; verification: JobQueue<VerificationMessage> | null },
+  queues: RetryQueues,
   stuckThresholdMs: number,
 ): Promise<void> {
   if (!jobs.listRetriable) return;
@@ -165,8 +185,10 @@ async function retriggerPendingJobs(
       // A verification job mirrors nothing (ADR-018 §6, "rejected version"):
       // running out of retries means the object could not be read, not that
       // it is wrong, so the upload stays `pending` and servable, and the
-      // asset's `status` belongs to extraction.
-      if (jobFailureClass(job) === "rejected-version") {
+      // asset's `status` belongs to extraction. A backfill job ("slower
+      // reads") mirrors nothing either: the row stays without a hash, as it
+      // was, and the closed job keeps the backfill from selecting it again.
+      if (jobFailureClass(job) !== "missing-feature") {
         await jobs.save(updatedJob);
       } else if (job.versionId) {
         const version = await versions.find(job.versionId);
@@ -183,7 +205,8 @@ async function retriggerPendingJobs(
 
     const sent = await resend(job, metadata, versions, queues);
     if (sent === "nothing") {
-      // The asset or version is gone (or, for verification, already settled):
+      // The asset or version is gone (or, for verification and backfill,
+      // already settled):
       // close the job instead of finding it again every tick, where it would
       // take one of the MAX_RETRIABLE_PER_TICK slots forever.
       await jobs.save(closedAsFailed(job, "nothing left to run: the asset or version is gone, or already settled", Date.now()));
@@ -222,7 +245,7 @@ async function resend(
   job: Job,
   metadata: MetadataStore,
   versions: VersionStore,
-  queues: { extraction: JobQueue<ExtractionMessage>; verification: JobQueue<VerificationMessage> | null },
+  queues: RetryQueues,
 ): Promise<"sent" | "unsent" | "nothing"> {
   try {
     if (job.type === VERIFICATION_JOB_TYPE) {
@@ -230,6 +253,11 @@ async function resend(
       const message = await verificationMessageForJob(job, metadata);
       if (!message) return "nothing";
       await queues.verification.send(message);
+    } else if (job.type === BACKFILL_JOB_TYPE) {
+      if (!queues.backfill) return "unsent";
+      const message = await backfillMessageForJob(job, metadata, versions);
+      if (!message) return "nothing";
+      await queues.backfill.send(message);
     } else {
       const message = await extractionMessageForJob(job, metadata, versions);
       if (!message) return "nothing";
