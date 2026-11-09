@@ -123,7 +123,8 @@ echo "Running E2E tests against the Node runtime..."
 # store, archive extraction needs a container launcher, and thumbnail
 # generation needs the bundled jSquash wasm. Each is skipped by its own flag.
 # E2E_NODE_RUNTIME marks what only this runtime shows end to end: under
-# wrangler dev the Vite dev server answers preflights itself.
+# wrangler dev the Vite dev server answers preflights itself, and a
+# client-sent CF-Connecting-IP passes through where the edge would overwrite it.
 E2E_ENDPOINT="${ENDPOINT}" \
 E2E_MOCK_OIDC="http://localhost:${MOCK_OIDC_PORT}" \
 E2E_INTERNAL_API_SECRET="${INTERNAL_API_SECRET}" \

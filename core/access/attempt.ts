@@ -126,6 +126,7 @@ if (import.meta.vitest) {
     for (const [assetId, version, password] of [["b", 1, "pw"], ["a", 2, "pw"], ["a", 1, "pW"]] as const) {
       expect(await memo.keyFor(assetId, version, password)).not.toBe(key);
     }
-    expect(key).not.toContain("pw");
+    expect(atob(key)).toHaveLength(32);
+    expect(await new PasswordMemo().keyFor("a", 1, "pw")).not.toBe(key);
   });
 }

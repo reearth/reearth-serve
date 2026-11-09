@@ -229,9 +229,9 @@ Private datasets, password-protected sites (ADR-013 B7) and partner data marketp
 
 - [ ] `access` mode on project assets (`public` / `password` / `restricted`); `resolveAccess` in the file handler with zero cost for public assets. `public` ✅, `password` ✅ (archives, ADR-013 B7), `restricted` ✅ for an OIDC bearer from a member with `read_asset` on the apex (`PATCH {access: "restricted"}`, `asset protect --restricted`, `file cp`/`file sync` send the login token). Pending: delivery tokens, so site hosts and browsers can read a restricted asset
 - [ ] Grants — `asset_grants` for `user` / `email` / `api_key` principals on an asset or a whole project, with expiry, revocation, `source`/`ref` for the partner's order, events and webhooks
-- [ ] Signed URLs — prefix-scoped HMAC tokens (`?rs_sig=`) so a viewer loads a whole restricted tileset with one token and CORS stays `*`; optional grant binding for revocation
+- [ ] Signed URLs: prefix-scoped HMAC tokens (`?serve_token=` or `X-Serve-Token`) so a viewer loads a whole restricted tileset with one token and CORS stays `*`; optional grant binding for revocation
 - [ ] API keys — workspace-scoped machine credentials (`rs_live_…`, hashed at rest) for pipelines, partner storefronts and the untiled service account
-- [ ] Grants/keys/signed-URL API and CLI (`asset access`, `asset grant`, `asset sign`, `workspace api-key`); `file cp` / `file sync` with a key or login
+- [ ] Grants/keys/signed-URL API and CLI (`asset protect --restricted`, `asset grant`, `asset sign`, `workspace api-key`); `file cp` / `file sync` with a key or login
 - [ ] Marketplace flow — batch grants, project-level grants, `email` principals matched on verified claims, per-principal transfer metering hook (Phase 6)
 
 ---
