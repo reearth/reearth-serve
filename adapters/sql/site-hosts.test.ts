@@ -7,8 +7,24 @@ import type { SiteHost } from "../../core/site/repository";
 
 const SUFFIX = ".serve.example.test";
 
+const ASSET_IDS = ["3f9a1c2b4d5e6f70", "fedcba9876543210"];
+
+/** A store over a database holding the assets the rows below point at. */
 function store(): SqlSiteHostStore {
-  return new SqlSiteHostStore(createSqliteClient());
+  return storeWith(ASSET_IDS);
+}
+
+function storeWith(assetIds: string[]): SqlSiteHostStore {
+  const sql = createSqliteClient();
+  // node:sqlite is synchronous underneath: the row is written before
+  // `execute` returns its promise, so the store can be handed back as is.
+  for (const id of assetIds) {
+    void sql.execute(
+      "INSERT INTO assets (id, filename, content_type, size, created_at, expires_at) VALUES (?1, 'site.zip', 'application/zip', 1, 0, 0)",
+      [id],
+    );
+  }
+  return new SqlSiteHostStore(sql);
 }
 
 function host(over: Partial<SiteHost> = {}): SiteHost {
@@ -155,6 +171,37 @@ describe("SqlSiteHostStore", () => {
     await s.release(`kawasaki-flood-map${SUFFIX}`, 9000);
     await s.release(`kawasaki-flood-map${SUFFIX}`, 20000);
     expect((await s.find(`kawasaki-flood-map${SUFFIX}`))?.releasedAt).toBe(9000);
+  });
+
+  // compliance#258 REL-11 follow-up: a claim racing the asset's delete.
+  test("insert refuses a row whose asset no longer exists", async () => {
+    const s = storeWith([]);
+    expect(await s.insert(host())).toBe(false);
+    expect(await s.find(`kawasaki-flood-map${SUFFIX}`)).toBeNull();
+  });
+
+  test("released verified custom domains stay listed until their certificate is marked released", async () => {
+    const s = store();
+    const custom = (name: string, over: Partial<SiteHost> = {}) =>
+      host({ hostname: name, kind: "custom", verifiedAt: 500, certificateStatus: "active", ...over });
+    await s.insert(custom("b.example.com"));
+    await s.insert(custom("a.example.com"));
+    await s.insert(custom("unverified.example.com", { verifiedAt: null, certificateStatus: null }));
+    await s.insert(custom("live.example.com"));
+    await s.insert(host({ hostname: `sub${SUFFIX}` }));
+    await s.release("b.example.com", 2000);
+    await s.release("a.example.com", 1000);
+    await s.release("unverified.example.com", 1000);
+    await s.release(`sub${SUFFIX}`, 1000);
+
+    expect((await s.listCertificatesToRelease(10)).map((h) => h.hostname)).toEqual(["a.example.com", "b.example.com"]);
+    expect((await s.listCertificatesToRelease(1)).map((h) => h.hostname)).toEqual(["a.example.com"]);
+
+    await s.markCertificateReleased("a.example.com");
+    // An active row is never marked: the guard is released_at IS NOT NULL.
+    await s.markCertificateReleased("live.example.com");
+    expect((await s.listCertificatesToRelease(10)).map((h) => h.hostname)).toEqual(["b.example.com"]);
+    expect((await s.find("live.example.com"))?.certificateStatus).toBe("active");
   });
 
   test("purgeReleasedBefore takes only rows past the cutoff, bounded by limit", async () => {

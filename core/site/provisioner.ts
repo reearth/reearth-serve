@@ -29,7 +29,11 @@ export interface CustomHostnameProvisioner {
   provision(hostname: string): Promise<CustomHostnameState>;
   /** Where issuance got to. Called from the single-row GET while pending. */
   status(hostname: string): Promise<CustomHostnameState>;
-  /** Give the certificate up. Best effort: release must not fail on it. */
+  /**
+   * Give the certificate up. Throws when the provider could not confirm it is
+   * gone; the caller keeps the release outstanding and the cleanup cron
+   * retries it. A hostname the provider no longer has is success.
+   */
   deprovision(hostname: string): Promise<void>;
 }
 

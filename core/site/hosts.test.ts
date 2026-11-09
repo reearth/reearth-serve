@@ -15,7 +15,7 @@ import {
 import { ENTRY_CACHE_CONTROL, PINNED_CACHE_CONTROL } from "../file/caching";
 import { SITE_PREVIEW_HEADER } from "./middleware";
 import { NAME_ERRORS } from "./names";
-import { RELEASE_COOLDOWN_MS, SITE_HOST_ERRORS, SITE_HOST_QUOTA, purgeReleasedSiteHosts } from "./usecase";
+import { RELEASE_COOLDOWN_MS, SITE_HOST_ERRORS, SITE_HOST_QUOTA, claimSiteHost, purgeReleasedSiteHosts } from "./usecase";
 
 type App = SiteApp;
 
@@ -590,5 +590,21 @@ describe("asset deletion and the cleanup cron", () => {
     expect(res.status).toBe(201);
     expect(siteHosts.hosts.get(hostname)?.releasedAt).toBeNull();
     expect((await app.request(...site("kawasaki-flood-map"))).status).toBe(200);
+  });
+
+  // The asset is read, then deleted (its names released), then the claim's
+  // insert runs: the insert must refuse, or an active name would point at an
+  // asset that no longer exists.
+  test("a claim that races the asset's delete is a 404, not a dangling name", async () => {
+    const { siteHosts, metadata } = await siteFixture();
+    const asset = metadata.assets.get(ASSET_ID)!;
+    metadata.assets.delete(ASSET_ID);
+
+    const result = await claimSiteHost(
+      { hosts: siteHosts, suffix: SUFFIX },
+      { asset, hostname: "kawasaki-flood-map", userId: USER },
+    );
+    expect(result).toEqual({ ok: false, status: 404, error: "Asset not found" });
+    expect(siteHosts.hosts.size).toBe(0);
   });
 });

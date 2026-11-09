@@ -436,6 +436,11 @@ states: they are capability URLs and stay reachable while the asset exists.
   its names answering 410, unrecoverable for 30 days (compliance#258
   REL-11). The cache drops and the certificate deprovisioning of verified
   custom domains run only after the batch commits.
+- **A claim cannot outlive its asset.** The claim reads the asset, then
+  inserts; a delete can commit in between. The insert is
+  `INSERT … SELECT … WHERE EXISTS (asset)`, one statement, so it serialises
+  with the delete batch: a claim that loses the race inserts nothing and
+  answers 404 instead of leaving an active name on a deleted asset.
 - Releasing frees a slot against the per-project quota immediately, even
   though the row is still held.
 
@@ -583,6 +588,14 @@ shared with B2–B3.
   verification *means*, so a `provision` that throws stores `pending` and the
   single-row `GET` retries `status` while it is not `active`; a `deprovision`
   that throws is logged and the release proceeds.
+- **A released certificate is retried until it is gone.** A successful
+  `deprovision` sets the released row's `certificate_status` to `released`.
+  Every cleanup tick lists released verified custom rows without that mark
+  (oldest first, 10 per tick) and deprovisions them again, so neither a
+  provider outage nor a process that dies between the delete's commit and
+  the call leaves a certificate on the zone. The Cloudflare adapter throws
+  when it cannot confirm the hostname is gone and treats an already-missing
+  hostname as success, so a retry is safe.
 - **`POST …/hosts/:hostname/verify`** and **`GET …/hosts/:hostname`** are the
   two new routes; the 409 from verify repeats the record to publish, since the
   caller is standing at their DNS console. The instructions are withheld once
@@ -870,9 +883,11 @@ every URL form, cookie/Basic proof, `private` caching, credentialed CORS
   `NotSupportedError` for PBKDF2 above it, and `wrangler dev` and Node do not.
   The first cut used 600 000 (the OWASP figure), passed every local run, and
   failed every password set on a deployed Worker (compliance#258 SCA-04). The
-  cap is enforced on every runtime: `hashPassword` refuses a higher count and
-  `verifyPassword` treats one as malformed and answers false, so a hash
-  written on Node always verifies on Workers. Below OWASP's figure, the
+  cap is enforced when hashing on every runtime, so a hash written on Node
+  always verifies on Workers. A hash stored above the cap before the fix
+  (only Node could write one) still verifies on a runtime that computes it;
+  where PBKDF2 refuses the count, `verifyPassword` answers false rather than
+  throwing, and setting the password again rehashes at the cap. Below OWASP's figure, the
   limiter below is what keeps a shared password from being guessed online;
   the hash only matters if the row leaks. The hash and salt are
   deliberately **not** on `AssetMetadata` — they are read by their own

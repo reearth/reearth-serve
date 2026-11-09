@@ -6,7 +6,7 @@
  * `adapters/memory/custom-hostnames.ts`), so a test publishes the record it
  * wants found rather than waiting on DNS.
  */
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import type { SiteHost, SiteHostVerification } from "../../shared/api";
 import { MemoryDnsResolver } from "../../adapters/memory/dns";
 import { MemoryCustomHostnames } from "../../adapters/memory/custom-hostnames";
@@ -15,7 +15,8 @@ import { PROJECT_ID, siteFixture, SUFFIX, type SiteApp } from "../../adapters/me
 import { INDEX_HTML } from "../../adapters/memory/fixture";
 import { CUSTOM_HOST_ERRORS, verificationRecordName } from "./custom";
 import { NAME_ERRORS } from "./names";
-import { SITE_HOST_QUOTA, VERIFY_ATTEMPT_LIMIT } from "./usecase";
+import { releaseOutstandingCertificates, SITE_HOST_QUOTA, VERIFY_ATTEMPT_LIMIT } from "./usecase";
+import { CERTIFICATE_RELEASED } from "./repository";
 
 const CUSTOM = "map.city.example.jp";
 const VERIFY_RECORD = verificationRecordName(CUSTOM);
@@ -320,6 +321,40 @@ describe("resolution on a custom host", () => {
     const path = `/api/v1/assets/${ASSET_ID}/hosts/${encodeURIComponent(CUSTOM)}`;
     expect((await app.request(path, { method: "DELETE", headers: auth })).status).toBe(204);
     expect(siteHosts.hosts.get(CUSTOM)?.releasedAt).toBeGreaterThan(0);
+  });
+
+  // A failed deprovision used to be logged and forgotten, leaving the
+  // certificate on the zone for good.
+  test("a deprovision that failed on release is retried by the cleanup cron", async () => {
+    const { app, auth, customHostnames, siteHosts } = await registered();
+    await verify(app, auth);
+    customHostnames.failure = new Error("cloudflare is down");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    const path = `/api/v1/assets/${ASSET_ID}/hosts/${encodeURIComponent(CUSTOM)}`;
+    expect((await app.request(path, { method: "DELETE", headers: auth })).status).toBe(204);
+    const deps = { hosts: siteHosts, provisioner: customHostnames, suffix: SUFFIX };
+    // Still down: the cron tries and keeps it outstanding.
+    expect(await releaseOutstandingCertificates(deps)).toEqual([]);
+    expect(siteHosts.hosts.get(CUSTOM)?.certificateStatus).not.toBe(CERTIFICATE_RELEASED);
+
+    customHostnames.failure = null;
+    expect(await releaseOutstandingCertificates(deps)).toEqual([CUSTOM]);
+    expect(customHostnames.deprovisioned).toEqual([CUSTOM]);
+    expect(siteHosts.hosts.get(CUSTOM)?.certificateStatus).toBe(CERTIFICATE_RELEASED);
+    // Done is done: the next tick has nothing to retry.
+    expect(await releaseOutstandingCertificates(deps)).toEqual([]);
+    warn.mockRestore();
+  });
+
+  test("deleting the asset releases its verified domain and gives the certificate up", async () => {
+    const { app, auth, customHostnames, siteHosts } = await registered();
+    await verify(app, auth);
+
+    expect((await app.request(`/api/v1/assets/${ASSET_ID}`, { method: "DELETE", headers: auth })).status).toBe(204);
+    expect((await app.request(...onHost(CUSTOM))).status).toBe(410);
+    expect(customHostnames.deprovisioned).toEqual([CUSTOM]);
+    expect(siteHosts.hosts.get(CUSTOM)?.certificateStatus).toBe(CERTIFICATE_RELEASED);
   });
 
   test("the apex never costs a site_hosts lookup", async () => {

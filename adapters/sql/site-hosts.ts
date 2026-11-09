@@ -6,7 +6,7 @@
  * splits. Nothing here is Cloudflare-specific — the dialect is SQLite and the
  * transport is D1 or `node:sqlite` depending on who constructs it.
  */
-import type { SiteHost, SiteHostPatch, SiteHostStore } from "../../core/site/repository";
+import { CERTIFICATE_RELEASED, type SiteHost, type SiteHostPatch, type SiteHostStore } from "../../core/site/repository";
 import type { SqlClient, SqlValue } from "../../core/sql/port";
 import type { Row } from "../../core/sql/port";
 import { queryAll, queryFirst } from "./helpers";
@@ -44,10 +44,13 @@ export class SqlSiteHostStore implements SiteHostStore {
   async insert(host: SiteHost): Promise<boolean> {
     // OR IGNORE, not OR REPLACE: the primary key is the uniqueness rule that
     // stops two projects from holding one name, released rows included. A
-    // caller that loses the race is told the name is taken.
+    // caller that loses the race is told the name is taken. The EXISTS makes
+    // the asset check and the insert one statement, so it serialises with
+    // the delete batch that releases the asset's names.
     const result = await this.db.execute(
       `INSERT OR IGNORE INTO site_hosts (${SITE_HOST_COLUMNS})
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)`,
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12
+         WHERE EXISTS (SELECT 1 FROM assets WHERE id = ?2)`,
       [
         host.hostname, host.assetId, host.projectId, host.kind,
         host.verifiedAt, host.disabledAt, host.previews ? 1 : 0,
@@ -96,6 +99,25 @@ export class SqlSiteHostStore implements SiteHostStore {
     await this.db.execute(
       "UPDATE site_hosts SET released_at = ?2, asset_id = NULL WHERE hostname = ?1 AND released_at IS NULL",
       [hostname, releasedAt],
+    );
+  }
+
+  async listCertificatesToRelease(limit: number): Promise<SiteHost[]> {
+    const rows = await queryAll(
+      this.db,
+      `SELECT ${SITE_HOST_COLUMNS} FROM site_hosts
+         WHERE released_at IS NOT NULL AND kind = 'custom' AND verified_at IS NOT NULL
+           AND (certificate_status IS NULL OR certificate_status <> ?1)
+         ORDER BY released_at ASC LIMIT ?2`,
+      [CERTIFICATE_RELEASED, limit],
+    );
+    return rows.map(parseSiteHost);
+  }
+
+  async markCertificateReleased(hostname: string): Promise<void> {
+    await this.db.execute(
+      "UPDATE site_hosts SET certificate_status = ?2 WHERE hostname = ?1 AND released_at IS NOT NULL",
+      [hostname, CERTIFICATE_RELEASED],
     );
   }
 

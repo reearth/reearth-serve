@@ -38,7 +38,7 @@ export const SITE_HOST_ERRORS = {
   released: "name has been released",
 } as const;
 
-export type ClaimFailure = { ok: false; status: 400 | 503; error: string };
+export type ClaimFailure = { ok: false; status: 400 | 404 | 503; error: string };
 export type ClaimSuccess = { ok: true; host: SiteHost };
 export type ClaimResult = ClaimSuccess | ClaimFailure;
 
@@ -151,8 +151,10 @@ export async function claimSiteHost(deps: SiteHostDeps, params: ClaimParams): Pr
     createdBy: params.userId,
   };
   // A concurrent claim that won the race owns the row; report it as taken
-  // rather than overwriting it.
+  // rather than overwriting it. No row at all means the asset was deleted
+  // after the caller read it, and the insert refused to name it.
   if (!await deps.hosts.insert(host)) {
+    if (!await deps.hosts.find(hostname)) return { ok: false, status: 404, error: "Asset not found" };
     return { ok: false, status: 400, error: NAME_ERRORS.taken };
   }
 
@@ -261,9 +263,8 @@ export async function releaseSiteHost(
 
   await deps.hosts.release(hostname, now);
   await dropCache(deps.cache, [hostname]);
-  // B5: give the certificate up too. Best effort — the name is released
-  // either way, and a certificate for a hostname that no longer resolves here
-  // is the provider's problem to expire, not a reason to fail the release.
+  // B5: give the certificate up too. The name is released either way; a
+  // deprovision that fails here is retried by the cleanup cron.
   if (existing.kind === "custom" && existing.verifiedAt !== null) {
     await deprovision(deps, hostname);
   }
@@ -273,15 +274,23 @@ export async function releaseSiteHost(
   return { ok: true };
 }
 
-async function deprovision(deps: SiteHostDeps, hostname: string): Promise<void> {
-  if (!deps.provisioner) return;
+/**
+ * Give a released row's certificate up and record that it is gone. A failure
+ * is logged, not thrown: the row stays in `listCertificatesToRelease` and the
+ * cleanup cron tries again.
+ */
+async function deprovision(deps: SiteHostDeps, hostname: string): Promise<boolean> {
+  if (!deps.provisioner) return false;
   try {
     await deps.provisioner.deprovision(hostname);
+    await deps.hosts.markCertificateReleased(hostname);
+    return true;
   } catch (e) {
     console.warn(
-      `Deprovisioning the certificate for ${hostname} failed:`,
+      `Deprovisioning the certificate for ${hostname} failed; the cleanup cron will retry:`,
       e instanceof Error ? e.message : e,
     );
+    return false;
   }
 }
 
@@ -433,6 +442,25 @@ export async function settleReleasedSiteHosts(deps: SiteHostDeps, released: Site
     if (host.kind === "custom" && host.verifiedAt !== null) await deprovision(deps, host.hostname);
   }
   // ADR-007: emit site_host.released here — there is no event store in core yet.
+}
+
+/**
+ * The cleanup cron's half of certificate release (B5): retry every released
+ * verified custom domain whose certificate is still outstanding, because its
+ * deprovision failed or the process died between the release and the call.
+ * Returns the hostnames whose certificate is now gone.
+ */
+export async function releaseOutstandingCertificates(
+  deps: SiteHostDeps,
+  options: { limit?: number } = {},
+): Promise<string[]> {
+  if (!deps.provisioner) return [];
+  const outstanding = await deps.hosts.listCertificatesToRelease(options.limit ?? 10);
+  const done: string[] = [];
+  for (const host of outstanding) {
+    if (await deprovision(deps, host.hostname)) done.push(host.hostname);
+  }
+  return done;
 }
 
 /**

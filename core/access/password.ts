@@ -18,8 +18,13 @@
  * Workers. workerd rejects PBKDF2 above 100 000 iterations with
  * `NotSupportedError`, and `wrangler dev` and Node do not, so the old 600 000
  * default worked in every local run and failed every password set on a
- * deployed Worker (compliance#258 SCA-04). Enforcing the cap here keeps a hash
- * written on one runtime verifiable on the other.
+ * deployed Worker (compliance#258 SCA-04). `hashPassword` enforces the cap on
+ * every runtime, so a hash written anywhere verifies on Workers.
+ *
+ * A hash stored above the cap before that fix (only the Node runtime could
+ * write one) still verifies where the runtime can compute it. Where it cannot,
+ * the check fails closed: the visitor sees a wrong-password answer, not a 500,
+ * and setting the password again writes a hash at the cap.
  */
 
 /** workerd's PBKDF2 ceiling; the most any runtime in ADR-012 can verify. */
@@ -99,15 +104,14 @@ export async function hashPassword(
  *
  * A malformed or unknown-algorithm hash is `false` rather than an exception:
  * this runs on the request path, and a row we cannot read must fail closed
- * without taking the response down with it. A count above
- * {@link MAX_ITERATIONS} counts as malformed: workerd would throw on it, and
- * the answer must not depend on which runtime is asking.
+ * without taking the response down with it. The same goes for a count the
+ * runtime refuses (workerd above {@link MAX_ITERATIONS}).
  */
 export async function verifyPassword(password: string, stored: PasswordHash): Promise<boolean> {
   const parts = stored.hash.split("$");
   if (parts.length !== 3 || parts[0] !== ALGORITHM) return false;
   const iterations = Number.parseInt(parts[1], 10);
-  if (!Number.isSafeInteger(iterations) || iterations <= 0 || iterations > MAX_ITERATIONS) return false;
+  if (!Number.isSafeInteger(iterations) || iterations <= 0) return false;
 
   let salt: Uint8Array;
   try {
@@ -116,7 +120,16 @@ export async function verifyPassword(password: string, stored: PasswordHash): Pr
     return false;
   }
 
-  const derived = await derive(password, salt, iterations);
+  let derived: Uint8Array;
+  try {
+    derived = await derive(password, salt, iterations);
+  } catch (e) {
+    console.warn(
+      `verifyPassword: PBKDF2 at ${iterations} iterations failed; reset the password to rehash at ${MAX_ITERATIONS}:`,
+      e instanceof Error ? e.message : e,
+    );
+    return false;
+  }
   return constantTimeEqual(toBase64(derived), parts[2]);
 }
 

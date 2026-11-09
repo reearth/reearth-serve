@@ -194,6 +194,37 @@ describe.skipIf(!SUFFIX)("site hosts", () => {
     expect((await reclaim.json() as { error: string }).error).toMatch(/on cooldown until/);
   });
 
+  // ADR-013 B3 through the delete batch (compliance#258 REL-11): deleting the
+  // asset releases its name in the same write that removes the row.
+  test("deleting the asset turns its name into a 410 that another asset cannot claim", async () => {
+    const token = await signToken();
+    const projectId = await createProjectForAuth(token, "e2e-site-delete");
+    const { assetId, name, hostname } = await claimedSite(token, projectId, "e2e-del");
+    expect((await get(hostname, "/site.zip")).status).toBe(200);
+
+    const deleted = await fetch(`${BASE}/api/v1/assets/${assetId}`, {
+      method: "DELETE",
+      headers: { Authorization: `Bearer ${token}` },
+    });
+    expect(deleted.status).toBe(204);
+    expect((await fetch(`${BASE}/api/v1/assets/${assetId}`, {
+      headers: { Authorization: `Bearer ${token}` },
+    })).status).toBe(404);
+
+    const gone = await get(hostname, "/site.zip");
+    expect(gone.status).toBe(410);
+
+    // The name is held for its cooldown, even against the same project.
+    const other = await claimedSite(token, projectId, "e2e-del-other");
+    const reclaim = await fetch(`${BASE}/api/v1/assets/${other.assetId}/hosts`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ hostname: name }),
+    });
+    expect(reclaim.status).toBe(400);
+    expect((await reclaim.json() as { error: string }).error).toMatch(/on cooldown until/);
+  });
+
   // Publish state (ADR-013 B3): the name is held either way, so the only thing
   // that changes is what the host answers.
   test("disabling a name answers 503 and enabling brings the site back", async () => {
