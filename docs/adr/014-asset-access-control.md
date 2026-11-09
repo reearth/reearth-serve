@@ -1,7 +1,7 @@
 # ADR-014: Asset Access Control for File Delivery
 
 - **Status:** Accepted
-- **Date:** 2026-09-11 (revised 2026-11-06)
+- **Date:** 2026-09-11 (revised 2026-11-06, accepted 2026-11-09)
 - **Deciders:** @rot1024, @pyshx
 - **Related:** [ADR-002](002-auth-sessions-projects.md) (auth, sessions,
   projects), ADR-007 (events, webhooks), [ADR-012](012-multi-cloud-portability.md)
@@ -136,8 +136,7 @@ Both composition roots parse it with one shared parser into
 parser rejects malformed JSON, a secret shorter than 32 bytes, more than
 two keys, and an `active` ID missing from `keys`, each with a message that
 starts `DELIVERY_TOKEN_KEYS: `. A rejected ring is a config error under
-ADR-016 decision 8, so the change that adds the ring also makes the
-Worker catch a `buildDeps` throw. The codec signs with the active key and
+ADR-016 decision 8: Node refuses to start and the Worker answers `500`. The codec signs with the active key and
 verifies with either. To rotate: add the new key, make it active, wait
 the longest token life, remove the old key. The cookie secret is separate,
 so tokens rotate without logging out password visitors.
@@ -160,7 +159,10 @@ and decoding again would turn `a%252Fb` into `a/b`.
 - `.` and `..` segments, backslashes, NUL, and any `%2F` left after
   decoding are refused. `a%2Fb` becomes `a/b`; `a%252Fb` is refused.
 - Empty segments stay. `a//b` names a different storage key from `a/b`.
-- The leading slash is stripped; the empty path is the whole asset.
+- One leading slash is stripped from the raw input; the empty path is the
+  whole asset. A path that still starts with `/` after that and after
+  decoding (`//a`, `%2Fa`) is refused, so an asset path never starts
+  with `/`.
 
 The storage key is built from this output, so the token match and the
 storage read use the same string. The mint route normalizes `prefix` with
@@ -271,10 +273,12 @@ The storefront flow needs grants and waits with them (Follow-up 5).
 - **CORS by proof.** Only a cookie proof gets credentialed CORS. Serve
   echoes `Origin` with `Access-Control-Allow-Credentials: true` only when
   it equals Serve's own origin or appears exactly in
-  `CREDENTIALED_ORIGINS`. The own origin is `BASE_URL` on the apex and the
-  request host on a site host, never `c.req.url`, which reads `http://`
-  behind a TLS proxy. Serve never echoes `null`. Every other proof, Basic
-  included, gets `*` with no credentials header. Protected responses send
+  `CREDENTIALED_ORIGINS`. The own origin is `BASE_URL` on the apex and
+  `BASE_URL`'s scheme with the request host on a site host, never
+  `c.req.url`, which reads `http://` behind a TLS proxy. Serve never
+  echoes `null`. A cookie read from any other origin, and every other
+  proof, Basic included, gets `*` with no credentials header; a browser
+  refuses `*` for a credentialed request, so the page cannot read it. Protected responses send
   `Vary: Origin`, and cookie-authorized ones add
   `Cross-Origin-Resource-Policy: same-origin`, which stops no-cors loads
   from sibling hosts. Preflights and refusals carry no proof, so whatever
@@ -408,5 +412,7 @@ skips the password.
    the cookie.
 7. Per-principal transfer metering (with ROADMAP Phase 6). `resolveAccess`
    returns the principal for it.
-8. Open questions: Ed25519 instead of HMAC (§4), tokens on `password`
-   assets, and a Public Suffix List entry instead of a separate domain.
+8. Open question: Ed25519 instead of HMAC (§4, alternative G). Tokens on
+   `password` assets (alternative K) and a Public Suffix List entry
+   instead of a separate domain (alternative J) are revisited only if
+   those alternatives' reasons stop holding.
