@@ -5,7 +5,7 @@ import { BearerCredential } from "./types";
 import type { KeyValue } from "../kv/port";
 import { resolveJWKS } from "./jwks";
 
-export { resolveJWKS, resetJWKSCache, jwksUrl } from "./jwks";
+export { resolveJWKS, resetJWKSCache, jwksUrl, discoverJwksUri } from "./jwks";
 
 /**
  * Provider-independent authentication configuration. The composition root

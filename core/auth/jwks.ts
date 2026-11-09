@@ -8,8 +8,40 @@ const JWKS_FETCH_TIMEOUT_MS = 3000;
 // In-memory cache (per isolate)
 let memoryCache: { issuer: string; jwks: JWTVerifyGetKey; fetchedAt: number } | null = null;
 
+function issuerBase(issuer: string): string {
+  return issuer.endsWith("/") ? issuer : `${issuer}/`;
+}
+
+/**
+ * Conventional JWKS location (`{issuer}/.well-known/jwks.json`). Used only as
+ * a fallback when OIDC discovery is unavailable or omits `jwks_uri`.
+ */
 export function jwksUrl(issuer: string): URL {
-  return new URL(".well-known/jwks.json", issuer.endsWith("/") ? issuer : `${issuer}/`);
+  return new URL(".well-known/jwks.json", issuerBase(issuer));
+}
+
+/**
+ * Resolve the JWKS endpoint for an issuer. Prefers `jwks_uri` from OIDC
+ * discovery (`{issuer}/.well-known/openid-configuration`), since providers
+ * differ (e.g. Dex serves `{issuer}/keys`). Falls back to `jwksUrl(issuer)`
+ * when discovery fails, times out, or returns no usable `jwks_uri`.
+ */
+export async function discoverJwksUri(issuer: string): Promise<URL> {
+  try {
+    const res = await fetch(new URL(".well-known/openid-configuration", issuerBase(issuer)).toString(), {
+      signal: AbortSignal.timeout(JWKS_FETCH_TIMEOUT_MS),
+    });
+    if (res.ok) {
+      const config = await res.json() as { jwks_uri?: unknown };
+      if (typeof config.jwks_uri === "string" && config.jwks_uri !== "") {
+        const uri = new URL(config.jwks_uri);
+        if (uri.protocol === "https:" || uri.protocol === "http:") return uri;
+      }
+    }
+  } catch {
+    // Discovery is best-effort; fall through to the conventional path.
+  }
+  return jwksUrl(issuer);
 }
 
 function jwksCacheKey(issuer: string): string {
@@ -46,7 +78,8 @@ export async function resolveJWKS(
   }
 
   // 3. Fetch from remote
-  const res = await fetch(jwksUrl(issuer).toString(), {
+  const uri = await discoverJwksUri(issuer);
+  const res = await fetch(uri.toString(), {
     signal: AbortSignal.timeout(JWKS_FETCH_TIMEOUT_MS),
   });
   if (!res.ok) {
@@ -136,7 +169,8 @@ if (import.meta.vitest) {
 
     const jwks = await resolveJWKS(TEST_ISSUER, { cache, ttlSeconds: 600 });
     expect(jwks).toBeDefined();
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    // Discovery (no jwks_uri in this mock → fallback) + JWKS fetch
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
     expect(cache.put).toHaveBeenCalledWith(
       `jwks:${TEST_ISSUER}`,
       JSON.stringify(jwksJson),
@@ -195,7 +229,7 @@ if (import.meta.vitest) {
     vi.stubGlobal("fetch", fetchSpy);
 
     await resolveJWKS(TEST_ISSUER, { cache, forceFresh: true });
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
 
     vi.unstubAllGlobals();
   });
@@ -218,11 +252,93 @@ if (import.meta.vitest) {
     vi.stubGlobal("fetch", fetchSpy);
 
     const jwks = await resolveJWKS(TEST_ISSUER);
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
 
     // Second call uses in-memory cache
     await resolveJWKS(TEST_ISSUER);
-    expect(fetchSpy).toHaveBeenCalledTimes(1);
+    expect(fetchSpy).toHaveBeenCalledTimes(2);
+
+    const token = await buildToken();
+    const { payload } = await jwtVerify(token, jwks, { issuer: TEST_ISSUER, audience: TEST_AUDIENCE });
+    expect(payload.sub).toBe("user-1");
+
+    vi.unstubAllGlobals();
+  });
+
+  // --- JWKS endpoint discovery ---
+
+  /** Stub fetch with a path → response table; unknown paths return 404. */
+  function routedFetch(routes: Record<string, () => Response | Promise<Response>>) {
+    const spy = vi.fn((input: string | URL | Request) => {
+      const url = typeof input === "string" ? input : input instanceof URL ? input.toString() : input.url;
+      const route = routes[url];
+      return Promise.resolve(route ? route() : new Response("Not Found", { status: 404 }));
+    });
+    vi.stubGlobal("fetch", spy);
+    return spy;
+  }
+
+  const DISCOVERY_URL = `${TEST_ISSUER}.well-known/openid-configuration`;
+  const FALLBACK_JWKS_URL = `${TEST_ISSUER}.well-known/jwks.json`;
+
+  test("resolveJWKS uses jwks_uri from OIDC discovery (Dex-style /keys)", async () => {
+    const dexKeys = `${TEST_ISSUER}keys`;
+    const spy = routedFetch({
+      [DISCOVERY_URL]: () => Response.json({ issuer: TEST_ISSUER, jwks_uri: dexKeys }),
+      [dexKeys]: () => Response.json(jwksJson),
+    });
+
+    const jwks = await resolveJWKS(TEST_ISSUER);
+    expect(spy.mock.calls.map((c) => String(c[0]))).toEqual([DISCOVERY_URL, dexKeys]);
+
+    const token = await buildToken();
+    const { payload } = await jwtVerify(token, jwks, { issuer: TEST_ISSUER, audience: TEST_AUDIENCE });
+    expect(payload.sub).toBe("user-1");
+
+    vi.unstubAllGlobals();
+  });
+
+  test("discoverJwksUri handles an issuer without a trailing slash", async () => {
+    routedFetch({
+      "https://dex.example.com/dex/.well-known/openid-configuration": () =>
+        Response.json({ jwks_uri: "https://dex.example.com/dex/keys" }),
+    });
+
+    const uri = await discoverJwksUri("https://dex.example.com/dex");
+    expect(uri.toString()).toBe("https://dex.example.com/dex/keys");
+
+    vi.unstubAllGlobals();
+  });
+
+  test("discoverJwksUri falls back when discovery returns non-2xx", async () => {
+    routedFetch({});
+    expect((await discoverJwksUri(TEST_ISSUER)).toString()).toBe(FALLBACK_JWKS_URL);
+    vi.unstubAllGlobals();
+  });
+
+  test("discoverJwksUri falls back when jwks_uri is missing or invalid", async () => {
+    for (const body of [{}, { jwks_uri: "" }, { jwks_uri: 42 }, { jwks_uri: "not a url" }, { jwks_uri: "file:///etc/keys" }]) {
+      routedFetch({ [DISCOVERY_URL]: () => Response.json(body) });
+      expect((await discoverJwksUri(TEST_ISSUER)).toString()).toBe(FALLBACK_JWKS_URL);
+    }
+    vi.unstubAllGlobals();
+  });
+
+  test("discoverJwksUri falls back on malformed JSON or network error", async () => {
+    routedFetch({ [DISCOVERY_URL]: () => new Response("<html>", { status: 200 }) });
+    expect((await discoverJwksUri(TEST_ISSUER)).toString()).toBe(FALLBACK_JWKS_URL);
+
+    vi.stubGlobal("fetch", vi.fn(() => Promise.reject(new TypeError("network down"))));
+    expect((await discoverJwksUri(TEST_ISSUER)).toString()).toBe(FALLBACK_JWKS_URL);
+
+    vi.unstubAllGlobals();
+  });
+
+  test("resolveJWKS still works via the fallback path when discovery is unavailable", async () => {
+    const spy = routedFetch({ [FALLBACK_JWKS_URL]: () => Response.json(jwksJson) });
+
+    const jwks = await resolveJWKS(TEST_ISSUER);
+    expect(spy.mock.calls.map((c) => String(c[0]))).toEqual([DISCOVERY_URL, FALLBACK_JWKS_URL]);
 
     const token = await buildToken();
     const { payload } = await jwtVerify(token, jwks, { issuer: TEST_ISSUER, audience: TEST_AUDIENCE });

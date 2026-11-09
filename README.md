@@ -124,7 +124,7 @@ SSR on Node is out of scope, and any other path returns 404 saying so.
 | `ANONYMOUS_UPLOAD_ENABLED` | (unset) | `"true"` to allow uploads without a token |
 | `TRUST_PROXY` | (unset) | `"true"` when a reverse proxy in front sets `X-Forwarded-For`; otherwise an incoming `CF-Connecting-IP` is dropped and `X-Forwarded-For` is set to the socket address, so a client cannot pick its own rate-limit bucket |
 | `ASSET_TTL_SECONDS` | `3600` | TTL for assets that belong to no project |
-| `OIDC_ISSUER_URL` / `OIDC_AUDIENCE` | (unset) | JWT verification; unset ⇒ demo mode |
+| `OIDC_ISSUER_URL` / `OIDC_AUDIENCE` | (unset) | JWT verification (JWKS from discovery `jwks_uri`, fallback `{issuer}/.well-known/jwks.json`); unset ⇒ demo mode |
 | `SITE_HOST_SUFFIX` | (unset) | Site-host suffix, e.g. `.localhost:8788` (must start with `.`, port included); unset ⇒ site hosts and custom domains off |
 | `SITE_REGISTRABLE_DOMAIN` | (unset) | Required with `SITE_HOST_SUFFIX`: the registrable domain the site hosts live under. Startup fails unless the suffix is under it and `BASE_URL` (also required then) is not, because hosts under one registrable domain are the same site to a browser |
 | `SITE_DOMAIN_IS_PUBLIC_SUFFIX` | (unset) | `"true"` skips that check, for a domain on the Public Suffix List (and for `localhost`); logged at startup |
