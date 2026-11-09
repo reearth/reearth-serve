@@ -117,7 +117,7 @@ describe("a token that covers the read", () => {
     for (const path of ["_thumbs/md.webp", "anything?thumb=md"]) {
       const res = await app.request(`/files/${ASSET_ID}/${path}${path.includes("?") ? "&" : "?"}${q(file)}`);
       expect(res.status, path).toBe(200);
-      expect(res.headers.get("Cache-Control")).toMatch(/^private, max-age=\d+$/);
+      expect(res.headers.get("Cache-Control")).toBe("private, max-age=0, must-revalidate");
     }
     expectRefusal(await app.request(`/files/${ASSET_ID}/_thumbs/md.webp?${q(await mint({ prefix: "docs/" }))}`), 403);
   });

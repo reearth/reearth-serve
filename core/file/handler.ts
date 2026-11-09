@@ -373,7 +373,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
   // `serve_token` leaves the query here, before anything reads it, and the
   // storage key is built from the same parsed path a token is matched on
   // (ADR-014 §4).
-  const delivery = readDeliveryRequest(c.req.raw);
+  const delivery = readDeliveryRequest(c.req.raw, id);
 
   // Errors raised before the asset is known carry no proof, so they take the
   // refusal policy, which discloses nothing about the asset's mode.

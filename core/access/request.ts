@@ -27,50 +27,60 @@ export interface DeliveryRequest {
 }
 
 /**
- * Read a request routed to `/files/<id>/…`. `pathname` must be the raw,
- * still-encoded path: Hono's path parameter is decoded once already, and
+ * Read a request routed to `/files/<id>/…`. The path comes from the raw,
+ * still-encoded URL: Hono's path parameter is decoded once already, and
  * decoding it again would turn `a%252Fb` into `a/b`.
  */
-export function readDeliveryRequest(request: Request): DeliveryRequest {
+export function readDeliveryRequest(request: Request, id: string): DeliveryRequest {
   const url = new URL(request.url);
   const sentSearch = url.search;
-  const { search, tokens } = splitTokens(sentSearch);
+  const tokens = queryTokens(sentSearch);
   const header = request.headers.get(TOKEN_HEADER) ?? "";
   // Repeated headers arrive joined by ", "; a token never contains a comma.
-  const values = new Set([...tokens, ...header.split(",").map((v) => v.trim())].filter((v) => v !== ""));
+  const values = new Set([...(tokens ?? []), ...header.split(",").map((v) => v.trim())].filter((v) => v !== ""));
   const [first] = values;
   const carry: TokenCarry = values.size === 0
     ? { kind: "none" }
     : values.size === 1 ? { kind: "one", token: first } : { kind: "conflict" };
   let stripped = request;
-  if (search !== sentSearch) {
-    url.search = search;
+  if (tokens !== null) {
+    url.search = withoutTokens(sentSearch);
     stripped = new Request(url, request);
   }
-  return { path: parseAssetPath(rawAssetPath(url.pathname)), carry, request: stripped, url, sentSearch };
+  const raw = rawAssetPath(url.pathname, id);
+  return { path: raw === null ? null : parseAssetPath(raw), carry, request: stripped, url, sentSearch };
 }
 
-/** The raw path after `/files/<id>`, its leading slash included. */
-function rawAssetPath(pathname: string): string {
-  const afterId = pathname.indexOf("/", "/files/".length);
-  return afterId === -1 ? "" : pathname.slice(afterId);
+/** The raw path after `/files/<id>`, its leading slash included; null when the URL is not under it. */
+function rawAssetPath(pathname: string, id: string): string | null {
+  const prefix = `/files/${id}`;
+  if (!pathname.startsWith(prefix)) return null;
+  const rest = pathname.slice(prefix.length);
+  return rest === "" || rest.startsWith("/") ? rest : null;
+}
+
+function isTokenPair(pair: string): boolean {
+  const eq = pair.indexOf("=");
+  return formDecode(eq === -1 ? pair : pair.slice(0, eq)) === TOKEN_QUERY;
+}
+
+/** Every `serve_token` value in a query, or null when it carries none. */
+function queryTokens(search: string): string[] | null {
+  const pairs = search.slice(1).split("&").filter(isTokenPair);
+  if (pairs.length === 0) return null;
+  return pairs.map((pair) => {
+    const eq = pair.indexOf("=");
+    return eq === -1 ? "" : formDecode(pair.slice(eq + 1));
+  });
 }
 
 /**
- * Split `serve_token` out of a query without re-serializing the rest, so
- * every other parameter reaches redirects byte for byte.
+ * The query without `serve_token`, the rest not re-serialized, so every other
+ * parameter reaches redirects byte for byte.
  */
-function splitTokens(search: string): { search: string; tokens: string[] } {
-  if (search === "") return { search, tokens: [] };
-  const kept: string[] = [];
-  const tokens: string[] = [];
-  for (const pair of search.slice(1).split("&")) {
-    const eq = pair.indexOf("=");
-    const name = eq === -1 ? pair : pair.slice(0, eq);
-    if (formDecode(name) === TOKEN_QUERY) tokens.push(eq === -1 ? "" : formDecode(pair.slice(eq + 1)));
-    else if (pair !== "") kept.push(pair);
-  }
-  return { search: kept.length > 0 ? `?${kept.join("&")}` : "", tokens };
+function withoutTokens(search: string): string {
+  const kept = search.slice(1).split("&").filter((pair) => pair !== "" && !isTokenPair(pair));
+  return kept.length > 0 ? `?${kept.join("&")}` : "";
 }
 
 function formDecode(value: string): string {
@@ -84,7 +94,7 @@ function formDecode(value: string): string {
 if (import.meta.vitest) {
   const { test, expect } = import.meta.vitest;
   const read = (path: string, headers: Record<string, string> = {}) =>
-    readDeliveryRequest(new Request(`https://example.test${path}`, { headers }));
+    readDeliveryRequest(new Request(`https://example.test${path}`, { headers }), "a");
 
   test("the query form and the header form both carry, and an empty value counts as absent", () => {
     expect(read("/files/a/x?serve_token=t1").carry).toEqual({ kind: "one", token: "t1" });
@@ -111,8 +121,12 @@ if (import.meta.vitest) {
   });
 
   test("a request without a token keeps its Request object", () => {
-    const original = new Request("https://example.test/files/a/x?v=2");
-    expect(readDeliveryRequest(original).request).toBe(original);
+    for (const query of ["?v=2", "?a=1&&b=2", "?a=1&"]) {
+      const original = new Request(`https://example.test/files/a/x${query}`);
+      const r = readDeliveryRequest(original, "a");
+      expect(r.request).toBe(original);
+      expect(r.url.search).toBe(query);
+    }
   });
 
   test("the path is the raw path after the ID, decoded once", () => {
@@ -123,5 +137,11 @@ if (import.meta.vitest) {
     expect(read("/files/a/a%2Fb").path).toBe("a/b");
     expect(read("/files/a/a%252Fb").path).toBeNull();
     expect(read("/files/a//x").path).toBeNull();
+  });
+
+  test("a URL not under /files/<id> has no path", () => {
+    expect(read("/files/ab/x").path).toBeNull();
+    expect(read("/files/b/x").path).toBeNull();
+    expect(read("/other/a/x").path).toBeNull();
   });
 }
