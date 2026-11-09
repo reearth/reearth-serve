@@ -20,6 +20,8 @@ import { NoopProvisioner, type CustomHostnameProvisioner } from "../../core/site
 import { apexHost } from "../../core/site/middleware";
 import { parseCredentialedOrigins } from "../../core/file/cors";
 import { checkSiteIsolation, PUBLIC_SUFFIX_OVERRIDE_NOTICE } from "../../core/site/isolation";
+import { WebCryptoDeliveryTokenCodec } from "../webcrypto/delivery-token";
+import { parseDeliveryTokenKeys, type DeliveryTokenCodec } from "../../core/access/token";
 
 // Anonymous sessions are identity, not content — they must outlive the
 // demo asset TTL. A large multipart upload can take many hours between the
@@ -90,7 +92,7 @@ export function buildDeps(env: Env): Deps {
     siteFallbackOrigin: env.SITE_FALLBACK_ORIGIN || undefined,
     cache: kv,
     // Password-protected sites (ADR-013 B7): the key their auth cookie is
-    // signed with, and the secret ADR-014 §4 reserves for signed URLs.
+    // signed with. Delivery tokens have their own ring (ADR-014 §4).
     // A wrangler secret, not a [vars] entry — `wrangler secret put
     // SIGNING_SECRET`. Unset ⇒ protected assets answer 503 and the PATCH that
     // would protect one is refused, rather than minting cookies nobody can
@@ -120,6 +122,7 @@ export function buildDeps(env: Env): Deps {
     extractionStuckThresholdMs:
       parseInt(env.EXTRACTION_STUCK_THRESHOLD_SECONDS || "", 10) * 1000 || DEFAULT_STUCK_THRESHOLD_MS,
     limits: { subrequestBudget: CLEANUP_SUBREQUEST_BUDGET },
+    deliveryTokens: codecForIsolate(env.DELIVERY_TOKEN_KEYS),
   };
 }
 
@@ -138,6 +141,16 @@ function customHostnames(env: Env): CustomHostnameProvisioner {
     return new CloudflareCustomHostnames({ apiToken: env.CF_API_TOKEN, zoneId: env.CF_ZONE_ID });
   }
   return new NoopProvisioner(env.SITE_FALLBACK_ORIGIN || apexHost(env.BASE_URL ?? "") || "");
+}
+
+let isolateCodec: { raw: string; codec: DeliveryTokenCodec } | null = null;
+
+function codecForIsolate(raw: string | undefined): DeliveryTokenCodec | null {
+  if (!raw) return null;
+  if (isolateCodec?.raw !== raw) {
+    isolateCodec = { raw, codec: new WebCryptoDeliveryTokenCodec(parseDeliveryTokenKeys(raw)) };
+  }
+  return isolateCodec.codec;
 }
 
 function r2Credentials(env: Env): ObjectStoreCredentials | null {

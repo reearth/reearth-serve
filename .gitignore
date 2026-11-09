@@ -9,4 +9,8 @@ worker-configuration.d.ts
 .env
 *.log
 *.tsbuildinfo
+
+# Ignore IDE and editor files
+.vscode/
+.idea/
 /tmp
