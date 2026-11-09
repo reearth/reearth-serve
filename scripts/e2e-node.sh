@@ -16,6 +16,10 @@ INTERNAL_API_SECRET="${INTERNAL_API_SECRET:-e2e-internal-secret}"
 # fail-closed 503 and the PATCH that protects one is refused, so the access
 # suite would be testing the missing-secret path rather than the feature.
 SIGNING_SECRET="${SIGNING_SECRET:-e2e-signing-secret}"
+# A valid delivery token key ring (ADR-014 §4), so every run proves the
+# runtime parses one and still serves.
+E2E_DELIVERY_TOKEN_KEYS='{"active":"e2e","keys":{"e2e":"ZTJlLWRlbGl2ZXJ5LXRva2VuLWtleS0zMi1ieXRlcyE="}}'
+DELIVERY_TOKEN_KEYS="${DELIVERY_TOKEN_KEYS:-$E2E_DELIVERY_TOKEN_KEYS}"
 # Site hosts (ADR-013 B1). The suffix carries the port because it is compared
 # against the Host header verbatim; the apex ("localhost:PORT") does not end
 # with it, so every other test is unaffected. Browsers treat an unlisted TLD
@@ -84,6 +88,7 @@ BASE_URL="${ENDPOINT}" \
 SQLITE_PATH=":memory:" \
 INTERNAL_API_SECRET="${INTERNAL_API_SECRET}" \
 SIGNING_SECRET="${SIGNING_SECRET}" \
+DELIVERY_TOKEN_KEYS="${DELIVERY_TOKEN_KEYS}" \
 ANONYMOUS_UPLOAD_ENABLED="true" \
 OIDC_ISSUER_URL="${OIDC_ISSUER}" \
 OIDC_AUDIENCE="e2e-audience" \
