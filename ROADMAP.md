@@ -227,7 +227,7 @@ Municipal and enterprise users increasingly generate frontend apps with AI but h
 
 Private datasets, password-protected sites (ADR-013 B7) and partner data marketplaces are one mechanism: an access mode on the asset, a proof on the request, a grant table in between. Serve enforces what was sold; the storefront, catalogue and payments stay with the partner. Design: [ADR-014](./docs/adr/014-asset-access-control.md).
 
-- [ ] `access` mode on project assets (`public` / `password` / `restricted`); `resolveAccess` in the file handler with zero cost for public assets
+- [ ] `access` mode on project assets (`public` / `password` / `restricted`); `resolveAccess` in the file handler with zero cost for public assets. `public` ✅, `password` ✅ (archives, ADR-013 B7), `restricted` ✅ for an OIDC bearer from a member with `read_asset` on the apex (`PATCH {access: "restricted"}`, `asset protect --restricted`, `file cp`/`file sync` send the login token). Pending: delivery tokens, so site hosts and browsers can read a restricted asset
 - [ ] Grants — `asset_grants` for `user` / `email` / `api_key` principals on an asset or a whole project, with expiry, revocation, `source`/`ref` for the partner's order, events and webhooks
 - [ ] Signed URLs — prefix-scoped HMAC tokens (`?rs_sig=`) so a viewer loads a whole restricted tileset with one token and CORS stays `*`; optional grant binding for revocation
 - [ ] API keys — workspace-scoped machine credentials (`rs_live_…`, hashed at rest) for pipelines, partner storefronts and the untiled service account
@@ -242,8 +242,8 @@ Introduce user identity, project scoping, and persistent assets.
 
 - [x] **Auth**: API key or OAuth (Re:Earth Dashboard integration)
 - [x] **Projects**: logical grouping of assets with per-project settings
-- [x] **Asset settings**: public/private toggle, custom metadata, configurable TTL or permanent storage
-- [x] **Access control**: file-layer access control (URL visibility) — distinct from service-layer. Note: `/files/` itself performs no request-time check today; viewer authentication for hosted sites is ADR-013 B7
+- [x] **Asset settings**: custom metadata, configurable TTL or permanent storage. Access modes on the asset are Phase 1.6
+- [x] **Access control**: file-layer access control (URL visibility), distinct from service-layer. `/files/` checks a request only when the asset's `access` mode asks for it (ADR-013 B7, Phase 1.6)
 - [ ] **OIDC server integration**: connection to external OIDC server for authentication (not yet implemented)
 - [ ] **Account server integration**: connection to Re:Earth account platform (not yet implemented)
 - [ ] **Cerbos integration**: `CerbosAuthorizer` adapter is implemented behind the `Authorizer` interface and enabled by setting `CERBOS_ENDPOINT` (falls back to in-process `SimpleAuthorizer`); deploying a Cerbos PDP and authoring the policy bundle are not yet done

@@ -276,8 +276,21 @@ reearth-serve asset protect <assetId> --off        # remove it
 - **It is a property of the asset, not of one hostname.** Every URL form is protected at once: `/files/<id>/…`, `<id>.serve…`, the named host, `v<n>--`/`latest--` previews, custom domains, thumbnails, `Range` requests and `HEAD`. Protecting only the pretty hostname would be theatre — the asset ID is printed in every `siteUrl`.
 - **CORS caveat.** A cookie read is answered with credentialed CORS (the echoed `Origin` plus `Access-Control-Allow-Credentials: true`) only when the `Origin` is Serve's own or is listed in `CREDENTIALED_ORIGINS`. Every other read, Basic included, gets `Access-Control-Allow-Origin: *` without credentials. So a page on another origin embeds a protected tileset by sending Basic, or by being listed. Public assets keep `*`. This is the one place protection changes how an asset is consumed, which is why `access` is visible in the API response.
 - **Caching.** Responses keep their usual lifetimes but become `private`, with `Vary: Cookie, Authorization`, so no shared cache stores them.
-- **Limits.** Site (archive) assets in a project only — demo assets are always public, and protecting a plain dataset is [ADR-014](./docs/adr/014-asset-access-control.md)'s job. Ten wrong passwords from one IP in 15 minutes gets `429`. And it does not hide the asset's *existence*: a protected URL answers `401`, not `404`. A shared password is a speed bump for staging, not a control for sensitive data.
+- **Limits.** Site (archive) assets in a project only. Demo assets are always public, and a plain dataset is restricted to members instead (below). Ten wrong passwords from one IP in 15 minutes gets `429`. And it does not hide the asset's *existence*: a protected URL answers `401`, not `404`. A shared password is a speed bump for staging, not a control for sensitive data.
 - **Operator setup.** Set `SIGNING_SECRET` (`wrangler secret put SIGNING_SECRET`, or the env var on Node). Until it is set, protecting an asset is refused with `503` and an already-protected asset answers `503` rather than serving its bytes.
+
+**Member-only assets.** Any project asset, a single file or an archive, can be limited to the members of its project ([ADR-014](./docs/adr/014-asset-access-control.md)):
+
+```bash
+reearth-serve asset protect <assetId> --restricted   # or PATCH {"access":"restricted"}
+reearth-serve file cp <assetId>:data.geojson .       # members download with their login token
+```
+
+- **Proof.** `Authorization: Bearer <OIDC access token>` on the apex `/files/…` path, from a member whose role holds `read_asset`. No other credential opens it yet; delivery tokens for browsers and site hosts come later.
+- **Answers.** No bearer, a bearer that does not verify, or another scheme: `401` JSON with `WWW-Authenticate: Bearer, ServeToken` (`ServeToken` alone on a site host, which ignores bearers), browser navigations included. A signed-in caller who may not read it: `404`, the same as a missing asset. Directory or Cerbos outage: `503` with `Retry-After: 5`. All refusals are `no-store`, and the bytes are never read before the decision.
+- **Caching and CORS.** A member's read is `private` with `Vary: Authorization` and `Access-Control-Allow-Origin: *` without credentials. Misses and redirects are `no-store`. Every `/files` response exposes `WWW-Authenticate` and `Retry-After` to cross-origin scripts.
+- **No secret needed.** Restricting does not need `SIGNING_SECRET`. It needs an OIDC issuer: without one no bearer verifies, so a restricted asset answers `401` to everyone.
+- **Not a recall.** Restricting does not take back what shared caches already hold from when the asset was public, so restrict before sharing URLs.
 
 **Named sites.** An ID-shaped host is correct but not printable, so an archive asset in a project can also be given a name:
 
@@ -369,7 +382,7 @@ CERBOS_ENDPOINT=http://localhost:3592 npm run start:node
 
 Serve fails closed when Cerbos cannot decide. A timeout, a refused connection or a non-2xx answer returns `503 {"error":"Authorization service unavailable"}` with `Retry-After: 5`, never an allow.
 
-Workspaces and memberships live in Serve's own D1 or SQLite directory, and Serve binds them to the caller once per request, after token verification. Health, the OpenAPI routes, `/files` and `/api/internal/*` skip that step, so a token there costs no directory lookup.
+Workspaces and memberships live in Serve's own D1 or SQLite directory, and Serve binds them to the caller once per request, after token verification. Health, the OpenAPI routes, `/files` and `/api/internal/*` skip that step, so a token there costs no directory lookup. The one exception is a read of a restricted asset with a bearer: the file handler verifies the token, binds the caller and checks `read_asset` itself, and a caller the directory does not know gets `404` there, not `401`.
 
 **Upgrade note.** Earlier releases sent Cerbos the kinds `asset`, `job`, `project` and `workspace`, with actions such as `create` and `read`. A policy written for those names denies every check after this release. Replace it with the policies in `docs/examples/cerbos/`.
 
@@ -394,6 +407,7 @@ npm run cli -- asset update <id> --description "My dataset" --user-meta '{"tag":
 npm run cli -- asset update <id> --spa on       # SPA fallback: unknown routes get index.html
 npm run cli -- asset delete <id>
 npm run cli -- asset protect <id> --password    # prompts twice; protects a site
+npm run cli -- asset protect <id> --restricted  # project members only (bearer)
 npm run cli -- asset protect <id> --off         # public again
 
 # Versioning
@@ -418,6 +432,7 @@ npm run cli -- file thumb <id> --size xs        # download xs thumbnail (default
 npm run cli -- file thumb <id> --size md --url  # print URL without downloading
 npm run cli -- file cp -r <id>:. ./out --password   # protected asset: prompts, then sends Basic
 REEARTH_SERVE_SITE_PASSWORD=… npm run cli -- file sync <id> ./local   # same, non-interactive
+# Without a password, `file cp` and `file sync` send your login token, which opens a restricted asset
 
 # Job management
 npm run cli -- job list

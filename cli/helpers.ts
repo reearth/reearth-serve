@@ -117,15 +117,18 @@ export function parseOnOff(value: string, flag: string): boolean {
 
 const TOKEN_REFRESH_BUFFER_MS = 60 * 1000; // refresh 60s before expiry
 
+/** The stored login, refreshed first when it is expired or about to be. */
+async function freshCredentials(): Promise<ReturnType<typeof loadCredentials>> {
+  const creds = loadCredentials();
+  if (creds?.expiresAt && creds.expiresAt - Date.now() < TOKEN_REFRESH_BUFFER_MS) {
+    if (await refreshAccessToken()) return loadCredentials();
+  }
+  return creds;
+}
+
 export async function commonHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = {};
-  let creds = loadCredentials();
-
-  // Auto-refresh if token is expired or about to expire
-  if (creds?.expiresAt && creds.expiresAt - Date.now() < TOKEN_REFRESH_BUFFER_MS) {
-    const newToken = await refreshAccessToken();
-    if (newToken) creds = loadCredentials();
-  }
+  const creds = await freshCredentials();
 
   if (creds) {
     headers["Authorization"] = `Bearer ${creds.accessToken}`;
@@ -402,6 +405,17 @@ export async function promptPasswordTwice(): Promise<string> {
 export function basicAuthHeader(password: string | undefined): Record<string, string> {
   if (!password) return {};
   return { Authorization: `Basic ${Buffer.from(`viewer:${password}`).toString("base64")}` };
+}
+
+/**
+ * The `Authorization` a file download sends: Basic when a site password is
+ * configured, else the login token, so a project member reads a restricted
+ * asset with the same commands (ADR-014 §6). Public files ignore either.
+ */
+export async function downloadAuthHeader(password: string | undefined): Promise<Record<string, string>> {
+  if (password) return basicAuthHeader(password);
+  const creds = await freshCredentials();
+  return creds ? { Authorization: `Bearer ${creds.accessToken}` } : {};
 }
 
 /**

@@ -10,7 +10,12 @@ import { cacheControlFor, etagMatches, representationEtag } from "./caching";
 import { addVary, applyCors, preflightResponse, type CorsPolicy } from "./cors";
 import { dispositionHeaders } from "./disposition";
 import { handleAuthSubmit } from "../access/form";
-import { AUTH_PATH_SEGMENT, resolveAccess, type AccessDeps } from "../access/resolve";
+import { AUTH_PATH_SEGMENT, accessModeOf, resolveAccess, type AccessDeps } from "../access/resolve";
+import type { BearerDecision } from "../access/restricted";
+import type { VerifiedCaller } from "../auth/types";
+import { accessCtx, authorizeAsset, deniedResponse } from "../auth/access";
+import { enterCaller, TENANCY_RETRY_AFTER_SECONDS } from "../tenancy/middleware";
+import { TenancyUnavailableError, UnknownAccountError } from "../tenancy/port";
 import { SITE_PREVIEW_HEADER, type SitePreview } from "../site/middleware";
 import { hostingFor, isControlFile } from "../site/hosting";
 import {
@@ -246,15 +251,13 @@ function serve404Page(located: Located, siteHost: boolean): Response {
   );
 }
 
-// File delivery is **capability by default, access mode when the asset asks
-// for it** (ADR-013 B7; ADR-014 §5 generalises it).
+// File delivery is capability by default; `resolveAccess` when the asset's
+// mode says so (ADR-013 B7, ADR-014 §5).
 //
-// For a `public` asset — every asset unless someone protects it — nothing has
-// changed: knowing the ID grants the download, confidentiality rests on ID
-// unguessability and on the list APIs being scoped to the caller, and
-// `resolveAccess` costs one string comparison on a row already in hand. An
-// asset whose `access` is `password` is checked here, before any storage I/O,
-// on every URL form that reaches this router. Any *further* access check
+// For a `public` asset, knowing the ID grants the download, and
+// `resolveAccess` costs one string comparison on a row already in hand. A
+// `password` or `restricted` asset is checked here, before any storage I/O,
+// on every URL form that reaches this router. Any further access check
 // belongs in `core/access/`, behind `resolveAccess`, not inline below.
 export const fileRoutes = new Hono<AppEnv>();
 
@@ -265,7 +268,7 @@ fileRoutes.use("*", async (c, next) => {
 });
 
 /** What `resolveAccess` and the auth form need, off the request context. */
-function accessDeps(c: Context<AppEnv>): AccessDeps {
+function accessDeps(c: Context<AppEnv>, asset: AssetMetadata): AccessDeps {
   return {
     metadata: c.get("metadata"),
     kv: c.get("cache"),
@@ -273,7 +276,40 @@ function accessDeps(c: Context<AppEnv>): AccessDeps {
     // Set by the composition root when it builds the file-only site router, not
     // read from a header: a visitor cannot claim to be on a site host.
     siteHost: c.get("siteHost"),
+    verifyBearer: c.get("bearerVerifier"),
+    authorize: (caller) => authorizeBearer(c, asset, caller),
   };
+}
+
+/**
+ * A verified bearer on a restricted asset (ADR-014 §5 step 3.2). The only
+ * place `/files` binds a caller, so public and password reads never reach the
+ * directory. Every refusal reads like a missing asset, as `deniedResponse`
+ * does, except an outage, which the client should retry.
+ */
+async function authorizeBearer(
+  c: Context<AppEnv>,
+  asset: AssetMetadata,
+  caller: VerifiedCaller,
+): Promise<BearerDecision> {
+  const refuse = (res: Response): BearerDecision => {
+    res.headers.set("Cache-Control", "no-store");
+    return { ok: false, response: res };
+  };
+  try {
+    await enterCaller(c, caller);
+    const decision = await authorizeAsset(accessCtx(c), asset, "read_asset");
+    return decision.ok ? { ok: true } : refuse(deniedResponse(c, decision, { notFound: "File not found" }));
+  } catch (err) {
+    if (err instanceof UnknownAccountError) return refuse(c.json({ error: "File not found" }, 404));
+    if (err instanceof TenancyUnavailableError) {
+      console.error(err);
+      const res = c.json({ error: "Authorization service unavailable" }, 503);
+      res.headers.set("Retry-After", String(TENANCY_RETRY_AFTER_SECONDS));
+      return refuse(res);
+    }
+    throw err;
+  }
 }
 
 // POST …/_serve/auth — the password form's endpoint (ADR-013 B7).
@@ -286,7 +322,7 @@ function accessDeps(c: Context<AppEnv>): AccessDeps {
 fileRoutes.post(`/:id/${AUTH_PATH_SEGMENT}`, async (c) => {
   const asset = await c.get("metadata").find(c.req.param("id"));
   if (!asset) return c.json({ error: "File not found" }, 404);
-  const res = await handleAuthSubmit(asset, c.req.raw, accessDeps(c));
+  const res = await handleAuthSubmit(asset, c.req.raw, accessDeps(c, asset));
   // Null means the asset is not protected: there is no auth endpoint on a
   // public asset, and saying so would confirm the ID.
   return res ?? c.json({ error: "File not found" }, 404);
@@ -356,22 +392,26 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
 
   const { asset, version } = resolved;
 
-  // The access check (ADR-013 B7), before any storage I/O and before the
-  // thumbnail branch — a protected asset's thumbnail is as much of a leak as
-  // its index page. A challenge, a 429 or the fail-closed 503 all come back as
-  // the resolution's own response; only the CORS headers are added to it, so a
-  // browser fetch can read the 401 rather than seeing an opaque network error.
-  const access = await resolveAccess(asset, c.req.raw, accessDeps(c));
+  // The access check (ADR-013 B7, ADR-014 §5), before any storage I/O and
+  // before the thumbnail branch: a protected asset's thumbnail is as much of a
+  // leak as its index page. Every refusal comes back as the resolution's own
+  // response; only the CORS headers are added to it, so a browser fetch can
+  // read the 401 rather than seeing an opaque network error.
+  const access = await resolveAccess(asset, c.req.raw, accessDeps(c, asset));
   if (access.kind === "challenge") {
     applyCors(access.response.headers, refusalCors);
     return access.response;
   }
   const isProtected = access.proof !== "none";
+  const restricted = accessModeOf(asset) === "restricted";
   const cors = corsPolicy(c, access.proof);
 
   /** Everything that leaves this route goes through here. */
   const decorate = (res: Response): Response => {
     if (isProtected) addVary(res.headers, "Cookie", "Authorization");
+    // A restricted asset's misses and redirects are not cached even
+    // privately (ADR-014 §4 Response).
+    if (restricted && res.status >= 300 && res.status !== 304) res.headers.set("Cache-Control", "no-store");
     applyCors(res.headers, cors);
     return res;
   };
@@ -516,7 +556,8 @@ const nosniff = { "X-Content-Type-Options": stringHeader("`nosniff`, on every `/
 const corsHeaders = {
   "Access-Control-Allow-Origin": stringHeader("`*`, or the request's `Origin` for a cookie-authorized read from Serve's own origin or one listed in `CREDENTIALED_ORIGINS`"),
   "Access-Control-Allow-Credentials": stringHeader("`true`, only alongside an echoed `Origin`"),
-  Vary: stringHeader("`Accept-Encoding` for a gzip-stored file; `Cookie, Authorization, Origin` for a password-protected asset"),
+  "Access-Control-Expose-Headers": stringHeader("`WWW-Authenticate, Retry-After`, on every `/files` response"),
+  Vary: stringHeader("`Accept-Encoding` for a gzip-stored file; `Cookie, Authorization, Origin` for a protected asset"),
 };
 const fileHeaders = {
   ...nosniff,
@@ -528,7 +569,7 @@ const fileHeaders = {
   "Content-Security-Policy": stringHeader("`sandbox` on every `attachment` response"),
   ETag: stringHeader("The stored object's tag; weak (`W/`) when a gzip-stored file is decompressed. Not sent on thumbnails"),
   "Accept-Ranges": stringHeader("`bytes`. Not sent on gzip pass-through responses or thumbnails"),
-  "Cache-Control": stringHeader("`public, max-age=31536000, immutable` at a version-ID URL and for thumbnails; `public, max-age=0, must-revalidate` at an asset-ID URL. A password-protected asset gets `private` in place of `public`"),
+  "Cache-Control": stringHeader("`public, max-age=31536000, immutable` at a version-ID URL and for thumbnails; `public, max-age=0, must-revalidate` at an asset-ID URL. A password or restricted asset gets `private` in place of `public`"),
   "Cross-Origin-Resource-Policy": stringHeader("`same-origin` on a cookie-authorized read"),
 };
 const jsonError = (description: string) => ({
@@ -557,10 +598,12 @@ fileRoutes.get("/:id/:path{.+}",
       "Here, on the shared origin, only types a browser shows without running script are `inline`; HTML, SVG, XML, JavaScript, PDF and every other type download as an `attachment` with `Content-Security-Policy: sandbox`. A hosted site renders on its site host only.",
       "",
       "A public asset needs no credentials. A password-protected asset accepts the viewer cookie the password form sets, or `Authorization: Basic` with the password (the username is ignored); without either it answers `401`, and repeated wrong passwords from one client answer `429`.",
+      "A restricted asset accepts `Authorization: Bearer <OIDC access token>` from a project member who holds `read_asset`, on the apex host only. Without a valid bearer it answers `401`; a caller who may not read it gets `404`, the same answer as a missing asset. Its misses and redirects are `no-store`.",
       "CORS: `Access-Control-Allow-Origin: *`, except that a cookie-authorized read from Serve's own origin or one in `CREDENTIALED_ORIGINS` gets its `Origin` echoed with `Access-Control-Allow-Credentials: true`.",
     ].join("\n"),
-    // Public assets need nothing; the password proofs are described above.
-    security: [],
+    // Public and password assets need no bearer; a restricted asset needs one.
+    // The password proofs are described above.
+    security: [{}, { bearerAuth: [] }],
     parameters: [
       { name: "id", in: "path", required: true, schema: { type: "string" }, description: "Asset ID or version ID" },
       { name: "path", in: "path", required: true, schema: { type: "string" }, description: "Filename, or a path inside an extracted archive (may contain `/`, sent raw or escaped as `%2F`)" },
@@ -599,11 +642,11 @@ fileRoutes.get("/:id/:path{.+}",
       },
       400: jsonError("Invalid thumbnail size"),
       401: {
-        description: "Password-protected asset and no valid cookie or Basic password. A browser navigation (`Accept: text/html`) gets the password page and no `WWW-Authenticate`; every other request gets JSON and the Basic challenge",
+        description: "Password-protected asset and no valid cookie or Basic password: a browser navigation (`Accept: text/html`) gets the password page and no `WWW-Authenticate`, every other request gets JSON and the Basic challenge. Restricted asset and no valid bearer: JSON for every request, browser navigations included",
         headers: {
           ...nosniff,
           ...corsHeaders,
-          "WWW-Authenticate": stringHeader("`Basic realm=\"reearth-serve\", charset=\"UTF-8\"`, on the JSON form only"),
+          "WWW-Authenticate": stringHeader("Password: `Basic realm=\"reearth-serve\", charset=\"UTF-8\"`, on the JSON form only. Restricted: `Bearer, ServeToken`, or `ServeToken` on a site host"),
           "Cache-Control": stringHeader("`no-store`"),
         },
         content: {
@@ -611,12 +654,15 @@ fileRoutes.get("/:id/:path{.+}",
           "text/html": { schema: { type: "string" } },
         },
       },
-      404: jsonError("Asset, file, or thumbnail not found. An archive with a root `404.html` answers with that page instead"),
+      404: jsonError("Asset, file, or thumbnail not found, or a restricted asset the bearer's caller may not read. An archive with a root `404.html` answers with that page instead"),
       429: {
         ...jsonError("Too many wrong passwords from this client for this asset; wait for `Retry-After`"),
         headers: { ...nosniff, ...corsHeaders, "Retry-After": stringHeader("Seconds until the window rolls over") },
       },
-      503: jsonError("The asset is password-protected but the deployment has no `SIGNING_SECRET`, or its protection is misconfigured"),
+      503: {
+        ...jsonError("The asset is password-protected but the deployment has no `SIGNING_SECRET`, or its protection is misconfigured; or the authorization service is unavailable for a restricted read"),
+        headers: { ...nosniff, ...corsHeaders, "Retry-After": stringHeader("`5`, when the authorization service is unavailable") },
+      },
     },
   }),
   serveRoute,

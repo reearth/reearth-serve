@@ -15,6 +15,7 @@ import type { DnsResolver } from "./site/dns";
 import type { CustomHostnameProvisioner } from "./site/provisioner";
 import type { ExtractionMessage } from "./extraction/handler";
 import type { ThumbnailMessage } from "./thumbnail/queue";
+import type { BearerVerifier } from "./access/restricted";
 
 /**
  * Dependencies that route handlers read off the request context.
@@ -134,5 +135,11 @@ export type AppEnv = {
      * (version-ID) hosts `noindex`.
      */
     siteHost: boolean;
+    /**
+     * Verifies an OIDC bearer for a `restricted` file read (ADR-014 §5). Null
+     * when no issuer is configured, and always null on a site host, which
+     * accepts no bearer.
+     */
+    bearerVerifier: BearerVerifier | null;
   };
 };

@@ -13,7 +13,7 @@ import { createApp } from "../../core/app";
 import type { Deps } from "../../core/types";
 import type { AssetMetadata, AssetVersion } from "../../core/asset/model";
 import type { SiteHosting } from "../../shared/api";
-import type { AssetProtection, ListResult, MetadataStore, VersionStore } from "../../core/asset/repository";
+import type { AccessChange, AssetProtection, ListResult, MetadataStore, VersionStore } from "../../core/asset/repository";
 import { hashPassword } from "../../core/access/password";
 import type { Session, SessionStore } from "../../core/session/repository";
 import { CERTIFICATE_RELEASED, type SiteHost, type SiteHostPatch, type SiteHostStore } from "../../core/site/repository";
@@ -65,13 +65,13 @@ export class MemoryMetadataStore implements MetadataStore {
   }
   async setProtection(
     id: string,
-    value: { access: "public" } | { access: "password"; hash: string; salt: string },
+    value: AccessChange,
   ): Promise<void> {
     const asset = this.assets.get(id);
     if (!asset) return;
     this.assets.set(id, { ...asset, access: value.access });
     const version = this.protection.get(id)?.version ?? 0;
-    if (value.access === "public") {
+    if (value.access !== "password") {
       // The counter outlives the hash, as it does in SQL.
       this.protection.set(id, { hash: "", salt: "", version });
       return;

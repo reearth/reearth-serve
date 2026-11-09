@@ -7,6 +7,7 @@ import {
   apiGet,
   basicAuthHeader,
   collectFiles,
+  downloadAuthHeader,
   downloadFile,
   formatBytes,
   listLocalFiles,
@@ -22,7 +23,8 @@ import {
  * `--password` on the download commands (ADR-013 B7).
  *
  * A protected asset answers `401` to an unauthenticated fetch of its files;
- * the CLI sends `Authorization: Basic`, which is the proof a tool uses. The
+ * the CLI sends `Authorization: Basic`, which is the proof a tool uses, and
+ * without a password `cp` and `sync` send the login token instead. The
  * flag takes no value — it prompts — and `REEARTH_SERVE_SITE_PASSWORD` is the
  * non-interactive route.
  */
@@ -91,7 +93,7 @@ export function registerFileCommands(program: Command, file: Command) {
       const opts = program.opts<{ endpoint: string; json: boolean }>();
       const { assetId, filePath } = parseSrc(src);
       const force = !!cmdOpts.force;
-      const auth = basicAuthHeader(await resolveSitePassword(cmdOpts.password));
+      const auth = await downloadAuthHeader(await resolveSitePassword(cmdOpts.password));
 
       if (cmdOpts.recursive) {
         const prefix = filePath || undefined;
@@ -228,7 +230,7 @@ export function registerFileCommands(program: Command, file: Command) {
     .action(async (assetId: string, destDir: string, cmdOpts: { delete?: boolean; concurrency: string } & PasswordOpt) => {
       const opts = program.opts<{ endpoint: string; json: boolean }>();
       const concurrency = parseInt(cmdOpts.concurrency, 10) || 4;
-      const auth = basicAuthHeader(await resolveSitePassword(cmdOpts.password));
+      const auth = await downloadAuthHeader(await resolveSitePassword(cmdOpts.password));
 
       const remoteFiles = await collectFiles(opts.endpoint, PATHS.assetFiles(assetId), auth);
       if (remoteFiles.length === 0) {

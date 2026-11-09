@@ -14,16 +14,18 @@ export function registerUpdateAssetRoute(app: Hono<AppEnv>) {
       summary: "Update asset metadata",
       description:
         "Update mutable asset fields: description, userMeta, activeVersionId, expiresAt, " +
-        "the access mode (ADR-013 B7) and the SPA fallback (ADR-013 C1). " +
+        "the access mode (ADR-013 B7, ADR-014) and the SPA fallback (ADR-013 C1). " +
         "`{\"access\":\"password\",\"password\":\"…\"}` protects " +
-        "a site (archive) asset in a project; `{\"access\":\"public\"}` unprotects it. Setting or " +
+        "a site (archive) asset in a project with a shared password; `{\"access\":\"restricted\"}` " +
+        "limits any project asset to project members who send their OIDC bearer; " +
+        "`{\"access\":\"public\"}` removes either. Setting or " +
         "changing the password invalidates every outstanding auth cookie. `{\"spa\":true}` makes " +
         "an extensionless miss inside the archive serve its root `index.html` with status 200.",
       responses: {
         200: jsonResponse("Updated asset", assetResponseSchema),
         400: jsonError("Protection or the SPA fallback is not available for this asset"),
         404: jsonError("Asset not found"),
-        503: jsonError("SIGNING_SECRET not configured"),
+        503: jsonError("SIGNING_SECRET not configured (access `password` only)"),
       },
     }),
     zValidator("param", idParamSchema),
@@ -48,7 +50,12 @@ export function registerUpdateAssetRoute(app: Hono<AppEnv>) {
       }
 
       if (body.access !== undefined) {
-        const result = await setAssetAccess(metadata, existing, { access: body.access, password: body.password }, {
+        // The schema refuses `password` without one, so `""` never reaches the
+        // store: the use case rejects it as missing.
+        const input = body.access === "password"
+          ? { access: body.access, password: body.password ?? "" }
+          : { access: body.access };
+        const result = await setAssetAccess(metadata, existing, input, {
           signingSecret: c.get("signingSecret"),
         });
         if (!result.ok) return c.json({ error: result.error }, result.status);

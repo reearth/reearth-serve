@@ -57,10 +57,10 @@ export const archiveFormatSchema = enumComponent("ArchiveFormat", z.enum(["zip",
  *
  * ADR-013 B7 writes the field as `hosting.access`; ADR-014 §1 declares the flat
  * `access` field canonical and the two the same thing. The flat name is the one
- * implemented: protection is a property of the asset, not of hosting, and
- * ADR-014's `restricted` mode joins this enum without a shape change.
+ * implemented: protection is a property of the asset, not of hosting.
+ * `restricted` is ADR-014's member-only mode.
  */
-export const assetAccessSchema = enumComponent("AssetAccess", z.enum(["public", "password"]));
+export const assetAccessSchema = enumComponent("AssetAccess", z.enum(["public", "password", "restricted"]));
 export const jobTypeSchema = z.literal("archive-extraction");
 export const jobStatusSchema = z.enum(["pending", "running", "completed", "failed"]);
 
@@ -420,9 +420,9 @@ export const updateAssetBodySchema = component("UpdateAssetRequest", z.object({
   activeVersionId: z.string().nullable().optional(),
   expiresAt: z.number().optional(),
   /**
-   * Turn protection on or off (ADR-013 B7). `password` requires `password`;
-   * `public` forbids it, so "unprotect" cannot be typed as an accidental
-   * password change. Re-sending `password` with a new secret rotates it and
+   * Set the access mode (ADR-013 B7, ADR-014 §1). `password` requires
+   * `password`; `public` and `restricted` forbid it, so neither can be typed
+   * as an accidental password change. Re-sending `password` with a new secret rotates it and
    * bumps the version, which invalidates every outstanding cookie.
    */
   access: assetAccessSchema.optional(),
