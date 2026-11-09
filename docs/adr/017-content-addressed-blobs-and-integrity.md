@@ -105,7 +105,7 @@ terms.
 Storage gains a blob layer:
 
 ```
-blobs/{workspaceId}/{sha256}            ← the bytes, written once
+blobs/{scope}/{sha256}                  ← the bytes, written once (scope: see below)
 assets/{assetId}/v/{versionId}/…        ← unchanged for extracted archives, slots, thumbnails
 ```
 
@@ -120,6 +120,43 @@ URL, which is deliberate:
 - Immutability of `/files/{versionId}/…` now follows from the key: a
   version's blob is a hash, and a hash names one byte sequence. The year-long
   `immutable` cache policy (ADR-013 A2) rests on structure, not on discipline.
+
+**Only a declared hash gets a blob key.** The key has to be known before
+the first byte is written, and without a declaration the hash is known
+only after the last. A direct `PUT` cannot be buffered (the Worker has
+128 MB), and a presigned upload's key is fixed when the session is
+created. Staging under a temporary key and copying afterwards would work,
+but for a 250 GiB multipart object the copy is itself a multipart job. So:
+
+| Upload | Stored at | Recorded |
+|--------|-----------|----------|
+| Hash declared | `blobs/{scope}/{sha256}` | `sha256`, `integrity` |
+| No hash declared | `assets/{assetId}/v/{versionId}/{filename}`, as today | `sha256` (computed), `integrity` |
+
+Both kinds are verified as §2 says; only the first takes part in
+deduplication (§4). The CLI always declares, so in practice CLI uploads
+land in `blobs/` and only direct API callers (`curl`, hand-rolled
+presigned clients) stay on the per-version key. The version row records
+which key holds its bytes, so readers do not have to guess.
+
+**One writer per blob.** A store-verified write (direct `PUT` with the
+declared hash, presigned single `PUT` with a checksum header) cannot leave
+wrong bytes under a blob key: a mismatch writes nothing. A presigned
+multipart upload can, because the store checks parts, not the whole
+object, and the whole-object hash is confirmed only afterwards. To keep a
+bad multipart upload from overwriting a good blob:
+
+- if the blob already exists in the scope, the session short-circuits
+  (§4) and no upload URL is issued;
+- otherwise the session claims the blob in the ledger (`blob_refs` row in
+  an `uploading` state); a second session for the same scope and hash is
+  refused with 409 until the claim completes or expires;
+- a verification failure deletes the blob only while the claim is still
+  the sole reference.
+
+**Scope.** `{scope}` is the workspace ID. A project with no workspace uses
+`p_{projectId}`, and demo-mode assets use `_demo` (below). The scope is the
+unit of deduplication in §4.
 
 Extracted archive entries and derived slots keep their per-version prefix.
 Their hashes are recorded in the extraction manifest and slot metadata
