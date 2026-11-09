@@ -10,6 +10,7 @@ import { assetUploadResultExamples, completeUploadExamples } from "../../openapi
 import { completeUploadBodySchema, uploadResultResponseSchema, idParamSchema } from "../../../shared/openapi";
 import { jsonError, jsonResponse, schemaRef } from "../../openapi";
 import { ChecksumMismatchError } from "../../asset/integrity";
+import { BLOB_UNAVAILABLE_MESSAGE, BlobUnavailableError } from "../../blob/usecase";
 
 
 export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
@@ -17,7 +18,7 @@ export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
     describeRoute({
       tags: ["Assets"],
       summary: "Complete upload session",
-      description: "Confirm upload and create asset. For multipart uploads, send parts with ETags in JSON body.",
+      description: "Confirm upload and create asset. For multipart uploads, send parts with ETags in JSON body. A session created with no parts (the workspace already held the declared bytes) needs no body, or `{ \"parts\": [] }`.",
       requestBody: {
         required: false,
         description: "Only read when Content-Type is application/json. Required for multipart sessions.",
@@ -28,6 +29,7 @@ export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
       responses: {
         201: jsonResponse("Upload completed", uploadResultResponseSchema, assetUploadResultExamples),
         404: jsonError("Upload session not found"),
+        409: jsonError(`${BLOB_UNAVAILABLE_MESSAGE} (the session is spent; create a new one)`),
         422: jsonError("Declared SHA-256 does not match the uploaded bytes; nothing was stored"),
       },
     }),
@@ -76,6 +78,7 @@ export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
       if (e instanceof ChecksumMismatchError) {
         return c.json({ error: "Declared SHA-256 does not match the uploaded bytes; nothing was stored" }, 422);
       }
+      if (e instanceof BlobUnavailableError) return c.json({ error: e.message }, 409);
       throw e;
     }
     if (!result) {

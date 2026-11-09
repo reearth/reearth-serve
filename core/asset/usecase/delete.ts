@@ -72,6 +72,7 @@ if (import.meta.vitest) {
     const remaining = new Set(keys);
     return {
       put: vi.fn(),
+      digest: vi.fn(),
       get: vi.fn(async () => null),
       head: vi.fn(async () => null),
       delete: vi.fn(async (key: string) => { remaining.delete(key); }),
@@ -113,6 +114,7 @@ if (import.meta.vitest) {
     let pageIdx = 0;
     const st: FileStorage = {
       put: vi.fn(),
+      digest: vi.fn(),
       get: vi.fn(async () => null),
       head: vi.fn(async () => null),
       delete: vi.fn(),

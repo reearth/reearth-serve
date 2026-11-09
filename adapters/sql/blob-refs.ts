@@ -39,6 +39,46 @@ export function blobAttachStatement(ref: BlobRefKey, state: "ready" | "verifying
   };
 }
 
+/**
+ * One more row references a blob whose bytes the upload did not write,
+ * because the blob already held them (ADR-017 §4, phase P3). Unlike
+ * `blobAttachStatement` this is conditional: the blob must still be `ready`
+ * and referenced by at least one other row — the state in which its object is
+ * known to exist (a `ready` row at zero may be a reservation whose write
+ * failed). If it is not, a statement here fails and takes the whole batch
+ * with it, so the asset or version row is never committed without its bytes.
+ *
+ * D1 has no interactive transactions and SQLite's `RAISE()` works only inside
+ * triggers, so the failure is a NOT NULL violation on `blob_refs.state`:
+ *
+ * 1. no row for the key at all → the INSERT tries to add one with a NULL state;
+ * 2. a row that does not qualify → the UPDATE sets its state to NULL.
+ *
+ * Either aborts the batch. A qualifying row is incremented and keeps its state.
+ * The caller tells this failure from others by reading the row again
+ * (`BlobUnavailableError`, core/blob/usecase.ts), so nothing here depends on
+ * the driver's error wording.
+ */
+export function blobAttachExistingStatements(ref: BlobRefKey, now: number): SqlStatement[] {
+  return [
+    {
+      sql: `INSERT INTO blob_refs (key, scope, sha256, ref_count, state, created_at, updated_at)
+              SELECT ?1, ?2, ?3, 0, NULL, ?4, ?4
+               WHERE NOT EXISTS (SELECT 1 FROM blob_refs WHERE key = ?1)`,
+      args: [ref.key, ref.scope, ref.sha256, now],
+    },
+    {
+      sql: `UPDATE blob_refs
+               SET ref_count = ref_count + 1,
+                   state = CASE WHEN state = 'ready' AND ref_count > 0 THEN state ELSE NULL END,
+                   zero_since = NULL,
+                   updated_at = ?2
+             WHERE key = ?1`,
+      args: [ref.key, now],
+    },
+  ];
+}
+
 // The keys an asset's rows hold: its own and every version's.
 const ASSET_BLOB_KEYS =
   `SELECT blob_key FROM assets WHERE id = ?1 AND blob_key IS NOT NULL

@@ -13,6 +13,9 @@ export const CONTENT_SHA256_HEADER = "X-Content-SHA256";
 
 const SHA256_HEX = /^[0-9a-fA-F]{64}$/;
 
+/** SHA-256 of zero bytes: the only hash an empty body can match. */
+export const EMPTY_SHA256 = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855";
+
 /** True when `value` is 64 hex characters (either case). */
 export function isSha256Hex(value: string): boolean {
   return SHA256_HEX.test(value);

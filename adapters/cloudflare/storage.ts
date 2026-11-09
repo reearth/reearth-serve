@@ -53,6 +53,32 @@ export class R2FileStorage implements FileStorage {
     return { sha256: bytesToHex(await digest.digest) };
   }
 
+  /**
+   * Hash a body without storing it (ADR-017 §4). The length check mirrors
+   * `FixedLengthStream`'s in `put`, with the wording the upload routes map to
+   * 400.
+   */
+  async digest(body: ReadableStream<Uint8Array>, size: number): Promise<PutResult> {
+    const { DigestStream: Digest } = crypto as unknown as { DigestStream: typeof DigestStream };
+    const digest = new Digest("SHA-256");
+    const writer = digest.getWriter();
+    const reader = body.getReader();
+    let read = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      read += value.byteLength;
+      if (read > size) {
+        await reader.cancel().catch(() => {});
+        throw new Error(`body exceeds declared Content-Length ${size}`);
+      }
+      await writer.write(value);
+    }
+    if (read !== size) throw new Error(`body shorter than declared Content-Length ${size} (got ${read})`);
+    await writer.close();
+    return { sha256: bytesToHex(await digest.digest) };
+  }
+
   async get(key: string, range?: { offset: number; length: number }): Promise<StoredFile | null> {
     const options: R2GetOptions = range
       ? { range: { offset: range.offset, length: range.length } }

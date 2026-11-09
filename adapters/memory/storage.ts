@@ -76,6 +76,25 @@ export class MemoryFileStorage implements FileStorage {
     return { sha256 };
   }
 
+  /** Hash a body without storing it (ADR-017 §4), with `put`'s length check. */
+  async digest(body: ReadableStream<Uint8Array>, size: number): Promise<PutResult> {
+    const hash = createHash("sha256");
+    const reader = body.getReader();
+    let read = 0;
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      read += value.byteLength;
+      if (read > size) {
+        await reader.cancel().catch(() => {});
+        throw new Error(`body exceeds declared Content-Length ${size}`);
+      }
+      hash.update(value);
+    }
+    if (read !== size) throw new Error(`body shorter than declared Content-Length ${size} (got ${read})`);
+    return { sha256: hash.digest("hex") };
+  }
+
   async get(key: string, range?: { offset: number; length: number }): Promise<StoredFile | null> {
     const entry = this.objects.get(key);
     if (!entry) return null;

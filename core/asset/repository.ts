@@ -12,6 +12,14 @@ import type { BlobRefKey } from "../blob/model";
 export interface BlobAttach {
   ref: BlobRefKey;
   state: "ready" | "verifying";
+  /**
+   * The upload skipped writing the bytes because the blob already held them
+   * (ADR-017 §4, phase P3). The reference is then taken only if the blob is
+   * still `ready` and referenced by another row; otherwise the whole write
+   * fails and nothing is committed, so no row can point at bytes that may
+   * not be there. `state` is not applied: the blob keeps the one it has.
+   */
+  existing?: boolean;
 }
 
 export interface ListResult<T> {
@@ -207,6 +215,16 @@ export interface FileStorage {
    * Either way the result carries the SHA-256 of what was stored.
    */
   put(key: string, body: ReadableStream<Uint8Array>, contentType: string, size: number, options?: { contentEncoding?: string; sha256?: string }): Promise<PutResult>;
+  /**
+   * Read `body` to its end and hash it, storing nothing. The body must be
+   * exactly `size` bytes, enforced as `put` enforces it (the thrown message
+   * names the "declared Content-Length").
+   *
+   * What a direct upload does instead of `put` when its blob already holds
+   * the declared bytes (ADR-017 §4): the body is still received and checked
+   * in full, it is just not written again.
+   */
+  digest(body: ReadableStream<Uint8Array>, size: number): Promise<PutResult>;
   get(key: string, range?: { offset: number; length: number }): Promise<StoredFile | null>;
   /**
    * `sha256` (lowercase hex) is present only when the store itself holds a

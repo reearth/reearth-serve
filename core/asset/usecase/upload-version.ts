@@ -4,7 +4,8 @@ import type { AtomicWrites, FileStorage, MetadataStore } from "../repository";
 import type { Job } from "../../job/model";
 import { generateId, versionStorageKey } from "./shared";
 import { UploadUnderVerificationError } from "../integrity";
-import { placeDirectUpload, type BlobContext } from "../../blob/usecase";
+import { reuseFailure, type BlobContext } from "../../blob/usecase";
+import { storeDirectUpload } from "../../blob/direct-upload";
 import { siteUrlFor } from "../../site/url";
 import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
@@ -33,6 +34,8 @@ export async function uploadVersion(
     /**
      * Declared SHA-256 of the body, lowercase hex (ADR-017 §1). The store
      * verifies it and writes nothing on a mismatch (`ChecksumMismatchError`).
+     * With `size` 0 it asks for the bytes the scope already holds (§4; see
+     * `storeDirectUpload`).
      */
     sha256?: string;
   },
@@ -53,18 +56,12 @@ export async function uploadVersion(
   const versionId = generateId();
   const now = Date.now();
   const contentType = file.type || "application/octet-stream";
-  const placement = options?.blob
-    ? await placeDirectUpload(options.blob.refs, options.blob.scope, file.sha256, versionStorageKey(assetId, versionId, file.name), now)
-    : { key: versionStorageKey(assetId, versionId, file.name) };
-  const key = placement.key;
-
-  // Declared or not, the store hands back the hash of what it stored, so the
-  // row is `verified` either way (ADR-017 §2). A declared mismatch throws
-  // here, before any row exists and with nothing stored.
-  const stored = await storage.put(key, file.body, contentType, file.size, {
-    ...(file.contentEncoding && { contentEncoding: file.contentEncoding }),
-    ...(file.sha256 && { sha256: file.sha256 }),
-  });
+  // As for a first upload (`uploadAsset`): reuse, blob key, or classic key.
+  // A declared mismatch throws here, before any row exists, with nothing stored.
+  const stored = await storeDirectUpload(storage, options?.blob, {
+    body: file.body, size: file.size, contentType, contentEncoding: file.contentEncoding, sha256: file.sha256,
+  }, versionStorageKey(assetId, versionId, file.name), now);
+  const key = stored.key;
 
   const archiveFormat = detectArchiveFormat(file.name);
 
@@ -77,7 +74,7 @@ export async function uploadVersion(
     version: 0,
     filename: file.name,
     contentType,
-    size: file.size,
+    size: stored.size,
     createdAt: now,
     sha256: stored.sha256,
     integrity: "verified",
@@ -88,7 +85,7 @@ export async function uploadVersion(
       ...(!options?.skipExtraction && { status: "pending" as const }),
       archiveFormat,
     }),
-    ...(placement.ref && { blobKey: placement.ref.key }),
+    ...(stored.ref && { blobKey: stored.ref.key }),
   };
 
   // Create extraction job for archives
@@ -113,12 +110,17 @@ export async function uploadVersion(
   try {
     // Job row, version row and storage-usage counters in one atomic write
     // (ADR-012 §3). The version number is assigned inside that batch.
-    savedVersion = await writes.createVersion({
-      version: versionInput,
-      job,
-      usageScopes: asset.projectId ? options?.usageScopes : [],
-      ...(placement.ref && { blob: { ref: placement.ref, state: "ready" as const } }),
-    });
+    // Reused bytes attach only while the blob still qualifies (ADR-017 §4).
+    try {
+      savedVersion = await writes.createVersion({
+        version: versionInput,
+        job,
+        usageScopes: asset.projectId ? options?.usageScopes : [],
+        ...(stored.ref && { blob: { ref: stored.ref, state: "ready" as const, ...(stored.reused && { existing: true }) } }),
+      });
+    } catch (e) {
+      throw stored.reused && options?.blob ? await reuseFailure(options.blob.refs, key, e) : e;
+    }
 
     // Enqueue only after the rows are committed: the consumer reads them.
     if (job && archiveFormat && options?.extractionQueue) {
@@ -141,13 +143,13 @@ export async function uploadVersion(
       versionId,
       sourceKey: key,
       contentType,
-      size: file.size,
+      size: stored.size,
     });
   } catch (e) {
     // Compensation: drop the orphaned R2 object so it doesn't leak forever
     // if the D1 version row failed to persist. Never a blob: other rows may
     // reference it, and the grace and orphan sweeps reclaim it if none does.
-    if (!placement.ref) {
+    if (!stored.ref) {
       try {
         await storage.delete(key);
       } catch (delErr) {

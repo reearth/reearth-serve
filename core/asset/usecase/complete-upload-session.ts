@@ -11,7 +11,7 @@ import type { JobQueue } from "../../queue/port";
 import type { ExtractionMessage } from "../../extraction/handler";
 import { newVerificationJob, verificationMessage, type VerificationMessage } from "../../integrity/verification";
 import type { BlobRefStore } from "../../blob/repository";
-import { discardClaimedUpload } from "../../blob/usecase";
+import { BlobUnavailableError, discardClaimedUpload, reuseFailure } from "../../blob/usecase";
 
 export async function completeUploadSession(
   sessions: UploadSessionStore,
@@ -59,6 +59,17 @@ export async function completeUploadSession(
     return { asset: existing, url, ...(siteUrl && { siteUrl }) };
   }
 
+  // A session for bytes the scope already held (ADR-017 §4) uploaded nothing
+  // and claimed nothing; it attaches to the blob if the blob is still there.
+  const reuse = Boolean(session.blobReuse && blobRef);
+  // The blob went away between session and completion: this session can
+  // never succeed, so it is spent and the client starts a new one, which
+  // will upload the bytes.
+  const unavailable = async (): Promise<never> => {
+    await sessions.delete(id);
+    throw new BlobUnavailableError(key);
+  };
+
   // Complete the multipart upload unless a previous attempt already did and
   // then failed on the metadata write: the session survives that failure so
   // the client can retry, and the completed UploadId cannot be completed twice.
@@ -69,27 +80,35 @@ export async function completeUploadSession(
     await presignedUrls.completeMultipartUpload(key, session.s3UploadId, parts);
     head = await storage.head(key);
   }
-  if (!head) return null;
+  if (!head) return reuse ? unavailable() : null;
 
   // A claim that lapsed (the session outlived its expiry in KV) may since
   // have been taken by another upload, which may have rewritten the key. This
   // session no longer owns those bytes, so it neither records nor deletes them.
-  if (blobRef) {
+  if (blobRef && !reuse) {
     const claim = await blobRefs!.find(blobRef.key);
     if (claim?.state !== "uploading" || claim.claimId !== id) return null;
   }
 
-  const integrity = await sessionIntegrity(session, head, async () => {
-    // A store that holds a different hash than the one declared would have
-    // refused the write; reaching here means the bytes are not what the client
-    // promised, so they are not kept and the session is spent (ADR-017 §2).
-    // A claimed blob key is still this session's alone, so it goes too.
-    if (blobRef) await discardClaimedUpload(blobRefs!, storage, blobRef.key, id);
-    else await storage.delete(key);
-    await sessions.delete(id);
-  });
+  // Reused bytes are a `ready` blob: verified when it became ready, so the
+  // row is `verified` with no job. Otherwise the store's report decides.
+  const integrity: Pick<AssetMetadata, "sha256" | "integrity"> = reuse
+    ? { sha256: session.sha256, integrity: "verified" }
+    : await sessionIntegrity(session, head, async () => {
+      // A store that holds a different hash than the one declared would have
+      // refused the write; reaching here means the bytes are not what the client
+      // promised, so they are not kept and the session is spent (ADR-017 §2).
+      // A claimed blob key is still this session's alone, so it goes too.
+      if (blobRef) await discardClaimedUpload(blobRefs!, storage, blobRef.key, id);
+      else await storage.delete(key);
+      await sessions.delete(id);
+    });
 
   const now = Date.now();
+  // What the uploaded object was stored with — for reused bytes, what this
+  // session told the client to send (the blob's own metadata belongs to
+  // whichever upload wrote it; `/files` serves by the row, not the object).
+  const contentEncoding = reuse ? session.contentEncoding : head.contentEncoding;
 
   // projectId is bound at createUploadSession time (after membership check)
   // and re-verified by the handler before we get here; use the session's copy
@@ -104,8 +123,8 @@ export async function completeUploadSession(
     createdAt: session.createdAt,
     expiresAt: projectId ? 0 : now + ttlSeconds * 1000,
     ...integrity,
-    ...(head.contentEncoding && { contentEncoding: head.contentEncoding }),
-    ...(head.contentEncoding && session.size && { originalSize: session.size }),
+    ...(contentEncoding && { contentEncoding }),
+    ...(contentEncoding && session.size && { originalSize: session.size }),
     ...(archiveFormat && {
       type: "archive" as const,
       ...(!session.skipExtraction && { status: "pending" as const }),
@@ -148,10 +167,24 @@ export async function completeUploadSession(
   //
   // The claim becomes the blob's first reference in the same write: `ready`
   // when the store vouched for the hash, `verifying` until the job does.
-  await writes.createAsset({
-    asset, job, verificationJob, usageScopes: projectId ? options?.usageScopes : [],
-    ...(blobRef && { blob: { ref: blobRef, state: asset.integrity === "verified" ? "ready" as const : "verifying" as const } }),
-  });
+  //
+  // Reused bytes attach only while the blob still qualifies (ADR-017 §4); if
+  // it no longer does, the session is spent like one whose blob vanished.
+  try {
+    await writes.createAsset({
+      asset, job, verificationJob, usageScopes: projectId ? options?.usageScopes : [],
+      ...(blobRef && {
+        blob: reuse
+          ? { ref: blobRef, state: "ready" as const, existing: true }
+          : { ref: blobRef, state: asset.integrity === "verified" ? "ready" as const : "verifying" as const },
+      }),
+    });
+  } catch (e) {
+    if (!reuse) throw e;
+    const failure = await reuseFailure(blobRefs!, key, e);
+    if (failure instanceof BlobUnavailableError) await unavailable();
+    throw failure;
+  }
 
   // Enqueue only after the rows are committed: the consumer reads them.
   if (job && archiveFormat && options?.extractionQueue) {
@@ -248,6 +281,7 @@ if (import.meta.vitest) {
   function mockStorage(headResult: { size: number; contentEncoding?: string; sha256?: string } | null = null): FileStorage {
     return {
       put: vi.fn(async () => ({ sha256: "" })),
+      digest: vi.fn(async () => ({ sha256: "" })),
       get: vi.fn(async () => null),
       head: vi.fn(async () => headResult),
       delete: vi.fn(async () => {}),

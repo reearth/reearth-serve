@@ -473,14 +473,93 @@ responses and usage accounting do not change.
 - Usage (ADR-004) is unchanged: counters move per asset and version row by
   the row's size, whether or not the bytes are shared.
 
+**P3 — deduplication inside the scope (done).** An upload of bytes the
+scope already holds no longer writes them again. Responses, URLs and usage
+accounting do not change.
+
+- When bytes can be reused (`isReusable`, `core/blob/usecase.ts`): the blob is
+  `ready` and at least one row references it. Rows are written only after
+  their bytes (§5) and objects are deleted only at zero references, so such a
+  blob has its object. A `ready` row at zero is never reused: it may be a
+  reservation whose write failed. `verifying`, `deleting` and claimed blobs
+  are not reused either; uploads of them behave as in P2. The lookup is by
+  the uploader's own blob key, so no other scope is ever consulted.
+- Direct uploads (first upload and new version, `storeDirectUpload`,
+  `core/blob/direct-upload.ts`). The body is still read to the end and hashed,
+  through a new `FileStorage.digest` (R2: `crypto.DigestStream`; Node:
+  `node:crypto`) that stores nothing and checks the length as `put` does. A
+  mismatch is still 422 and an overrun still 400. Then, in place of the
+  `put`, the blob is `head`ed: one store round trip for another, it confirms
+  the object is there before a row points at it, and it gives the size.
+  Matching the write's cost exactly was not done, because §4's timing argument
+  is about other workspaces, and an upload whose bytes exist only in another
+  workspace finds nothing in its own scope and writes like any fresh upload.
+  Inside the scope, "these bytes are already here" is not a secret.
+- The row a reused upload writes is the one a full upload of the same bytes
+  would have written: `size` from the stored object, `contentType`,
+  `contentEncoding` and `originalSize` from the request, the declared
+  `sha256`, `integrity: verified`, the blob key. `/files` serves an original by
+  its row's type and encoding, never the object's metadata, so the first
+  writer's metadata on a shared blob does not leak into later rows.
+- Empty body. A direct upload with `X-Content-SHA256` may send
+  `Content-Length: 0` (or no body). That is an ordinary upload of zero bytes:
+  when the scope holds the declared bytes, the asset or version is created
+  from them; when it does not, the empty body is checked against the
+  declaration like any other body — 422 with the usual message, and no
+  reservation is taken. The SHA-256 of zero bytes matches an empty body, so
+  that declaration stores (or reuses) an empty file. Without a declared hash,
+  `Content-Length: 0` is still 400.
+- Presigned sessions with a declared hash of reusable bytes take no claim and
+  issue no URL. The response is a `MultipartUploadSession` with `parts: []`
+  (whatever `partCount` was), plus `contentEncoding` when the server
+  compresses the file, as for any session. That shape is the least
+  disruptive one: the CLI and any client that handles multipart already
+  upload nothing for an empty list and then call `complete`, which creates
+  the asset (`verified`, no verification job, the blob's size, the session's
+  encoding). Creating the asset at session creation instead would have given
+  the session endpoint a second response type. The session records
+  `blobReuse`. The 409 for a live claim and the fallback to the classic key
+  for `verifying`, `deleting` and unreferenced blobs are unchanged.
+- Encoding on sessions. A session's `contentEncoding` is the server's
+  decision, and a client must hash the gzipped bytes it will send. A client
+  that hashed the raw file would fail verification when uploading; reused, its
+  asset would label raw bytes `gzip`. So a session the server compresses
+  reuses a blob only if the blob starts with the gzip magic bytes (a two-byte
+  range read); otherwise it falls back to an upload. A direct upload needs no
+  such check, because its `Content-Encoding` is the client's own statement
+  about the bytes the hash names.
+- Races. The reference is attached in the same batch as the row, and on
+  condition (`BlobAttach.existing`; `blobAttachExistingStatements`,
+  `adapters/sql/blob-refs.ts`): the blob must still be `ready` with
+  `ref_count > 0`. D1 has no interactive transaction and `RAISE()` works only
+  in triggers, so a failed condition is a NOT NULL violation on
+  `blob_refs.state` (an INSERT for a missing row, an UPDATE for one that does
+  not qualify), which aborts the whole batch: no row, no usage, no reference.
+  The use case then reads the blob row again; if it no longer qualifies the
+  error is `BlobUnavailableError`, otherwise the original error is passed on,
+  so no driver wording is parsed. The body is gone by then and was not
+  stored, so the route answers **409** ("deleted while the upload was in
+  progress … upload again"). 409 rather than 503: nothing is wrong with the
+  server, the resource changed under the request, a retry succeeds at once
+  (it finds no reusable blob and writes in full), and the other "retry once
+  the state changes" answers on these routes are already 409. A session
+  whose blob is gone at completion (head or attach) answers 409 and is
+  deleted, since it can never complete; the client starts a new one. The
+  condition requires a reference, not only `ready`, because a blob may reach
+  zero during the read, be swept after its grace period, and be re-reserved
+  by a failed upload as `ready` with no object. Sweeps need `BLOB_GRACE_MS` at
+  zero and the `deleting` lock, so in practice the 409 happens only when the
+  last other row holding the bytes is deleted while the body is in flight.
+- Usage (ADR-004) moves per row as before: a reused upload increments the
+  project and workspace counters by its size in the same batch.
+- P1b. A reused upload attaches to a `ready`, already verified blob, so its
+  row is `verified` and has no verification job. `discardRejectedBlob` is
+  unchanged: a rejected blob never left `verifying`, the conditional attach
+  refuses a `verifying` blob, so the rejected upload's reference is normally
+  its only one, and `markDeleting` still requires zero references.
+
 **Remaining.**
 
-- **P3**: workspace-scoped deduplication (§4): a direct upload whose blob is
-  `ready` skips the write after reading the body (or, with an empty body,
-  creates the version without transfer); a session for an existing blob
-  short-circuits instead of falling back to the classic key. Only a `ready`
-  blob with `ref_count > 0` may be short-circuited to: a `ready` row at zero
-  can be a reservation whose upload failed and left no object.
 - **P4**: backfill of `sha256` for versions stored before ADR-017.
 - **P5**: the CLI declaring `X-Content-SHA256` / `sha256` on every upload.
   Once it does, a client that uploads a version right after a large
@@ -517,6 +596,21 @@ responses and usage accounting do not change.
 - Rows stored before P2 have `blob_key` NULL and stay at their classic keys.
   Moving them into the blob layer would need the backfilled hash (P4) and a
   copy per object; nothing does it yet.
+- A direct upload that reuses bytes gets 409 if the last other row holding
+  them is deleted while its body is in flight: the bytes are still there, but
+  the attach requires a reference. Relaxing that would need a way to tell
+  such a blob from a re-reserved one with no object.
+- An empty file can be uploaded directly only with
+  `X-Content-SHA256: e3b0c442…b855` (the hash of zero bytes); without a
+  declaration `Content-Length: 0` is still 400, as before P3.
+- The gzip check on reusing bytes for a compressed session looks at the magic
+  number only. It rules out the likely mistake (a hash of the raw file), not
+  every byte sequence that starts with `1f 8b`.
+- A blob's object metadata (`Content-Type`, `Content-Encoding`) is whatever its
+  first writer sent. `/files` does not read it, but readers that go through
+  the S3 API (the extractor and the verifier) get it with the bytes. This
+  started with P2's shared blobs; P3 makes the first writer's metadata stick
+  because later uploads no longer rewrite the object.
 - The scope is fixed when the bytes are stored. A project that later moved to
   another workspace would keep its blobs in the old scope (reads still work,
   because the row records the key). No API moves a project today.

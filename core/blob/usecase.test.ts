@@ -11,8 +11,8 @@ import { SubrequestBudget } from "../cleanup/usecase";
 import type { AssetMetadata } from "../asset/model";
 import { BLOB_GRACE_MS, blobRefKey } from "./model";
 import {
-  BlobClaimedError, blobScopeFor, discardRejectedBlob, ORPHAN_CURSOR_KEY, ORPHAN_PAGE_SIZE,
-  placeDirectUpload, placeSessionUpload, sweepBlobs,
+  BlobClaimedError, blobScopeFor, BlobUnavailableError, discardRejectedBlob, findReusableBlob, ORPHAN_CURSOR_KEY, ORPHAN_PAGE_SIZE,
+  placeDirectUpload, placeSessionUpload, reuseFailure, sweepBlobs,
 } from "./usecase";
 
 const sha = (n: number) => n.toString(16).padStart(2, "0").repeat(32);
@@ -64,7 +64,7 @@ describe("placement", () => {
     expect(await placeDirectUpload(refs, "w1", undefined, "assets/a/f", NOW)).toEqual({ key: "assets/a/f" });
     const ref = blobRefKey("w1", sha(1));
     expect(await placeDirectUpload(refs, "w1", sha(1), "assets/a/f", NOW)).toEqual({ key: ref.key, ref });
-    // A second direct upload of the same bytes rewrites the same blob.
+    // Reserved but not yet referenced: a second direct upload writes it too.
     expect(await placeDirectUpload(refs, "w1", sha(1), "assets/b/f", NOW)).toEqual({ key: ref.key, ref });
 
     await refs.claim(blobRefKey("w1", sha(2)), "s1", NOW + 1000, NOW);
@@ -88,11 +88,71 @@ describe("placement", () => {
     expect(await placeSessionUpload(refs, "w1", sha(3), "assets/s2/f", { id: "s2", expiresAt: NOW + 5000 }, NOW + 2000))
       .toEqual({ key: ref.key, ref });
 
+    // Completed and verified: the next session reuses the bytes (ADR-017 §4).
     await writes.createAsset({ asset: assetWith("a1", ref.key), blob: { ref, state: "ready" } });
     expect(await placeSessionUpload(refs, "w1", sha(3), "assets/s3/f", { id: "s3", expiresAt: NOW + 5000 }, NOW + 3000))
-      .toEqual({ key: "assets/s3/f" });
+      .toEqual({ key: ref.key, ref, reuse: true });
+    // Reusing takes no claim.
+    expect(await refs.find(ref.key)).toMatchObject({ state: "ready", refCount: 1 });
+    expect((await refs.find(ref.key))?.claimId).toBeUndefined();
     expect(await placeSessionUpload(refs, "w1", undefined, "assets/s4/f", { id: "s4", expiresAt: NOW }, NOW))
       .toEqual({ key: "assets/s4/f" });
+  });
+
+  describe("reuse (ADR-017 §4)", () => {
+    const session = (id: string) => ({ id, expiresAt: NOW + 5000 });
+
+    test("a ready, referenced blob is reused by direct uploads and sessions, in its own scope only", async () => {
+      const ref = blobRefKey("w1", sha(20));
+      await writes.createAsset({ asset: assetWith("a1", ref.key), blob: { ref, state: "ready" } });
+
+      expect(await placeDirectUpload(refs, "w1", sha(20), "assets/b/f", NOW)).toEqual({ key: ref.key, ref, reuse: true });
+      expect(await placeSessionUpload(refs, "w1", sha(20), "assets/s/f", session("s1"), NOW)).toEqual({ key: ref.key, ref, reuse: true });
+      expect(await findReusableBlob(refs, "w1", sha(20))).toEqual({ key: ref.key, ref, reuse: true });
+
+      // Another workspace with the same bytes writes its own blob.
+      const other = blobRefKey("w2", sha(20));
+      expect(await findReusableBlob(refs, "w2", sha(20))).toBeNull();
+      expect(await placeDirectUpload(refs, "w2", sha(20), "assets/c/f", NOW)).toEqual({ key: other.key, ref: other });
+    });
+
+    test("a ready blob with no reference is not reused: a direct upload reserves and writes, a session falls back", async () => {
+      const ref = blobRefKey("w1", sha(21));
+      expect(await refs.reserve(ref, NOW)).toBe(true); // a reservation whose upload may have failed
+      expect(await placeDirectUpload(refs, "w1", sha(21), "assets/b/f", NOW)).toEqual({ key: ref.key, ref });
+      expect(await placeSessionUpload(refs, "w1", sha(21), "assets/s/f", session("s1"), NOW)).toEqual({ key: "assets/s/f" });
+      expect(await findReusableBlob(refs, "w1", sha(21))).toBeNull();
+    });
+
+    test("a verifying blob is not reused: both kinds fall back to the classic key", async () => {
+      const ref = blobRefKey("w1", sha(22));
+      await refs.claim(ref, "s0", NOW + 1000, NOW);
+      await writes.createAsset({ asset: assetWith("a1", ref.key), blob: { ref, state: "verifying" } });
+      expect(await placeDirectUpload(refs, "w1", sha(22), "assets/b/f", NOW)).toEqual({ key: "assets/b/f" });
+      expect(await placeSessionUpload(refs, "w1", sha(22), "assets/s/f", session("s1"), NOW)).toEqual({ key: "assets/s/f" });
+    });
+
+    test("a blob being deleted is not reused: both kinds fall back to the classic key", async () => {
+      const ref = blobRefKey("w1", sha(23));
+      await refs.markOrphanDeleting(ref, NOW);
+      expect(await placeDirectUpload(refs, "w1", sha(23), "assets/b/f", NOW)).toEqual({ key: "assets/b/f" });
+      expect(await placeSessionUpload(refs, "w1", sha(23), "assets/s/f", session("s1"), NOW)).toEqual({ key: "assets/s/f" });
+    });
+
+    test("a live claim still answers 409 to a session", async () => {
+      await refs.claim(blobRefKey("w1", sha(24)), "s0", NOW + 1000, NOW);
+      await expect(placeSessionUpload(refs, "w1", sha(24), "assets/s/f", session("s1"), NOW)).rejects.toBeInstanceOf(BlobClaimedError);
+    });
+
+    test("reuseFailure: a blob that stopped qualifying becomes BlobUnavailableError; anything else is passed through", async () => {
+      const ref = blobRefKey("w1", sha(25));
+      const original = new Error("D1 hiccup");
+      expect(await reuseFailure(refs, ref.key, original)).toBeInstanceOf(BlobUnavailableError);
+      await writes.createAsset({ asset: assetWith("a1", ref.key), blob: { ref, state: "ready" } });
+      expect(await reuseFailure(refs, ref.key, original)).toBe(original);
+      await writes.deleteAsset({ asset: assetWith("a1", ref.key), cleanupPrefix: "assets/a1/" });
+      expect(await reuseFailure(refs, ref.key, original)).toBeInstanceOf(BlobUnavailableError);
+    });
   });
 });
 
@@ -107,6 +167,18 @@ describe("discardRejectedBlob", () => {
     expect(await discardRejectedBlob(refs, storage, ref.key, NOW)).toBe(true);
     expect(await exists(ref.key)).toBe(false);
     expect(await refs.find(ref.key)).toBeNull();
+  });
+
+  test("a reuse attempt cannot attach to a blob still verifying, so a rejection still deletes it", async () => {
+    const ref = blobRefKey("w1", sha(26));
+    await refs.claim(ref, "s1", NOW + 1000, NOW);
+    await putObject(ref.key);
+    await writes.createAsset({ asset: assetWith("a1", ref.key), blob: { ref, state: "verifying" } });
+    await expect(writes.createAsset({ asset: assetWith("a2", ref.key), blob: { ref, state: "ready", existing: true } })).rejects.toThrow();
+    await writes.deleteAsset({ asset: assetWith("a1", ref.key), cleanupPrefix: "assets/a1/" });
+
+    expect(await discardRejectedBlob(refs, storage, ref.key, NOW)).toBe(true);
+    expect(await exists(ref.key)).toBe(false);
   });
 
   test("keeps the bytes while another row still references them", async () => {

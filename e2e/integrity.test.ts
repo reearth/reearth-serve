@@ -1,5 +1,6 @@
-// Upload integrity over HTTP (ADR-017 §1–§2, phase P1a) and the blob layer
-// that declared uploads are stored in (§3, P2). Runs against both
+// Upload integrity over HTTP (ADR-017 §1–§2, phase P1a), the blob layer
+// that declared uploads are stored in (§3, P2), and deduplication inside a
+// workspace (§4, P3). Runs against both
 // runtimes: the R2 binding verifies a declared hash on Workers, the memory
 // store does it in-process on Node.
 import { createHash } from "node:crypto";
@@ -129,5 +130,29 @@ describe("declared uploads in one workspace", { skip: !mockOidcAvailable }, () =
     expect(new Uint8Array(await file.arrayBuffer())).toEqual(body);
     expect(file.headers.get("X-Content-SHA256")).toBe(sha256(body));
     expect((await fetch(rewriteUrl(first.url))).status).toBe(404);
+  });
+
+  test("bytes already in the workspace: same response for a duplicate, and an empty body creates a version", async () => {
+    const content = new TextEncoder().encode(`dedup e2e ${Date.now()}`);
+    const headers = { Authorization: `Bearer ${token}`, "X-Project-Id": projectId, "X-Content-SHA256": sha256(content) };
+    const first = (await (await upload("/api/v1/assets", content, "d.txt", headers)).json()) as { asset: Record<string, unknown> & { id: string } };
+    const dupRes = await upload("/api/v1/assets", content, "d.txt", headers);
+    expect(dupRes.status).toBe(201);
+    const dup = (await dupRes.json()) as { asset: Record<string, unknown> & { id: string } };
+    const strip = ({ id: _i, createdAt: _c, ...rest }: Record<string, unknown>) => rest;
+    expect(strip(dup.asset)).toEqual(strip(first.asset));
+
+    // No body at all: the version is made from the stored bytes.
+    const v = await upload(`/api/v1/assets/${first.asset.id}`, new Uint8Array(0), "d.txt", headers);
+    expect(v.status).toBe(201);
+    const { version } = (await v.json()) as { version: { id: string; size: number; sha256: string; integrity: string } };
+    expect(version).toMatchObject({ size: content.byteLength, sha256: sha256(content), integrity: "verified" });
+    const file = await fetch(`${BASE}/files/${version.id}/d.txt`);
+    expect(new Uint8Array(await file.arrayBuffer())).toEqual(content);
+
+    // An empty body naming bytes the workspace does not hold is just a mismatch.
+    const unknown = sha256(new TextEncoder().encode(`not uploaded ${Date.now()}`));
+    const miss = await upload(`/api/v1/assets/${first.asset.id}`, new Uint8Array(0), "d.txt", { ...headers, "X-Content-SHA256": unknown });
+    expect(miss.status).toBe(422);
   });
 });

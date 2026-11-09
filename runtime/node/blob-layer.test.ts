@@ -227,8 +227,8 @@ describe("presigned sessions", () => {
     const file = await call("GET", `/files/${uploadId}/data.bin`);
     expect(await file.text()).toBe("multipart bytes");
 
-    // Once the claim completed, a new session for the same bytes goes to its
-    // own key instead (P3 will skip the transfer).
+    // The claim completed but the blob is still verifying: it cannot be
+    // reused yet (ADR-017 §4), so a new session goes to its own key.
     const third = await createSession("again.bin", declared);
     expect(third.status).toBe(201);
     const thirdJson = (await third.json()) as { uploadId: string; parts: { url: string }[] };

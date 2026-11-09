@@ -160,4 +160,20 @@ describe("MemoryFileStorage", () => {
     ).rejects.toThrow("SHA-256 mismatch");
     expect(await read((await storage.get("a"))!.body)).toBe("hello");
   });
+
+  test("digest hashes a multi-chunk body to its end and stores nothing", async () => {
+    const storage = new MemoryFileStorage();
+    expect(await storage.digest(stream(bytes("hel"), bytes("lo")), 5)).toEqual({ sha256: HELLO_SHA256 });
+    expect(storage.size).toBe(0);
+    // Zero bytes hash to the empty-string SHA-256.
+    expect(await storage.digest(stream(), 0)).toEqual({
+      sha256: "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+    });
+  });
+
+  test("digest enforces the declared length the way put does", async () => {
+    const storage = new MemoryFileStorage();
+    await expect(storage.digest(stream(bytes("too long")), 3)).rejects.toThrow(/declared Content-Length/);
+    await expect(storage.digest(stream(bytes("hi")), 10)).rejects.toThrow(/declared Content-Length/);
+  });
 });

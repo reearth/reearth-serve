@@ -136,6 +136,60 @@ describe("reference counts in the row writes", () => {
   });
 });
 
+describe("attaching to bytes already stored (ADR-017 §4)", () => {
+  const EXISTING = { ref: REF, state: "ready" as const, existing: true };
+
+  test("a ready, referenced blob takes one more reference and keeps its state", async () => {
+    const f = fixture();
+    await f.writes.createAsset({ asset: asset("a1", REF.key), blob: READY, usageScopes: ["project:p1"] });
+    await f.writes.createAsset({ asset: asset("a2", REF.key), blob: EXISTING, usageScopes: ["project:p1"] });
+    await f.writes.createVersion({ version: version("v1", "a1", REF.key), blob: EXISTING, usageScopes: ["project:p1"] });
+
+    expect(await f.refs.find(REF.key)).toMatchObject({ refCount: 3, state: "ready" });
+    expect(await f.assets.find("a2")).toMatchObject({ blobKey: REF.key });
+    // Usage is per row, as if each held its own copy.
+    expect(await f.usage.get("project:p1")).toMatchObject({ totalSize: 240, assetCount: 3 });
+  });
+
+  // Every case where the object may not be there: the batch fails as a whole.
+  const notReusable: [string, (f: ReturnType<typeof fixture>) => Promise<void>][] = [
+    ["no ledger row", async () => {}],
+    ["a ready row nothing references (a reservation)", async (f) => { await f.refs.reserve(REF, 1); }],
+    ["a blob still verifying", async (f) => {
+      await f.refs.claim(REF, "s1", 10, 1);
+      await f.writes.createAsset({ asset: asset("a0", REF.key), blob: { ref: REF, state: "verifying" } });
+    }],
+    ["a blob a sweep has locked", async (f) => { await f.refs.markOrphanDeleting(REF, 1); }],
+    ["a live claim", async (f) => { await f.refs.claim(REF, "s1", Number.MAX_SAFE_INTEGER, 1); }],
+  ];
+  for (const [name, setup] of notReusable) {
+    test(`fails and commits nothing for ${name}`, async () => {
+      const f = fixture();
+      await setup(f);
+      const before = await f.refs.find(REF.key);
+      const usageBefore = await f.usage.get("project:p1");
+
+      await expect(f.writes.createAsset({ asset: asset("a2", REF.key), blob: EXISTING, usageScopes: ["project:p1"] }))
+        .rejects.toThrow();
+      await expect(f.writes.createVersion({ version: version("v2", "a0", REF.key), blob: EXISTING, usageScopes: ["project:p1"] }))
+        .rejects.toThrow();
+
+      expect(await f.assets.find("a2")).toBeNull();
+      expect(await f.versions.find("v2")).toBeNull();
+      expect(await f.refs.find(REF.key)).toEqual(before);
+      expect(await f.usage.get("project:p1")).toEqual(usageBefore);
+    });
+  }
+
+  test("fails once the last other reference is gone, even though the row is still ready", async () => {
+    const f = fixture();
+    await f.writes.createAsset({ asset: asset("a1", REF.key), blob: READY });
+    await f.writes.deleteAsset({ asset: asset("a1", REF.key), cleanupPrefix: "assets/a1/" });
+    await expect(f.writes.createAsset({ asset: asset("a2", REF.key), blob: EXISTING })).rejects.toThrow();
+    expect(await f.refs.find(REF.key)).toMatchObject({ refCount: 0, state: "ready" });
+  });
+});
+
 describe("SqlBlobRefStore", () => {
   test("reserve: a free key becomes ready with its grace clock started; a ready one is reserved again", async () => {
     const { refs } = fixture();

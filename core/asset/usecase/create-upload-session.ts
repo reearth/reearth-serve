@@ -1,8 +1,9 @@
 import type { MultipartUploadResult, PresignedUploadResult, UploadSession } from "../model";
-import type { PresignedPut, PresignedUrlGenerator, UploadSessionStore } from "../repository";
+import type { FileStorage, PresignedPut, PresignedUrlGenerator, UploadSessionStore } from "../repository";
 import { shouldCompress } from "../compression";
 import { generateId, storageKey } from "./shared";
 import { placeSessionUpload, type BlobContext, type Placement } from "../../blob/usecase";
+import type { BlobRefKey } from "../../blob/model";
 
 // Upload window: scale with declared size so multi-GB archives uploaded over
 // slow links don't have their presigned URLs (and the KV session that the
@@ -29,6 +30,12 @@ export async function createUploadSession(
     sessionId?: string | null; projectId?: string | null; skipExtraction?: boolean;
     /** Blob ledger and scope: a declared upload claims its blob key (ADR-017 §3). Omitted, it does not. */
     blob?: BlobContext;
+    /**
+     * The object store, to look at bytes the scope already holds before a
+     * gzip session reuses them (`isGzipBlob`). Without it such a session does
+     * not reuse.
+     */
+    storage?: FileStorage;
   },
 ): Promise<PresignedUploadResult | MultipartUploadResult> {
   const id = generateId();
@@ -42,11 +49,21 @@ export async function createUploadSession(
   // Neither a multipart upload nor (on R2, unconfirmed) a presigned single PUT
   // is verified by the store as it is written, so a declared hash claims the
   // blob key for the session's lifetime instead of just reserving it. A live
-  // claim by another session throws `BlobClaimedError` (409); an existing blob
-  // sends this upload to the classic key (P3 will skip the transfer instead).
+  // claim by another session throws `BlobClaimedError` (409). Bytes the scope
+  // already holds are reused with no transfer (ADR-017 §4); bytes that cannot
+  // be reused (unverified, being deleted) send this upload to the classic key.
   const placement: Placement = options?.blob
-    ? await placeSessionUpload(options.blob.refs, options.blob.scope, sha256, storageKey(id, params.filename), { id, expiresAt }, now)
+    ? await placeSessionUpload(
+      options.blob.refs, options.blob.scope, sha256, storageKey(id, params.filename), { id, expiresAt }, now,
+      compress ? (key) => isGzipBlob(options.storage, key) : undefined,
+    )
     : { key: storageKey(id, params.filename) };
+  if (placement.reuse && placement.ref) {
+    return startReuseSession(sessions, {
+      id, now, expiresAt, urlExpirySeconds, contentType, compress, sha256: placement.ref.sha256, ref: placement.ref,
+      filename: params.filename, size: params.size,
+    }, options);
+  }
   try {
     return await startSession(sessions, presignedUrls, {
       id, now, expiresAt, urlExpirySeconds, contentType, compress, sha256, placement,
@@ -56,6 +73,75 @@ export async function createUploadSession(
     if (placement.ref && options?.blob) await options.blob.refs.releaseClaim(placement.ref.key, id).catch(() => {});
     throw e;
   }
+}
+
+/**
+ * Whether stored bytes are gzip, by their magic number — the guard on reusing
+ * them for a session the server compresses.
+ *
+ * A session's encoding is the server's decision, not a description of the
+ * client's bytes: the client is told to gzip, and its declared hash must be
+ * of the gzipped bytes (the open issue on predicting that decision). A client
+ * that hashed the raw file instead would, uploading, fail verification. Reused,
+ * its asset would label raw bytes `gzip` and be served broken. Bytes that do
+ * not start like gzip are therefore not reused for a gzip session: it falls
+ * back to an upload, which settles the hash the usual way. A direct upload
+ * needs no such guard — its `Content-Encoding` is the client's own statement
+ * about the very bytes the hash names, so reuse records what a full upload of
+ * those bytes would.
+ */
+async function isGzipBlob(storage: FileStorage | undefined, key: string): Promise<boolean> {
+  if (!storage) return false;
+  const head = await storage.get(key, { offset: 0, length: 2 });
+  if (!head) return false;
+  const start = new Uint8Array(await new Response(head.body).arrayBuffer());
+  return start.length === 2 && start[0] === 0x1f && start[1] === 0x8b;
+}
+
+/**
+ * A session for bytes the scope already holds (ADR-017 §4): nothing to upload.
+ *
+ * The response is a multipart session with no parts — the shape every client
+ * already handles. A client uploads nothing and calls `complete` as usual
+ * (with `{ "parts": [] }` or no body), which creates the asset from the
+ * existing blob. `contentEncoding` is the server's decision for this file, as
+ * for any session, and is what the asset records: the declared hash names the
+ * bytes as they would have been stored, so the blob holds exactly those.
+ *
+ * No claim is taken: nothing is written, so there is no writer to exclude.
+ * Whether the blob is still there is settled at completion.
+ */
+async function startReuseSession(
+  sessions: UploadSessionStore,
+  params: {
+    id: string; now: number; expiresAt: number; urlExpirySeconds: number; contentType: string;
+    compress: boolean; sha256: string; ref: BlobRefKey; filename: string; size: number;
+  },
+  options?: { sessionId?: string | null; projectId?: string | null; skipExtraction?: boolean },
+): Promise<MultipartUploadResult> {
+  const session: UploadSession = {
+    id: params.id,
+    filename: params.filename,
+    contentType: params.contentType,
+    size: params.size,
+    createdAt: params.now,
+    expiresAt: params.expiresAt,
+    ...(params.compress && { contentEncoding: "gzip" }),
+    sha256: params.sha256,
+    ...(options?.sessionId && { sessionId: options.sessionId }),
+    ...(options?.projectId && { projectId: options.projectId }),
+    ...(options?.skipExtraction && { skipExtraction: true }),
+    blobKey: params.ref.key,
+    blobScope: params.ref.scope,
+    blobReuse: true,
+  };
+  await sessions.save(session, params.urlExpirySeconds);
+  return {
+    uploadId: params.id,
+    parts: [],
+    ...(params.compress && { contentEncoding: "gzip" }),
+    expiresAt: session.expiresAt,
+  };
 }
 
 async function startSession(

@@ -3,11 +3,11 @@ import { describeRoute } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { toUploadResponse } from "../response";
 import { uploadAsset } from "../usecase";
-import { blobContext, denyAnonymousUpload, resolveUploadProject, usageScopes } from "./shared";
+import { blobContext, denyAnonymousUpload, parseDirectUploadHeaders, resolveUploadProject, usageScopes } from "./shared";
 import { assetUploadResultExamples } from "../../openapi-examples";
 import { uploadResultResponseSchema } from "../../../shared/openapi";
-import { isSafeFilename } from "../../../shared/api";
-import { ChecksumMismatchError, CONTENT_SHA256_HEADER, parseSha256Header } from "../../asset/integrity";
+import { ChecksumMismatchError } from "../../asset/integrity";
+import { BLOB_UNAVAILABLE_MESSAGE, BlobUnavailableError } from "../../blob/usecase";
 import { contentEncodingHeaderParam, contentLengthHeaderParam, contentSha256HeaderParam, filenameHeaderParam, jsonError, jsonResponse, originalSizeHeaderParam, projectIdHeaderParam, skipExtractionHeaderParam } from "../../openapi";
 
 export function registerUploadRoute(app: Hono<AppEnv>) {
@@ -35,6 +35,7 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
         400: jsonError("Bad request (missing/invalid headers, or X-Project-Id missing for an authenticated caller)"),
         401: jsonError("Anonymous upload disabled, or invalid token / session ID"),
         404: jsonError("Project not found"),
+        409: jsonError(BLOB_UNAVAILABLE_MESSAGE),
         413: jsonError("Upload exceeds storage capacity"),
         422: jsonError("Declared SHA-256 does not match the uploaded bytes; nothing was stored"),
       },
@@ -48,30 +49,9 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
     const ttlSeconds = c.get("ttlSeconds");
     const baseUrl = c.get("baseUrl");
 
-    const filename = c.req.header("X-Filename");
-    const contentLength = c.req.header("Content-Length");
-    if (!filename || !contentLength) {
-      return c.json({ error: "Missing required headers: X-Filename, Content-Length" }, 400);
-    }
-
-    if (!isSafeFilename(filename)) {
-      return c.json({ error: "Invalid X-Filename" }, 400);
-    }
-
-    const size = parseInt(contentLength, 10);
-    if (isNaN(size) || size <= 0) {
-      return c.json({ error: "Invalid Content-Length" }, 400);
-    }
-
-    const sha256 = parseSha256Header(c.req.header(CONTENT_SHA256_HEADER));
-    if (sha256 === "invalid") {
-      return c.json({ error: `Invalid ${CONTENT_SHA256_HEADER}: expected 64 hex characters` }, 400);
-    }
-
-    const body = c.req.raw.body;
-    if (!body) {
-      return c.json({ error: "Missing request body" }, 400);
-    }
+    const parsed = parseDirectUploadHeaders(c);
+    if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+    const { filename, size, sha256, body } = parsed;
 
     const contentType = c.req.header("Content-Type") || "application/octet-stream";
     const contentEncoding = c.req.header("Content-Encoding") || undefined;
@@ -108,6 +88,7 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
       if (e instanceof ChecksumMismatchError) {
         return c.json({ error: "Declared SHA-256 does not match the uploaded bytes; nothing was stored" }, 422);
       }
+      if (e instanceof BlobUnavailableError) return c.json({ error: e.message }, 409);
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.includes("exceeds storage capacity")) {
         return c.json({ error: "Upload exceeds storage capacity" }, 413);

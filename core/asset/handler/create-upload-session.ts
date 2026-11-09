@@ -20,7 +20,7 @@ export function registerCreateUploadSessionRoute(app: Hono<AppEnv>) {
     describeRoute({
       tags: ["Assets"],
       summary: "Create upload session with presigned URL",
-      description: "Step 1 of a presigned upload. Without `partCount` (or with 1) the response is a single presigned PUT URL; with `partCount` > 1 it is one URL per part (multipart). An optional `sha256` declares the hash of the bytes to be stored (after gzip when the response says `contentEncoding: gzip`): on a single PUT it is signed into the URL, the client must send every header in the response's `headers` (including `x-amz-checksum-sha256`), and the store rejects a body that does not match; on multipart it is recorded and the version stays `integrity: pending` until verified. While another session uploads the same declared hash into the same workspace, the request answers 409 until that session completes or expires. Upload the bytes straight to storage, then call `POST /api/v1/assets/uploads/{id}/complete`.",
+      description: "Step 1 of a presigned upload. Without `partCount` (or with 1) the response is a single presigned PUT URL; with `partCount` > 1 it is one URL per part (multipart). An optional `sha256` declares the hash of the bytes to be stored (after gzip when the response says `contentEncoding: gzip`): on a single PUT it is signed into the URL, the client must send every header in the response's `headers` (including `x-amz-checksum-sha256`), and the store rejects a body that does not match; on multipart it is recorded and the version stays `integrity: pending` until verified. While another session uploads the same declared hash into the same workspace, the request answers 409 until that session completes or expires. When the workspace already holds bytes with the declared hash, the response is a multipart session with `parts: []` whatever `partCount` was: there is nothing to upload, and `complete` creates the asset from the stored bytes. Otherwise upload the bytes straight to storage, then call `POST /api/v1/assets/uploads/{id}/complete`.",
       parameters: [projectIdHeaderParam],
       requestBody: {
         required: true,
@@ -63,7 +63,7 @@ export function registerCreateUploadSessionRoute(app: Hono<AppEnv>) {
           size: body.size,
           partCount: body.partCount,
           sha256: body.sha256,
-        }, ttlSeconds, { sessionId, projectId: projectResult.projectId, blob });
+        }, ttlSeconds, { sessionId, projectId: projectResult.projectId, blob, storage: c.get("storage") });
         return c.json(result, 201);
       } catch (e) {
         if (e instanceof BlobClaimedError) return c.json({ error: e.message }, 409);

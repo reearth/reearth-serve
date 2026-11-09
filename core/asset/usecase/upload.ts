@@ -3,7 +3,8 @@ import { detectArchiveFormat } from "../model";
 import type { AtomicWrites, FileStorage } from "../repository";
 import type { Job } from "../../job/model";
 import { generateId, storageKey } from "./shared";
-import { placeDirectUpload, type BlobContext } from "../../blob/usecase";
+import { reuseFailure, type BlobContext } from "../../blob/usecase";
+import { storeDirectUpload } from "../../blob/direct-upload";
 import { siteUrlFor } from "../../site/url";
 import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
@@ -23,6 +24,8 @@ export async function uploadAsset(
     /**
      * Declared SHA-256 of the body, lowercase hex (ADR-017 §1). The store
      * verifies it and writes nothing on a mismatch (`ChecksumMismatchError`).
+     * With `size` 0 it asks for the bytes the scope already holds (§4; see
+     * `storeDirectUpload`).
      */
     sha256?: string;
   },
@@ -39,21 +42,14 @@ export async function uploadAsset(
   const id = generateId();
   const now = Date.now();
   const contentType = file.type || "application/octet-stream";
-  // A declared hash goes to the blob layer when the ledger lets this upload
-  // write the key; otherwise, and always without a declaration, to the
-  // asset's own key.
-  const placement = options?.blob
-    ? await placeDirectUpload(options.blob.refs, options.blob.scope, file.sha256, storageKey(id, file.name), now)
-    : { key: storageKey(id, file.name) };
-  const key = placement.key;
-
-  // Declared or not, the store hands back the hash of what it stored, so the
-  // row is `verified` either way (ADR-017 §2). A declared mismatch throws
-  // here, before any row exists and with nothing stored.
-  const stored = await storage.put(key, file.body, contentType, file.size, {
-    ...(file.contentEncoding && { contentEncoding: file.contentEncoding }),
-    ...(file.sha256 && { sha256: file.sha256 }),
-  });
+  // A declared hash goes to the blob layer — reusing the bytes when the scope
+  // already holds them, writing the key when the ledger lets this upload —
+  // and otherwise, as always without a declaration, to the asset's own key.
+  // A declared mismatch throws here, before any row exists, with nothing stored.
+  const stored = await storeDirectUpload(storage, options?.blob, {
+    body: file.body, size: file.size, contentType, contentEncoding: file.contentEncoding, sha256: file.sha256,
+  }, storageKey(id, file.name), now);
+  const key = stored.key;
 
   const archiveFormat = detectArchiveFormat(file.name);
 
@@ -61,7 +57,7 @@ export async function uploadAsset(
     id,
     filename: file.name,
     contentType,
-    size: file.size,
+    size: stored.size,
     createdAt: now,
     expiresAt: options?.projectId ? 0 : now + ttlSeconds * 1000,
     sha256: stored.sha256,
@@ -75,7 +71,7 @@ export async function uploadAsset(
     }),
     ...(options?.sessionId && { sessionId: options.sessionId }),
     ...(options?.projectId && { projectId: options.projectId }),
-    ...(placement.ref && { blobKey: placement.ref.key }),
+    ...(stored.ref && { blobKey: stored.ref.key }),
   };
 
   // Create extraction job for archives (unless skipped)
@@ -98,11 +94,16 @@ export async function uploadAsset(
     // Job row, asset row and storage-usage counters in one atomic write, so a
     // failure never leaves an asset without its job or the counters short
     // (ADR-012 §3).
-    // The blob reference rides in the same write: bytes first, ledger second (ADR-017 §5).
-    await writes.createAsset({
-      asset, job, usageScopes: options?.usageScopes,
-      ...(placement.ref && { blob: { ref: placement.ref, state: "ready" as const } }),
-    });
+    // The blob reference rides in the same write: bytes first, ledger second
+    // (ADR-017 §5). Reused bytes attach only while the blob still qualifies.
+    try {
+      await writes.createAsset({
+        asset, job, usageScopes: options?.usageScopes,
+        ...(stored.ref && { blob: { ref: stored.ref, state: "ready" as const, ...(stored.reused && { existing: true }) } }),
+      });
+    } catch (e) {
+      throw stored.reused && options?.blob ? await reuseFailure(options.blob.refs, key, e) : e;
+    }
 
     // Enqueue only after the rows are committed: the consumer reads them.
     if (job && options?.extractionQueue) {
@@ -124,7 +125,7 @@ export async function uploadAsset(
       assetId: id,
       sourceKey: key,
       contentType,
-      size: file.size,
+      size: stored.size,
     });
   } catch (e) {
     // R2 put already succeeded but D1 metadata write failed. Without
@@ -135,7 +136,7 @@ export async function uploadAsset(
     // A blob is never deleted here: other rows may reference the same key.
     // The reservation's grace clock (or, failing that, the orphan sweep)
     // reclaims it if nothing does.
-    if (!placement.ref) {
+    if (!stored.ref) {
       try {
         await storage.delete(key);
       } catch (delErr) {
@@ -189,6 +190,7 @@ if (import.meta.vitest) {
         while (!(await reader.read()).done) {}
         return { sha256: opts?.sha256 ?? COMPUTED_SHA256 };
       }),
+      digest: vi.fn(async () => { throw new Error("not used"); }),
       get: vi.fn(async () => null),
       head: vi.fn(async () => null),
       delete: vi.fn(async () => {}),

@@ -86,4 +86,10 @@ export interface UploadSession {
   blobKey?: string;
   /** The claimed blob's scope, carried to completion with `blobKey`. */
   blobScope?: string;
+  /**
+   * The scope already held the declared bytes at `blobKey` when the session
+   * was created (ADR-017 §4): no claim was taken, no upload URL issued, and
+   * completion attaches to the existing blob instead of finishing an upload.
+   */
+  blobReuse?: boolean;
 }

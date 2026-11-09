@@ -3,6 +3,8 @@ import type { AppEnv } from "../../types";
 import { accessCtx, authorizeProject } from "../../auth/access";
 import { usageScopesFor } from "../usecase/shared";
 import { blobScopeFor, type BlobContext } from "../../blob/usecase";
+import { CONTENT_SHA256_HEADER, parseSha256Header } from "../integrity";
+import { isSafeFilename } from "../../../shared/api";
 
 /**
  * Block uploads from unauthenticated callers when anonymous uploads are
@@ -85,4 +87,42 @@ export async function blobContext(
 ): Promise<BlobContext | undefined> {
   if (!sha256) return undefined;
   return { refs: c.get("blobRefs"), scope: await blobScopeFor(c.get("projects"), projectId) };
+}
+
+/**
+ * The headers and body of a direct upload (`POST /api/v1/assets` and
+ * `POST /api/v1/assets/{id}`), checked before a byte is read.
+ *
+ * `Content-Length` must be positive — except with `X-Content-SHA256`, where 0
+ * (or no body at all) asks for the bytes the workspace already holds
+ * (ADR-017 §4). The use case answers that request; this only lets it through.
+ */
+export function parseDirectUploadHeaders(c: Context<AppEnv>):
+  | { ok: true; filename: string; size: number; sha256: string | undefined; body: ReadableStream<Uint8Array> }
+  | { ok: false; error: string } {
+  const filename = c.req.header("X-Filename");
+  const sha256 = parseSha256Header(c.req.header(CONTENT_SHA256_HEADER));
+  const rawBody = c.req.raw.body;
+  // A client sending no body at all may omit Content-Length; with a declared
+  // hash that is the same request as `Content-Length: 0`.
+  const contentLength = c.req.header("Content-Length") ?? (sha256 && sha256 !== "invalid" && !rawBody ? "0" : undefined);
+  if (!filename || !contentLength) {
+    return { ok: false, error: "Missing required headers: X-Filename, Content-Length" };
+  }
+  if (!isSafeFilename(filename)) return { ok: false, error: "Invalid X-Filename" };
+
+  const size = parseInt(contentLength, 10);
+  if (isNaN(size) || size < 0 || (size === 0 && !sha256)) {
+    return { ok: false, error: "Invalid Content-Length" };
+  }
+  if (sha256 === "invalid") {
+    return { ok: false, error: `Invalid ${CONTENT_SHA256_HEADER}: expected 64 hex characters` };
+  }
+  const body = rawBody ?? (size === 0 ? emptyBody() : null);
+  if (!body) return { ok: false, error: "Missing request body" };
+  return { ok: true, filename, size, sha256, body };
+}
+
+function emptyBody(): ReadableStream<Uint8Array> {
+  return new ReadableStream({ start(controller) { controller.close(); } });
 }

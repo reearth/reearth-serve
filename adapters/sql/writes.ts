@@ -1,4 +1,4 @@
-import type { AtomicWrites } from "../../core/asset/repository";
+import type { AtomicWrites, BlobAttach } from "../../core/asset/repository";
 import type { SqlClient, SqlStatement } from "../../core/sql/port";
 import {
   ASSET_UPSERT_SQL, assetUpsertArgs,
@@ -9,7 +9,7 @@ import {
   CLEANUP_PENDING_ADD_SQL,
 } from "./stores";
 import { parseSiteHost, SITE_HOSTS_RELEASE_BY_ASSET_SQL } from "./site-hosts";
-import { blobAttachStatement, blobReleaseForAssetStatements, blobReleaseForVersionStatements } from "./blob-refs";
+import { blobAttachExistingStatements, blobAttachStatement, blobReleaseForAssetStatements, blobReleaseForVersionStatements } from "./blob-refs";
 
 // Runs before the version and asset rows are deleted in the same batch: it
 // reads their sizes, and the EXISTS guard skips it once the asset is gone.
@@ -47,7 +47,7 @@ export class SqlAtomicWrites implements AtomicWrites {
     if (verificationJob) statements.push({ sql: JOB_UPSERT_SQL, args: jobUpsertArgs(verificationJob) });
     statements.push({ sql: ASSET_UPSERT_SQL, args: assetUpsertArgs(asset) });
     statements.push(...usageStatements(usageScopes, asset.size));
-    if (blob) statements.push(blobAttachStatement(blob.ref, blob.state, Date.now()));
+    if (blob) statements.push(...blobStatements(blob));
     await this.db.batch(statements);
   }
 
@@ -57,7 +57,7 @@ export class SqlAtomicWrites implements AtomicWrites {
     const versionIndex = statements.length;
     statements.push({ sql: VERSION_INSERT_SQL, args: versionInsertArgs(version) });
     statements.push(...usageStatements(usageScopes, version.size));
-    if (blob) statements.push(blobAttachStatement(blob.ref, blob.state, Date.now()));
+    if (blob) statements.push(...blobStatements(blob));
 
     const results = await this.db.batch(statements);
     return { ...version, version: assignedVersion(results[versionIndex].rows) };
@@ -102,6 +102,16 @@ export class SqlAtomicWrites implements AtomicWrites {
     if (version) statements.push({ sql: VERSION_EXTRACTION_UPDATE_SQL, args: versionExtractionUpdateArgs(version) });
     await this.db.batch(statements);
   }
+}
+
+// A blob the upload wrote (or a claim it completes) is attached
+// unconditionally; one it found already stored only while that blob still
+// qualifies, failing the batch otherwise (ADR-017 §4).
+function blobStatements(blob: BlobAttach): SqlStatement[] {
+  const now = Date.now();
+  return blob.existing
+    ? blobAttachExistingStatements(blob.ref, now)
+    : [blobAttachStatement(blob.ref, blob.state, now)];
 }
 
 function usageStatements(scopes: string[] | undefined, sizeBytes: number): SqlStatement[] {

@@ -6,14 +6,25 @@
  * per-asset key exactly as an undeclared one would be. Falling back never
  * changes what the client sees — the URL is ID-based either way.
  *
+ * Deduplication (ADR-017 §4, phase P3). When the scope already holds the
+ * declared bytes — the blob is `ready` and some row references it — the
+ * upload reuses them: a direct upload still receives and hashes its whole
+ * body but does not write it, and a presigned session issues no upload URL.
+ * Only the uploader's own scope is ever looked up, so whether the bytes exist
+ * in another workspace never changes what happens (the key differs).
+ *
+ * Otherwise:
+ *
  * - A direct upload through the Worker is store-verified: a mismatch writes
- *   nothing, so rewriting a `ready` blob with the same declared hash can only
- *   rewrite identical bytes. It reserves the key and writes.
+ *   nothing, so writing a key that is `ready` but unreferenced (a reservation
+ *   by a concurrent upload, or bytes in their grace period) can only write
+ *   identical bytes. It reserves the key and writes.
  * - A presigned upload is not store-verified at write time (multipart never,
  *   a single PUT only if the store kept the checksum), so it may write only a
  *   key nobody else relies on: it claims a free key, gets 409 while another
- *   session's claim is live, and falls back when the blob already exists.
- *   P3 turns that last case into a short-circuit with no transfer at all.
+ *   session's claim is live, and falls back to its classic key when the blob
+ *   holds bytes that cannot be reused (`verifying`, `deleting`, or `ready`
+ *   with no reference).
  *
  * Removal. Rows release references in the batch that deletes them; objects
  * are deleted only here, by the cleanup cron, a grace period after the count
@@ -24,7 +35,7 @@ import type { FileStorage } from "../asset/repository";
 import type { KeyValue } from "../kv/port";
 import type { SubrequestBudget } from "../cleanup/usecase";
 import type { ProjectStore } from "../project/repository";
-import type { BlobRefStore } from "./repository";
+import type { BlobRef, BlobRefStore } from "./repository";
 import { BLOB_GRACE_MS, BLOB_PREFIX, blobRefKey, blobScope, parseBlobKey, type BlobRefKey } from "./model";
 
 /** What an upload needs to place declared bytes in the blob layer. */
@@ -41,15 +52,39 @@ export async function blobScopeFor(projects: ProjectStore, projectId: string | n
   return blobScope({ id: projectId, workspaceId: project?.workspaceId });
 }
 
-/** Where to write an upload, and the blob it references when that is a blob key. */
+/**
+ * Where to write an upload, and the blob it references when that is a blob
+ * key. `reuse`: the blob already holds the declared bytes, so nothing is
+ * written and the reference is attached with `existing` (see `BlobAttach`).
+ */
 export interface Placement {
   key: string;
   ref?: BlobRefKey;
+  reuse?: true;
 }
 
 /**
- * Placement of a direct (store-verified) upload: the blob key when the
- * ledger lets this upload write it, otherwise `classicKey`.
+ * True when an upload may reuse this blob instead of writing it: `ready`
+ * (verified bytes, no sweep holding it) and referenced by at least one row.
+ * A row is written only after its bytes are in place (§5) and an object is
+ * deleted only once its count is zero, so a referenced `ready` blob has its
+ * object. A `ready` row at zero does not qualify: it may be a reservation
+ * whose upload failed and left nothing behind.
+ */
+export function isReusable(row: BlobRef | null): boolean {
+  return row !== null && row.state === "ready" && row.refCount > 0;
+}
+
+/** The reusable blob for `sha256` in `scope`, as a placement, or null. Looks in that scope only. */
+export async function findReusableBlob(blobRefs: BlobRefStore, scope: string, sha256: string): Promise<Placement | null> {
+  const ref = blobRefKey(scope, sha256);
+  return isReusable(await blobRefs.find(ref.key)) ? { key: ref.key, ref, reuse: true } : null;
+}
+
+/**
+ * Placement of a direct (store-verified) upload: the existing blob when it
+ * can be reused, else the blob key when the ledger lets this upload write it,
+ * else `classicKey`.
  */
 export async function placeDirectUpload(
   blobRefs: BlobRefStore,
@@ -59,9 +94,40 @@ export async function placeDirectUpload(
   now = Date.now(),
 ): Promise<Placement> {
   if (!sha256) return { key: classicKey };
+  const reusable = await findReusableBlob(blobRefs, scope, sha256);
+  if (reusable) return reusable;
   const ref = blobRefKey(scope, sha256);
   if (await blobRefs.reserve(ref, now)) return { key: ref.key, ref };
   return { key: classicKey };
+}
+
+/**
+ * An upload that reused a blob found it gone, or no longer reusable, when it
+ * came to attach to it — the rows that referenced it were deleted while the
+ * body was in flight. Its body has been consumed and not stored, so there is
+ * nothing to record; the route answers 409 and the client uploads again,
+ * which then writes the bytes in full.
+ */
+export class BlobUnavailableError extends Error {
+  constructor(readonly key: string) {
+    super(BLOB_UNAVAILABLE_MESSAGE);
+    this.name = "BlobUnavailableError";
+  }
+}
+
+export const BLOB_UNAVAILABLE_MESSAGE =
+  "The stored copy of this content was deleted while the upload was in progress; nothing was stored. Upload again";
+
+/**
+ * Called when the row write of an upload that reused `key` failed. The
+ * conditional attach (`BlobAttach.existing`) fails the write when the blob no
+ * longer qualifies; reading the row again tells that apart from any other
+ * failure without parsing a driver's error message. Returns the error to throw.
+ */
+export async function reuseFailure(blobRefs: BlobRefStore, key: string, error: unknown): Promise<unknown> {
+  const row = await blobRefs.find(key).catch(() => undefined);
+  if (row === undefined) return error;
+  return isReusable(row) ? error : new BlobUnavailableError(key);
 }
 
 /**
@@ -80,10 +146,11 @@ export const BLOB_CLAIMED_MESSAGE =
   "Another upload of the same content is in progress in this workspace; retry once it completes or its session expires";
 
 /**
- * Placement of a presigned upload session with a declared hash. Claims the
- * blob key until the session expires, or falls back to `classicKey` when the
- * blob already holds bytes. Throws `BlobClaimedError` while another session's
- * claim is live.
+ * Placement of a presigned upload session with a declared hash: the existing
+ * blob when it can be reused (the session then uploads nothing); otherwise a
+ * claim on the blob key until the session expires, or `classicKey` when the
+ * blob holds bytes that cannot be reused. Throws `BlobClaimedError` while
+ * another session's claim is live.
  */
 export async function placeSessionUpload(
   blobRefs: BlobRefStore,
@@ -92,8 +159,12 @@ export async function placeSessionUpload(
   classicKey: string,
   claim: { id: string; expiresAt: number },
   now = Date.now(),
+  /** A further check on reusable bytes; false treats them as not reusable. */
+  canReuse?: (key: string) => Promise<boolean>,
 ): Promise<Placement> {
   if (!sha256) return { key: classicKey };
+  const reusable = await findReusableBlob(blobRefs, scope, sha256);
+  if (reusable && (!canReuse || await canReuse(reusable.key))) return reusable;
   const ref = blobRefKey(scope, sha256);
   const outcome = await blobRefs.claim(ref, claim.id, claim.expiresAt, now);
   if (outcome === "busy") throw new BlobClaimedError(ref.key);
@@ -109,6 +180,11 @@ const ANY_AGE = Number.MAX_SAFE_INTEGER;
  * references it (ADR-017 §3). The rejected row's reference has already been
  * released; if another row still holds the key, the bytes stay. Returns
  * whether the object was deleted.
+ *
+ * Deduplication does not change this: only a `ready` blob is reused, and a
+ * rejected blob is one that never left `verifying`, so the rejected upload's
+ * claim is normally its only reference and `markDeleting` (which requires a
+ * count of zero) is what keeps bytes another row holds.
  */
 export async function discardRejectedBlob(
   blobRefs: BlobRefStore,
