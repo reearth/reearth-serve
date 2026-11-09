@@ -1,7 +1,7 @@
 # ADR-014: Asset Access Control for File Delivery
 
-- **Status:** Accepted
-- **Date:** 2026-09-11 (revised 2026-11-06, accepted 2026-11-09)
+- **Status:** Proposed
+- **Date:** 2026-09-11 (revised 2026-11-06)
 - **Deciders:** @rot1024, @pyshx
 - **Related:** [ADR-002](002-auth-sessions-projects.md) (auth, sessions,
   projects), ADR-007 (events, webhooks), [ADR-012](012-multi-cloud-portability.md)
@@ -136,7 +136,8 @@ Both composition roots parse it with one shared parser into
 parser rejects malformed JSON, a secret shorter than 32 bytes, more than
 two keys, and an `active` ID missing from `keys`, each with a message that
 starts `DELIVERY_TOKEN_KEYS: `. A rejected ring is a config error under
-ADR-016 decision 8: Node refuses to start and the Worker answers `500`. The codec signs with the active key and
+ADR-016 decision 8, so the change that adds the ring also makes the
+Worker catch a `buildDeps` throw. The codec signs with the active key and
 verifies with either. To rotate: add the new key, make it active, wait
 the longest token life, remove the old key. The cookie secret is separate,
 so tokens rotate without logging out password visitors.
@@ -278,8 +279,8 @@ The storefront flow needs grants and waits with them (Follow-up 5).
   `c.req.url`, which reads `http://` behind a TLS proxy. Serve never
   echoes `null`. A cookie read from any other origin, and every other
   proof, Basic included, gets `*` with no credentials header; a browser
-  refuses `*` for a credentialed request, so the page cannot read it. Protected responses send
-  `Vary: Origin`, and cookie-authorized ones add
+  refuses `*` for a credentialed request, so the page cannot read it.
+  Protected responses send `Vary: Origin`, and cookie-authorized ones add
   `Cross-Origin-Resource-Policy: same-origin`, which stops no-cors loads
   from sibling hosts. Preflights and refusals carry no proof, so whatever
   the mode they answer an own or listed origin with credentials and every
