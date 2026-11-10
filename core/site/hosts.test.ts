@@ -35,11 +35,11 @@ function site(label: string, path = "/"): [string, RequestInit] {
 describe("POST /assets/:id/hosts", () => {
   test("an editor claims a name and gets the row and the site URL", async () => {
     const { app, auth, siteHosts } = await siteFixture();
-    const res = await claim(app, auth, { hostname: "kawasaki-flood-map" });
+    const res = await claim(app, auth, { hostname: "flood-map" });
     expect(res.status).toBe(201);
     const body = await res.json() as { host: SiteHost; siteUrl: string };
     expect(body.host).toMatchObject({
-      hostname: `kawasaki-flood-map${SUFFIX}`,
+      hostname: `flood-map${SUFFIX}`,
       assetId: ASSET_ID,
       projectId: PROJECT_ID,
       kind: "subdomain",
@@ -47,7 +47,7 @@ describe("POST /assets/:id/hosts", () => {
       releasedAt: null,
     });
     // The scheme follows BASE_URL (https://example.test in the fixture).
-    expect(body.siteUrl).toBe(`https://kawasaki-flood-map${SUFFIX}/`);
+    expect(body.siteUrl).toBe(`https://flood-map${SUFFIX}/`);
     expect(body.host.url).toBe(body.siteUrl);
     // Internal-only columns stay out of the API. `verifiedAt` is shown since
     // B5 — it is how a custom domain reports whether it resolves — but on a
@@ -58,31 +58,31 @@ describe("POST /assets/:id/hosts", () => {
     expect(body.host.certificateStatus).toBeNull();
     // Nothing to publish for a name under our own suffix.
     expect(body).not.toHaveProperty("verification");
-    expect(siteHosts.hosts.get(`kawasaki-flood-map${SUFFIX}`)?.createdBy).toBe(USER);
+    expect(siteHosts.hosts.get(`flood-map${SUFFIX}`)?.createdBy).toBe(USER);
   });
 
   test("the full host round-trips as well as the bare label", async () => {
     const { app, auth } = await siteFixture();
-    const res = await claim(app, auth, { hostname: `KAWASAKI-FLOOD-MAP${SUFFIX}` });
+    const res = await claim(app, auth, { hostname: `FLOOD-MAP${SUFFIX}` });
     expect(res.status).toBe(201);
-    expect((await res.json() as { host: SiteHost }).host.hostname).toBe(`kawasaki-flood-map${SUFFIX}`);
+    expect((await res.json() as { host: SiteHost }).host.hostname).toBe(`flood-map${SUFFIX}`);
   });
 
   test("a viewer cannot claim; an editor can", async () => {
     const viewer = await siteFixture({ role: "viewer" });
-    const denied = await claim(viewer.app, viewer.auth, { hostname: "kawasaki-flood-map" });
+    const denied = await claim(viewer.app, viewer.auth, { hostname: "flood-map" });
     // 404, not 403: the same answer the rest of the asset API gives, so it
     // does not confirm the asset to someone who may not act on it.
     expect(denied.status).toBe(404);
     expect(viewer.siteHosts.hosts.size).toBe(0);
 
     const editor = await siteFixture({ role: "editor" });
-    expect((await claim(editor.app, editor.auth, { hostname: "kawasaki-flood-map" })).status).toBe(201);
+    expect((await claim(editor.app, editor.auth, { hostname: "flood-map" })).status).toBe(201);
   });
 
   test("an anonymous caller cannot claim a project asset's name", async () => {
     const { app } = await siteFixture();
-    expect((await claim(app, {}, { hostname: "kawasaki-flood-map" })).status).toBe(404);
+    expect((await claim(app, {}, { hostname: "flood-map" })).status).toBe(404);
   });
 
   test("a demo (session-scoped) asset cannot hold a name", async () => {
@@ -98,7 +98,7 @@ describe("POST /assets/:id/hosts", () => {
     const res = await f.app.request(`/api/v1/assets/${ASSET_ID}/hosts`, {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Session-Id": sessionId },
-      body: JSON.stringify({ hostname: "kawasaki-flood-map" }),
+      body: JSON.stringify({ hostname: "flood-map" }),
     });
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: SITE_HOST_ERRORS.projectRequired });
@@ -113,7 +113,7 @@ describe("POST /assets/:id/hosts", () => {
 
   test("claiming is unavailable where the server has no site-host suffix", async () => {
     const { app, auth } = await siteFixture({ suffix: undefined });
-    const res = await claim(app, auth, { hostname: "kawasaki-flood-map" });
+    const res = await claim(app, auth, { hostname: "flood-map" });
     expect(res.status).toBe(503);
     expect(await res.json()).toEqual({ error: SITE_HOST_ERRORS.notEnabled });
     // Reading still works — enabling the feature later must not lose rows.
@@ -136,19 +136,19 @@ describe("POST /assets/:id/hosts", () => {
 
   test("a name already claimed is taken", async () => {
     const { app, auth } = await siteFixture();
-    expect((await claim(app, auth, { hostname: "kawasaki-flood-map" })).status).toBe(201);
-    const again = await claim(app, auth, { hostname: "kawasaki-flood-map" });
+    expect((await claim(app, auth, { hostname: "flood-map" })).status).toBe(201);
+    const again = await claim(app, auth, { hostname: "flood-map" });
     expect(again.status).toBe(400);
     expect(await again.json()).toEqual({ error: NAME_ERRORS.taken });
   });
 
   test("several names may point at one asset", async () => {
     const { app, auth } = await siteFixture();
-    expect((await claim(app, auth, { hostname: "kawasaki-flood-map" })).status).toBe(201);
-    expect((await claim(app, auth, { hostname: "kawasaki" })).status).toBe(201);
+    expect((await claim(app, auth, { hostname: "harbor" })).status).toBe(201);
+    expect((await claim(app, auth, { hostname: "flood-map" })).status).toBe(201);
     const list = await (await app.request(`/api/v1/assets/${ASSET_ID}/hosts`, { headers: auth })).json();
     expect((list as { hosts: SiteHost[] }).hosts.map((h) => h.hostname)).toEqual([
-      `kawasaki-flood-map${SUFFIX}`, `kawasaki${SUFFIX}`,
+      `harbor${SUFFIX}`, `flood-map${SUFFIX}`,
     ]);
   });
 
@@ -173,7 +173,7 @@ describe("POST /assets/:id/hosts", () => {
 describe("GET /assets/:id/hosts and GET /projects/:id/hosts", () => {
   test("a viewer may list the asset's names", async () => {
     const editor = await siteFixture();
-    await claim(editor.app, editor.auth, { hostname: "kawasaki-flood-map" });
+    await claim(editor.app, editor.auth, { hostname: "flood-map" });
 
     const res = await editor.app.request(`/api/v1/assets/${ASSET_ID}/hosts`, { headers: editor.auth });
     expect(res.status).toBe(200);
@@ -185,12 +185,12 @@ describe("GET /assets/:id/hosts and GET /projects/:id/hosts", () => {
 
   test("the project listing spans the project's assets", async () => {
     const { app, auth } = await siteFixture();
-    await claim(app, auth, { hostname: "kawasaki-flood-map" });
+    await claim(app, auth, { hostname: "flood-map" });
 
     const res = await app.request(`/api/v1/projects/${PROJECT_ID}/hosts`, { headers: auth });
     expect(res.status).toBe(200);
     expect((await res.json() as { hosts: SiteHost[] }).hosts.map((h) => h.hostname))
-      .toEqual([`kawasaki-flood-map${SUFFIX}`]);
+      .toEqual([`flood-map${SUFFIX}`]);
   });
 
   test("a non-member sees no project and no names", async () => {
@@ -202,8 +202,8 @@ describe("GET /assets/:id/hosts and GET /projects/:id/hosts", () => {
 
   test("a released name is not listed", async () => {
     const { app, auth } = await siteFixture();
-    await claim(app, auth, { hostname: "kawasaki-flood-map" });
-    await app.request(`/api/v1/assets/${ASSET_ID}/hosts/kawasaki-flood-map${SUFFIX}`, {
+    await claim(app, auth, { hostname: "flood-map" });
+    await app.request(`/api/v1/assets/${ASSET_ID}/hosts/flood-map${SUFFIX}`, {
       method: "DELETE", headers: auth,
     });
     const res = await app.request(`/api/v1/assets/${ASSET_ID}/hosts`, { headers: auth });
@@ -216,30 +216,30 @@ describe("the site host itself", () => {
     const { app, auth } = await siteFixture();
 
     // Someone tries the name before it exists: 404, and the miss is cached.
-    expect((await app.request(...site("kawasaki-flood-map"))).status).toBe(404);
+    expect((await app.request(...site("flood-map"))).status).toBe(404);
 
-    await claim(app, auth, { hostname: "kawasaki-flood-map" });
+    await claim(app, auth, { hostname: "flood-map" });
 
-    const res = await app.request(...site("kawasaki-flood-map"));
+    const res = await app.request(...site("flood-map"));
     expect(res.status).toBe(200);
     expect(await res.text()).toContain("<title>site</title>");
 
     // Paths inside the site resolve the same way they do on the ID host.
-    expect((await app.request(...site("kawasaki-flood-map", "/docs/"))).status).toBe(200);
+    expect((await app.request(...site("flood-map", "/docs/"))).status).toBe(200);
   });
 
   test("releasing turns the host into a 410 page and starts the cooldown", async () => {
     const { app, auth } = await siteFixture();
-    await claim(app, auth, { hostname: "kawasaki-flood-map" });
-    expect((await app.request(...site("kawasaki-flood-map"))).status).toBe(200);
+    await claim(app, auth, { hostname: "flood-map" });
+    expect((await app.request(...site("flood-map"))).status).toBe(200);
 
     const released = await app.request(
-      `/api/v1/assets/${ASSET_ID}/hosts/kawasaki-flood-map${SUFFIX}`,
+      `/api/v1/assets/${ASSET_ID}/hosts/flood-map${SUFFIX}`,
       { method: "DELETE", headers: auth },
     );
     expect(released.status).toBe(204);
 
-    const gone = await app.request(...site("kawasaki-flood-map"));
+    const gone = await app.request(...site("flood-map"));
     expect(gone.status).toBe(410);
     expect(gone.headers.get("Content-Type")).toContain("text/html");
     expect(gone.headers.get("Cache-Control")).toBe("no-store");
@@ -247,7 +247,7 @@ describe("the site host itself", () => {
     expect(await gone.text()).toContain("This site has moved or been removed");
 
     // …and the name cannot be claimed again while the cooldown runs.
-    const again = await claim(app, auth, { hostname: "kawasaki-flood-map" });
+    const again = await claim(app, auth, { hostname: "flood-map" });
     expect(again.status).toBe(400);
     expect((await again.json() as { error: string }).error)
       .toMatch(/^name was recently released and is on cooldown until \d{4}-/);
@@ -266,28 +266,28 @@ describe("the site host itself", () => {
 
   test("a viewer cannot release", async () => {
     const editor = await siteFixture();
-    await claim(editor.app, editor.auth, { hostname: "kawasaki-flood-map" });
+    await claim(editor.app, editor.auth, { hostname: "flood-map" });
 
     const viewer = await siteFixture({ role: "viewer" });
     // Same store? No — a second fixture. Claim there as well, through its own
     // editor-less API by seeding the store directly.
-    viewer.siteHosts.hosts.set(`kawasaki-flood-map${SUFFIX}`, {
-      hostname: `kawasaki-flood-map${SUFFIX}`, assetId: ASSET_ID, projectId: PROJECT_ID,
+    viewer.siteHosts.hosts.set(`flood-map${SUFFIX}`, {
+      hostname: `flood-map${SUFFIX}`, assetId: ASSET_ID, projectId: PROJECT_ID,
       kind: "subdomain", verifiedAt: null, verificationToken: null,
       certificateStatus: null, disabledAt: null, previews: false,
       releasedAt: null, createdAt: 0, createdBy: USER,
     });
     const res = await viewer.app.request(
-      `/api/v1/assets/${ASSET_ID}/hosts/kawasaki-flood-map${SUFFIX}`,
+      `/api/v1/assets/${ASSET_ID}/hosts/flood-map${SUFFIX}`,
       { method: "DELETE", headers: viewer.auth },
     );
     expect(res.status).toBe(404);
-    expect(viewer.siteHosts.hosts.get(`kawasaki-flood-map${SUFFIX}`)?.releasedAt).toBeNull();
+    expect(viewer.siteHosts.hosts.get(`flood-map${SUFFIX}`)?.releasedAt).toBeNull();
   });
 });
 
 describe("PATCH /assets/:id/hosts/:hostname", () => {
-  function patch(app: App, auth: Record<string, string>, body: unknown, name = `kawasaki-flood-map${SUFFIX}`) {
+  function patch(app: App, auth: Record<string, string>, body: unknown, name = `flood-map${SUFFIX}`) {
     return app.request(`/api/v1/assets/${ASSET_ID}/hosts/${name}`, {
       method: "PATCH",
       headers: { ...auth, "Content-Type": "application/json" },
@@ -297,18 +297,18 @@ describe("PATCH /assets/:id/hosts/:hostname", () => {
 
   test("disabling takes the site down with a 503 page; enabling brings it back", async () => {
     const { app, auth, siteHosts } = await siteFixture();
-    await claim(app, auth, { hostname: "kawasaki-flood-map" });
-    expect((await app.request(...site("kawasaki-flood-map"))).status).toBe(200);
+    await claim(app, auth, { hostname: "flood-map" });
+    expect((await app.request(...site("flood-map"))).status).toBe(200);
 
     const disabled = await patch(app, auth, { disabled: true });
     expect(disabled.status).toBe(200);
     const body = await disabled.json() as { host: SiteHost };
     expect(body.host.disabledAt).toEqual(expect.any(Number));
-    expect(siteHosts.hosts.get(`kawasaki-flood-map${SUFFIX}`)?.disabledAt).toEqual(expect.any(Number));
+    expect(siteHosts.hosts.get(`flood-map${SUFFIX}`)?.disabledAt).toEqual(expect.any(Number));
 
     // The host says "held, not serving" — and the PATCH dropped the cached
     // resolution, so it says it on the very next request.
-    const down = await app.request(...site("kawasaki-flood-map"));
+    const down = await app.request(...site("flood-map"));
     expect(down.status).toBe(503);
     expect(down.headers.get("Content-Type")).toContain("text/html");
     expect(down.headers.get("Cache-Control")).toBe("no-store");
@@ -317,7 +317,7 @@ describe("PATCH /assets/:id/hosts/:hostname", () => {
     expect(await down.text()).toContain("This site is temporarily unavailable");
 
     // The name is still held: nobody else may claim it while it is down.
-    const taken = await claim(app, auth, { hostname: "kawasaki-flood-map" });
+    const taken = await claim(app, auth, { hostname: "flood-map" });
     expect(taken.status).toBe(400);
     expect(await taken.json()).toEqual({ error: NAME_ERRORS.taken });
 
@@ -328,17 +328,17 @@ describe("PATCH /assets/:id/hosts/:hostname", () => {
     const enabled = await patch(app, auth, { disabled: false });
     expect(enabled.status).toBe(200);
     expect((await enabled.json() as { host: SiteHost }).host.disabledAt).toBeNull();
-    expect((await app.request(...site("kawasaki-flood-map"))).status).toBe(200);
+    expect((await app.request(...site("flood-map"))).status).toBe(200);
   });
 
   test("the previews flag is stored and reported", async () => {
     const { app, auth, siteHosts } = await siteFixture();
-    await claim(app, auth, { hostname: "kawasaki-flood-map" });
+    await claim(app, auth, { hostname: "flood-map" });
 
     const res = await patch(app, auth, { previews: true });
     expect(res.status).toBe(200);
     expect((await res.json() as { host: SiteHost }).host.previews).toBe(true);
-    expect(siteHosts.hosts.get(`kawasaki-flood-map${SUFFIX}`)?.previews).toBe(true);
+    expect(siteHosts.hosts.get(`flood-map${SUFFIX}`)?.previews).toBe(true);
 
     // Both switches in one request, each independent of the other.
     const both = await patch(app, auth, { disabled: true, previews: false });
@@ -349,14 +349,14 @@ describe("PATCH /assets/:id/hosts/:hostname", () => {
 
   test("an empty body is refused rather than silently doing nothing", async () => {
     const { app, auth } = await siteFixture();
-    await claim(app, auth, { hostname: "kawasaki-flood-map" });
+    await claim(app, auth, { hostname: "flood-map" });
     expect((await patch(app, auth, {})).status).toBe(400);
   });
 
   test("a released name cannot be updated: 409, not a revival", async () => {
     const { app, auth, siteHosts } = await siteFixture();
-    await claim(app, auth, { hostname: "kawasaki-flood-map" });
-    await app.request(`/api/v1/assets/${ASSET_ID}/hosts/kawasaki-flood-map${SUFFIX}`, {
+    await claim(app, auth, { hostname: "flood-map" });
+    await app.request(`/api/v1/assets/${ASSET_ID}/hosts/flood-map${SUFFIX}`, {
       method: "DELETE", headers: auth,
     });
 
@@ -364,8 +364,8 @@ describe("PATCH /assets/:id/hosts/:hostname", () => {
     expect(res.status).toBe(409);
     expect(await res.json()).toEqual({ error: SITE_HOST_ERRORS.released });
     // Still released: the 410 page, not the site.
-    expect(siteHosts.hosts.get(`kawasaki-flood-map${SUFFIX}`)?.releasedAt).toEqual(expect.any(Number));
-    expect((await app.request(...site("kawasaki-flood-map"))).status).toBe(410);
+    expect(siteHosts.hosts.get(`flood-map${SUFFIX}`)?.releasedAt).toEqual(expect.any(Number));
+    expect((await app.request(...site("flood-map"))).status).toBe(410);
   });
 
   test("a name the asset does not hold is a 404", async () => {
@@ -375,29 +375,29 @@ describe("PATCH /assets/:id/hosts/:hostname", () => {
 
   test("a viewer cannot disable a site", async () => {
     const editor = await siteFixture();
-    await claim(editor.app, editor.auth, { hostname: "kawasaki-flood-map" });
+    await claim(editor.app, editor.auth, { hostname: "flood-map" });
 
     const viewer = await siteFixture({ role: "viewer" });
-    viewer.siteHosts.hosts.set(`kawasaki-flood-map${SUFFIX}`, {
-      hostname: `kawasaki-flood-map${SUFFIX}`, assetId: ASSET_ID, projectId: PROJECT_ID,
+    viewer.siteHosts.hosts.set(`flood-map${SUFFIX}`, {
+      hostname: `flood-map${SUFFIX}`, assetId: ASSET_ID, projectId: PROJECT_ID,
       kind: "subdomain", verifiedAt: null, verificationToken: null,
       certificateStatus: null, disabledAt: null, previews: false,
       releasedAt: null, createdAt: 0, createdBy: USER,
     });
     const res = await patch(viewer.app, viewer.auth, { disabled: true });
     expect(res.status).toBe(404);
-    expect(viewer.siteHosts.hosts.get(`kawasaki-flood-map${SUFFIX}`)?.disabledAt).toBeNull();
+    expect(viewer.siteHosts.hosts.get(`flood-map${SUFFIX}`)?.disabledAt).toBeNull();
   });
 
   test("an anonymous caller cannot disable a site", async () => {
     const { app, auth } = await siteFixture();
-    await claim(app, auth, { hostname: "kawasaki-flood-map" });
+    await claim(app, auth, { hostname: "flood-map" });
     expect((await patch(app, {}, { disabled: true })).status).toBe(404);
   });
 });
 
 describe("preview hosts (ADR-013 B4)", () => {
-  const NAME = "kawasaki-flood-map";
+  const NAME = "flood-map";
 
   /**
    * The fixture's asset with a second version, both extracted, and previews
@@ -537,8 +537,8 @@ describe("preview hosts (ADR-013 B4)", () => {
 describe("asset deletion and the cleanup cron", () => {
   test("deleting an asset releases its names rather than cascading them away", async () => {
     const { app, auth, siteHosts, metadata } = await siteFixture();
-    await claim(app, auth, { hostname: "kawasaki-flood-map" });
-    await claim(app, auth, { hostname: "kawasaki" });
+    await claim(app, auth, { hostname: "flood-map" });
+    await claim(app, auth, { hostname: "harbor" });
 
     const deleted = await app.request(`/api/v1/assets/${ASSET_ID}`, { method: "DELETE", headers: auth });
     expect(deleted.status).toBe(204);
@@ -552,17 +552,17 @@ describe("asset deletion and the cleanup cron", () => {
     }
 
     // The host says "gone", not "not found", and the name cannot be taken.
-    const gone = await app.request(...site("kawasaki-flood-map"));
+    const gone = await app.request(...site("flood-map"));
     expect(gone.status).toBe(410);
   });
 
   test("the cron purges a released row once its cooldown ends, and not before", async () => {
     const { app, auth, siteHosts, cache } = await siteFixture();
-    await claim(app, auth, { hostname: "kawasaki-flood-map" });
-    await app.request(`/api/v1/assets/${ASSET_ID}/hosts/kawasaki-flood-map${SUFFIX}`, {
+    await claim(app, auth, { hostname: "flood-map" });
+    await app.request(`/api/v1/assets/${ASSET_ID}/hosts/flood-map${SUFFIX}`, {
       method: "DELETE", headers: auth,
     });
-    const releasedAt = siteHosts.hosts.get(`kawasaki-flood-map${SUFFIX}`)!.releasedAt!;
+    const releasedAt = siteHosts.hosts.get(`flood-map${SUFFIX}`)!.releasedAt!;
     const deps = { hosts: siteHosts, cache, suffix: SUFFIX };
 
     // One day short of the cooldown: still held.
@@ -571,25 +571,25 @@ describe("asset deletion and the cleanup cron", () => {
 
     // A moment past it: purged, and the name is free.
     expect(await purgeReleasedSiteHosts(deps, { now: releasedAt + RELEASE_COOLDOWN_MS + 1 }))
-      .toEqual([`kawasaki-flood-map${SUFFIX}`]);
+      .toEqual([`flood-map${SUFFIX}`]);
     expect(siteHosts.hosts.size).toBe(0);
-    expect((await app.request(...site("kawasaki-flood-map"))).status).toBe(404);
+    expect((await app.request(...site("flood-map"))).status).toBe(404);
   });
 
   test("a claim after the cooldown has run out succeeds even before the cron sweeps", async () => {
     const { app, auth, siteHosts } = await siteFixture();
-    await claim(app, auth, { hostname: "kawasaki-flood-map" });
+    await claim(app, auth, { hostname: "flood-map" });
     // Back-date the release past the cooldown.
-    const hostname = `kawasaki-flood-map${SUFFIX}`;
+    const hostname = `flood-map${SUFFIX}`;
     const row = siteHosts.hosts.get(hostname)!;
     siteHosts.hosts.set(hostname, {
       ...row, releasedAt: Date.now() - RELEASE_COOLDOWN_MS - 1, assetId: null,
     });
 
-    const res = await claim(app, auth, { hostname: "kawasaki-flood-map" });
+    const res = await claim(app, auth, { hostname: "flood-map" });
     expect(res.status).toBe(201);
     expect(siteHosts.hosts.get(hostname)?.releasedAt).toBeNull();
-    expect((await app.request(...site("kawasaki-flood-map"))).status).toBe(200);
+    expect((await app.request(...site("flood-map"))).status).toBe(200);
   });
 
   // The asset is read, then deleted (its names released), then the claim's
@@ -602,7 +602,7 @@ describe("asset deletion and the cleanup cron", () => {
 
     const result = await claimSiteHost(
       { hosts: siteHosts, suffix: SUFFIX },
-      { asset, hostname: "kawasaki-flood-map", userId: USER },
+      { asset, hostname: "flood-map", userId: USER },
     );
     expect(result).toEqual({ ok: false, status: 404, error: "Asset not found" });
     expect(siteHosts.hosts.size).toBe(0);

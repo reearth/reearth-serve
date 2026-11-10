@@ -109,7 +109,7 @@ describe("POST /assets/:id/hosts {kind: custom}", () => {
     expect(await errorFor("-map.example.jp")).toBe(CUSTOM_HOST_ERRORS.format);
     expect(await errorFor("map..example.jp")).toBe(CUSTOM_HOST_ERRORS.format);
     // Under our own suffix it would be a B2 name, not a domain they own.
-    expect(await errorFor(`kawasaki${SUFFIX}`)).toBe(CUSTOM_HOST_ERRORS.reserved);
+    expect(await errorFor(`harbor${SUFFIX}`)).toBe(CUSTOM_HOST_ERRORS.reserved);
     expect(await errorFor(SUFFIX.slice(1))).toBe(CUSTOM_HOST_ERRORS.reserved);
     // The apex of BASE_URL: claiming it would take the API down.
     expect(await errorFor("example.test")).toBe(CUSTOM_HOST_ERRORS.reserved);
@@ -211,9 +211,9 @@ describe("POST /assets/:id/hosts/:hostname/verify", () => {
     await app.request(`/api/v1/assets/${ASSET_ID}/hosts`, {
       method: "POST",
       headers: { ...auth, "Content-Type": "application/json" },
-      body: JSON.stringify({ hostname: "kawasaki-flood-map" }),
+      body: JSON.stringify({ hostname: "flood-map" }),
     });
-    const res = await verify(app, auth, `kawasaki-flood-map${SUFFIX}`);
+    const res = await verify(app, auth, `flood-map${SUFFIX}`);
     expect(res.status).toBe(400);
     expect(await res.json()).toEqual({ error: CUSTOM_HOST_ERRORS.notCustom });
   });
@@ -410,9 +410,9 @@ describe("the single-row GET", () => {
     await app.request(`/api/v1/assets/${ASSET_ID}/hosts`, {
       method: "POST",
       headers: { ...auth, "Content-Type": "application/json" },
-      body: JSON.stringify({ hostname: "kawasaki-flood-map" }),
+      body: JSON.stringify({ hostname: "flood-map" }),
     });
-    const body = await (await show(app, auth, `kawasaki-flood-map${SUFFIX}`)).json() as ClaimBody;
+    const body = await (await show(app, auth, `flood-map${SUFFIX}`)).json() as ClaimBody;
     expect(body.host.kind).toBe("subdomain");
     expect(body).not.toHaveProperty("verification");
   });

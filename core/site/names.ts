@@ -42,8 +42,8 @@ export type NameCheck =
 /**
  * Take the bare label out of whatever the caller sent.
  *
- * The API accepts either form — `kawasaki-flood-map` or the full
- * `kawasaki-flood-map.serve.example.com` — because the response prints the
+ * The API accepts either form, `flood-map` or the full
+ * `flood-map.serve.example.com`, because the response prints the
  * full host and round-tripping it should work. A host that does not end with
  * the suffix is returned unchanged and then fails validation on its dots.
  */
@@ -98,7 +98,7 @@ if (import.meta.vitest) {
 
   describe("validateSiteName accepts", () => {
     test("plain DNS labels", () => {
-      expect(ok("kawasaki-flood-map")).toEqual({ ok: true, name: "kawasaki-flood-map" });
+      expect(ok("flood-map")).toEqual({ ok: true, name: "flood-map" });
       expect(ok("abc")).toEqual({ ok: true, name: "abc" });
       expect(ok("a1b")).toEqual({ ok: true, name: "a1b" });
       expect(ok("123")).toEqual({ ok: true, name: "123" });
@@ -106,7 +106,7 @@ if (import.meta.vitest) {
     });
 
     test("mixed case and surrounding space, lowercased", () => {
-      expect(ok("  Kawasaki-Flood-Map ")).toEqual({ ok: true, name: "kawasaki-flood-map" });
+      expect(ok("  Flood-Map ")).toEqual({ ok: true, name: "flood-map" });
     });
 
     test("hex that is not exactly 16 characters", () => {
@@ -136,10 +136,10 @@ if (import.meta.vitest) {
     });
 
     test("characters outside [a-z0-9-]", () => {
-      expect(errorOf("Kawasaki_Map")).toBe(NAME_ERRORS.format);
+      expect(errorOf("Harbor_Map")).toBe(NAME_ERRORS.format);
       expect(errorOf("flood.map")).toBe(NAME_ERRORS.format);
-      expect(errorOf("kawasaki flood")).toBe(NAME_ERRORS.format);
-      expect(errorOf("川崎")).toBe(NAME_ERRORS.format);
+      expect(errorOf("harbor flood")).toBe(NAME_ERRORS.format);
+      expect(errorOf("港")).toBe(NAME_ERRORS.format);
       expect(errorOf("xn--p8j2a")).toBe(NAME_ERRORS.format); // punycode: also a `--`
     });
 
@@ -153,7 +153,7 @@ if (import.meta.vitest) {
       expect(errorOf("v3--map")).toBe(NAME_ERRORS.format);
       expect(errorOf("ab--cd")).toBe(NAME_ERRORS.format);
       expect(errorOf("map--")).toBe(NAME_ERRORS.format);
-      expect(errorOf("kawasaki--flood--map")).toBe(NAME_ERRORS.format);
+      expect(errorOf("harbor--flood--map")).toBe(NAME_ERRORS.format);
     });
   });
 
@@ -180,7 +180,7 @@ if (import.meta.vitest) {
     test("reserved words as hyphen-delimited parts", () => {
       expect(errorOf("api-v2")).toBe(NAME_ERRORS.reserved);
       expect(errorOf("login-portal")).toBe(NAME_ERRORS.reserved);
-      expect(errorOf("kawasaki-admin")).toBe(NAME_ERRORS.reserved);
+      expect(errorOf("harbor-admin")).toBe(NAME_ERRORS.reserved);
       expect(errorOf("my-cdn-1")).toBe(NAME_ERRORS.reserved);
     });
 
@@ -194,13 +194,13 @@ if (import.meta.vitest) {
     const suffix = ".serve.example.com";
 
     test("passes a bare label through, lowercased", () => {
-      expect(toSiteName("Kawasaki-Flood-Map", suffix)).toBe("kawasaki-flood-map");
+      expect(toSiteName("Flood-Map", suffix)).toBe("flood-map");
     });
 
     test("strips the configured suffix from a full host", () => {
-      expect(toSiteName("kawasaki-flood-map.serve.example.com", suffix)).toBe("kawasaki-flood-map");
-      expect(toSiteName("KAWASAKI.SERVE.EXAMPLE.COM", suffix)).toBe("kawasaki");
-      expect(toSiteName("kawasaki.serve.example.com.", suffix)).toBe("kawasaki");
+      expect(toSiteName("flood-map.serve.example.com", suffix)).toBe("flood-map");
+      expect(toSiteName("HARBOR.SERVE.EXAMPLE.COM", suffix)).toBe("harbor");
+      expect(toSiteName("harbor.serve.example.com.", suffix)).toBe("harbor");
     });
 
     test("leaves a host under a different suffix alone (it then fails validation)", () => {
@@ -209,7 +209,7 @@ if (import.meta.vitest) {
     });
 
     test("without a configured suffix nothing is stripped", () => {
-      expect(toSiteName("kawasaki-flood-map", undefined)).toBe("kawasaki-flood-map");
+      expect(toSiteName("flood-map", undefined)).toBe("flood-map");
     });
   });
 

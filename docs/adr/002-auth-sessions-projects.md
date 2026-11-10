@@ -75,7 +75,7 @@ Authentication is handled by validating OIDC-compliant JWTs in a Hono middleware
 
 **Flow:**
 1. Check `Authorization: Bearer <token>` header
-2. Token present → `jose.jwtVerify()` using JWKS from `{issuer}/.well-known/jwks.json`
+2. Token present → `jose.jwtVerify()` using the JWKS at the `jwks_uri` advertised by OIDC discovery (`{issuer}/.well-known/openid-configuration`), falling back to `{issuer}/.well-known/jwks.json` (with a warning naming the reason) when discovery fails or omits `jwks_uri`. The discovery document's `issuer` must equal `OIDC_ISSUER_URL` exactly, and an `http:` `jwks_uri` is only accepted for an `http:` issuer. Discovery and the key fetch share one 3s timeout
 3. Valid → extract user identity (`sub`, `email`, `name`) into request context
 4. No token → proceed as demo mode (`user = null`)
 5. Invalid token → 401 Unauthorized

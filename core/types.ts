@@ -15,6 +15,7 @@ import type { DnsResolver } from "./site/dns";
 import type { CustomHostnameProvisioner } from "./site/provisioner";
 import type { ExtractionMessage } from "./extraction/handler";
 import type { ThumbnailMessage } from "./thumbnail/queue";
+import type { DeliveryTokenCodec } from "./access/token";
 
 /**
  * Dependencies that route handlers read off the request context.
@@ -119,6 +120,7 @@ export type Deps = ContextDeps & {
   /** How long an extraction job may sit untouched before the cron retriggers it. */
   extractionStuckThresholdMs: number;
   limits: Limits;
+  deliveryTokens: DeliveryTokenCodec | null;
 };
 
 export type AppEnv = {

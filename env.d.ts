@@ -38,7 +38,7 @@ interface Env {
   // Defaults to "true" — read & non-upload operations are not affected.
   ANONYMOUS_UPLOAD_ENABLED?: string;
   // Wildcard suffix that per-asset site hosts live under, e.g.
-  // ".serve.reearth.land" (ADR-013 B1). Unset ⇒ site hosts are off.
+  // ".sites.example.net" (ADR-013 B1). Unset ⇒ site hosts are off.
   SITE_HOST_SUFFIX?: string;
   // Required with SITE_HOST_SUFFIX: the registrable domain the site hosts live
   // under, e.g. "example.net". The Worker refuses to serve when the suffix is
@@ -59,6 +59,9 @@ interface Env {
   // DNS-over-HTTPS endpoint for the TXT verification lookup.
   // Default: https://cloudflare-dns.com/dns-query
   SITE_DNS_RESOLVER_URL?: string;
+  // Delivery token key ring (ADR-014 §4), a wrangler secret:
+  // {"active":"<kid>","keys":{"<kid>":"<base64 secret>"}}. Unset ⇒ tokens are off.
+  DELIVERY_TOKEN_KEYS?: string;
   // Cloudflare Containers
   ARCHIVE_EXTRACTOR?: DurableObjectNamespace;
   THUMBNAIL_GENERATOR?: DurableObjectNamespace;

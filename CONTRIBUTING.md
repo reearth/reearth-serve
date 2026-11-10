@@ -151,6 +151,7 @@ Set via `npx wrangler secret put <NAME>`:
 | `OIDC_AUDIENCE` | No | JWT audience claim for token validation |
 | `CERBOS_ENDPOINT` | No | Cerbos PDP endpoint URL (http or https) for authorization; starting policies in `docs/examples/cerbos/`. An outage answers 503 with `Retry-After: 5`. An invalid value stops Node at startup; on Workers every `/api/` and `/files` request answers `500`. |
 | `SIGNING_SECRET` | No‡ | HMAC key for the viewer-authentication cookie of password-protected sites (ADR-013 B7), not used for delivery tokens (ADR-014 §4). A secret (`wrangler secret put SIGNING_SECRET`), not a var |
+| `DELIVERY_TOKEN_KEYS` | No | Delivery token key ring, `{"active":"<kid>","keys":{"<kid>":"<base64 secret>"}}`, at most two keys of 32 bytes or more. Generate a secret with `openssl rand -base64 32`. An invalid value stops Node at startup; on Workers every `/api/` and `/files` request answers `500`. |
 | `CREDENTIALED_ORIGINS` | No | Comma-separated exact origins, besides Serve's own, whose pages may read a protected file with the visitor's cookie. An entry with a path, a wildcard or `null` fails at start |
 | `SITE_HOST_SUFFIX` | No | Wildcard suffix site hosts live under, e.g. `.sites.example.net` (ADR-013 B1). Unset ⇒ site hosts and custom domains are off. Set in `wrangler.toml` once the zone is ready |
 | `SITE_REGISTRABLE_DOMAIN` | With `SITE_HOST_SUFFIX` | The registrable domain the site hosts live under, e.g. `example.net`. The Worker refuses to serve when the suffix is not under it or when the `BASE_URL` host is |

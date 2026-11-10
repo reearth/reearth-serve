@@ -16,8 +16,8 @@
  *   cookie without any server-side state to sweep.
  * - **`exp`** is a UNIX timestamp in seconds; the lifetime is 7 days.
  *
- * The secret is `SIGNING_SECRET` — the name ADR-014 §4 reserves for signed
- * URLs, so both proofs share one deployment secret and one rotation.
+ * The secret is `SIGNING_SECRET`. Delivery tokens use their own key ring,
+ * `DELIVERY_TOKEN_KEYS`, so the two rotate apart (ADR-014 §4, alternative H).
  */
 
 /**
