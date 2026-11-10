@@ -68,7 +68,7 @@ export const contentLengthHeaderParam: ParameterSpec = {
   in: "header",
   required: true,
   schema: { type: "integer" },
-  description: "File size in bytes",
+  description: "File size in bytes. 0 (or no body) only with `X-Content-SHA256`, which must then be the SHA-256 of zero bytes (an empty file); any other hash answers 422.",
 };
 
 export const contentEncodingHeaderParam: ParameterSpec = {
@@ -93,6 +93,19 @@ export const skipExtractionHeaderParam: ParameterSpec = {
   required: false,
   schema: schemaRef(skipExtractionHeaderSchema),
   description: "Skip archive extraction",
+};
+
+/**
+ * Declared SHA-256 of the body (ADR-017 §1), read by both direct-upload routes.
+ * Of the bytes sent — after gzip when the upload is `Content-Encoding: gzip`.
+ */
+export const contentSha256HeaderParam: ParameterSpec = {
+  name: "X-Content-SHA256",
+  in: "header",
+  required: false,
+  schema: { type: "string", pattern: "^[0-9a-fA-F]{64}$" },
+  description:
+    "SHA-256 of the request body, 64 hex characters (case-insensitive; stored lowercase). The store verifies the body against it and writes nothing on a mismatch (422). Malformed → 400. Without it Serve hashes the body itself; either way the result is recorded as the asset's or version's `sha256` with `integrity: verified`. An empty body is checked against it like any other (422 unless it is the SHA-256 of zero bytes, which stores an empty file); there is no hash-only upload. Whether the workspace already stores the bytes never changes the response.",
 };
 
 // --- Shared parameters and responses ---
@@ -121,6 +134,7 @@ const sharedErrorResponses = {
   WorkspaceNotFound: "Workspace not found",
   ScopeNotAccessible: "Scope not accessible",
   StorageCapacityExceeded: "Upload exceeds storage capacity",
+  ChecksumMismatch: "Declared SHA-256 does not match the uploaded bytes; nothing was stored",
   MembersManagedExternally: "Members are managed by an external directory",
   WorkspacesManagedExternally: "Workspaces are managed by an external directory",
 } satisfies Record<string, string>;
@@ -231,6 +245,7 @@ async function sharedParameters(): Promise<Record<string, Parameter>> {
     ContentEncodingHeader: contentEncodingHeaderParam,
     OriginalSizeHeader: originalSizeHeaderParam,
     SkipExtractionHeader: skipExtractionHeaderParam,
+    ContentSha256Header: contentSha256HeaderParam,
   } as Record<string, Parameter>;
 }
 

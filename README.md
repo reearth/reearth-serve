@@ -55,6 +55,14 @@ When calling with `Authorization: Bearer <jwt>`, add
 and the caller needs `create_asset` on that project (see [Authorization](#authorization)). Anonymous
 (demo-mode) uploads omit both headers and are tracked by `X-Session-Id`.
 
+**Integrity.** Add `-H "X-Content-SHA256: $(shasum -a 256 myfile.geojson | cut -d' ' -f1)"` to have the store verify the body: a mismatch answers `422` and nothing is stored, a malformed value `400`. The hash is of the bytes sent (after gzip, for a `Content-Encoding: gzip` upload). Without the header Serve hashes the body itself. Either way the asset (or version) records `sha256` and `integrity: "verified"`, and `/files` sends the hash back as `X-Content-SHA256` whenever it serves those stored bytes, so a consumer can check what it fetched. Presigned upload sessions take the same hash as a `sha256` field: on a single PUT it is signed into the URL as `x-amz-checksum-sha256` (send every header in the session's `headers`); a multipart upload, or a single PUT whose checksum the store did not confirm, records it as `integrity: "pending"`, as does a presigned upload that declared nothing. A pending upload is servable. An `integrity-verification` job (listed under `/api/v1/jobs`) then hashes the stored object once: on a match, or when nothing was declared, the asset becomes `integrity: "verified"` with the computed `sha256`; on a mismatch the asset is deleted with its bytes and anything extracted from it, and the job ends `failed` with the two hashes in its `error`. While a declared upload is still pending, uploading a new version to it answers `409`. Presigned sessions also take `contentEncoding` (`gzip` or `identity`): the encoding the client will upload, which the server stores as stated and echoes back. A client that declares `sha256` should send it, so it never has to guess whether the server would gzip; without it the server decides by file name and size, as before. `skipExtraction: true` on a session stores an archive without extracting it, like the `X-Skip-Extraction: true` header on a direct upload. The upload errors a client acts on carry a stable `code` next to `error`: `checksum_mismatch` (422), `upload_under_verification` and `blob_unavailable` (409).
+
+**Assets stored before hashes were recorded.** Assets and versions uploaded before Serve recorded hashes have no `sha256` or `integrity` (the fields are omitted). Set `INTEGRITY_BACKFILL_ENABLED=true` (a `[vars]` entry in `wrangler.toml`, or the environment variable on Node) and the cleanup cron hashes them a few at a time: each row gets an `integrity-backfill` job (listed under `/api/v1/jobs`) that reads the stored object once, in the same container as verification, and records its hash with `integrity: "verified"`. `INTEGRITY_BACKFILL_BATCH_SIZE` (default `2`) caps how many of these jobs are open at once, since each takes an extractor instance. A backfill never deletes or rejects anything: a row whose object is missing keeps no hash and its job ends `failed` with the reason, and a row is never picked twice (`POST /api/v1/jobs/{id}/retry` runs one again).
+
+**Where declared uploads are stored.** A direct upload that declares its hash is stored once per workspace at `blobs/{workspaceId}/{sha256}` (`p_{projectId}` for a project with no workspace, `_demo_{sessionId}` for a demo upload, so anonymous sessions never share bytes); an undeclared one stays at `assets/{assetId}/…` as before. A presigned session always uploads to `assets/{assetId}/…`, declared or not. Nothing about this is visible to clients: URLs are unchanged, responses do not name the key, and storage usage is still counted per asset and version. Assets and versions with the same declared bytes in a workspace share one object, which is deleted by the cleanup cron 24 hours after the last of them is gone.
+
+**Uploading bytes the workspace already has.** It looks exactly like uploading new bytes. Every upload sends the whole file and the server reads all of it; the response, the jobs and the usage counters are the same either way. What a duplicate saves is storage, after the fact: a direct upload whose bytes the workspace already stores is checked in full and then not written again, and a presigned upload is moved onto the stored copy once its hash is confirmed (at `complete`, or when its verification job matches), its own object being deleted by the cleanup cron a day later. An empty body with `X-Content-SHA256` is an upload of an empty file: it answers `422` unless the hash is the SHA-256 of zero bytes, whatever the workspace holds. Bytes stored in other workspaces never count. In the rare case a direct upload cannot be stored because of a concurrent change on the server, it answers `409` (`blob_unavailable`); upload again. See [ADR-017](./docs/adr/017-content-addressed-blobs-and-integrity.md).
+
 The production endpoint is `https://serve.reearth.land`. Point the CLI at it via `REEARTH_SERVE_ENDPOINT=https://serve.reearth.land` (or `--endpoint` per command).
 
 ## Architecture
@@ -135,6 +143,8 @@ SSR on Node is out of scope, and any other path returns 404 saying so.
 | `CERBOS_ENDPOINT` | (unset) | Cerbos PDP base URL (http or https); unset ⇒ the built-in policy table decides (see [Authorization](#authorization)). Any other value fails at startup |
 | `OBJECT_STORE_*` | (unset) | Reserved for the future S3 adapter; until then storage is in-process |
 | `CONTAINER_LAUNCHER` | `none` | Only `none` is implemented; any other value fails at startup |
+| `INTEGRITY_BACKFILL_ENABLED` | (unset) | `"true"` to have the cron hash assets and versions stored before hashes were recorded (ADR-017 P4); hashing runs in process on this runtime |
+| `INTEGRITY_BACKFILL_BATCH_SIZE` | `2` | How many backfill jobs may be open at once |
 
 Cloudflare drives the cron trigger and the queue consumers for you; on Node the
 operator does. One tick — cleanup, both queue drains, and the `kv` expiry sweep —
@@ -168,7 +178,7 @@ not persisted.
 | `PATCH` | `/api/v1/assets/:id/versions/:vid` | Update version (`userMeta`) |
 | `DELETE` | `/api/v1/assets/:id/versions/:vid` | Delete a specific version |
 | `PUT` | `/api/v1/assets/:id/active-version` | Set active version (`{ versionId }` or `null` for latest) |
-| `GET` | `/api/v1/assets/:id/files` | List files (NDJSON stream, `?prefix=` filter) |
+| `GET` | `/api/v1/assets/:id/files` | List files (NDJSON stream, `?prefix=` filter; a single-file asset's entry carries its `sha256` and `integrity`) |
 | `DELETE` | `/api/v1/assets/:id` | Delete asset and all versions |
 | `POST` | `/api/v1/assets/uploads` | Create presigned upload session |
 | `POST` | `/api/v1/assets/uploads/:id/complete` | Complete upload session |
@@ -198,7 +208,7 @@ not persisted.
 | `GET` | `/api/v1/doc` | OpenAPI 3.1 JSON spec |
 | `GET` | `/api/v1/docs` | Scalar interactive API reference |
 
-The OpenAPI document also covers file delivery (`/files/{id}/{path}`, marked `security: []`) and declares the `bearerAuth` / `X-Session-Id` security schemes. Shared models (`Asset`, `AssetVersion`, `FileEntry`, `Job`, `Project`, `Workspace`, `Member`, `Error`, upload sessions) the request bodies (`CreateUploadSessionRequest`, `UpdateAssetRequest`, `UploadPart`, …) and the response envelopes (`AssetResponse`, `ProjectListResponse`, …) are emitted as named `components.schemas` via `component()` in `shared/api.ts` / `shared/openapi.ts`, as are the enums `Role`, `AssetType`, `AssetStatus` and `ArchiveFormat` (`enumComponent()`) and the upload header enums `ContentEncoding` and `XSkipExtraction`, each with `x-enum-varnames` so Go constants are prefixed (`RoleOwner`), so generated clients such as oapi-codegen get stable type names. Repeated parameters are shared `components.parameters`: path IDs (`Id`, `VersionId`, `UserId`), list queries (`Limit`, `Cursor`, `WorkspaceFilter`, `ProjectFilter`) and upload headers (`ProjectIdHeader`, `FilenameHeader`, …). `core/openapi.ts` swaps every inline parameter identical to one of them for a `$ref`, so routes need no wiring; a copy that differs (say, in its description) stays inline and fails the duplicate-parameter test. Error responses work the same way: routes write `jsonError("Asset not found")`, and any response used by more than one operation must be one of the shared `components.responses` in `core/openapi.ts` (`Unauthorized`, `BadRequest`, `AssetNotFound`, …), which it is swapped for. Success bodies use `jsonResponse(description, schema, examples?)`. `core/openapi.ts` also holds the upload header parameters, `schemaRef()` for pointing at a named schema, and the document metadata. When a handler starts reading a header or returning a new status, declare it in that route's `describeRoute`. Request/response examples (upload sessions — single PUT and multipart — completion, upload results, the NDJSON file listing, health) live in `core/openapi-examples.ts`, typed against the shared API types. `npm run check` lints the generated document with Redocly's recommended OpenAPI 3.1 rules plus strict example validation (`core/openapi.test.ts`) and fails on any error.
+The OpenAPI document also covers file delivery (`/files/{id}/{path}`, marked `security: []`) and declares the `bearerAuth` / `X-Session-Id` security schemes. Shared models (`Asset`, `AssetVersion`, `FileEntry`, `Job`, `Project`, `Workspace`, `Member`, `Error`, upload sessions) the request bodies (`CreateUploadSessionRequest`, `UpdateAssetRequest`, `UploadPart`, …) and the response envelopes (`AssetResponse`, `ProjectListResponse`, …) are emitted as named `components.schemas` via `component()` in `shared/api.ts` / `shared/openapi.ts`, as are the enums `Role`, `AssetType`, `AssetStatus`, `ArchiveFormat`, `Integrity`, `JobType`, `UploadEncoding` and `ErrorCode` (`enumComponent()`) and the upload header enums `ContentEncoding` and `XSkipExtraction`, each with `x-enum-varnames` so Go constants are prefixed (`RoleOwner`), so generated clients such as oapi-codegen get stable type names. Repeated parameters are shared `components.parameters`: path IDs (`Id`, `VersionId`, `UserId`), list queries (`Limit`, `Cursor`, `WorkspaceFilter`, `ProjectFilter`) and upload headers (`ProjectIdHeader`, `FilenameHeader`, …). `core/openapi.ts` swaps every inline parameter identical to one of them for a `$ref`, so routes need no wiring; a copy that differs (say, in its description) stays inline and fails the duplicate-parameter test. Error responses work the same way: routes write `jsonError("Asset not found")`, and any response used by more than one operation must be one of the shared `components.responses` in `core/openapi.ts` (`Unauthorized`, `BadRequest`, `AssetNotFound`, …), which it is swapped for. Success bodies use `jsonResponse(description, schema, examples?)`. `core/openapi.ts` also holds the upload header parameters, `schemaRef()` for pointing at a named schema, and the document metadata. When a handler starts reading a header or returning a new status, declare it in that route's `describeRoute`. Request/response examples (upload sessions — single PUT and multipart — completion, upload results, the NDJSON file listing, health) live in `core/openapi-examples.ts`, typed against the shared API types. `npm run check` lints the generated document with Redocly's recommended OpenAPI 3.1 rules plus strict example validation (`core/openapi.test.ts`) and fails on any error.
 
 ### Internal API (`/api/internal`)
 
@@ -221,6 +231,8 @@ These endpoints require `Authorization: Bearer $INTERNAL_API_SECRET` — set it 
 | `GET` | `/files/:id/_thumbs/:size.webp` | Image thumbnail (`xs`/`sm`/`md`/`lg`) |
 | `GET` | `/files/:id/:filename?thumb=:size` | Same thumbnail, accessed via query parameter |
 | `POST` | `/files/:id/_serve/auth` | Password form of a protected asset (`/_serve/auth` on a site host) — sets the cookie and redirects back |
+
+When a response carries an upload's own stored bytes (the single file, or an archive fetched by its filename; whole, ranged, or gzip passed through) and the ledger has a hash for them, it sends `X-Content-SHA256: <hex>`, listed in `Access-Control-Expose-Headers`. Extracted entries, decompressed bodies, thumbnails and `404.html` pages carry none, nor do assets uploaded before ADR-017.
 
 File delivery never reads or mints an anonymous session. `/files` responses carry no `X-Session-Id`, and the request's `X-Session-Id` header is ignored.
 
@@ -400,6 +412,7 @@ npm run cli -- asset protect <id> --off         # public again
 
 # Versioning
 npm run cli -- asset upload <id> ./updated-data.geojson   # upload new version
+npm run cli -- asset upload <id> ./data.zip --wait 0      # fail at once if the first upload is still being verified
 npm run cli -- asset versions <id>                        # list versions
 npm run cli -- asset version list <id>                    # alias for above
 npm run cli -- asset version show <id> <vid>              # version details
@@ -414,7 +427,7 @@ npm run cli -- file ls -l <id> tiles/           # detailed list with prefix filt
 npm run cli -- file cp <id>:tileset.json .       # download single file
 npm run cli -- file cp -r <id>:tiles/ ./out     # recursive download
 npm run cli -- file cp -rf <id>:tiles/ ./out    # recursive + overwrite
-npm run cli -- file sync <id> ./local           # hash-based diff sync
+npm run cli -- file sync <id> ./local           # SHA-256 / MD5 / size diff sync
 npm run cli -- file sync --delete <id> ./local  # sync + remove extra local files
 npm run cli -- file thumb <id> --size xs        # download xs thumbnail (default md)
 npm run cli -- file thumb <id> --size md --url  # print URL without downloading
@@ -454,7 +467,14 @@ npm run cli -- --endpoint https://example.com upload myfile.geojson
 npm run cli -- --json asset show <id>           # JSON output
 ```
 
-`file sync` uses MD5 hash comparison (matching R2 ETags) to skip unchanged files. When no hash is available, it falls back to size comparison.
+**Hashes on upload.** Every CLI upload declares the SHA-256 of the bytes it sends (`X-Content-SHA256` on a direct upload, `sha256` on an upload session), so the store verifies it (see [ADR-017](./docs/adr/017-content-addressed-blobs-and-integrity.md)). The hash is computed before the first request. A file of up to 1 GiB is read into memory and hashed there; a larger one is streamed from disk twice, once to hash it (with a `hashing …` progress line) and once to upload it. The CLI decides whether to gzip a file and says so (`Content-Encoding`, or `contentEncoding` on a session), and the hash covers the gzipped bytes; files over 1 GiB are sent as they are. Every upload sends the whole file: the server never says whether the workspace already has those bytes.
+
+**When the server answers 409.** The CLI reads the error's `code`:
+
+- `upload_under_verification` (`asset upload` right after a large presigned first upload): the CLI waits for the asset's verification to finish, polling the asset every 5 to 60 seconds, then uploads the version. `--wait <minutes>` (default 30, `0` to fail at once) bounds the wait. If the asset disappears meanwhile, its first upload failed verification and was deleted, and the CLI says so.
+- `blob_unavailable` (a concurrent change on the server kept the upload from being stored): the CLI uploads again at once, up to twice.
+
+`file sync` compares each file by the server's SHA-256 when the listing has one that is `verified` and the file is not stored gzipped, and skips a file whose local copy has the same size and hash. Otherwise it compares the MD5 in the listing's `hash` (the store's ETag for a single file, which is not an MD5 after a multipart upload) and, when there is none, the size. Assets stored before hashes were recorded, uploads still pending verification, and extracted archive entries use the MD5 or size. Local files are hashed only when a comparison needs it, by streaming.
 
 ## Roadmap
 

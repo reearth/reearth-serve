@@ -1,5 +1,4 @@
-import { createHash } from "node:crypto";
-import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readdirSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { Writable } from "node:stream";
 import type { AssetMetadata, AssetVersion, FileEntry, Job } from "../shared/api";
@@ -270,11 +269,6 @@ export async function downloadFile(
   const ws = createWriteStream(dest);
   await res.body.pipeTo(Writable.toWeb(ws) as WritableStream<Uint8Array>);
   return true; // downloaded
-}
-
-export function localMd5(filePath: string): string {
-  const data = readFileSync(filePath);
-  return `md5:${createHash("md5").update(data).digest("hex")}`;
 }
 
 export function listLocalFiles(dir: string): string[] {

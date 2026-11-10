@@ -8,6 +8,7 @@ import type { SessionStore } from "./session/repository";
 import type { ContainerLauncher } from "./container/port";
 import type { StorageUsageStore } from "./asset/repository";
 import type { CleanupPendingStore } from "./cleanup/repository";
+import type { BlobRefStore } from "./blob/repository";
 import type { JobQueue } from "./queue/port";
 import type { KeyValue } from "./kv/port";
 import type { SiteHostStore } from "./site/repository";
@@ -15,6 +16,9 @@ import type { DnsResolver } from "./site/dns";
 import type { CustomHostnameProvisioner } from "./site/provisioner";
 import type { ExtractionMessage } from "./extraction/handler";
 import type { ThumbnailMessage } from "./thumbnail/queue";
+import type { VerificationMessage } from "./integrity/verification";
+import type { BackfillMessage, BackfillSettings } from "./integrity/backfill";
+import type { IntegrityBackfillStore } from "./integrity/repository";
 import type { DeliveryTokenCodec } from "./access/token";
 
 /**
@@ -37,8 +41,24 @@ export type ContextDeps = {
   projects: ProjectStore;
   extractionQueue: JobQueue<ExtractionMessage> | null;
   thumbnailQueue: JobQueue<ThumbnailMessage> | null;
+  /**
+   * Hash verification runs (ADR-017 §2). The same queue as `extractionQueue`
+   * on both runtimes — the runs share its container and consumer, which tells
+   * them apart by `kind` — typed separately so neither producer can send the
+   * other's message.
+   */
+  verificationQueue: JobQueue<VerificationMessage> | null;
+  /**
+   * SHA-256 backfill runs for rows stored before ADR-017 (P4). The same queue
+   * again, typed on its own like `verificationQueue`.
+   */
+  backfillQueue: JobQueue<BackfillMessage> | null;
+  /** Selection and the conditional write of the backfill (ADR-017 P4). */
+  integrityBackfills: IntegrityBackfillStore;
   storageUsage: StorageUsageStore;
   pendingCleanup: CleanupPendingStore;
+  /** The blob ledger (ADR-017 §3, §5): reservations, claims and sweeps of `blobs/`. */
+  blobRefs: BlobRefStore;
   anonymousUploadEnabled: boolean;
   /**
    * `SITE_HOST_SUFFIX` — the wildcard suffix site hosts live under, e.g.
@@ -120,6 +140,12 @@ export type Deps = ContextDeps & {
   /** How long an extraction job may sit untouched before the cron retriggers it. */
   extractionStuckThresholdMs: number;
   limits: Limits;
+  /**
+   * `INTEGRITY_BACKFILL_ENABLED` / `INTEGRITY_BACKFILL_BATCH_SIZE`: whether the
+   * cleanup cron hashes rows stored before ADR-017, and how many such jobs may
+   * be open at once (ADR-017 P4).
+   */
+  backfillSettings: BackfillSettings;
   deliveryTokens: DeliveryTokenCodec | null;
 };
 

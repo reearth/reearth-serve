@@ -2,12 +2,13 @@ import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
 import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
+import { toVersionResponse } from "../response";
 import { getAssetMetadata, uploadVersion } from "../usecase";
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
-import { denyAnonymousUpload, usageScopes } from "./shared";
+import { blobContext, denyAnonymousUpload, parseDirectUploadHeaders, usageScopes } from "./shared";
 import { versionUploadResultResponseSchema, idParamSchema } from "../../../shared/openapi";
-import { isSafeFilename } from "../../../shared/api";
-import { contentEncodingHeaderParam, contentLengthHeaderParam, filenameHeaderParam, jsonError, jsonResponse, originalSizeHeaderParam, skipExtractionHeaderParam } from "../../openapi";
+import { uploadErrorResponse } from "./errors";
+import { contentEncodingHeaderParam, contentLengthHeaderParam, contentSha256HeaderParam, filenameHeaderParam, jsonError, jsonResponse, originalSizeHeaderParam, skipExtractionHeaderParam } from "../../openapi";
 
 export function registerUploadVersionRoute(app: Hono<AppEnv>) {
   app.post("/:id",
@@ -21,6 +22,7 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
         contentEncodingHeaderParam,
         originalSizeHeaderParam,
         skipExtractionHeaderParam,
+        contentSha256HeaderParam,
       ],
       requestBody: {
         required: true,
@@ -33,6 +35,8 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
         401: jsonError("Anonymous upload disabled, or invalid token / session ID"),
         404: jsonError("Asset not found"),
         413: jsonError("Upload exceeds storage capacity"),
+        409: jsonError("The asset's first upload is still being verified against its declared SHA-256 (`code: upload_under_verification`), or a concurrent change on the server kept the upload from being stored (`code: blob_unavailable`; upload again)"),
+        422: jsonError("Declared SHA-256 does not match the uploaded bytes; nothing was stored"),
       },
     }),
     zValidator("param", idParamSchema),
@@ -50,25 +54,9 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
       if (!access.ok) return deniedResponse(c, access, { notFound: "Asset not found" });
       const asset = access.value;
 
-      const filename = c.req.header("X-Filename");
-      const contentLength = c.req.header("Content-Length");
-      if (!filename || !contentLength) {
-        return c.json({ error: "Missing required headers: X-Filename, Content-Length" }, 400);
-      }
-
-      if (!isSafeFilename(filename)) {
-        return c.json({ error: "Invalid X-Filename" }, 400);
-      }
-
-      const size = parseInt(contentLength, 10);
-      if (isNaN(size) || size <= 0) {
-        return c.json({ error: "Invalid Content-Length" }, 400);
-      }
-
-      const body = c.req.raw.body;
-      if (!body) {
-        return c.json({ error: "Missing request body" }, 400);
-      }
+      const parsed = parseDirectUploadHeaders(c);
+      if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+      const { filename, size, sha256, body } = parsed;
 
       const contentEncoding = c.req.header("Content-Encoding") || undefined;
       const originalSizeHeader = c.req.header("X-Original-Size");
@@ -79,16 +67,20 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
 
       // Resolved up front so the counters ride along in the version's batch.
       const scopes = await usageScopes(c, asset.projectId);
+      const blob = await blobContext(c, asset.projectId, asset.sessionId, sha256);
 
       const result = await uploadVersion(
         metadata, writes, storage, id,
-        { name: filename, type: c.req.header("Content-Type") || "application/octet-stream", body, size, contentEncoding, originalSize },
+        { name: filename, type: c.req.header("Content-Type") || "application/octet-stream", body, size, contentEncoding, originalSize, sha256 },
         baseUrl,
-        { extractionQueue, thumbnailQueue, skipExtraction, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix") },
+        { extractionQueue, thumbnailQueue, skipExtraction, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix"), blob },
       ).catch((e: unknown) => {
+        const known = uploadErrorResponse(e);
+        if (known) return known;
         if (e instanceof Error && e.message.includes("exceeds storage capacity")) return "over-capacity" as const;
         throw e;
       });
+      if (typeof result === "object" && result && "status" in result) return c.json(result.body, result.status);
       if (result === "over-capacity") {
         return c.json({ error: "Upload exceeds storage capacity" }, 413);
       }
@@ -98,7 +90,7 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
       }
 
       return c.json(
-        { version: result.version, url: result.url, ...(result.siteUrl && { siteUrl: result.siteUrl }) },
+        { version: toVersionResponse(result.version), url: result.url, ...(result.siteUrl && { siteUrl: result.siteUrl }) },
         201,
       );
     },

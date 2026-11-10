@@ -2,12 +2,14 @@ import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
 import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
+import { toUploadResponse } from "../response";
 import { completeUploadSession } from "../usecase";
 import { accessCtx, authorizeProject } from "../../auth/access";
 import { usageScopes } from "./shared";
 import { assetUploadResultExamples, completeUploadExamples } from "../../openapi-examples";
 import { completeUploadBodySchema, uploadResultResponseSchema, idParamSchema } from "../../../shared/openapi";
 import { jsonError, jsonResponse, schemaRef } from "../../openapi";
+import { uploadErrorResponse } from "./errors";
 
 
 export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
@@ -26,6 +28,7 @@ export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
       responses: {
         201: jsonResponse("Upload completed", uploadResultResponseSchema, assetUploadResultExamples),
         404: jsonError("Upload session not found"),
+        422: jsonError("Declared SHA-256 does not match the uploaded bytes; nothing was stored"),
       },
     }),
     zValidator("param", idParamSchema),
@@ -66,11 +69,18 @@ export function registerCompleteUploadSessionRoute(app: Hono<AppEnv>) {
     const thumbnailQueue = c.get("thumbnailQueue");
     // Resolved up front so the counters ride along in the asset's batch.
     const scopes = await usageScopes(c, session.projectId);
-    const result = await completeUploadSession(sessions, writes, c.get("metadata"), storage, presignedUrls, id, ttlSeconds, baseUrl, parts, { sessionId, extractionQueue, thumbnailQueue, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix") });
+    let result;
+    try {
+      result = await completeUploadSession(sessions, writes, c.get("metadata"), storage, presignedUrls, id, ttlSeconds, baseUrl, parts, { sessionId, extractionQueue, verificationQueue: c.get("verificationQueue"), thumbnailQueue, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix"), blobRefs: c.get("blobRefs") });
+    } catch (e) {
+      const known = uploadErrorResponse(e);
+      if (known) return c.json(known.body, known.status);
+      throw e;
+    }
     if (!result) {
       return c.json({ error: "Upload session not found or file not yet uploaded" }, 404);
     }
 
-    return c.json(result, 201);
+    return c.json(toUploadResponse(result), 201);
   });
 }

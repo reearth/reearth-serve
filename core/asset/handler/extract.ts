@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
 import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
+import { originalKey } from "../../blob/model";
 import { getAssetMetadata } from "../usecase";
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { denyAnonymousUpload } from "./shared";
@@ -71,11 +72,10 @@ export function registerExtractRoute(app: Hono<AppEnv>) {
 
     // Enqueue
     if (extractionQueue) {
-      const key = `assets/${id}/${asset.filename}`;
       await extractionQueue.send({
         jobId: id,
         assetId: id,
-        archiveKey: key,
+        archiveKey: originalKey(asset),
         archiveFilename: asset.filename,
         archiveFormat: asset.archiveFormat,
       });

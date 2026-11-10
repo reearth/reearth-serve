@@ -1,13 +1,20 @@
 import { cleanupExpiredAssets, drainPendingCleanups, SubrequestBudget } from "./usecase";
+import { sweepBlobs } from "../blob/usecase";
 import { purgeReleasedSiteHosts, releaseOutstandingCertificates } from "../site/usecase";
-import type { Job } from "../job/model";
+import { JOB_MAX_RETRIES, jobFailureClass, type Job } from "../job/model";
 import type { JobStore } from "../job/repository";
 import type { AtomicWrites, MetadataStore, VersionStore } from "../asset/repository";
 import type { Deps } from "../types";
 import { extractionMessageForJob, type ExtractionMessage } from "../extraction/handler";
+import {
+  closedAsFailed, VERIFICATION_JOB_TYPE, verificationMessageForJob, type VerificationMessage,
+} from "../integrity/verification";
+import {
+  BACKFILL_JOB_TYPE, backfillMessageForJob, enqueueIntegrityBackfill, type BackfillMessage,
+} from "../integrity/backfill";
 import type { JobQueue } from "../queue/port";
 
-const MAX_RETRIES = 5;
+const MAX_RETRIES = JOB_MAX_RETRIES;
 // Cap per-tick re-enqueue work so a backlog of failed jobs cannot blow the
 // Workers subrequest budget and break the recovery loop itself.
 const MAX_RETRIABLE_PER_TICK = 50;
@@ -26,6 +33,7 @@ export async function handleScheduled(deps: Deps): Promise<void> {
     maxAssets: 100,
     versions,
     budget,
+    writes: deps.writes,
   });
 
   if (result.deletedAssets.length > 0 || result.budgetExhausted) {
@@ -40,6 +48,27 @@ export async function handleScheduled(deps: Deps): Promise<void> {
   if (drainResult.drainedPrefixes.length > 0 || drainResult.budgetExhausted) {
     const suffix = drainResult.budgetExhausted ? " (budget exhausted — resuming next tick)" : "";
     console.log(`Cleanup: drained ${drainResult.drainedPrefixes.length} pending prefixes${suffix}`);
+  }
+
+  // The blob layer (ADR-017 §5): expired upload claims, blobs past their
+  // grace period with no reference, and one page of orphan reconciliation.
+  // After the prefix drain, on whatever budget is left.
+  const blobs = await sweepBlobs({ blobRefs: deps.blobRefs, storage, cache: deps.cache }, budget);
+  if (blobs.droppedClaims + blobs.swept.length + blobs.orphans.length > 0 || blobs.budgetExhausted) {
+    const suffix = blobs.budgetExhausted ? " (budget exhausted — resuming next tick)" : "";
+    console.log(
+      `Cleanup: blobs — ${blobs.droppedClaims} expired claims dropped, ${blobs.swept.length} unreferenced and ${blobs.orphans.length} orphaned objects deleted${suffix}`,
+    );
+  }
+
+  // SHA-256 backfill of rows stored before ADR-017 (P4). Lowest priority of
+  // the budgeted steps, so it gets what the cleanup and the blob sweeps left.
+  // A few jobs at a time: each run is a whole-object read in the extractor
+  // container, competing with extraction and verification for instances.
+  const backfill = await enqueueIntegrityBackfill(deps, budget, deps.backfillSettings);
+  if (backfill.enqueued.length > 0 || backfill.budgetExhausted) {
+    const suffix = backfill.budgetExhausted ? " (budget exhausted — resuming next tick)" : "";
+    console.log(`Cleanup: integrity backfill — ${backfill.enqueued.length} jobs enqueued${suffix}`);
   }
 
   // Released site names whose 30-day cooldown has run out (ADR-013 B3). One
@@ -67,9 +96,13 @@ export async function handleScheduled(deps: Deps): Promise<void> {
   // drift never resolves on its own.
   await reconcileStuckAssets(metadata, jobs);
 
-  // Re-trigger pending/failed/stuck extraction jobs via queue
+  // Re-trigger pending/failed/stuck extraction and verification jobs via queue
   if (deps.extractionQueue) {
-    await retriggerPendingJobs(metadata, versions, jobs, deps.writes, deps.extractionQueue, deps.extractionStuckThresholdMs);
+    await retriggerPendingJobs(metadata, versions, jobs, deps.writes, {
+      extraction: deps.extractionQueue,
+      verification: deps.verificationQueue,
+      backfill: deps.backfillQueue,
+    }, deps.extractionStuckThresholdMs);
   }
 }
 
@@ -114,12 +147,18 @@ export function effectiveRetryCount(
   return progressed ? 0 : (job.retryCount ?? 0);
 }
 
+type RetryQueues = {
+  extraction: JobQueue<ExtractionMessage>;
+  verification: JobQueue<VerificationMessage> | null;
+  backfill: JobQueue<BackfillMessage> | null;
+};
+
 async function retriggerPendingJobs(
   metadata: MetadataStore,
   versions: VersionStore,
   jobs: JobStore,
   writes: AtomicWrites,
-  queue: JobQueue<ExtractionMessage>,
+  queues: RetryQueues,
   stuckThresholdMs: number,
 ): Promise<void> {
   if (!jobs.listRetriable) return;
@@ -142,7 +181,16 @@ async function retriggerPendingJobs(
       };
       // Job and its mirror in one atomic write (ADR-012 §3). A version's job
       // fails only that version; the asset and its other versions stay usable.
-      if (job.versionId) {
+      //
+      // A verification job mirrors nothing (ADR-018 §6, "rejected version"):
+      // running out of retries means the object could not be read, not that
+      // it is wrong, so the upload stays `pending` and servable, and the
+      // asset's `status` belongs to extraction. A backfill job ("slower
+      // reads") mirrors nothing either: the row stays without a hash, as it
+      // was, and the closed job keeps the backfill from selecting it again.
+      if (jobFailureClass(job) !== "missing-feature") {
+        await jobs.save(updatedJob);
+      } else if (job.versionId) {
         const version = await versions.find(job.versionId);
         if (version) version.status = "failed";
         await writes.saveJob({ job: updatedJob, version: version ?? undefined });
@@ -155,18 +203,17 @@ async function retriggerPendingJobs(
       continue;
     }
 
-    const message = await extractionMessageForJob(job, metadata, versions);
-    if (!message) continue;
-
-    // Send to queue FIRST. If it fails, the job stays pending with the same
-    // retry_count and the next cron tick will try again — without burning a
-    // retry on a transient queue/network failure.
-    try {
-      await queue.send(message);
-    } catch (e) {
-      console.error(`Failed to enqueue extraction for job ${job.id} (retry budget preserved):`, e);
+    const sent = await resend(job, metadata, versions, queues);
+    if (sent === "nothing") {
+      // The asset or version is gone (or, for verification and backfill,
+      // already settled):
+      // close the job instead of finding it again every tick, where it would
+      // take one of the MAX_RETRIABLE_PER_TICK slots forever.
+      await jobs.save(closedAsFailed(job, "nothing left to run: the asset or version is gone, or already settled", Date.now()));
+      console.log(`Closed job ${job.id} (asset ${job.assetId}): nothing left to run`);
       continue;
     }
+    if (sent === "unsent") continue;
 
     // Only after successful enqueue, persist the incremented retry count
     // (reset to zero first if the job progressed) and capture the progress
@@ -185,7 +232,41 @@ async function retriggerPendingJobs(
       console.error(`Failed to persist retry count for job ${job.id} (job already enqueued):`, e);
       continue;
     }
-    console.log(`Re-enqueued extraction for job ${job.id} (retry ${updatedJob.retryCount}/${MAX_RETRIES})`);
+    console.log(`Re-enqueued ${job.type} for job ${job.id} (retry ${updatedJob.retryCount}/${MAX_RETRIES})`);
+  }
+}
+
+/**
+ * Send the message that re-runs `job`. Sent FIRST, before the retry count is
+ * persisted: if it fails, the job stays as it was and the next tick tries
+ * again without burning a retry on a transient queue failure.
+ */
+async function resend(
+  job: Job,
+  metadata: MetadataStore,
+  versions: VersionStore,
+  queues: RetryQueues,
+): Promise<"sent" | "unsent" | "nothing"> {
+  try {
+    if (job.type === VERIFICATION_JOB_TYPE) {
+      if (!queues.verification) return "unsent";
+      const message = await verificationMessageForJob(job, metadata);
+      if (!message) return "nothing";
+      await queues.verification.send(message);
+    } else if (job.type === BACKFILL_JOB_TYPE) {
+      if (!queues.backfill) return "unsent";
+      const message = await backfillMessageForJob(job, metadata, versions);
+      if (!message) return "nothing";
+      await queues.backfill.send(message);
+    } else {
+      const message = await extractionMessageForJob(job, metadata, versions);
+      if (!message) return "nothing";
+      await queues.extraction.send(message);
+    }
+    return "sent";
+  } catch (e) {
+    console.error(`Failed to enqueue ${job.type} for job ${job.id} (retry budget preserved):`, e);
+    return "unsent";
   }
 }
 

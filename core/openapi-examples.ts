@@ -22,6 +22,22 @@ export const createUploadSessionExamples = {
     summary: "Single PUT (omit partCount)",
     value: { filename: "buildings.geojson", contentType: "application/geo+json", size: 52_428_800 },
   },
+  declared: {
+    summary: "Single PUT with a declared SHA-256",
+    description: "`sha256` is the hash of the bytes that will be stored (after gzip if the response says `contentEncoding: gzip`). The store verifies the PUT against it; send the `x-amz-checksum-sha256` header the response lists.",
+    value: {
+      filename: "city.zip", contentType: "application/zip", size: 52_428_800,
+      sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+    },
+  },
+  stated: {
+    summary: "Declared SHA-256 with a stated encoding",
+    description: "What the CLI sends: it gzips the file itself, says so with `contentEncoding: gzip`, and declares the hash of the gzipped bytes. The server stores exactly that encoding, so the client never predicts the server's choice. `identity` states the bytes are sent as they are.",
+    value: {
+      filename: "buildings.geojson", contentType: "application/geo+json", size: 52_428_800,
+      sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", contentEncoding: "gzip",
+    },
+  },
   multipart: {
     summary: "Multipart (partCount > 1)",
     description: "Split the file into `partCount` parts; every part except the last must be at least 5 MiB. The CLI uses 100 MiB parts.",
@@ -39,6 +55,17 @@ export const uploadSessionExamples = {
       method: "PUT",
       headers: { "Content-Type": "application/geo+json", "Content-Encoding": "gzip" },
       contentEncoding: "gzip",
+      expiresAt: EXPIRES_AT,
+    },
+  } satisfies Example<PresignedUploadResult>,
+  declared: {
+    summary: "Single PUT with a declared SHA-256",
+    description: "The session declared `sha256`, so the signature also binds `x-amz-checksum-sha256` (the digest in base64). Send it exactly as given; the store rejects a body that does not hash to it.",
+    value: {
+      uploadId: "8f3a2c1d9b7e4f60",
+      url: "https://storage.example.com/assets/8f3a2c1d9b7e4f60/city.zip?X-Amz-SignedHeaders=host%3Bx-amz-checksum-sha256&X-Amz-Signature=…",
+      method: "PUT",
+      headers: { "Content-Type": "application/zip", "x-amz-checksum-sha256": "n4bQgYhMfWWaL+qgxVrQFaO/TxsrC4Is0V1sFbDwCgg=" },
       expiresAt: EXPIRES_AT,
     },
   } satisfies Example<PresignedUploadResult>,
@@ -80,6 +107,8 @@ const archiveAsset: AssetMetadata = {
   status: "pending",
   archiveFormat: "zip",
   jobId: "e41b9d27c06a4f8d",
+  sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08",
+  integrity: "verified",
   projectId: "p_2b7c9e10",
 };
 
@@ -103,6 +132,8 @@ export const assetUploadResultExamples = {
         expiresAt: EXPIRES_AT,
         type: "file",
         status: "ready",
+        sha256: "4e07408562bedb8b60ce05c1decfe3ad16b72230967de01f640b7e4729b49fce",
+        integrity: "verified",
         projectId: "p_2b7c9e10",
       },
       url: `${BASE}/files/5d1e7b0c2a9f4e38/buildings.geojson`,
@@ -127,8 +158,11 @@ export const fileListExamples = {
   },
   file: {
     summary: "Single-file asset",
-    description: "A plain file yields one line.",
-    value: JSON.stringify({ path: "buildings.geojson", size: 9_437_184, contentType: "application/geo+json", hash: "md5:3b5d5c3712955042212316173ccf37be" } satisfies FileEntry) + "\n",
+    description: "A plain file yields one line, with the SHA-256 of its stored bytes and its `integrity` once the ledger has one (ADR-017).",
+    value: JSON.stringify({
+      path: "buildings.zip", size: 9_437_184, contentType: "application/zip", hash: "md5:3b5d5c3712955042212316173ccf37be",
+      sha256: "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08", integrity: "verified",
+    } satisfies FileEntry) + "\n",
   },
   empty: {
     summary: "No match",

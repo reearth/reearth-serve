@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
 import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
+import { toVersionResponse } from "../response";
 import { getAssetMetadata, listVersions } from "../usecase";
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { versionListResponseSchema, idParamSchema, paginationQuerySchema } from "../../../shared/openapi";
@@ -31,7 +32,7 @@ export function registerListVersionsRoute(app: Hono<AppEnv>) {
 
       const limit = parseInt(limitStr || "20", 10);
       const result = await listVersions(versions, id, { limit: Math.min(limit, 100), cursor });
-      return c.json({ versions: result.items, cursor: result.cursor });
+      return c.json({ versions: result.items.map(toVersionResponse), cursor: result.cursor });
     },
   );
 }

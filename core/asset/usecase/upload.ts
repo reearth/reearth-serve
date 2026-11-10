@@ -3,6 +3,8 @@ import { detectArchiveFormat } from "../model";
 import type { AtomicWrites, FileStorage } from "../repository";
 import type { Job } from "../../job/model";
 import { generateId, storageKey } from "./shared";
+import { reuseFailure, type BlobContext } from "../../blob/usecase";
+import { storeDirectUpload } from "../../blob/direct-upload";
 import { siteUrlFor } from "../../site/url";
 import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
@@ -19,19 +21,35 @@ export async function uploadAsset(
     size: number;
     contentEncoding?: string;
     originalSize?: number;
+    /**
+     * Declared SHA-256 of the body, lowercase hex (ADR-017 §1). The store
+     * verifies it and writes nothing on a mismatch (`ChecksumMismatchError`).
+     * With `size` 0 it must be the SHA-256 of zero bytes; anything else is a
+     * mismatch, whatever the scope holds (§4; see `storeDirectUpload`).
+     */
+    sha256?: string;
   },
   ttlSeconds: number,
   baseUrl: string,
-  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string },
-): Promise<AssetUploadResult> {
+  options?: {
+    sessionId?: string | null; projectId?: string | null;
+    extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null;
+    skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string;
+    /** Blob ledger and scope: a declared upload is stored at its blob key (ADR-017 §3). Omitted, it is not. */
+    blob?: BlobContext;
+  },
+): Promise<AssetUploadResult & { asset: AssetMetadata }> {
   const id = generateId();
   const now = Date.now();
   const contentType = file.type || "application/octet-stream";
-  const key = storageKey(id, file.name);
-
-  await storage.put(key, file.body, contentType, file.size,
-    file.contentEncoding ? { contentEncoding: file.contentEncoding } : undefined,
-  );
+  // A declared hash goes to the blob layer — reusing the bytes when the scope
+  // already holds them, writing the key when the ledger lets this upload —
+  // and otherwise, as always without a declaration, to the asset's own key.
+  // A declared mismatch throws here, before any row exists, with nothing stored.
+  const stored = await storeDirectUpload(storage, options?.blob, {
+    body: file.body, size: file.size, contentType, contentEncoding: file.contentEncoding, sha256: file.sha256,
+  }, storageKey(id, file.name), now);
+  const key = stored.key;
 
   const archiveFormat = detectArchiveFormat(file.name);
 
@@ -39,9 +57,11 @@ export async function uploadAsset(
     id,
     filename: file.name,
     contentType,
-    size: file.size,
+    size: stored.size,
     createdAt: now,
     expiresAt: options?.projectId ? 0 : now + ttlSeconds * 1000,
+    sha256: stored.sha256,
+    integrity: "verified",
     ...(file.contentEncoding && { contentEncoding: file.contentEncoding }),
     ...(file.contentEncoding && file.originalSize && { originalSize: file.originalSize }),
     ...(archiveFormat && {
@@ -51,6 +71,7 @@ export async function uploadAsset(
     }),
     ...(options?.sessionId && { sessionId: options.sessionId }),
     ...(options?.projectId && { projectId: options.projectId }),
+    ...(stored.ref && { blobKey: stored.ref.key }),
   };
 
   // Create extraction job for archives (unless skipped)
@@ -73,7 +94,16 @@ export async function uploadAsset(
     // Job row, asset row and storage-usage counters in one atomic write, so a
     // failure never leaves an asset without its job or the counters short
     // (ADR-012 §3).
-    await writes.createAsset({ asset, job, usageScopes: options?.usageScopes });
+    // The blob reference rides in the same write: bytes first, ledger second
+    // (ADR-017 §5). Reused bytes attach only while the blob still qualifies.
+    try {
+      await writes.createAsset({
+        asset, job, usageScopes: options?.usageScopes,
+        ...(stored.ref && { blob: { ref: stored.ref, state: "ready" as const, ...(stored.reuse && { existing: stored.reuse }) } }),
+      });
+    } catch (e) {
+      throw stored.reuse && options?.blob ? await reuseFailure(options.blob.refs, key, stored.reuse.since, e) : e;
+    }
 
     // Enqueue only after the rows are committed: the consumer reads them.
     if (job && options?.extractionQueue) {
@@ -95,17 +125,23 @@ export async function uploadAsset(
       assetId: id,
       sourceKey: key,
       contentType,
-      size: file.size,
+      size: stored.size,
     });
   } catch (e) {
     // R2 put already succeeded but D1 metadata write failed. Without
     // compensation the R2 object is orphaned (cleanup drives off D1 rows),
     // so try to delete it. Best-effort: a delete failure here is logged
     // but the original error is what the caller cares about.
-    try {
-      await storage.delete(key);
-    } catch (delErr) {
-      console.error("Failed to clean up R2 object after metadata save failure:", delErr);
+    //
+    // A blob is never deleted here: other rows may reference the same key.
+    // The reservation's grace clock (or, failing that, the orphan sweep)
+    // reclaims it if nothing does.
+    if (!stored.ref) {
+      try {
+        await storage.delete(key);
+      } catch (delErr) {
+        console.error("Failed to clean up R2 object after metadata save failure:", delErr);
+      }
     }
     throw e;
   }
@@ -132,12 +168,15 @@ if (import.meta.vitest) {
   }
 
   type CreateAssetInput = Parameters<AtomicWrites["createAsset"]>[0];
+  const COMPUTED_SHA256 = "a".repeat(64);
+  const DECLARED_SHA256 = "b".repeat(64);
 
   function mockWrites() {
     const calls: CreateAssetInput[] = [];
     const writes: AtomicWrites = {
       createAsset: vi.fn(async (input: CreateAssetInput) => { calls.push(input); }),
       createVersion: vi.fn(async () => { throw new Error("not used"); }),
+      deleteVersion: vi.fn(async () => { throw new Error("not used"); }),
       saveJob: vi.fn(async () => { throw new Error("not used"); }),
       deleteAsset: vi.fn(async () => { throw new Error("not used"); }),
     };
@@ -146,10 +185,12 @@ if (import.meta.vitest) {
 
   function mockStorage(): FileStorage {
     return {
-      put: vi.fn(async (_key: string, body: ReadableStream<Uint8Array>, _ct: string, _size: number) => {
+      put: vi.fn(async (_key: string, body: ReadableStream<Uint8Array>, _ct: string, _size: number, opts?: { sha256?: string }) => {
         const reader = body.getReader();
         while (!(await reader.read()).done) {}
+        return { sha256: opts?.sha256 ?? COMPUTED_SHA256 };
       }),
+      digest: vi.fn(async () => { throw new Error("not used"); }),
       get: vi.fn(async () => null),
       head: vi.fn(async () => null),
       delete: vi.fn(async () => {}),
@@ -311,5 +352,52 @@ if (import.meta.vitest) {
     expect(result.asset.status).toBeUndefined();
     expect(result.asset.jobId).toBeUndefined();
     expect(calls[0].job).toBeUndefined();
+  });
+
+  // --- ADR-017 §1–§2: integrity ---
+
+  test("uploadAsset records the store's hash as verified when none is declared", async () => {
+    const { writes, calls } = mockWrites();
+    const st = mockStorage();
+
+    const result = await uploadAsset(
+      writes, st,
+      { name: "a.txt", type: "text/plain", body: toStream(new Uint8Array(3)), size: 3 },
+      3600, "https://example.com",
+    );
+
+    expect(vi.mocked(st.put).mock.calls[0][4]?.sha256).toBeUndefined();
+    expect(result.asset.sha256).toBe(COMPUTED_SHA256);
+    expect(result.asset.integrity).toBe("verified");
+    expect(calls[0].asset.sha256).toBe(COMPUTED_SHA256);
+  });
+
+  test("uploadAsset hands a declared hash to the store and records it", async () => {
+    const { writes, calls } = mockWrites();
+    const st = mockStorage();
+
+    await uploadAsset(
+      writes, st,
+      { name: "a.txt", type: "text/plain", body: toStream(new Uint8Array(3)), size: 3, sha256: DECLARED_SHA256 },
+      3600, "https://example.com",
+    );
+
+    expect(vi.mocked(st.put).mock.calls[0][4]?.sha256).toBe(DECLARED_SHA256);
+    expect(calls[0].asset.sha256).toBe(DECLARED_SHA256);
+    expect(calls[0].asset.integrity).toBe("verified");
+  });
+
+  test("uploadAsset writes no row when the store rejects the declared hash", async () => {
+    const { ChecksumMismatchError } = await import("../integrity");
+    const { writes } = mockWrites();
+    const st = mockStorage();
+    vi.mocked(st.put).mockRejectedValueOnce(new ChecksumMismatchError(DECLARED_SHA256));
+
+    await expect(uploadAsset(
+      writes, st,
+      { name: "a.txt", type: "text/plain", body: toStream(new Uint8Array(3)), size: 3, sha256: DECLARED_SHA256 },
+      3600, "https://example.com",
+    )).rejects.toBeInstanceOf(ChecksumMismatchError);
+    expect(writes.createAsset).not.toHaveBeenCalled();
   });
 }

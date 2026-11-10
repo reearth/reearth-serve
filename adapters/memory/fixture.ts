@@ -390,7 +390,10 @@ export async function fixture(overrides?: Partial<Deps>) {
     status: "ready",
   });
   const prefix = `assets/${ASSET_ID}/v/${VERSION_ID}`;
-  await storage.put(`${prefix}/site.zip`, stream(bytes("PK\x03")), "application/zip", 3);
+  // The version records the hash of its archive object, as an ADR-017 upload
+  // would; the legacy single-file asset below predates ADR-017 and has none.
+  const archive = await storage.put(`${prefix}/site.zip`, stream(bytes("PK\x03")), "application/zip", 3);
+  versions.versions.set(VERSION_ID, { ...versions.versions.get(VERSION_ID)!, sha256: archive.sha256, integrity: "verified" });
   await storage.put(`${prefix}/files/index.html`, stream(bytes(INDEX_HTML)), "text/html; charset=utf-8", INDEX_HTML.length);
   await storage.put(`${prefix}/files/docs/index.html`, stream(bytes(DOCS_HTML)), "text/html; charset=utf-8", DOCS_HTML.length);
   const gz = new Uint8Array(gzipSync(APP_JS));
@@ -417,6 +420,7 @@ export async function fixture(overrides?: Partial<Deps>) {
       createAsset: () => { throw new Error('fake dependency "writes.createAsset" was called unexpectedly'); },
       createVersion: () => { throw new Error('fake dependency "writes.createVersion" was called unexpectedly'); },
       saveJob: () => { throw new Error('fake dependency "writes.saveJob" was called unexpectedly'); },
+      deleteVersion: () => { throw new Error('fake dependency "writes.deleteVersion" was called unexpectedly'); },
       async deleteAsset({ asset, releasedAt }) {
         metadata.assets.delete(asset.id);
         for (const [id, v] of versions.versions) if (v.assetId === asset.id) versions.versions.delete(id);
@@ -432,8 +436,12 @@ export async function fixture(overrides?: Partial<Deps>) {
     tenancy: memberTenancy(unused("members")),
     extractionQueue: null,
     thumbnailQueue: null,
+    verificationQueue: null,
+    backfillQueue: null,
+    integrityBackfills: unused("integrityBackfills"),
     storageUsage: unused("storageUsage"),
     pendingCleanup: { add: async () => {}, list: async () => [], remove: async () => {} },
+    blobRefs: unused("blobRefs"),
     anonymousUploadEnabled: false,
     siteHostSuffix: undefined,
     siteHosts,
@@ -450,6 +458,7 @@ export async function fixture(overrides?: Partial<Deps>) {
     containers: unused("containers"),
     extractionStuckThresholdMs: 1000,
     limits: { subrequestBudget: 700 },
+    backfillSettings: { enabled: false, batchSize: 0 },
     deliveryTokens: null,
     ...overrides,
   };

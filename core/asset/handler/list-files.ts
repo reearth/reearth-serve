@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
 import { resolver, validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
+import { originalKey } from "../../blob/model";
 import { getAssetMetadata } from "../usecase";
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { fileListExamples } from "../../openapi-examples";
@@ -46,10 +47,19 @@ export function registerListFilesRoute(app: Hono<AppEnv>) {
     if (asset.type !== "archive") {
       if (!prefix || asset.filename.startsWith(prefix)) {
         // Get ETag from storage for hash
-        const storageKey = `assets/${id}/${asset.filename}`;
-        const head = await storage.head(storageKey);
+        const head = await storage.head(originalKey(asset));
         const hash = head?.etag ? `md5:${head.etag.replace(/"/g, "")}` : undefined;
-        const entry = { path: asset.filename, size: asset.size, contentType: asset.contentType, ...(hash && { hash }) };
+        // The ledger's hash of the stored bytes (ADR-017), with its integrity
+        // so a client can tell a confirmed hash from a declared one still
+        // being verified. `contentEncoding` says whether those stored bytes
+        // are what a download gives a decompressing client.
+        const entry = {
+          path: asset.filename, size: asset.size, contentType: asset.contentType,
+          ...(asset.contentEncoding && { contentEncoding: asset.contentEncoding }),
+          ...(hash && { hash }),
+          ...(asset.sha256 && { sha256: asset.sha256 }),
+          ...(asset.integrity && { integrity: asset.integrity }),
+        };
         const body = new ReadableStream({
           start(controller) {
             controller.enqueue(encoder.encode(JSON.stringify(entry) + "\n"));

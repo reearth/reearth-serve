@@ -1,3 +1,5 @@
+import { createHash } from "node:crypto";
+import { gzipSync } from "node:zlib";
 import { describe, expect, test } from "vitest";
 import {
   APP_JS, ASSET_ID, DOCS_HTML, fixture, INDEX_HTML, protect, seedEntry, seedNotFoundPage,
@@ -230,5 +232,81 @@ describe("nosniff and the inline allowlist (ADR-013 A4)", () => {
     expect(res.headers.get("Content-Disposition")).toBe('inline; filename="index.html"');
     expect(res.headers.get("Content-Security-Policy")).toBeNull();
     expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
+  });
+});
+
+describe("X-Content-SHA256 (ADR-017 §2)", () => {
+  const sha256Hex = (data: Uint8Array | string) => createHash("sha256").update(data).digest("hex");
+  const toStream = (data: Uint8Array) => new ReadableStream<Uint8Array>({ start(c) { c.enqueue(data); c.close(); } });
+
+  test("the version's original object carries its hash, exposed to CORS", async () => {
+    const { app, versions } = await fixture();
+    const expected = versions.versions.get(VERSION_ID)!.sha256;
+    expect(expected).toBe(sha256Hex("PK\x03"));
+
+    for (const path of [`/files/${ASSET_ID}/site.zip`, `/files/${VERSION_ID}/site.zip`]) {
+      const res = await app.request(path);
+      expect(res.status, path).toBe(200);
+      expect(res.headers.get("X-Content-SHA256"), path).toBe(expected);
+      expect(res.headers.get("Access-Control-Expose-Headers"), path).toBe("X-Content-SHA256");
+    }
+    // A Range response is a slice of the same stored bytes.
+    const ranged = await app.request(`/files/${ASSET_ID}/site.zip`, { headers: { Range: "bytes=0-1" } });
+    expect(ranged.status).toBe(206);
+    expect(ranged.headers.get("X-Content-SHA256")).toBe(expected);
+  });
+
+  test("extracted entries, SPA/404 pages and thumbnails carry no hash", async () => {
+    const { app, storage } = await fixture();
+    await seedNotFoundPage(storage);
+    const thumb = new TextEncoder().encode("RIFF");
+    await storage.put(versionThumbKey(ASSET_ID, VERSION_ID, thumbnailFilename("md")), toStream(thumb), "image/webp", thumb.byteLength);
+
+    const responses = [
+      ["index", await app.request(`/files/${ASSET_ID}/`), 200],
+      ["entry", await app.request(`/files/${ASSET_ID}/assets/app.js`, { headers: { "Accept-Encoding": "gzip" } }), 200],
+      ["404 page", await app.request(`/files/${ASSET_ID}/nope.js`), 404],
+      ["thumbnail", await app.request(`/files/${ASSET_ID}?thumb=md`), 200],
+    ] as const;
+    for (const [name, res, status] of responses) {
+      expect(res.status, name).toBe(status);
+      expect(res.headers.get("X-Content-SHA256"), name).toBeNull();
+      expect(res.headers.get("Access-Control-Expose-Headers"), name).toBeNull();
+    }
+  });
+
+  test("an asset stored before ADR-017 has no hash to send", async () => {
+    const { app } = await fixture();
+    const res = await app.request(`/files/${SINGLE_FILE_ID}/data.geojson`);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("X-Content-SHA256")).toBeNull();
+  });
+
+  test("a single-file asset with no version row uses the asset's hash", async () => {
+    const { app, metadata, geojson } = await fixture();
+    const sha256 = sha256Hex(geojson);
+    metadata.assets.set(SINGLE_FILE_ID, { ...metadata.assets.get(SINGLE_FILE_ID)!, sha256, integrity: "verified" });
+    const res = await app.request(`/files/${SINGLE_FILE_ID}/data.geojson`);
+    expect(res.headers.get("X-Content-SHA256")).toBe(sha256);
+  });
+
+  test("gzip-stored bytes carry the hash when passed through, not when decompressed", async () => {
+    const { app, metadata, storage } = await fixture();
+    const id = "aaaaaaaaaaaaaaaa";
+    const gz = new Uint8Array(gzipSync(APP_JS));
+    const { sha256 } = await storage.put(`assets/${id}/app.js`, toStream(gz), "text/javascript", gz.byteLength, { contentEncoding: "gzip" });
+    metadata.assets.set(id, {
+      id, filename: "app.js", contentType: "text/javascript", size: gz.byteLength, createdAt: 0, expiresAt: 0,
+      contentEncoding: "gzip", sha256, integrity: "verified",
+    });
+
+    const passthrough = await app.request(`/files/${id}/app.js`, { headers: { "Accept-Encoding": "gzip" } });
+    expect(passthrough.headers.get("Content-Encoding")).toBe("gzip");
+    expect(passthrough.headers.get("X-Content-SHA256")).toBe(sha256);
+    expect(sha256).toBe(sha256Hex(gz));
+
+    const decoded = await app.request(`/files/${id}/app.js`, { headers: { "Accept-Encoding": "identity" } });
+    expect(await decoded.text()).toBe(APP_JS);
+    expect(decoded.headers.get("X-Content-SHA256")).toBeNull();
   });
 });

@@ -1,12 +1,14 @@
 import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
 import type { AppEnv } from "../../types";
+import { toUploadResponse } from "../response";
 import { uploadAsset } from "../usecase";
-import { denyAnonymousUpload, resolveUploadProject, usageScopes } from "./shared";
+import { blobContext, denyAnonymousUpload, parseDirectUploadHeaders, resolveUploadProject, usageScopes } from "./shared";
 import { assetUploadResultExamples } from "../../openapi-examples";
 import { uploadResultResponseSchema } from "../../../shared/openapi";
-import { isSafeFilename } from "../../../shared/api";
-import { contentEncodingHeaderParam, contentLengthHeaderParam, filenameHeaderParam, jsonError, jsonResponse, originalSizeHeaderParam, projectIdHeaderParam, skipExtractionHeaderParam } from "../../openapi";
+import { BLOB_UNAVAILABLE_MESSAGE } from "../../blob/usecase";
+import { uploadErrorResponse } from "./errors";
+import { contentEncodingHeaderParam, contentLengthHeaderParam, contentSha256HeaderParam, filenameHeaderParam, jsonError, jsonResponse, originalSizeHeaderParam, projectIdHeaderParam, skipExtractionHeaderParam } from "../../openapi";
 
 export function registerUploadRoute(app: Hono<AppEnv>) {
   app.post("/",
@@ -20,6 +22,7 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
         contentEncodingHeaderParam,
         originalSizeHeaderParam,
         skipExtractionHeaderParam,
+        contentSha256HeaderParam,
         projectIdHeaderParam,
       ],
       requestBody: {
@@ -32,7 +35,9 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
         400: jsonError("Bad request (missing/invalid headers, or X-Project-Id missing for an authenticated caller)"),
         401: jsonError("Anonymous upload disabled, or invalid token / session ID"),
         404: jsonError("Project not found"),
+        409: jsonError(`${BLOB_UNAVAILABLE_MESSAGE} (\`code: blob_unavailable\`)`),
         413: jsonError("Upload exceeds storage capacity"),
+        422: jsonError("Declared SHA-256 does not match the uploaded bytes; nothing was stored"),
       },
     }),
     async (c) => {
@@ -44,25 +49,9 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
     const ttlSeconds = c.get("ttlSeconds");
     const baseUrl = c.get("baseUrl");
 
-    const filename = c.req.header("X-Filename");
-    const contentLength = c.req.header("Content-Length");
-    if (!filename || !contentLength) {
-      return c.json({ error: "Missing required headers: X-Filename, Content-Length" }, 400);
-    }
-
-    if (!isSafeFilename(filename)) {
-      return c.json({ error: "Invalid X-Filename" }, 400);
-    }
-
-    const size = parseInt(contentLength, 10);
-    if (isNaN(size) || size <= 0) {
-      return c.json({ error: "Invalid Content-Length" }, 400);
-    }
-
-    const body = c.req.raw.body;
-    if (!body) {
-      return c.json({ error: "Missing request body" }, 400);
-    }
+    const parsed = parseDirectUploadHeaders(c);
+    if (!parsed.ok) return c.json({ error: parsed.error }, 400);
+    const { filename, size, sha256, body } = parsed;
 
     const contentType = c.req.header("Content-Type") || "application/octet-stream";
     const contentEncoding = c.req.header("Content-Encoding") || undefined;
@@ -82,19 +71,22 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
 
     // Resolved up front so the counters ride along in the upload's batch.
     const scopes = await usageScopes(c, projectId);
+    const blob = await blobContext(c, projectId, sessionId, sha256);
 
     try {
       const result = await uploadAsset(
         writes,
         storage,
-        { name: filename, type: contentType, body, size, contentEncoding, originalSize },
+        { name: filename, type: contentType, body, size, contentEncoding, originalSize, sha256 },
         ttlSeconds,
         baseUrl,
-        { sessionId, projectId, extractionQueue, thumbnailQueue, skipExtraction, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix") },
+        { sessionId, projectId, extractionQueue, thumbnailQueue, skipExtraction, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix"), blob },
       );
 
-      return c.json(result, 201);
+      return c.json(toUploadResponse(result), 201);
     } catch (e) {
+      const known = uploadErrorResponse(e);
+      if (known) return c.json(known.body, known.status);
       const msg = e instanceof Error ? e.message : String(e);
       if (msg.includes("exceeds storage capacity")) {
         return c.json({ error: "Upload exceeds storage capacity" }, 413);

@@ -271,7 +271,7 @@ export class SqlJobStore implements JobStore {
     const rows = await queryAll(
       this.db,
       `SELECT * FROM jobs
-         WHERE type = 'archive-extraction'
+         WHERE type IN ('archive-extraction', 'integrity-verification', 'integrity-backfill')
            AND (retry_count <= ?1
                 OR COALESCE(json_extract(meta, '$.fileCount'), 0) >
                    COALESCE(json_extract(meta, '$.retryFileCount'), 0)
@@ -288,12 +288,15 @@ export class SqlJobStore implements JobStore {
 
   async listStuckAssets(limit: number): Promise<Job[]> {
     // `extracting` captures the running-phase drift; `pending` catches the
-    // rarer case where the first (running) mirror write was lost too.
+    // rarer case where the first (running) mirror write was lost too. Only
+    // extraction jobs mirror onto `status`: a completed verification job says
+    // nothing about extraction (ADR-017 §2).
     const rows = await queryAll(
       this.db,
       `SELECT j.* FROM jobs j
          JOIN assets a ON a.id = j.asset_id
          WHERE j.status = 'completed'
+           AND j.type = 'archive-extraction'
            AND j.version_id IS NULL
            AND a.status IN ('pending', 'extracting')
          ORDER BY j.updated_at ASC
@@ -320,6 +323,17 @@ export class SqlJobStore implements JobStore {
  * SQLite evaluates the `VALUES` expressions before the replace, so the
  * subqueries see the row being replaced.
  *
+ * `sha256` / `integrity` (ADR-017) are written from the model when it carries
+ * them and kept from the existing row otherwise, so an upsert built from a
+ * model that predates the columns cannot erase a recorded hash. A `verified`
+ * row keeps both no matter what the model says: the job-status callback
+ * rewrites the whole row from a copy it read earlier, and a copy read while
+ * verification was still `pending` must not undo the verdict (P1b).
+ *
+ * `blob_key` (ADR-017 §3) is set when the row is first written and never
+ * moves afterwards: an existing row's value always wins over the model's, so a
+ * rewrite from a copy that lacks the field cannot point the row at other bytes.
+ *
  * Protection is therefore written by exactly one statement,
  * `SqlMetadataStore.setProtection`, and nothing else can move it by accident.
  */
@@ -328,13 +342,21 @@ export const ASSET_UPSERT_SQL =
          (id, filename, content_type, size, created_at, expires_at,
           type, status, session_id, project_id, meta,
           active_version_id, description, user_meta,
-          access, password_hash, password_salt, password_version, spa)
+          access, password_hash, password_salt, password_version, spa,
+          sha256, integrity, blob_key)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14,
                  (SELECT access FROM assets WHERE id = ?1),
                  (SELECT password_hash FROM assets WHERE id = ?1),
                  (SELECT password_salt FROM assets WHERE id = ?1),
                  COALESCE((SELECT password_version FROM assets WHERE id = ?1), 0),
-                 COALESCE((SELECT spa FROM assets WHERE id = ?1), 0))`;
+                 COALESCE((SELECT spa FROM assets WHERE id = ?1), 0),
+                 CASE WHEN (SELECT integrity FROM assets WHERE id = ?1) = 'verified'
+                      THEN (SELECT sha256 FROM assets WHERE id = ?1)
+                      ELSE COALESCE(?15, (SELECT sha256 FROM assets WHERE id = ?1)) END,
+                 CASE WHEN (SELECT integrity FROM assets WHERE id = ?1) = 'verified'
+                      THEN 'verified'
+                      ELSE COALESCE(?16, (SELECT integrity FROM assets WHERE id = ?1)) END,
+                 COALESCE((SELECT blob_key FROM assets WHERE id = ?1), ?17))`;
 
 export function assetUpsertArgs(asset: AssetMetadata): SqlValue[] {
   const { userMeta, currentVersion: _cv, versionCount: _vc, ...rest } =
@@ -347,6 +369,7 @@ export function assetUpsertArgs(asset: AssetMetadata): SqlValue[] {
     row.session_id ?? null, row.project_id ?? null, row.meta ?? null,
     row.active_version_id ?? null, row.description ?? null,
     userMeta ? JSON.stringify(userMeta) : null,
+    row.sha256 ?? null, row.integrity ?? null, row.blob_key ?? null,
   ] as SqlValue[];
 }
 
@@ -502,7 +525,19 @@ function parseAssetRow(row: Record<string, unknown>): AssetMetadata {
   // SQLite stores the flag as 0/1 (ADR-013 C1); the domain sees a boolean, so
   // nothing downstream has to remember that `0` is falsy but `"0"` would not be.
   model.spa = Number(row.spa ?? 0) === 1;
+  dropNullIntegrity(model);
   return model;
+}
+
+/**
+ * NULL `sha256` / `integrity` means "stored before ADR-017"; the API omits the
+ * fields rather than sending nulls the schema does not allow. NULL `blob_key`
+ * means the classic layout, which the model expresses as an absent field.
+ */
+function dropNullIntegrity(model: { sha256?: string | null; integrity?: string | null; blobKey?: string | null }): void {
+  if (model.sha256 == null) delete model.sha256;
+  if (model.integrity == null) delete model.integrity;
+  if (model.blobKey == null) delete model.blobKey;
 }
 
 // ---------------------------------------------------------------------------
@@ -516,10 +551,10 @@ function parseAssetRow(row: Record<string, unknown>): AssetMetadata {
 export const VERSION_INSERT_SQL =
   `INSERT INTO asset_versions
          (id, asset_id, version, filename, content_type, size, created_at,
-          type, status, meta, user_meta)
+          type, status, meta, user_meta, sha256, integrity, blob_key)
          VALUES (?1, ?2,
                  (SELECT COALESCE(MAX(version), 0) + 1 FROM asset_versions WHERE asset_id = ?2),
-                 ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+                 ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)
          RETURNING version`;
 
 export function versionInsertArgs(version: AssetVersion): SqlValue[] {
@@ -530,6 +565,7 @@ export function versionInsertArgs(version: AssetVersion): SqlValue[] {
     row.size, row.created_at,
     row.type ?? null, row.status ?? null, row.meta ?? null,
     userMeta ? JSON.stringify(userMeta) : null,
+    row.sha256 ?? null, row.integrity ?? null, row.blob_key ?? null,
   ] as SqlValue[];
 }
 
@@ -684,6 +720,7 @@ function parseVersionRow(row: Record<string, unknown>): AssetVersion {
   if (userMetaStr) {
     try { model.userMeta = JSON.parse(userMetaStr); } catch { /* ignore */ }
   }
+  dropNullIntegrity(model);
   return model;
 }
 

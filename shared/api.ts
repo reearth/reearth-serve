@@ -61,7 +61,32 @@ export const archiveFormatSchema = enumComponent("ArchiveFormat", z.enum(["zip",
  * ADR-014's `restricted` mode joins this enum without a shape change.
  */
 export const assetAccessSchema = enumComponent("AssetAccess", z.enum(["public", "password"]));
-export const jobTypeSchema = z.literal("archive-extraction");
+/**
+ * Whether a version's `sha256` has been confirmed over the stored bytes
+ * (ADR-017 §1). Absent on versions stored before ADR-017 until the backfill
+ * (P4) hashes them.
+ *
+ * - `verified` — the store or Serve hashed the stored bytes and they match.
+ * - `pending` — the bytes are in place and servable, the hash is not yet
+ *   confirmed (presigned uploads the store did not vouch for; `sha256` is the
+ *   declared hash, or absent when none was declared). An
+ *   `integrity-verification` job settles it (ADR-017 §2).
+ * - `failed` — a declared hash did not match. Reserved: such an upload is
+ *   deleted outright, so no row is ever served with this value today.
+ */
+export const integritySchema = enumComponent("Integrity", z.enum(["verified", "pending", "failed"]));
+/**
+ * What a job does.
+ *
+ * - `archive-extraction` — unpacks an archive upload into its files (ADR-001).
+ * - `integrity-verification` — streams a presigned upload once and confirms its
+ *   SHA-256 (ADR-017 §2). Its failure class is "rejected version" (ADR-018
+ *   §6): a mismatch deletes the upload, which is final and not retried.
+ * - `integrity-backfill` — hashes an asset or version stored before ADR-017
+ *   and records the result as `verified` (ADR-017 P4). Nothing was declared,
+ *   so there is nothing to reject: a failure leaves the row as it was.
+ */
+export const jobTypeSchema = enumComponent("JobType", z.enum(["archive-extraction", "integrity-verification", "integrity-backfill"]));
 export const jobStatusSchema = z.enum(["pending", "running", "completed", "failed"]);
 
 // Upload request headers (`Content-Encoding`, `X-Skip-Extraction`). Named so
@@ -69,6 +94,36 @@ export const jobStatusSchema = z.enum(["pending", "running", "completed", "faile
 // (oapi-codegen only reuses a parameter's type when its schema is a $ref).
 export const contentEncodingHeaderSchema = enumComponent("ContentEncoding", z.enum(["gzip"]));
 export const skipExtractionHeaderSchema = enumComponent("XSkipExtraction", z.enum(["true"]));
+/**
+ * The encoding a client states it will upload in an upload session
+ * (ADR-017 P5). `gzip`: the client gzips the file and the declared `sha256` is
+ * of the gzipped bytes. `identity`: the bytes are sent as they are. Omitted,
+ * the server decides by file name and size, as before.
+ */
+export const uploadEncodingSchema = enumComponent("UploadEncoding", z.enum(["gzip", "identity"]));
+
+/**
+ * A machine-readable reason on an error response, for the errors a client
+ * acts on differently (ADR-017 P5). Most errors carry none; the message in
+ * `error` is for people and may change, the code does not.
+ *
+ * - `checksum_mismatch` (422) — the declared SHA-256 does not match the bytes;
+ *   nothing was stored. An empty body with a declared hash other than the
+ *   hash of zero bytes always gets this: there is no hash-only upload.
+ * - `upload_under_verification` (409) — a new version while the asset's
+ *   declared first upload is still `integrity: pending`. Retry once the
+ *   asset's `integrity` is `verified`; if the asset is gone, the first upload
+ *   was rejected.
+ * - `blob_unavailable` (409) — a direct upload could not be stored because of
+ *   a concurrent change on the server; nothing was stored. Retry at once.
+ *
+ * Nothing in the published API depends on a duplicate: whether the workspace
+ * already stores the bytes never changes a response (ADR-017 §4). The
+ * `blob_claimed` code that P5 briefly defined is gone; it was never released.
+ */
+export const errorCodeSchema = enumComponent("ErrorCode", z.enum([
+  "checksum_mismatch", "upload_under_verification", "blob_unavailable",
+]));
 
 // --- Role ---
 
@@ -175,6 +230,13 @@ export const assetVersionSchema = component("AssetVersion", z.object({
   fileCount: z.number().optional(),
   extractedSize: z.number().optional(),
   jobId: z.string().optional(),
+  /**
+   * SHA-256 of the stored bytes, lowercase hex (ADR-017 §1) — after the
+   * client's gzip when the object is stored gzip. Absent on objects stored
+   * before ADR-017.
+   */
+  sha256: z.string().optional(),
+  integrity: integritySchema.optional(),
   userMeta: z.record(z.string(), z.unknown()).optional(),
   /**
    * `_headers` / `_redirects` as parsed at extraction time (ADR-013 C3).
@@ -199,6 +261,14 @@ export const assetMetadataSchema = component("Asset", z.object({
   fileCount: z.number().optional(),
   extractedSize: z.number().optional(),
   jobId: z.string().optional(),
+  /**
+   * SHA-256 of the stored bytes, lowercase hex (ADR-017 §1) — after the
+   * client's gzip when the object is stored gzip. Absent on objects stored
+   * before ADR-017. On the asset it describes the first upload, which has
+   * no version row; each version carries its own.
+   */
+  sha256: z.string().optional(),
+  integrity: integritySchema.optional(),
   sessionId: z.string().optional(),
   projectId: z.string().optional(),
   activeVersionId: z.string().optional(),
@@ -382,6 +452,15 @@ export const fileEntrySchema = component("FileEntry", z.object({
   contentType: z.string(),
   contentEncoding: z.string().optional(),
   hash: z.string().optional(),
+  /**
+   * SHA-256 of the stored bytes and its `integrity` (ADR-017), on the entry of
+   * a non-archive asset only; absent for rows stored before ADR-017 that the
+   * backfill has not reached, and for extracted archive entries. When
+   * `contentEncoding` is set the hash is of the encoded bytes, not of what a
+   * decompressing client ends up with.
+   */
+  sha256: z.string().optional(),
+  integrity: integritySchema.optional(),
 }));
 
 // --- Request bodies ---
@@ -395,6 +474,27 @@ export const createUploadSessionBodySchema = component("CreateUploadSessionReque
   contentType: z.string().optional(),
   size: z.number(),
   partCount: z.number().int().positive().max(MAX_UPLOAD_PARTS).optional(),
+  /**
+   * Declared SHA-256 of the bytes that will be uploaded, hex (ADR-017 §1) —
+   * of the stored bytes, i.e. after gzip when the session answers
+   * `contentEncoding: gzip`. On a single-PUT session it is signed into the URL
+   * as `x-amz-checksum-sha256`, which the client must send (see the response's
+   * `headers`).
+   */
+  sha256: z.string().regex(/^[0-9a-fA-F]{64}$/, "sha256 must be 64 hex characters").optional(),
+  /**
+   * The encoding the client will upload (ADR-017 P5). When given, the server
+   * stores the file with exactly that encoding and the response's
+   * `contentEncoding` echoes it (`gzip`) or is absent (`identity`), so a
+   * client declaring `sha256` knows which bytes it hashes without predicting
+   * the server. Omitted, the server decides as before.
+   */
+  contentEncoding: uploadEncodingSchema.optional(),
+  /**
+   * Store an archive without extracting it — the session counterpart of the
+   * direct upload's `X-Skip-Extraction: true` header.
+   */
+  skipExtraction: z.boolean().optional(),
 }));
 
 export const completeUploadBodySchema = component("CompleteUploadSessionRequest", z.object({
@@ -406,6 +506,8 @@ export const updateJobStatusBodySchema = z.object({
   fileCount: z.number().optional(),
   extractedSize: z.number().optional(),
   error: z.string().optional(),
+  /** `integrity-verification` jobs: the SHA-256 the verifier computed, sent with `completed`. */
+  sha256: z.string().optional(),
 });
 
 // --- Asset update ---
@@ -456,6 +558,7 @@ export const setActiveVersionBodySchema = component("SetActiveVersionRequest", z
 
 export const errorResponseSchema = component("Error", z.object({
   error: z.string(),
+  code: errorCodeSchema.optional(),
 }));
 
 // --- Inferred types ---
@@ -473,6 +576,7 @@ export type SiteHeaderRule = z.infer<typeof siteHeaderRuleSchema>;
 export type SiteRedirectRule = z.infer<typeof siteRedirectRuleSchema>;
 export type SiteHosting = z.infer<typeof siteHostingSchema>;
 export type AssetType = z.infer<typeof assetTypeSchema>;
+export type Integrity = z.infer<typeof integritySchema>;
 export type AssetStatus = z.infer<typeof assetStatusSchema>;
 export type ArchiveFormat = z.infer<typeof archiveFormatSchema>;
 export type AssetVersion = z.infer<typeof assetVersionSchema>;
@@ -486,6 +590,8 @@ export type CreateUploadSessionBody = z.infer<typeof createUploadSessionBodySche
 export type CompleteUploadBody = z.infer<typeof completeUploadBodySchema>;
 export type UpdateJobStatusBody = z.infer<typeof updateJobStatusBodySchema>;
 export type ErrorResponse = z.infer<typeof errorResponseSchema>;
+export type ErrorCode = z.infer<typeof errorCodeSchema>;
+export type UploadEncoding = z.infer<typeof uploadEncodingSchema>;
 export type FileEntry = z.infer<typeof fileEntrySchema>;
 export type UpdateAssetBody = z.infer<typeof updateAssetBodySchema>;
 export type SiteHostKind = z.infer<typeof siteHostKindSchema>;

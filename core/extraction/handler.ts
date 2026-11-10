@@ -1,10 +1,13 @@
 import { retryDelaySeconds } from "./backoff";
 import type { ArchiveFormat } from "../asset/model";
 import type { MetadataStore, VersionStore } from "../asset/repository";
-import { storageKey, versionStorageKey } from "../asset/usecase/shared";
+import { originalKey } from "../blob/model";
 import type { Job } from "../job/model";
 import type { Deps } from "../types";
 import type { QueueMessage } from "../queue/port";
+import { touchPendingJob } from "../job/usecase";
+import { handleVerificationQueue, isVerificationMessage, type VerificationMessage } from "../integrity/verification";
+import { handleBackfillQueue, isBackfillMessage, type BackfillMessage } from "../integrity/backfill";
 
 /** One extraction run, addressed by job (ADR-005, amendment 2026-11-05). */
 export interface ExtractionMessage {
@@ -13,6 +16,11 @@ export interface ExtractionMessage {
   assetId: string;
   /** Set for a version's job: the run reads and writes under the version's prefix. */
   versionId?: string;
+  /**
+   * Storage key of the archive to read — `originalKey` of the row, which may
+   * be a blob outside the asset's prefix (ADR-017 §3). The extractor reads it
+   * as given and writes under its own prefix (`keyRoot`), derived from the IDs.
+   */
   archiveKey: string;
   archiveFilename: string;
   archiveFormat: ArchiveFormat;
@@ -31,7 +39,7 @@ export async function extractionMessageForJob(
       jobId: job.id,
       assetId: job.assetId,
       versionId: version.id,
-      archiveKey: versionStorageKey(job.assetId, version.id, version.filename),
+      archiveKey: originalKey(version),
       archiveFilename: version.filename,
       archiveFormat: version.archiveFormat,
     };
@@ -41,7 +49,7 @@ export async function extractionMessageForJob(
   return {
     jobId: job.id,
     assetId: job.assetId,
-    archiveKey: storageKey(job.assetId, asset.filename),
+    archiveKey: originalKey(asset),
     archiveFilename: asset.filename,
     archiveFormat: asset.archiveFormat,
   };
@@ -50,7 +58,31 @@ export async function extractionMessageForJob(
 // Delay applied to every message when the extractor cannot be launched at all.
 const MISCONFIGURED_RETRY_DELAY_SECONDS = 300;
 
+/**
+ * Consumer of the extraction queue. The queue also carries hash verification
+ * runs (ADR-017 §2) and hash backfill runs (P4), which use the same container
+ * image and launcher; they are split off first so a deployment without the
+ * extractor does not hold them back.
+ */
 export async function handleQueue(
+  messages: QueueMessage<ExtractionMessage | VerificationMessage | BackfillMessage>[],
+  deps: Deps,
+): Promise<void> {
+  const verification: QueueMessage<VerificationMessage>[] = [];
+  const backfill: QueueMessage<BackfillMessage>[] = [];
+  const extraction: QueueMessage<ExtractionMessage>[] = [];
+  for (const m of messages) {
+    if (isVerificationMessage(m.body)) verification.push(m as QueueMessage<VerificationMessage>);
+    else if (isBackfillMessage(m.body)) backfill.push(m as QueueMessage<BackfillMessage>);
+    else extraction.push(m as QueueMessage<ExtractionMessage>);
+  }
+  if (verification.length > 0) await handleVerificationQueue(verification, deps);
+  if (extraction.length > 0) await handleExtractionMessages(extraction, deps);
+  // Last: the backfill is the lowest-priority work on this queue.
+  if (backfill.length > 0) await handleBackfillQueue(backfill, deps);
+}
+
+async function handleExtractionMessages(
   messages: QueueMessage<ExtractionMessage>[],
   deps: Deps,
 ): Promise<void> {
@@ -72,25 +104,8 @@ export async function handleQueue(
       message.ack();
     } catch (e) {
       console.error(`Failed to launch extractor for job ${params.jobId} (attempt ${message.attempts}):`, e);
-      // Refresh the job's updated_at so the cleanup cron can tell "waiting
-      // for capacity, queue is on it" from "orphaned" — without this, the
-      // cron re-enqueues the still-pending job every tick and each pass
-      // burns one of its MAX_RETRIES. The cron only takes over once the
-      // queue gives up (max_retries → DLQ) and the touches stop.
-      await touchPendingJob(deps, params.jobId);
+      await touchPendingJob(deps.jobs, params.jobId);
       message.retry({ delaySeconds: retryDelaySeconds(message.attempts) });
     }
-  }
-}
-
-async function touchPendingJob(deps: Deps, jobId: string): Promise<void> {
-  try {
-    const job = await deps.jobs.find(jobId);
-    if (job && job.status === "pending") {
-      job.updatedAt = Date.now();
-      await deps.jobs.save(job);
-    }
-  } catch (e) {
-    console.error(`Failed to touch pending job ${jobId}:`, e);
   }
 }

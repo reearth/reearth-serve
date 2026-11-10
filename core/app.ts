@@ -122,7 +122,9 @@ export function createApp(deps: Deps) {
   app.use("/api/internal/*", internalApiAuth(deps.internalApiSecret));
   app.route("/api/internal/jobs", jobInternalRoutes);
 
-  // Internal asset existence check (for container TTL checks)
+  // Internal asset existence check (for container TTL checks). An extractor
+  // stops at the first 404, which is also how it learns that its upload was
+  // rejected by hash verification (ADR-017 §2): the asset is deleted.
   app.get("/api/internal/assets/:id/exists", async (c) => {
     const asset = await deps.metadata.find(c.req.param("id"));
     return asset ? c.json({ exists: true }) : c.json({ exists: false }, 404);
@@ -213,9 +215,13 @@ function injectDeps(deps: Deps, opts: { siteHost: boolean }): MiddlewareHandler<
     c.set("projects", deps.projects);
     c.set("extractionQueue", deps.extractionQueue);
     c.set("thumbnailQueue", deps.thumbnailQueue);
+    c.set("verificationQueue", deps.verificationQueue);
+    c.set("backfillQueue", deps.backfillQueue);
+    c.set("integrityBackfills", deps.integrityBackfills);
     c.set("writes", deps.writes);
     c.set("storageUsage", deps.storageUsage);
     c.set("pendingCleanup", deps.pendingCleanup);
+    c.set("blobRefs", deps.blobRefs);
     c.set("anonymousUploadEnabled", deps.anonymousUploadEnabled);
     c.set("siteHostSuffix", deps.siteHostSuffix);
     c.set("siteHosts", deps.siteHosts);

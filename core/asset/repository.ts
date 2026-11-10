@@ -1,6 +1,50 @@
 import type { AssetMetadata, AssetVersion, StoredFile, UploadSession, UploadPart } from "./model";
 import type { Job } from "../job/model";
 import type { SiteHost } from "../site/repository";
+import type { BlobRefKey } from "../blob/model";
+
+/**
+ * A reference to a blob, taken in the same batch as the row that holds it
+ * (ADR-017 §5). The row's `blobKey` is `ref.key`. `state` is what a claimed
+ * key becomes (claims exist only from before the post-review change): `ready`
+ * when the store vouched for the bytes, `verifying` when the integrity job
+ * has yet to.
+ */
+export interface BlobAttach {
+  ref: BlobRefKey;
+  state: "ready" | "verifying";
+  /**
+   * The upload did not write the blob's bytes because the blob already held
+   * them (ADR-017 §4): a direct upload that discarded its body, or a presigned
+   * upload adopting the blob. The reference is then taken only if the blob
+   * still qualifies (`stillAttachable` for a lookup at `since`); otherwise the
+   * whole write fails and nothing is committed, so no row can point at bytes
+   * that may not be there. `state` is not applied: the blob keeps the one it
+   * has.
+   */
+  existing?: { since: number };
+  /**
+   * The classic object this upload wrote and no longer needs, because the row
+   * references the blob instead (adoption). Recorded `retired` in the same
+   * write and deleted by the grace sweep `BLOB_GRACE_MS` later, never inline:
+   * see `BLOB_GRACE_MS`.
+   */
+  retire?: BlobRefKey;
+}
+
+/**
+ * Switching an existing asset row from its classic object to the scope's
+ * blob with the same bytes (ADR-017 §4, adoption after verification). The
+ * write happens only while the row still has no blob key and still has
+ * `ref.sha256`; it fails as a whole if the blob no longer qualifies.
+ */
+export interface BlobAdoption {
+  ref: BlobRefKey;
+  /** When the blob was found reusable (see `BlobAttach.existing`). */
+  since: number;
+  /** The classic object to retire; `key` is the row's classic key. */
+  retire: BlobRefKey;
+}
 
 export interface ListResult<T> {
   items: T[];
@@ -105,25 +149,45 @@ export interface VersionStore {
  * the size of the asset or version being written.
  */
 export interface AtomicWrites {
-  /** A new asset, its optional extraction job, and storage-usage increments. */
-  createAsset(input: { asset: AssetMetadata; job?: Job; usageScopes?: string[] }): Promise<void>;
   /**
-   * A new version, its optional extraction job, and storage-usage increments.
+   * A new asset, its optional extraction job, its optional hash verification
+   * job (ADR-017 §2), and storage-usage increments.
+   */
+  createAsset(input: { asset: AssetMetadata; job?: Job; verificationJob?: Job; usageScopes?: string[]; blob?: BlobAttach }): Promise<void>;
+  /**
+   * A new version, its optional extraction job, storage-usage increments, and
+   * the reference to its blob when it has one.
    * Returns the version with the number the store assigned (see `VersionStore.save`).
    */
-  createVersion(input: { version: AssetVersion; job?: Job; usageScopes?: string[] }): Promise<AssetVersion>;
+  createVersion(input: { version: AssetVersion; job?: Job; usageScopes?: string[]; blob?: BlobAttach }): Promise<AssetVersion>;
+  /**
+   * Removes one version row, releases its blob reference (a blob at zero
+   * starts its grace period; the object is never deleted here) and decrements
+   * each usage scope by the version's size. Returns false when the row was
+   * already gone, in which case nothing changed.
+   */
+  deleteVersion(input: { version: AssetVersion; usageScopes?: string[] }): Promise<boolean>;
   /**
    * A job row plus the row that mirrors its status: the version for a
    * version's job, the asset otherwise. A version's job may still pass the
    * asset to extend its expiry.
+   *
+   * `adopt` (with `asset`) switches the asset row to a blob in the same write
+   * (ADR-017 §4): the integrity job confirmed the hash and the scope holds
+   * those bytes. See `BlobAdoption`.
    */
-  saveJob(input: { job: Job; asset?: AssetMetadata; version?: AssetVersion }): Promise<void>;
+  saveJob(input: { job: Job; asset?: AssetMetadata; version?: AssetVersion; adopt?: BlobAdoption }): Promise<void>;
   /**
    * Removes the asset row and all its version rows, decrements each usage
    * scope by the asset's size plus its versions' sizes, and records
    * `cleanupPrefix` in `cleanup_pending`, so the R2 objects are always
    * reclaimed even if the inline delete that follows fails. Decrements apply
    * only while the asset row still exists, so a repeated delete is a no-op.
+   *
+   * The blob references the asset row and its versions hold are released in
+   * the same write (ADR-017 §5). Blob objects are not under `cleanupPrefix`
+   * and are never deleted here: one that reaches zero references is swept by
+   * the cleanup cron after `BLOB_GRACE_MS`.
    *
    * The asset's active site hosts are released (ADR-013 B3) in the same write,
    * stamped `releasedAt` (default now). Releasing them in a write of their own
@@ -159,10 +223,46 @@ export interface StorageUsageStore {
   recalculate(scope: string, totalSize: number, assetCount: number): Promise<void>;
 }
 
+/** What a `FileStorage.put` reports about the bytes it stored (ADR-017 §2). */
+export interface PutResult {
+  /** SHA-256 of the stored bytes, lowercase hex, as computed or confirmed by the store. */
+  sha256: string;
+}
+
 export interface FileStorage {
-  put(key: string, body: ReadableStream<Uint8Array>, contentType: string, size: number, options?: { contentEncoding?: string }): Promise<void>;
+  /**
+   * Store `body` under `key`.
+   *
+   * Integrity (ADR-017 §2) lives here because hashing a stream is runtime
+   * specific (`crypto.DigestStream` on Workers, `node:crypto` on Node):
+   *
+   * - `options.sha256` declared → the store verifies the bytes against it and,
+   *   on a mismatch, throws `ChecksumMismatchError` having written **nothing**.
+   * - not declared → the store hashes the stream as it is written.
+   *
+   * Either way the result carries the SHA-256 of what was stored.
+   */
+  put(key: string, body: ReadableStream<Uint8Array>, contentType: string, size: number, options?: { contentEncoding?: string; sha256?: string }): Promise<PutResult>;
+  /**
+   * Read `body` to its end and hash it, storing nothing. The body must be
+   * exactly `size` bytes, enforced as `put` enforces it (the thrown message
+   * names the "declared Content-Length").
+   *
+   * What a direct upload does instead of `put` when its blob already holds
+   * the declared bytes (ADR-017 §4): the body is still received and checked
+   * in full, it is just not written again.
+   */
+  digest(body: ReadableStream<Uint8Array>, size: number): Promise<PutResult>;
   get(key: string, range?: { offset: number; length: number }): Promise<StoredFile | null>;
-  head(key: string): Promise<{ size: number; contentEncoding?: string; etag?: string } | null>;
+  /**
+   * `sha256` (lowercase hex) is present only when the store itself holds a
+   * SHA-256 for the object — R2 does when the upload supplied one, which is
+   * how a presigned single PUT's checksum is confirmed at completion.
+   * `uploadedAt` (epoch ms) is when the object was last written, when the
+   * store reports it; the blob orphan sweep (ADR-017 §5) leaves an object
+   * alone without it.
+   */
+  head(key: string): Promise<{ size: number; contentEncoding?: string; etag?: string; sha256?: string; uploadedAt?: number } | null>;
   delete(key: string): Promise<void>;
   /**
    * Optional batch delete. R2 supports up to 1000 keys per call; cleanup paths
@@ -179,8 +279,20 @@ export interface UploadSessionStore {
   delete(id: string): Promise<void>;
 }
 
+/** A presigned single PUT: the URL, plus any headers the signature binds that the client must send verbatim. */
+export interface PresignedPut {
+  url: string;
+  /** Extra headers beyond `Content-Type` / `Content-Encoding`, e.g. `x-amz-checksum-sha256`. */
+  headers: Record<string, string>;
+}
+
 export interface PresignedUrlGenerator {
-  generatePutUrl(key: string, contentType: string, expiresInSeconds: number, options?: { contentEncoding?: string }): Promise<string>;
+  /**
+   * `options.sha256` (lowercase hex) asks the store to verify the upload
+   * against it on write (ADR-017 §2); the header that carries it is signed into
+   * the URL and returned in `headers`.
+   */
+  generatePutUrl(key: string, contentType: string, expiresInSeconds: number, options?: { contentEncoding?: string; sha256?: string }): Promise<PresignedPut>;
   createMultipartUpload(key: string, contentType: string, options?: { contentEncoding?: string }): Promise<string>;
   generateUploadPartUrl(key: string, uploadId: string, partNumber: number, expiresInSeconds: number): Promise<string>;
   completeMultipartUpload(key: string, uploadId: string, parts: UploadPart[]): Promise<void>;

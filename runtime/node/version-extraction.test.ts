@@ -40,7 +40,7 @@ async function drainQueue(): Promise<ExtractionMessage[]> {
   const messages = await runtime.extractionQueue.receive();
   for (const m of messages) m.ack();
   await runtime.extractionQueue.flush();
-  return messages.map((m) => m.body);
+  return messages.map((m) => m.body as ExtractionMessage);
 }
 
 beforeEach(async () => {

@@ -2,6 +2,7 @@ import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
 import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
+import { toAssetResponse } from "../response";
 import { enrichAssetWithVersion } from "../usecase";
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { assetResponseSchema, idParamSchema } from "../../../shared/openapi";
@@ -27,7 +28,7 @@ export function registerGetRoute(app: Hono<AppEnv>) {
       if (!access.ok) return deniedResponse(c, access, { notFound: "Asset not found" });
       const asset = access.value;
 
-      return c.json({ asset });
+      return c.json({ asset: toAssetResponse(asset) });
     },
   );
 }

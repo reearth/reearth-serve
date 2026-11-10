@@ -2,7 +2,7 @@ import { Command } from "commander";
 import { PATHS } from "../shared/paths";
 import type { AssetMetadata, AssetVersion, Job } from "../shared/api";
 import { apiGet, apiPost, apiPatch, apiPut, apiDelete, output, formatAsset, formatJob, formatVersion, formatBytes, parseOnOff, promptPasswordTwice } from "./helpers";
-import { doUpload } from "./upload";
+import { doUpload, doUploadVersion } from "./upload";
 import { registerFileCommands } from "./file";
 import { registerHostCommands } from "./host";
 import { login, logout, whoami } from "./auth";
@@ -146,57 +146,21 @@ asset
   .argument("<id>", "Asset ID")
   .argument("<file>", "File to upload")
   .option("--no-extract", "Skip automatic archive extraction")
-  .action(async (id: string, file: string, cmdOpts: { extract?: boolean }) => {
-    const { readFileSync, statSync } = await import("node:fs");
-    const { basename } = await import("node:path");
-    const { gzipSync } = await import("node:zlib");
-    const { lookup } = await import("./mime");
-    const { commonHeaders } = await import("./helpers");
-    const { isCompressiblePath } = await import("@reearth/compressible");
-
+  .option(
+    "--wait <minutes>",
+    "While the asset's first upload is still being verified, wait this long before giving up (0: fail at once)",
+    "30",
+  )
+  .action(async (id: string, file: string, cmdOpts: { extract?: boolean; wait: string }) => {
     const opts = program.opts<{ endpoint: string; json: boolean }>();
-
-    try { statSync(file); } catch { console.error(`Error: File not found: ${file}`); process.exit(1); }
-
-    const fileName = basename(file);
-    const fileData = new Uint8Array(readFileSync(file));
-    const contentType = lookup(fileName);
-
-    const compress = fileData.byteLength >= 1024 && isCompressiblePath(fileName);
-    const uploadData = compress ? new Uint8Array(gzipSync(fileData)) : fileData;
-
-    const headers: Record<string, string> = {
-      "Content-Type": contentType,
-      "Content-Length": String(uploadData.byteLength),
-      "X-Filename": fileName,
-      ...(await commonHeaders()),
-    };
-    if (compress) {
-      headers["Content-Encoding"] = "gzip";
-      headers["X-Original-Size"] = String(fileData.byteLength);
+    const waitMinutes = Number(cmdOpts.wait);
+    if (!Number.isFinite(waitMinutes) || waitMinutes < 0) {
+      console.error("Error: --wait takes a number of minutes (0 or more)");
+      process.exit(1);
     }
-    if (cmdOpts.extract === false) {
-      headers["X-Skip-Extraction"] = "true";
-    }
-
-    const res = await fetch(`${opts.endpoint}${PATHS.assetUpload(id)}`, {
-      method: "POST",
-      headers,
-      body: uploadData as BodyInit,
+    await doUploadVersion(id, file, {
+      endpoint: opts.endpoint, json: opts.json, skipExtraction: cmdOpts.extract === false, waitMinutes,
     });
-
-    if (!res.ok) {
-      const body = await res.text();
-      throw new Error(`Upload failed (${res.status}): ${body}`);
-    }
-    const data = await res.json() as { version: AssetVersion; url: string };
-
-    if (opts.json) {
-      output(data, true);
-    } else {
-      console.log(`Version ${data.version.version} created: ${data.version.id}`);
-      console.log(data.url);
-    }
   });
 
 asset

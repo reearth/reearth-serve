@@ -11,9 +11,14 @@ import { CloudflareContainerLauncher, type ObjectStoreCredentials } from "./cont
 import { CloudflareKeyValue } from "./kv";
 import { KeyValueUploadSessionStore, KeyValueSessionStore } from "../../core/kv/stores";
 import { CloudflareJobQueue } from "./queues";
+import type { ExtractionMessage } from "../../core/extraction/handler";
+import type { VerificationMessage } from "../../core/integrity/verification";
+import { DEFAULT_BACKFILL_BATCH_SIZE, type BackfillMessage } from "../../core/integrity/backfill";
+import { SqlIntegrityBackfillStore } from "../sql/integrity-backfill";
 import { D1SqlClient } from "./sql";
 import { SqlAtomicWrites } from "../sql/writes";
 import { SqlSiteHostStore } from "../sql/site-hosts";
+import { SqlBlobRefStore } from "../sql/blob-refs";
 import { DohDnsResolver } from "../doh/dns";
 import { CloudflareCustomHostnames } from "./custom-hostnames";
 import { NoopProvisioner, type CustomHostnameProvisioner } from "../../core/site/provisioner";
@@ -55,6 +60,11 @@ export function buildDeps(env: Env): Deps {
   const kv = new CloudflareKeyValue(env.KV);
   // One SqlClient per invocation; every repository speaks the port, not D1 (ADR-012 §3).
   const sql = new D1SqlClient(env.DB);
+  // Extraction, hash verification and the hash backfill share one queue and
+  // one consumer (core/extraction/handler.ts tells them apart by `kind`).
+  const containerJobs = env.EXTRACTION_QUEUE
+    ? new CloudflareJobQueue<ExtractionMessage | VerificationMessage | BackfillMessage>(env.EXTRACTION_QUEUE)
+    : null;
 
   return {
     metadata: new SqlMetadataStore(sql),
@@ -67,10 +77,14 @@ export function buildDeps(env: Env): Deps {
     ttlSeconds: parseInt(env.ASSET_TTL_SECONDS, 10) || 3600,
     baseUrl: env.BASE_URL,
     projects: new SqlProjectStore(sql),
-    extractionQueue: env.EXTRACTION_QUEUE ? new CloudflareJobQueue(env.EXTRACTION_QUEUE) : null,
+    extractionQueue: containerJobs,
+    verificationQueue: containerJobs,
+    backfillQueue: containerJobs,
+    integrityBackfills: new SqlIntegrityBackfillStore(sql),
     thumbnailQueue: env.THUMBNAIL_QUEUE ? new CloudflareJobQueue(env.THUMBNAIL_QUEUE) : null,
     storageUsage: new SqlStorageUsageStore(sql),
     pendingCleanup: new SqlCleanupPendingStore(sql),
+    blobRefs: new SqlBlobRefStore(sql),
     // Fail closed: anonymous uploads stay off unless explicitly enabled. The
     // flag lives as a wrangler secret (not in [vars]) so test campaigns can
     // flip it without touching wrangler.toml: `wrangler secret put
@@ -122,6 +136,13 @@ export function buildDeps(env: Env): Deps {
     extractionStuckThresholdMs:
       parseInt(env.EXTRACTION_STUCK_THRESHOLD_SECONDS || "", 10) * 1000 || DEFAULT_STUCK_THRESHOLD_MS,
     limits: { subrequestBudget: CLEANUP_SUBREQUEST_BUDGET },
+    // Hashing rows stored before ADR-017 (P4). Off unless "true": each run
+    // reads a whole object in the extractor container, so turning it on is an
+    // operator's decision about capacity.
+    backfillSettings: {
+      enabled: env.INTEGRITY_BACKFILL_ENABLED === "true",
+      batchSize: parseInt(env.INTEGRITY_BACKFILL_BATCH_SIZE || "", 10) || DEFAULT_BACKFILL_BATCH_SIZE,
+    },
     deliveryTokens: codecForIsolate(env.DELIVERY_TOKEN_KEYS),
   };
 }

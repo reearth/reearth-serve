@@ -1,6 +1,7 @@
 import { AwsClient } from "aws4fetch";
 import type { UploadPart } from "../../core/asset/model";
-import type { PresignedUrlGenerator } from "../../core/asset/repository";
+import type { PresignedPut, PresignedUrlGenerator } from "../../core/asset/repository";
+import { sha256HexToBase64 } from "../../core/asset/integrity";
 
 export class R2PresignedUrlGenerator implements PresignedUrlGenerator {
   private client: AwsClient;
@@ -32,7 +33,14 @@ export class R2PresignedUrlGenerator implements PresignedUrlGenerator {
     return new URL(`/${this.bucket}/${path}`, this.endpoint);
   }
 
-  async generatePutUrl(key: string, contentType: string, expiresInSeconds: number, options?: { contentEncoding?: string }): Promise<string> {
+  /**
+   * A declared SHA-256 (ADR-017 §2) is bound into the signature as the
+   * `x-amz-checksum-sha256` header (base64 of the digest). It is listed in
+   * `X-Amz-SignedHeaders`, so the client must send it verbatim — omitting or
+   * altering it fails the signature — and the store checks the body against it
+   * on write. The header is returned for the session response to hand on.
+   */
+  async generatePutUrl(key: string, contentType: string, expiresInSeconds: number, options?: { contentEncoding?: string; sha256?: string }): Promise<PresignedPut> {
     const url = this.objectUrl(key);
     url.searchParams.set("X-Amz-Expires", String(expiresInSeconds));
 
@@ -40,13 +48,17 @@ export class R2PresignedUrlGenerator implements PresignedUrlGenerator {
     if (options?.contentEncoding) {
       headers["Content-Encoding"] = options.contentEncoding;
     }
+    const extra: Record<string, string> = {};
+    if (options?.sha256) {
+      extra["x-amz-checksum-sha256"] = sha256HexToBase64(options.sha256);
+    }
 
     const signed = await this.client.sign(
-      new Request(url, { method: "PUT", headers }),
+      new Request(url, { method: "PUT", headers: { ...headers, ...extra } }),
       { aws: { signQuery: true } },
     );
 
-    return signed.url;
+    return { url: signed.url, headers: extra };
   }
 
   async createMultipartUpload(key: string, contentType: string, options?: { contentEncoding?: string }): Promise<string> {

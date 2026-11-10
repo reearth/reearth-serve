@@ -1,8 +1,10 @@
 import { Container } from "@cloudflare/containers";
-import { archiveExtractorEnv, objectStoreEnv, type ObjectStoreCredentials } from "./container-env";
+import { archiveExtractorEnv, integrityVerifierEnv, objectStoreEnv, type ObjectStoreCredentials } from "./container-env";
 import type {
   ArchiveExtractorParams,
   ContainerLauncher,
+  IntegrityVerifierOutcome,
+  IntegrityVerifierParams,
   ThumbnailGeneratorParams,
 } from "../../core/container/port";
 
@@ -137,6 +139,35 @@ export class CloudflareContainerLauncher implements ContainerLauncher {
     if (result !== "started") {
       throw new Error(`extractor container failed to start: ${result}`);
     }
+  }
+
+  // Hash verification (ADR-017 §2) runs in the extractor's image and Durable
+  // Object class, with MODE=verify. It needs exactly what extraction needs —
+  // S3 credentials to stream the object and the secret to call back — and is
+  // as long-running (a 250 GiB object), so a separate class would duplicate
+  // the image, the lifetime handling and the capacity settings for no gain.
+  get integrityVerifierAvailable(): boolean {
+    return this.archiveExtractorAvailable;
+  }
+
+  async verifyIntegrity(params: IntegrityVerifierParams): Promise<IntegrityVerifierOutcome> {
+    const { archiveExtractor, objectStore, internalApiSecret } = this.config;
+    if (!archiveExtractor || !objectStore || !internalApiSecret) {
+      throw new Error("archive extractor container is not configured");
+    }
+    // Its own instance per job, never the one extracting the same asset.
+    const stub = archiveExtractor.get(archiveExtractor.idFromName(`verify:${params.jobId}`)) as
+      DurableObjectStub & ArchiveExtractorContainer;
+    const result = await stub.startExtraction({
+      ...objectStoreEnv(objectStore),
+      ...integrityVerifierEnv(params),
+      WORKER_API_URL: this.config.baseUrl,
+      INTERNAL_API_SECRET: internalApiSecret,
+    });
+    if (result !== "started") {
+      throw new Error(`verifier container failed to start: ${result}`);
+    }
+    return { started: true };
   }
 
   get thumbnailGeneratorAvailable(): boolean {
