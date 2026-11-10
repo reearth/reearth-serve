@@ -121,6 +121,7 @@ function fakeDeps(overrides: Partial<Deps> = {}): Deps {
     extractionStuckThresholdMs: 1000,
     limits: { subrequestBudget: 700 },
     backfillSettings: { enabled: false, batchSize: 0 },
+    deliveryTokens: null,
     ...overrides,
   };
 }

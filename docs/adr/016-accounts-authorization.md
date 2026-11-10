@@ -59,7 +59,7 @@ Any new action goes in through one procedure, the policy action change. The firs
 
 `Tenancy.enter(caller)` in `core/tenancy/port.ts` turns a verified caller into a directory user and binds stores and an authorizer to that caller. `tenancyMiddleware` runs after the auth middleware and before the session middleware, which amends ADR-002's middleware order. It calls `enter(caller)` on `/api/v1/*`. On `/api/internal/*`, `/files`, health and the OpenAPI routes it sets `enter(null)`, so a token there costs no directory call. `LocalTenancy` returns the shared SQL stores with `id = sub`, so existing rows need no migration. `AccountsTenancy` closes its stores over the caller's credential, so the token reaches exactly one adapter. The session middleware decides that a request is authenticated from the verified caller, so a route that skips tenancy never mints an anonymous session for a token holder.
 
-A public file read makes no directory call, and neither does a read that a delivery token authorizes (the delivery token section of ADR-014, in review on [PR #16](https://github.com/reearth/reearth-serve/pull/16)). Only a restricted file read that carries an OIDC bearer binds tenancy, through `enterCaller(c, caller)`, which `core/tenancy/middleware.ts` exports and `tenancyMiddleware` itself uses.
+A public file read makes no directory call, and neither does a read that a delivery token authorizes (the delivery token section of [ADR-014](014-asset-access-control.md)). Only a restricted file read that carries an OIDC bearer binds tenancy, through `enterCaller(c, caller)`, which `core/tenancy/middleware.ts` exports and `tenancyMiddleware` itself uses.
 
 ### 2. One decision path
 

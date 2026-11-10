@@ -386,11 +386,11 @@ describe("every URL form obeys the check", () => {
     const claimed = await app.request(`/api/v1/assets/${ASSET_ID}/hosts`, {
       method: "POST",
       headers: { ...auth, "Content-Type": "application/json" },
-      body: JSON.stringify({ hostname: "kawasaki-flood-map" }),
+      body: JSON.stringify({ hostname: "flood-map" }),
     });
     expect(claimed.status).toBe(201);
 
-    const host = `kawasaki-flood-map${SUFFIX}`;
+    const host = `flood-map${SUFFIX}`;
     expect((await app.request(`http://${host}/`, { headers: { Host: host } })).status).toBe(401);
 
     // The form, posted on the site host, comes back through the middleware's
@@ -447,7 +447,7 @@ describe("CORS", () => {
       const res = await preflight(app, ASSET_ID, OWN_ORIGIN);
       // Fixed, not echoed from Access-Control-Request-Headers.
       expect(res.headers.get("Access-Control-Allow-Headers"))
-        .toBe("range, if-none-match, if-modified-since, authorization");
+        .toBe("range, if-none-match, if-modified-since, authorization, x-serve-token");
       expect(res.headers.get("Access-Control-Max-Age")).toBe("86400");
     }
   });
@@ -484,9 +484,11 @@ describe("CORS", () => {
     expect(ok.headers.get("Access-Control-Allow-Origin")).toBe(`https://${host}`);
     expect(ok.headers.get("Access-Control-Allow-Credentials")).toBe("true");
 
-    for (const origin of [`http://${host}`, OWN_ORIGIN]) {
+    for (const origin of [`http://${host}`, OWN_ORIGIN, `https://sibling${SUFFIX}`]) {
       const res = await app.request(`http://${host}/`, { headers: { Host: host, Cookie: cookie, Origin: origin } });
+      expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
       expect(res.headers.get("Access-Control-Allow-Credentials")).toBeNull();
+      expect(res.headers.get("Cross-Origin-Resource-Policy")).toBe("same-origin");
     }
   });
 

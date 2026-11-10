@@ -1,6 +1,6 @@
 import { describe, test, expect } from "vitest";
 import { execSync } from "node:child_process";
-import { request as httpRequest } from "node:http";
+import { request as httpRequest, type IncomingHttpHeaders } from "node:http";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -26,7 +26,9 @@ function get(
   host: string,
   path: string,
   extraHeaders: Record<string, string> = {},
-): Promise<{ status: number; contentType: string; cacheControl: string; robots: string; body: string }> {
+): Promise<{
+  status: number; contentType: string; cacheControl: string; robots: string; body: string; headers: IncomingHttpHeaders;
+}> {
   const base = new URL(BASE);
   return new Promise((resolve, reject) => {
     const req = httpRequest(
@@ -44,6 +46,7 @@ function get(
           cacheControl: res.headers["cache-control"] ?? "",
           robots: (res.headers["x-robots-tag"] as string | undefined) ?? "",
           body,
+          headers: res.headers,
         }));
       },
     );
@@ -111,7 +114,7 @@ describe.skipIf(!SUFFIX)("site hosts", () => {
   });
 
   test("a label that is not an ID is a plain-text 404", async () => {
-    const res = await get(`kawasaki-flood-map${suffix}`, "/");
+    const res = await get(`flood-map${suffix}`, "/");
     expect(res.status).toBe(404);
     expect(res.contentType).toContain("text/plain");
     expect(res.body).toBe("Not found");
@@ -386,6 +389,52 @@ describe.skipIf(!SUFFIX)("site hosts", () => {
     cli(`asset host disable ${assetId} ${first}`);
     expect((await get(`${first}${suffix}`, "/site.zip")).status).toBe(503);
     expect((await get(`${second}${suffix}`, "/site.zip")).status).toBe(200);
+  });
+
+  test("the password form on a site host sets a __Host- cookie", async () => {
+    const token = await signToken();
+    const projectId = await createProjectForAuth(token, "e2e-site-password");
+    const { assetId, hostname } = await claimedSite(token, projectId, "e2e-pw");
+    const patched = await fetch(`${BASE}/api/v1/assets/${assetId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ access: "password", password: "e2e-site-password" }),
+    });
+    expect(patched.status).toBe(200);
+
+    const base = new URL(BASE);
+    const form = new URLSearchParams({ password: "e2e-site-password", next: "/" }).toString();
+    const { status, setCookie } = await new Promise<{ status: number; setCookie: string[] }>((resolve, reject) => {
+      const req = httpRequest(
+        {
+          hostname: base.hostname, port: base.port, path: "/_serve/auth", method: "POST",
+          headers: { Host: hostname, "Content-Type": "application/x-www-form-urlencoded" },
+        },
+        (res) => {
+          res.resume();
+          res.on("end", () => resolve({ status: res.statusCode ?? 0, setCookie: res.headers["set-cookie"] ?? [] }));
+        },
+      );
+      req.on("error", reject);
+      req.end(form);
+    });
+    expect(status).toBe(303);
+    expect(setCookie).toHaveLength(1);
+    const attributes = setCookie[0].split(";").map((part) => part.trim());
+    expect(attributes[0].startsWith("__Host-serve_access=")).toBe(true);
+    expect(attributes).toContain("Secure");
+    expect(attributes).toContain("Path=/");
+    expect(attributes.some((part) => /^domain=/i.test(part))).toBe(false);
+    expect(attributes).toContain("HttpOnly");
+    expect(attributes).toContain("SameSite=Lax");
+
+    const sibling = await get(hostname, "/site.zip", {
+      Cookie: attributes[0], Origin: `https://sibling${suffix}`,
+    });
+    expect(sibling.status).toBe(200);
+    expect(sibling.headers["access-control-allow-origin"]).toBe("*");
+    expect(sibling.headers["access-control-allow-credentials"]).toBeUndefined();
+    expect(sibling.headers["cross-origin-resource-policy"]).toBe("same-origin");
   });
 
   // Custom domains (ADR-013 B5). The Node runtime uses the real DoH adapter,

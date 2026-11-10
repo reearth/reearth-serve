@@ -29,7 +29,7 @@ export default {
 
     // API routes: /api/*, /files/* — plus every path on a site host, whose
     // whole surface is file delivery (ADR-013 B1). Without the host check the
-    // React Router UI would answer at `{assetId}.serve.reearth.land/`.
+    // React Router UI would answer at `{assetId}.sites.example.net/`.
     //
     // Since B5 the host test is "not the apex" rather than "ends with
     // SITE_HOST_SUFFIX": a customer's own domain looks like any other

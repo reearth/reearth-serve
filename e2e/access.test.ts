@@ -23,7 +23,11 @@ try {
 }
 
 const PASSWORD = "e2e-site-password";
+const NODE_RUNTIME = process.env.E2E_NODE_RUNTIME === "true";
+/** `RATE_LIMIT_PER_IP` in core/access/ratelimit.ts; e2e tests talk to the server only. */
+const RATE_LIMIT_PER_IP = 10;
 const BROWSER = { Accept: "text/html,application/xhtml+xml" };
+const EMPTY_ZIP = new Uint8Array([0x50, 0x4b, 0x05, 0x06, ...new Array(18).fill(0)]);
 
 function basic(password: string): Record<string, string> {
   return { Authorization: `Basic ${Buffer.from(`viewer:${password}`).toString("base64")}` };
@@ -35,14 +39,38 @@ describe("password-protected sites", { skip: !mockOidcAvailable }, () => {
   let assetId: string;
   let fileUrl: string;
   let configDir: string;
+  let ownOrigin: string;
+
+  async function formCookie(): Promise<string> {
+    expect((await setAccess({ access: "password", password: PASSWORD })).status).toBe(200);
+    const posted = await fetch(`${BASE}/files/${assetId}/_serve/auth`, {
+      method: "POST",
+      headers: { "Content-Type": "application/x-www-form-urlencoded" },
+      body: new URLSearchParams({ password: PASSWORD, next: "/" }),
+      redirect: "manual",
+    });
+    expect(posted.status).toBe(303);
+    return (posted.headers.get("Set-Cookie") ?? "").split(";")[0];
+  }
 
   /** Protect or unprotect through the API. */
-  async function setAccess(body: unknown): Promise<Response> {
-    return fetch(`${BASE}/api/v1/assets/${assetId}`, {
+  async function setAccess(body: unknown, id = assetId): Promise<Response> {
+    return fetch(`${BASE}/api/v1/assets/${id}`, {
       method: "PATCH",
       headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
       body: JSON.stringify(body),
     });
+  }
+
+  /** A fresh archive behind `password`, so a test can spend its limiter budget alone. */
+  async function protectedFile(password: string): Promise<{ id: string; url: string }> {
+    const { status, body } = await uploadFileWithAuth(
+      EMPTY_ZIP, "site.zip", "application/zip", token, projectId,
+    );
+    expect(status).toBe(201);
+    const id = body.asset.id as string;
+    expect((await setAccess({ access: "password", password }, id)).status).toBe(200);
+    return { id, url: `${BASE}/files/${id}/site.zip` };
   }
 
   beforeAll(async () => {
@@ -56,9 +84,8 @@ describe("password-protected sites", { skip: !mockOidcAvailable }, () => {
     // runs here — no container launcher on this runtime — but the archive
     // itself is served at its own filename, which is enough to prove the
     // access check without depending on the extractor.
-    const zip = new Uint8Array([0x50, 0x4b, 0x05, 0x06, ...new Array(18).fill(0)]);
     const { status, body } = await uploadFileWithAuth(
-      zip, "site.zip", "application/zip", token, projectId,
+      EMPTY_ZIP, "site.zip", "application/zip", token, projectId,
     );
     expect(status).toBe(201);
     assetId = body.asset.id;
@@ -66,6 +93,8 @@ describe("password-protected sites", { skip: !mockOidcAvailable }, () => {
     // Public until someone says otherwise.
     expect(body.asset.access ?? "public").toBe("public");
     fileUrl = `${BASE}/files/${assetId}/site.zip`;
+    // BASE_URL, not BASE: wrangler dev keeps the production BASE_URL.
+    ownOrigin = new URL(body.url).origin;
 
     // The CLI writes credentials under REEARTH_SERVE_CONFIG_DIR; a throwaway
     // directory keeps this suite out of the developer's real config.
@@ -137,6 +166,40 @@ describe("password-protected sites", { skip: !mockOidcAvailable }, () => {
     await res.body?.cancel();
   });
 
+  test("a cookie read is credentialed for Serve's own origin only", async () => {
+    const cookie = await formCookie();
+    expect(cookie.startsWith("serve_access=")).toBe(true);
+
+    const foreign = await fetch(fileUrl, { headers: { Cookie: cookie, Origin: "https://other.example.com" } });
+    expect(foreign.status).toBe(200);
+    expect(foreign.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(foreign.headers.get("Access-Control-Allow-Credentials")).toBeNull();
+    expect(foreign.headers.get("Cross-Origin-Resource-Policy")).toBe("same-origin");
+    await foreign.body?.cancel();
+
+    const own = await fetch(fileUrl, { headers: { Cookie: cookie, Origin: ownOrigin } });
+    expect(own.status).toBe(200);
+    expect(own.headers.get("Access-Control-Allow-Origin")).toBe(ownOrigin);
+    expect(own.headers.get("Access-Control-Allow-Credentials")).toBe("true");
+    expect(own.headers.get("Vary")).toContain("Origin");
+    await own.body?.cancel();
+  });
+
+  test("a preflight allows the fixed headers, not the requested ones", { skip: !NODE_RUNTIME }, async () => {
+    const res = await fetch(fileUrl, {
+      method: "OPTIONS",
+      headers: {
+        Origin: "https://other.example.com",
+        "Access-Control-Request-Method": "GET",
+        "Access-Control-Request-Headers": "x-evil, range",
+      },
+    });
+    expect(res.status).toBe(204);
+    expect(res.headers.get("Access-Control-Allow-Headers"))
+      .toBe("range, if-none-match, if-modified-since, authorization, x-serve-token");
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
+  });
+
   test("a wrong password re-renders the form", async () => {
     const res = await fetch(`${BASE}/files/${assetId}/_serve/auth`, {
       method: "POST",
@@ -148,6 +211,41 @@ describe("password-protected sites", { skip: !mockOidcAvailable }, () => {
     expect(res.headers.get("Set-Cookie")).toBeNull();
     expect(await res.text()).toContain("Wrong password");
   });
+
+  test("after a password change the old password is refused", async () => {
+    const { id, url } = await protectedFile(PASSWORD);
+    const before = await fetch(url, { headers: basic(PASSWORD) });
+    expect(before.status).toBe(200);
+    await before.body?.cancel();
+
+    expect((await setAccess({ access: "password", password: "e2e-site-password-2" }, id)).status).toBe(200);
+
+    const old = await fetch(url, { headers: basic(PASSWORD) });
+    expect(old.status).toBe(401);
+    await old.body?.cancel();
+    const current = await fetch(url, { headers: basic("e2e-site-password-2") });
+    expect(current.status).toBe(200);
+    await current.body?.cancel();
+  });
+
+  for (const header of ["X-Forwarded-For", "CF-Connecting-IP"]) {
+    test(`a client cannot pick its own limiter bucket with ${header}`, { skip: !NODE_RUNTIME }, async () => {
+      const { url } = await protectedFile(PASSWORD);
+      const statuses: number[] = [];
+      let retryAfter: string | null = null;
+      for (let i = 1; i <= RATE_LIMIT_PER_IP + 1; i++) {
+        const res = await fetch(url, {
+          headers: { ...basic(`wrong-password-${i}`), [header]: `198.51.100.${i}` },
+        });
+        statuses.push(res.status);
+        retryAfter = res.headers.get("Retry-After");
+        await res.body?.cancel();
+      }
+      expect(statuses.slice(0, RATE_LIMIT_PER_IP)).toEqual(new Array(RATE_LIMIT_PER_IP).fill(401));
+      expect(statuses[RATE_LIMIT_PER_IP]).toBe(429);
+      expect(Number(retryAfter)).toBeGreaterThan(0);
+    });
+  }
 
   test("`asset protect --off` makes it public again", () => {
     const out = execSync(

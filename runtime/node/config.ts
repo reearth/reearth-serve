@@ -1,3 +1,5 @@
+import { parseDeliveryTokenKeys, type DeliveryKeyRing } from "../../core/access/token";
+
 /**
  * Environment parsing for the Node runtime, kept separate from the wiring so
  * it can be unit-tested without opening a database or a socket.
@@ -46,7 +48,7 @@ export type NodeConfig = {
   tenancy: TenancyConfig;
   /**
    * Wildcard suffix per-asset site hosts live under, e.g.
-   * `.serve.reearth.land` or `.localhost:8788` locally (ADR-013 B1). Unset ⇒
+   * `.sites.example.net` or `.localhost:8788` locally (ADR-013 B1). Unset ⇒
    * site hosts are off. Validated (leading dot) when the app is built.
    */
   siteHostSuffix: string | undefined;
@@ -79,6 +81,7 @@ export type NodeConfig = {
    * (ADR-017 P4). Off by default.
    */
   backfill: { enabled: boolean; batchSize: number };
+  deliveryTokenKeys: DeliveryKeyRing | null;
 };
 
 const DEFAULT_PORT = 8788;
@@ -116,6 +119,7 @@ export function loadConfig(env: Env): NodeConfig {
       enabled: env.INTEGRITY_BACKFILL_ENABLED === "true",
       batchSize: intOr(env.INTEGRITY_BACKFILL_BATCH_SIZE, DEFAULT_BACKFILL_BATCH_SIZE),
     },
+    deliveryTokenKeys: env.DELIVERY_TOKEN_KEYS ? parseDeliveryTokenKeys(env.DELIVERY_TOKEN_KEYS) : null,
   };
 }
 

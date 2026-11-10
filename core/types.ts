@@ -19,6 +19,7 @@ import type { ThumbnailMessage } from "./thumbnail/queue";
 import type { VerificationMessage } from "./integrity/verification";
 import type { BackfillMessage, BackfillSettings } from "./integrity/backfill";
 import type { IntegrityBackfillStore } from "./integrity/repository";
+import type { DeliveryTokenCodec } from "./access/token";
 
 /**
  * Dependencies that route handlers read off the request context.
@@ -145,6 +146,7 @@ export type Deps = ContextDeps & {
    * be open at once (ADR-017 P4).
    */
   backfillSettings: BackfillSettings;
+  deliveryTokens: DeliveryTokenCodec | null;
 };
 
 export type AppEnv = {

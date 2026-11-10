@@ -24,6 +24,7 @@ import {
   DOMAIN_MIGRATIONS_DIR,
   SQL_ADAPTER_MIGRATIONS_DIR,
 } from "../../adapters/memory/sqlite-node";
+import { WebCryptoDeliveryTokenCodec } from "../../adapters/webcrypto/delivery-token";
 import { UnavailableContainerLauncher } from "./container";
 import { loadConfig, type Env, type NodeConfig } from "./config";
 
@@ -129,6 +130,9 @@ export function buildNodeRuntime(env: Env = process.env): NodeRuntime {
     extractionStuckThresholdMs: STUCK_THRESHOLD_MS,
     limits: { subrequestBudget: CLEANUP_SUBREQUEST_BUDGET },
     backfillSettings: config.backfill,
+    deliveryTokens: config.deliveryTokenKeys
+      ? new WebCryptoDeliveryTokenCodec(config.deliveryTokenKeys)
+      : null,
   };
 
   return { config, deps, extractionQueue, thumbnailQueue, kv };

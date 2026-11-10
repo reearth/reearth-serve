@@ -28,6 +28,8 @@ BASE_URL = "https://serve.reearth.land"
 # `wrangler secret delete ANONYMOUS_UPLOAD_ENABLED` disables (fail-closed
 # default in core/app.ts). Defining it here would clobber the secret on
 # every deploy.
+# DELIVERY_TOKEN_KEYS is a wrangler secret for the same reason:
+# `wrangler secret put DELIVERY_TOKEN_KEYS`.
 # The extractor heartbeats job status every ~2 minutes (statusUpdateInterval
 # in container/archive-extractor/worker.go), so a running job whose
 # updated_at is older than 30 minutes has lost its container (e.g. stopped

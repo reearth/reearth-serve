@@ -37,7 +37,7 @@ const NOT_FOUND_FILE = "404.html";
  * A 200 HTML body in place of a missing `.js` chunk, `.json` manifest or
  * `.b3dm` tile is worse than the 404 it replaces: a bundler's dynamic import
  * fails with a syntax error and a 3D Tiles viewer tries to parse HTML as a tile.
- * SPA routes, by contrast, are extensionless (`/about`, `/map/kawasaki`) or end
+ * SPA routes, by contrast, are extensionless (`/about`, `/map/harbor`) or end
  * in a slash. So the fallback is withheld from anything whose last segment ends
  * in a short, file-like extension.
  *

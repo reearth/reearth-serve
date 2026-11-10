@@ -459,6 +459,7 @@ export async function fixture(overrides?: Partial<Deps>) {
     extractionStuckThresholdMs: 1000,
     limits: { subrequestBudget: 700 },
     backfillSettings: { enabled: false, batchSize: 0 },
+    deliveryTokens: null,
     ...overrides,
   };
   return {
