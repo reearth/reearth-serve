@@ -2,6 +2,7 @@ import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { describeRoute } from "hono-openapi";
 import { Scalar } from "@scalar/hono-api-reference";
 import { assetRoutes } from "./asset/handler";
+import { SIGNED_URLS_PATH, signedUrlCors } from "./asset/handler/signed-urls";
 import { fileRoutes } from "./file/handler";
 import { jobRoutes, jobInternalRoutes } from "./job/handler";
 import { projectRoutes } from "./project/handler";
@@ -65,6 +66,10 @@ export function createApp(deps: Deps) {
       })
       : undefined,
   }));
+
+  // The mint route's CORS wraps auth and tenancy, so a browser reads their
+  // refusals too (ADR-014 §4 Mint).
+  app.use(SIGNED_URLS_PATH, signedUrlCors);
 
   // Authentication middleware (JWKS cache comes from deps).
   //
@@ -234,6 +239,7 @@ function injectDeps(
     c.set("cache", deps.cache);
     c.set("signingSecret", deps.signingSecret);
     c.set("credentialedOrigins", deps.credentialedOrigins);
+    c.set("deliveryTokens", deps.deliveryTokens);
     c.set("siteHost", opts.siteHost);
     c.set("bearerVerifier", opts.bearerVerifier);
     await next();

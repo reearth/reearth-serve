@@ -70,7 +70,7 @@ describe("site hosts on", () => {
     const { app } = await on();
     const res = await app.request(...site(ASSET_ID, "/docs?x=1"));
     expect(res.status).toBe(301);
-    expect(res.headers.get("Location")).toBe(`http://${ASSET_ID}${SUFFIX}/docs/?x=1`);
+    expect(res.headers.get("Location")).toBe("/docs/?x=1");
   });
 
   test("HEAD works on a site host", async () => {

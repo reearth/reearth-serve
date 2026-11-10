@@ -31,7 +31,7 @@ describe("index file resolution", () => {
     const { app } = await fixture();
     const res = await app.request(`http://localhost/files/${ASSET_ID}/docs?x=1`);
     expect(res.status).toBe(301);
-    expect(res.headers.get("Location")).toBe(`http://localhost/files/${ASSET_ID}/docs/?x=1`);
+    expect(res.headers.get("Location")).toBe(`/files/${ASSET_ID}/docs/?x=1`);
   });
 
   test("the archive itself is still reachable by its filename", async () => {

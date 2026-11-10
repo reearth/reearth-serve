@@ -15,6 +15,7 @@ import { registerGetVersionRoute } from "./get-version";
 import { registerUpdateVersionRoute } from "./update-version";
 import { registerDeleteVersionRoute } from "./delete-version";
 import { registerSetActiveVersionRoute } from "./set-active-version";
+import { registerSignedUrlsRoute } from "./signed-urls";
 import { registerAssetHostRoutes } from "../../site/handler";
 
 export const assetRoutes = new Hono<AppEnv>();
@@ -41,6 +42,7 @@ registerAssetHostRoutes(assetRoutes);
 // Asset-level routes
 registerListFilesRoute(assetRoutes);
 registerExtractRoute(assetRoutes);
+registerSignedUrlsRoute(assetRoutes);
 registerUploadVersionRoute(assetRoutes);
 registerUpdateAssetRoute(assetRoutes);
 registerGetRoute(assetRoutes);

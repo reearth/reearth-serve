@@ -259,14 +259,14 @@ describe("OpenAPI document", () => {
     expect(paths["/files/{id}/{path}"].get.responses["503"]).not.toEqual({ $ref: "#/components/responses/TenancyUnavailable" });
   });
 
-  test("documents file delivery as anonymous, or a bearer for a restricted asset", async () => {
+  test("documents file delivery as anonymous, or a delivery token or bearer for a restricted asset", async () => {
     const spec = await loadSpec();
     const op = spec.paths["/files/{id}/{path}"]?.get;
     expect(op).toBeDefined();
-    expect(op.security).toEqual([{}, { bearerAuth: [] }]);
+    expect(op.security).toEqual([{}, { serveTokenQuery: [] }, { serveTokenHeader: [] }, { bearerAuth: [] }]);
     expect(paramsOf(spec, op).map((p) => `${p.in}:${p.name}`)).toEqual(
       expect.arrayContaining(["path:id", "path:path", "query:thumb", "header:Range", "header:Accept-Encoding", "header:If-None-Match"]),
     );
-    expect(Object.keys(op.responses).sort()).toEqual(["200", "206", "301", "304", "400", "401", "404", "429", "503"]);
+    expect(Object.keys(op.responses).sort()).toEqual(["200", "206", "301", "304", "400", "401", "403", "404", "429", "503"]);
   });
 });

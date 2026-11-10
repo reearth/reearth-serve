@@ -58,7 +58,7 @@ function decodeOnce(raw: string): string | null {
   return failed ? null : decoded;
 }
 
-function toAssetPath(decoded: string): AssetPath | null {
+export function toAssetPath(decoded: string): AssetPath | null {
   if (decoded.startsWith("/") || /[\\\0]|%2f/i.test(decoded)) return null;
   if (decoded.split("/").some((segment) => segment === "." || segment === "..")) return null;
   return decoded as AssetPath;
