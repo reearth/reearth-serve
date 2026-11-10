@@ -61,6 +61,42 @@ jobs:
       - run: npm ci
       - run: npm run test:e2e:node
 
+  e2e-accounts:
+    name: E2E / accounts policy contract
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ACCOUNTS_SHA: b7d5685eacfc4976d7e62a583506bb1186f18d55
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        with:
+          egress-policy: audit
+      - name: Require a pinned accounts commit
+        run: |
+          if ! [[ "$ACCOUNTS_SHA" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "ACCOUNTS_SHA must be a full reearth-accounts commit SHA, got: $ACCOUNTS_SHA" >&2
+            exit 1
+          fi
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          repository: reearth/reearth-accounts
+          ref: ${{ env.ACCOUNTS_SHA }}
+          path: .accounts
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: .accounts/server/go.mod
+          cache-dependency-path: .accounts/server/go.sum
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run test:e2e:accounts
+        env:
+          ACCOUNTS_DIR: .accounts
+
   container-archive-extractor:
     name: Container / archive-extractor
     runs-on: ubuntu-latest
@@ -135,7 +171,7 @@ jobs:
   # above so the ruleset can require "CI" instead of tracking job names.
   ci:
     name: CI
-    needs: [check, build, e2e-node, container-archive-extractor, container-thumbnail]
+    needs: [check, build, e2e-node, e2e-accounts, container-archive-extractor, container-thumbnail]
     if: always()
     runs-on: ubuntu-latest
     steps:

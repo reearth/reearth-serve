@@ -24,6 +24,7 @@ npm run dev        # Start dev server with HMR (port 5173)
 | `npm run test` | Unit tests only |
 | `npm run test:e2e:dev` | Start the Cloudflare dev server + run E2E tests + shut down |
 | `npm run test:e2e:node` | Same suite against the Node runtime, no cloud credentials |
+| `npm run test:e2e:accounts` | E2E suite for the optional accounts adapter ([`adapters/accounts/README.md`](./adapters/accounts/README.md)) |
 | `npm run start:node` | Start the Node runtime (API only, port 8788) |
 | `npm run test:e2e` | E2E tests (requires running dev server) |
 | `npm run typecheck` | TypeScript type check |
