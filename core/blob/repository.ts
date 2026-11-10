@@ -1,6 +1,16 @@
 import type { BlobRefKey } from "./model";
 
-export type BlobState = "uploading" | "verifying" | "ready" | "deleting";
+/**
+ * - `ready`: verified bytes (or a direct upload about to write them).
+ * - `deleting`: the lock a sweep holds while it removes the object.
+ * - `retired`: not a blob — a presigned upload's classic object, superseded
+ *   when its row was switched to the scope's identical blob (adoption). Never
+ *   referenced; the grace sweep deletes it `BLOB_GRACE_MS` after `zero_since`.
+ * - `uploading`, `verifying`: a presigned session's claim, and a claimed blob
+ *   awaiting the integrity job. Written only before the post-review change
+ *   (sessions no longer write blob keys); still read and settled.
+ */
+export type BlobState = "uploading" | "verifying" | "ready" | "deleting" | "retired";
 
 /** A row of the blob ledger (`blob_refs`, migration 0009). */
 export interface BlobRef extends BlobRefKey {
@@ -19,8 +29,8 @@ export interface BlobRef extends BlobRefKey {
  * Reference counts move only inside `AtomicWrites` — in the same batch that
  * creates or deletes the asset or version row — so a count can never disagree
  * with the rows that hold the key. This port has the transitions that happen
- * outside those writes: reserving a key before bytes are written, claiming
- * one for an upload session, settling verification, and the sweeps.
+ * outside those writes: reserving a key before bytes are written, settling
+ * verification, and the sweeps.
  *
  * Every transition is one conditional statement, so two Workers racing on the
  * same key cannot both win. `deleting` is the lock a sweep takes before it
@@ -39,25 +49,11 @@ export interface BlobRefStore {
    * sweep holds the key: the caller stores at the classic key instead.
    */
   reserve(ref: BlobRefKey, now: number): Promise<boolean>;
-  /**
-   * Claim a key for an upload session that is not store-verified (presigned
-   * multipart, or a presigned single PUT). Only a free key, or one whose claim
-   * has expired, can be claimed — never one that holds bytes somebody may rely
-   * on (ADR-017 §3, "one writer per blob").
-   *
-   * - `claimed`: the row is `uploading`, held by `claimId` until `expiresAt`.
-   * - `busy`: another live claim holds it (the route answers 409).
-   * - `exists`: the key holds, or is about to hold, bytes (`ready`,
-   *   `verifying`, `deleting`).
-   */
-  claim(ref: BlobRefKey, claimId: string, expiresAt: number, now: number): Promise<"claimed" | "busy" | "exists">;
-  /** Give up a claim that never completed (session creation failed). */
-  releaseClaim(key: string, claimId: string): Promise<void>;
   /** The verification job confirmed the hash: `verifying` → `ready`. */
   markVerified(key: string, now: number): Promise<void>;
   /**
-   * Lock an unreferenced blob for deletion: `ready` / `verifying` with
-   * `ref_count = 0` and `zero_since <= zeroBefore` becomes `deleting`. False
+   * Lock an unreferenced blob for deletion: `ready` / `verifying` / `retired`
+   * with `ref_count = 0` and `zero_since <= zeroBefore` becomes `deleting`. False
    * when the row does not qualify (someone attached to it, or it is not old
    * enough).
    */
@@ -70,11 +66,14 @@ export interface BlobRefStore {
   /** Drop a `deleting` row once its object is gone. */
   removeDeleted(key: string): Promise<void>;
   /**
-   * Keys the grace sweep should delete: unreferenced past `zeroBefore`, plus
-   * any `deleting` row a crashed sweep left behind.
+   * Keys the grace sweep should delete: unreferenced (or retired) past
+   * `zeroBefore`, plus any `deleting` row a crashed sweep left behind.
    */
   listSweepable(zeroBefore: number, limit: number): Promise<string[]>;
-  /** Delete `uploading` claims that expired before `now`. Returns how many. */
+  /**
+   * Delete `uploading` claims that expired before `now`. Returns how many.
+   * Only claims written before the post-review change exist.
+   */
   dropExpiredClaims(now: number, limit: number): Promise<number>;
   /** Which of `keys` have a ledger row. */
   existing(keys: string[]): Promise<Set<string>>;

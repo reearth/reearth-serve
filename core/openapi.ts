@@ -68,7 +68,7 @@ export const contentLengthHeaderParam: ParameterSpec = {
   in: "header",
   required: true,
   schema: { type: "integer" },
-  description: "File size in bytes. 0 (or no body) only with `X-Content-SHA256`, to create the asset or version from bytes the workspace already holds.",
+  description: "File size in bytes. 0 (or no body) only with `X-Content-SHA256`, which must then be the SHA-256 of zero bytes (an empty file); any other hash answers 422.",
 };
 
 export const contentEncodingHeaderParam: ParameterSpec = {
@@ -105,7 +105,7 @@ export const contentSha256HeaderParam: ParameterSpec = {
   required: false,
   schema: { type: "string", pattern: "^[0-9a-fA-F]{64}$" },
   description:
-    "SHA-256 of the request body, 64 hex characters (case-insensitive; stored lowercase). The store verifies the body against it and writes nothing on a mismatch (422). Malformed → 400. Without it Serve hashes the body itself; either way the result is recorded as the asset's or version's `sha256` with `integrity: verified`. With `Content-Length: 0` it names bytes already stored in the same workspace: the asset or version is created from them without a transfer, and when the workspace holds no such bytes the empty body is checked against the hash like any other (422 unless it is the SHA-256 of zero bytes, which stores an empty file).",
+    "SHA-256 of the request body, 64 hex characters (case-insensitive; stored lowercase). The store verifies the body against it and writes nothing on a mismatch (422). Malformed → 400. Without it Serve hashes the body itself; either way the result is recorded as the asset's or version's `sha256` with `integrity: verified`. An empty body is checked against it like any other (422 unless it is the SHA-256 of zero bytes, which stores an empty file); there is no hash-only upload. Whether the workspace already stores the bytes never changes the response.",
 };
 
 // --- Shared parameters and responses ---

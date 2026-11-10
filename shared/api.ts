@@ -108,20 +108,21 @@ export const uploadEncodingSchema = enumComponent("UploadEncoding", z.enum(["gzi
  * `error` is for people and may change, the code does not.
  *
  * - `checksum_mismatch` (422) — the declared SHA-256 does not match the bytes;
- *   nothing was stored. Also the answer to a hash-only (empty-body) upload
- *   when the workspace does not hold those bytes.
+ *   nothing was stored. An empty body with a declared hash other than the
+ *   hash of zero bytes always gets this: there is no hash-only upload.
  * - `upload_under_verification` (409) — a new version while the asset's
  *   declared first upload is still `integrity: pending`. Retry once the
  *   asset's `integrity` is `verified`; if the asset is gone, the first upload
  *   was rejected.
- * - `blob_claimed` (409) — another upload session is uploading the same
- *   declared hash into the same workspace. Retry once it completes or expires.
- * - `blob_unavailable` (409) — the stored copy this upload reused was deleted
- *   while the request was in progress. Retry at once (a session is spent:
- *   create a new one); the retry uploads the bytes.
+ * - `blob_unavailable` (409) — a direct upload could not be stored because of
+ *   a concurrent change on the server; nothing was stored. Retry at once.
+ *
+ * Nothing in the published API depends on a duplicate: whether the workspace
+ * already stores the bytes never changes a response (ADR-017 §4). The
+ * `blob_claimed` code that P5 briefly defined is gone; it was never released.
  */
 export const errorCodeSchema = enumComponent("ErrorCode", z.enum([
-  "checksum_mismatch", "upload_under_verification", "blob_claimed", "blob_unavailable",
+  "checksum_mismatch", "upload_under_verification", "blob_unavailable",
 ]));
 
 // --- Role ---

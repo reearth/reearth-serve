@@ -1,4 +1,5 @@
-// Workspace-scoped deduplication of direct uploads (ADR-017 §4, phase P3),
+// Workspace-scoped deduplication of direct uploads (ADR-017 §4, phase P3 as
+// amended by the post-review change: no hash-only uploads),
 // against the real SQL ledger and row writes and the in-memory object store.
 import { createHash } from "node:crypto";
 import { beforeEach, describe, expect, test, vi } from "vitest";
@@ -87,7 +88,7 @@ describe("storeDirectUpload", () => {
     const stored = await storeDirectUpload(storage, blobIn("w1"), {
       body: trackedBody(data).body, size: data.byteLength, contentType: "t", sha256: sha256(data),
     }, "assets/a/f");
-    expect(stored).toEqual({ key: blobRefKey("w1", sha256(data)).key, ref: blobRefKey("w1", sha256(data)), reused: false, sha256: sha256(data), size: 5 });
+    expect(stored).toEqual({ key: blobRefKey("w1", sha256(data)).key, ref: blobRefKey("w1", sha256(data)), sha256: sha256(data), size: 5 });
     expect(put).toHaveBeenCalledOnce();
   });
 
@@ -100,7 +101,7 @@ describe("storeDirectUpload", () => {
     const { body, state } = trackedBody(data);
     const stored = await storeDirectUpload(storage, blobIn("w1"), { body, size: data.byteLength, contentType: "t", sha256: sha256(data) }, "assets/b/f");
 
-    expect(stored).toMatchObject({ reused: true, sha256: sha256(data), size: data.byteLength });
+    expect(stored).toMatchObject({ reuse: { since: expect.any(Number) }, sha256: sha256(data), size: data.byteLength });
     expect(state.finished).toBe(true);
     expect(digest).toHaveBeenCalledOnce();
     expect(put).not.toHaveBeenCalled();
@@ -130,37 +131,34 @@ describe("storeDirectUpload", () => {
     const stored = await storeDirectUpload(storage, blobIn("w2"), {
       body: trackedBody(data).body, size: data.byteLength, contentType: "t", sha256: sha256(data),
     }, "assets/b/f");
-    expect(stored).toMatchObject({ key: blobRefKey("w2", sha256(data)).key, reused: false });
+    expect(stored).toMatchObject({ key: blobRefKey("w2", sha256(data)).key });
     expect(put).toHaveBeenCalledOnce();
   });
 
-  test("an empty body with a declared hash reuses what the scope holds, sized by the stored object", async () => {
+  test("an empty body with a declared hash is a mismatch even when the scope holds those bytes, and the ledger is not consulted", async () => {
     const data = bytes("twenty-one bytes long");
-    await upload(data);
-    const stored = await storeDirectUpload(storage, blobIn("w1"), { body: empty(), size: 0, contentType: "t", sha256: sha256(data) }, "assets/b/f");
-    expect(stored).toMatchObject({ reused: true, sha256: sha256(data), size: 21 });
-  });
-
-  test("an empty body naming bytes the scope does not hold is a plain mismatch, and reserves nothing", async () => {
-    const data = bytes("held elsewhere only");
     await upload(data); // in w1
+    const find = vi.spyOn(refs, "find");
+    const reserve = vi.spyOn(refs, "reserve");
     const put = vi.spyOn(storage, "put");
-    for (const scope of ["w1-other", "w2"]) {
+    for (const scope of ["w1", "w2"]) {
       await expect(storeDirectUpload(storage, blobIn(scope), { body: empty(), size: 0, contentType: "t", sha256: sha256(data) }, "assets/b/f"))
         .rejects.toEqual(new ChecksumMismatchError(sha256(data), EMPTY_SHA256));
-      expect(await refs.find(blobRefKey(scope, sha256(data)).key)).toBeNull();
     }
+    expect(find).not.toHaveBeenCalled();
+    expect(reserve).not.toHaveBeenCalled();
     expect(put).not.toHaveBeenCalled();
+    expect(await refs.find(blobRefKey("w2", sha256(data)).key)).toBeNull();
   });
 
   test("an empty body declaring the empty-string hash stores an empty file, and reuses it the second time", async () => {
     const first = await storeDirectUpload(storage, blobIn("w1"), { body: empty(), size: 0, contentType: "t", sha256: EMPTY_SHA256 }, "assets/a/f");
-    expect(first).toMatchObject({ reused: false, sha256: EMPTY_SHA256, size: 0, key: blobRefKey("w1", EMPTY_SHA256).key });
+    expect(first).toMatchObject({ sha256: EMPTY_SHA256, size: 0, key: blobRefKey("w1", EMPTY_SHA256).key });
     expect((await storage.head(first.key))?.size).toBe(0);
 
     await upload(new Uint8Array(0), { body: empty() });
     const second = await storeDirectUpload(storage, blobIn("w1"), { body: empty(), size: 0, contentType: "t", sha256: EMPTY_SHA256 }, "assets/b/f");
-    expect(second).toMatchObject({ reused: true, size: 0 });
+    expect(second).toMatchObject({ reuse: { since: expect.any(Number) }, size: 0 });
   });
 
   test("a ledger that says ready but an object that is gone refuses the upload instead of recording it", async () => {
@@ -195,42 +193,41 @@ describe("uploadAsset / uploadVersion with bytes already stored", () => {
     expect(await refs.find(fresh.asset.blobKey!)).toMatchObject({ refCount: 2, state: "ready" });
   });
 
-  test("an empty-bodied first upload is recorded exactly as the full one would be", async () => {
+  test("an empty-bodied first upload naming stored bytes is refused like any wrong declaration: no row, no usage", async () => {
     const data = bytes("the full content");
-    const fresh = await upload(data, { name: "f.txt", type: "text/plain" });
-    const viaHash = await upload(data, { name: "f.txt", type: "text/plain", body: empty(), size: 0 });
-    expect(comparable(viaHash.asset)).toEqual(comparable(fresh.asset));
-    expect(viaHash.asset.size).toBe(data.byteLength);
-    expect(await usage.get("workspace:w1")).toMatchObject({ totalSize: 2 * data.byteLength, assetCount: 2 });
+    await upload(data, { name: "f.txt", type: "text/plain" });
+    const before = await usage.get("workspace:w1");
+    await expect(upload(data, { name: "f.txt", type: "text/plain", body: empty(), size: 0 })).rejects.toBeInstanceOf(ChecksumMismatchError);
+    expect(await usage.get("workspace:w1")).toEqual(before);
+    expect(await refs.find(blobRefKey("w1", sha256(data)).key)).toMatchObject({ refCount: 1 });
   });
 
-  test("a new version from bytes already stored: verified, sized, counted, and no extra write", async () => {
+  test("a new version from bytes already stored: the body is read in full, verified, sized, counted, and not written again", async () => {
     const data = bytes("version content");
     const { asset } = await upload(data);
     const put = vi.spyOn(storage, "put");
+    const tracked = trackedBody(data);
 
     const full = await uploadVersion(metadata, writes, storage, asset.id,
-      { name: "data.bin", type: "application/octet-stream", body: trackedBody(data).body, size: data.byteLength, sha256: sha256(data) },
-      BASE, { usageScopes: SCOPES, blob: blobIn("w1") });
-    const empty0 = await uploadVersion(metadata, writes, storage, asset.id,
-      { name: "data.bin", type: "application/octet-stream", body: empty(), size: 0, sha256: sha256(data) },
+      { name: "data.bin", type: "application/octet-stream", body: tracked.body, size: data.byteLength, sha256: sha256(data) },
       BASE, { usageScopes: SCOPES, blob: blobIn("w1") });
 
+    expect(tracked.state.finished).toBe(true);
     expect(put).not.toHaveBeenCalled();
-    for (const r of [full!, empty0!]) {
-      expect(r.version).toMatchObject({ integrity: "verified", sha256: sha256(data), size: data.byteLength, blobKey: asset.blobKey });
-    }
-    const { id: _a, version: _n, createdAt: _c, ...a } = full!.version;
-    const { id: _b, version: _m, createdAt: _d, ...b } = empty0!.version;
-    expect(a).toEqual(b);
-    expect(await refs.find(asset.blobKey!)).toMatchObject({ refCount: 3 });
-    expect(await usage.get("workspace:w1")).toMatchObject({ totalSize: 3 * data.byteLength, assetCount: 3 });
+    expect(full!.version).toMatchObject({ integrity: "verified", sha256: sha256(data), size: data.byteLength, blobKey: asset.blobKey });
+    expect(await refs.find(asset.blobKey!)).toMatchObject({ refCount: 2 });
+    expect(await usage.get("workspace:w1")).toMatchObject({ totalSize: 2 * data.byteLength, assetCount: 2 });
+
+    // A hash-only version is a wrong declaration, whatever the scope holds.
+    await expect(uploadVersion(metadata, writes, storage, asset.id,
+      { name: "data.bin", type: "application/octet-stream", body: empty(), size: 0, sha256: sha256(data) },
+      BASE, { usageScopes: SCOPES, blob: blobIn("w1") })).rejects.toBeInstanceOf(ChecksumMismatchError);
+    expect(await refs.find(asset.blobKey!)).toMatchObject({ refCount: 2 });
   });
 
-  test("the blob losing its last reference while the body is read: 409-able error, no row, no usage", async () => {
+  test("the blob losing its last reference while the body is read: still attached, since its object is in its grace period", async () => {
     const data = bytes("raced away");
     const first = await upload(data);
-    const usageBefore = await usage.get("workspace:w1");
     // The other asset is deleted while this upload's body is in flight.
     const realDigest = storage.digest.bind(storage);
     vi.spyOn(storage, "digest").mockImplementation(async (body, size) => {
@@ -238,16 +235,36 @@ describe("uploadAsset / uploadVersion with bytes already stored", () => {
       await writes.deleteAsset({ asset: first.asset, usageScopes: SCOPES, cleanupPrefix: `assets/${first.asset.id}/` });
       return result;
     });
+
+    const second = await upload(data);
+    expect(second.asset.blobKey).toBe(first.asset.blobKey);
+    expect(await refs.find(first.asset.blobKey!)).toMatchObject({ refCount: 1, state: "ready" });
+    expect((await refs.find(first.asset.blobKey!))?.zeroSince).toBeUndefined();
+    expect(await usage.get("workspace:w1")).toMatchObject({ totalSize: data.byteLength, assetCount: 1 });
+  });
+
+  test("a sweep locking the blob while the body is read: 409-able error, no row, no usage", async () => {
+    const data = bytes("swept away");
+    const first = await upload(data);
+    const usageBefore = await usage.get("workspace:w1");
+    const realDigest = storage.digest.bind(storage);
+    vi.spyOn(storage, "digest").mockImplementation(async (body, size) => {
+      const result = await realDigest(body, size);
+      await writes.deleteAsset({ asset: first.asset, usageScopes: SCOPES, cleanupPrefix: `assets/${first.asset.id}/` });
+      await refs.markDeleting(first.asset.blobKey!, Number.MAX_SAFE_INTEGER, Date.now());
+      return result;
+    });
     const createAsset = vi.spyOn(writes, "createAsset");
 
-    await expect(upload(data)).rejects.toBeInstanceOf(BlobUnavailableError);
+    const error = await upload(data).catch((e: unknown) => e);
+    expect(error).toBeInstanceOf(BlobUnavailableError);
+    // The message names no duplicate: it is the one answer only a duplicate can get.
+    expect((error as Error).message).not.toMatch(/copy|duplicate|already|exist/i);
 
     expect(createAsset).toHaveBeenCalledOnce(); // tried, and the batch refused it
     const created = createAsset.mock.calls[0][0].asset.id;
     expect(await metadata.find(created)).toBeNull();
     expect(await usage.get("workspace:w1")).toMatchObject({ totalSize: usageBefore!.totalSize - data.byteLength, assetCount: usageBefore!.assetCount - 1 });
-    // The bytes are left for the grace sweep, as for any blob at zero.
-    expect(await storage.head(first.asset.blobKey!)).not.toBeNull();
   });
 
   test("the same race on a new version", async () => {
@@ -258,6 +275,7 @@ describe("uploadAsset / uploadVersion with bytes already stored", () => {
     vi.spyOn(storage, "digest").mockImplementation(async (body, size) => {
       const result = await realDigest(body, size);
       await writes.deleteAsset({ asset: holder.asset, usageScopes: SCOPES, cleanupPrefix: `assets/${holder.asset.id}/` });
+      await refs.markDeleting(holder.asset.blobKey!, Number.MAX_SAFE_INTEGER, Date.now());
       return result;
     });
     await expect(uploadVersion(metadata, writes, storage, asset.id,

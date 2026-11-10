@@ -3,14 +3,15 @@
  * request (ADR-017 P5).
  *
  * The hash is always computed before the first request: an upload session
- * needs it up front (it names the blob key before a byte is written), and so
- * does the hash-only request that asks for bytes the workspace already holds.
- * A file read into memory is hashed from that buffer, so the cost is CPU only.
- * A file streamed from disk (over `LARGE_FILE_THRESHOLD`) is read twice — once
- * to hash, once to upload — and the hashing pass shows its own progress.
- * Reading a local disk is far faster than any upload link, and the pass is
- * what lets a re-upload of bytes the workspace holds skip the transfer
- * entirely.
+ * takes it at creation, and a direct upload sends it as a header in front of
+ * the body. A file read into memory is hashed from that buffer, so the cost
+ * is CPU only. A file streamed from disk (over `LARGE_FILE_THRESHOLD`) is read
+ * twice — once to hash, once to upload — and the hashing pass shows its own
+ * progress. Reading a local disk is far faster than any upload link.
+ *
+ * Every upload sends the whole file. The server never tells a client whether
+ * the workspace already stores the bytes (ADR-017 §4), so there is nothing to
+ * skip; what a duplicate saves is storage on the server.
  *
  * The hash covers the bytes *sent*: after the CLI's own gzip, when it gzips.
  * The encoding is the CLI's decision and is stated to the server
@@ -32,20 +33,11 @@ export const MULTIPART_THRESHOLD = 100 * MIB;
 export const PART_SIZE = 100 * MIB;
 /** The largest body the Worker accepts on a direct upload. */
 export const DIRECT_UPLOAD_LIMIT = 100 * MIB;
-/**
- * From this size, a direct upload first sends only the hash (empty body) and
- * sends the bytes only when the workspace does not hold them. The probe is one
- * extra round trip; below about 1 MiB the full body costs about as much as the
- * probe on a typical link, so the probe would rarely save anything.
- */
-export const PROBE_THRESHOLD = 1 * MIB;
 const MAX_CONCURRENCY = 4;
 const MIN_COMPRESS_SIZE = 1024;
 
-/** Retries of an upload whose reused bytes vanished mid-request (`blob_unavailable`). */
+/** Retries of a direct upload the server could not store because of a concurrent change (`blob_unavailable`). */
 const BLOB_UNAVAILABLE_RETRIES = 2;
-/** Waits between session attempts while another session holds the blob (`blob_claimed`). */
-export const BLOB_CLAIMED_DELAYS_MS = [10_000, 20_000, 40_000, 60_000, 60_000, 60_000];
 /** Polling while a first upload is verified (`upload_under_verification`). */
 const VERIFICATION_POLL_MIN_MS = 5_000;
 const VERIFICATION_POLL_MAX_MS = 60_000;
@@ -118,11 +110,10 @@ export function preparePayload(fileName: string, contentType: string, fileData: 
 
 // --- Direct uploads (through the Worker) ---
 
-async function postDirect(endpoint: string, path: string, p: Payload, withBody: boolean): Promise<Response> {
-  const body = withBody ? p.data : new Uint8Array(0);
+async function postDirect(endpoint: string, path: string, p: Payload): Promise<Response> {
   const headers: Record<string, string> = {
     "Content-Type": p.contentType,
-    "Content-Length": String(body.byteLength),
+    "Content-Length": String(p.data.byteLength),
     "X-Filename": p.fileName,
     "X-Content-SHA256": p.sha256,
     ...(await commonHeaders()),
@@ -132,39 +123,26 @@ async function postDirect(endpoint: string, path: string, p: Payload, withBody: 
     headers["X-Original-Size"] = String(p.originalSize);
   }
   if (p.skipExtraction) headers["X-Skip-Extraction"] = "true";
-  const res = await fetch(`${endpoint}${path}`, { method: "POST", headers, body: body as BodyInit });
+  const res = await fetch(`${endpoint}${path}`, { method: "POST", headers, body: p.data as BodyInit });
   adoptSessionId(res);
   return res;
 }
 
-/**
- * One direct upload: the hash alone first when the file is large enough
- * (ADR-017 §4 — the workspace may already hold the bytes), then the bytes.
- *
- * A probe answered 422 (the workspace does not hold the bytes) or 400 (a
- * server that predates hash-only uploads) falls through to the full upload.
- * A 409 is the caller's to handle; 401/403/404/413 would only repeat.
- */
+/** One direct upload. A 409 is the caller's to handle; 401/403/404/413 would only repeat. */
 async function sendDirect<T>(endpoint: string, path: string, p: Payload): Promise<T> {
-  if (p.data.byteLength >= PROBE_THRESHOLD) {
-    const probe = await postDirect(endpoint, path, p, false);
-    if (probe.ok) return probe.json() as Promise<T>;
-    if (![400, 422].includes(probe.status)) throw await failure(probe, "Upload");
-    await probe.text().catch(() => {});
-  }
-  const res = await postDirect(endpoint, path, p, true);
+  const res = await postDirect(endpoint, path, p);
   if (!res.ok) throw await failure(res, "Upload");
   return res.json() as Promise<T>;
 }
 
-/** `POST /api/v1/assets`, retried when reused bytes vanish under it. */
+/** `POST /api/v1/assets`, retried on `blob_unavailable`. */
 export async function uploadDirect(endpoint: string, p: Payload, deps: TransferDeps = defaultDeps): Promise<AssetUploadResult> {
   for (let attempt = 0; ; attempt++) {
     try {
       return await sendDirect<AssetUploadResult>(endpoint, PATHS.assets, p);
     } catch (e) {
       if (hasCode(e, "blob_unavailable") && attempt < BLOB_UNAVAILABLE_RETRIES) {
-        deps.log("The stored copy of this content was deleted during the upload; uploading again.");
+        deps.log("The server could not store the upload because of a concurrent change; uploading again.");
         continue;
       }
       throw e;
@@ -195,7 +173,7 @@ export async function uploadVersionDirect(
       return await sendDirect(endpoint, PATHS.assetUpload(assetId), p);
     } catch (e) {
       if (hasCode(e, "blob_unavailable") && unavailableRetries++ < BLOB_UNAVAILABLE_RETRIES) {
-        deps.log("The stored copy of this content was deleted during the upload; uploading again.");
+        deps.log("The server could not store the upload because of a concurrent change; uploading again.");
         continue;
       }
       if (hasCode(e, "upload_under_verification")) {
@@ -297,7 +275,7 @@ async function complete(endpoint: string, uploadId: string, parts?: { partNumber
 
 /**
  * One session: create it with the declared hash and the stated encoding,
- * upload the parts (none when the workspace already holds the bytes), complete.
+ * upload the parts, complete.
  * `null` when the server has no presigned uploads (501).
  */
 async function runSession(endpoint: string, u: SessionUpload): Promise<AssetUploadResult | null> {
@@ -332,7 +310,6 @@ async function runSession(endpoint: string, u: SessionUpload): Promise<AssetUplo
   }
 
   if ("parts" in session) {
-    // `parts: []`: the workspace already holds these bytes. Nothing to send.
     const etags: { partNumber: number; etag: string }[] = [];
     const parts = session.parts.filter((part) => (part.partNumber - 1) * PART_SIZE < source.size);
     const showProgress = parts.length > 1;
@@ -363,46 +340,21 @@ async function runSession(endpoint: string, u: SessionUpload): Promise<AssetUplo
 }
 
 /**
- * A presigned upload with its conflicts handled:
- *
- * - `blob_unavailable` at completion — the bytes the session meant to reuse
- *   were deleted; the session is spent. A new session uploads them.
- * - `blob_claimed` — another session is uploading the same bytes into this
- *   workspace. `fallback` (a direct upload, for a file small enough) is used
- *   at once when given; otherwise the session is retried on a bounded
- *   backoff, and then the CLI gives up with an explanation.
+ * A presigned upload. `null` when the server has no presigned uploads (501).
+ * A `blob_unavailable` (which current servers never send for a session) is
+ * retried with a new session, since the old one is spent.
  */
 export async function uploadViaSession(
   endpoint: string,
   u: SessionUpload,
-  options: { fallback?: () => Promise<AssetUploadResult> } = {},
   deps: TransferDeps = defaultDeps,
 ): Promise<AssetUploadResult | null> {
-  let unavailableRetries = 0;
-  let claimedAttempt = 0;
-  for (;;) {
+  for (let attempt = 0; ; attempt++) {
     try {
       return await runSession(endpoint, u);
     } catch (e) {
-      if (hasCode(e, "blob_unavailable") && unavailableRetries++ < BLOB_UNAVAILABLE_RETRIES) {
-        deps.log("The stored copy of this content was deleted during the upload; starting a new upload session.");
-        continue;
-      }
-      if (hasCode(e, "blob_claimed")) {
-        if (options.fallback) {
-          deps.log("Another upload of the same content is in progress in this workspace; uploading directly instead.");
-          return options.fallback();
-        }
-        const delay = BLOB_CLAIMED_DELAYS_MS[claimedAttempt++];
-        if (delay === undefined) {
-          throw new Error(
-            `Another upload of the same content (sha256 ${u.sha256}) is still in progress in this workspace. ` +
-            "If it is an interrupted run of this command, its claim lasts until that upload session expires " +
-            "(up to 24 hours). Try again later.",
-          );
-        }
-        deps.log(`Another upload of the same content is in progress in this workspace; retrying in ${delay / 1000} s...`);
-        await deps.sleep(delay);
+      if (hasCode(e, "blob_unavailable") && attempt < BLOB_UNAVAILABLE_RETRIES) {
+        deps.log("The server could not store the upload because of a concurrent change; starting a new upload session.");
         continue;
       }
       throw e;
@@ -441,7 +393,7 @@ export async function uploadLargeFile(
     };
     return await uploadViaSession(endpoint, {
       fileName, contentType, originalSize: fileSize, encoding: "identity", sha256, skipExtraction, source,
-    }, {}, deps);
+    }, deps);
   } finally {
     await fh.close();
   }

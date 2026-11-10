@@ -1,6 +1,6 @@
 /**
- * The CLI's side of ADR-017 P5: what it declares, when it sends only the
- * hash, and how it reacts to each 409. `fetch` is replaced by a scripted
+ * The CLI's side of ADR-017 P5: what it declares, that it always sends the
+ * whole file, and how it reacts to each 409. `fetch` is replaced by a scripted
  * server that records every request, so each test reads as "the server
  * answered X, the CLI then sent Y".
  */
@@ -18,7 +18,7 @@ vi.mock("./helpers", async (importOriginal) => ({
 }));
 
 const {
-  BLOB_CLAIMED_DELAYS_MS, PROBE_THRESHOLD, bufferSource, preparePayload, uploadDirect, uploadLargeFile,
+  bufferSource, preparePayload, uploadDirect, uploadLargeFile,
   uploadVersionDirect, uploadViaSession,
 } = await import("./transfer");
 const { sha256File, EMPTY_SHA256 } = await import("./hash");
@@ -105,28 +105,21 @@ describe("direct uploads", () => {
     expect(requests[0].headers["Content-Length"]).toBe("0");
   });
 
-  test("a large file sends the hash alone first; bytes the workspace holds are not sent", async () => {
+  test("a large file is sent whole in one request, never as a hash-only probe", async () => {
     const requests = fakeServer(() => ({ status: 201, json: assetResult }));
-    const p = preparePayload("big.zip", "application/zip", new Uint8Array(PROBE_THRESHOLD).fill(1));
+    const size = 2 * 1024 * 1024;
+    const p = preparePayload("big.zip", "application/zip", new Uint8Array(size).fill(1));
     expect(await uploadDirect("http://srv", p, deps())).toEqual(assetResult);
     expect(requests).toHaveLength(1);
-    expect(requests[0].headers["Content-Length"]).toBe("0");
-    expect(requests[0].body.byteLength).toBe(0);
+    expect(requests[0].headers["Content-Length"]).toBe(String(size));
+    expect(requests[0].body.byteLength).toBe(size);
     expect(requests[0].headers["X-Content-SHA256"]).toBe(p.sha256);
   });
 
-  test.each([422, 400])("a probe answered %i is followed by the full upload", async (status) => {
-    const requests = fakeServer((_, i) => (i === 0 ? { status, json: { error: "no" } } : { status: 201, json: assetResult }));
-    const p = preparePayload("big.zip", "application/zip", new Uint8Array(PROBE_THRESHOLD).fill(1));
-    await uploadDirect("http://srv", p, deps());
-    expect(requests).toHaveLength(2);
-    expect(requests[1].body.byteLength).toBe(PROBE_THRESHOLD);
-  });
-
-  test("a probe answered 404 is not repeated with the body", async () => {
-    const requests = fakeServer(() => ({ status: 404, json: { error: "Project not found" } }));
-    const p = preparePayload("big.zip", "application/zip", new Uint8Array(PROBE_THRESHOLD).fill(1));
-    await expect(uploadDirect("http://srv", p, deps())).rejects.toThrow("404");
+  test("a 422 is not followed by another request", async () => {
+    const requests = fakeServer(() => ({ status: 422, json: { error: "mismatch", code: "checksum_mismatch" } }));
+    const p = preparePayload("big.zip", "application/zip", new Uint8Array(2 * 1024 * 1024).fill(1));
+    await expect(uploadDirect("http://srv", p, deps())).rejects.toMatchObject({ status: 422, code: "checksum_mismatch" });
     expect(requests).toHaveLength(1);
   });
 
@@ -196,45 +189,31 @@ describe("upload sessions", () => {
       return { status: 201, json: assetResult };
     });
     const p = preparePayload("data.json", "application/json", new TextEncoder().encode("{}".repeat(1000)));
-    await uploadViaSession("http://srv", session(p), {}, deps());
+    await uploadViaSession("http://srv", session(p), deps());
     const init = JSON.parse(new TextDecoder().decode(requests[0].body));
     expect(init).toMatchObject({ sha256: p.sha256, contentEncoding: "gzip", size: 2000 });
     expect(requests[1].headers["x-amz-checksum-sha256"]).toBe("b64");
     expect(requests[1].body).toEqual(p.data);
   });
 
-  test("parts: [] uploads nothing and completes with no parts", async () => {
-    const requests = fakeServer((req) => (req.url.endsWith("/uploads")
-      ? { status: 201, json: { uploadId: "u1", parts: [], expiresAt: 0 } }
-      : { status: 201, json: assetResult }));
+  test("a multipart session uploads every part and completes with their ETags", async () => {
+    const requests = fakeServer((req) => {
+      if (req.url.endsWith("/uploads")) {
+        return { status: 201, json: { uploadId: "u1", parts: [{ partNumber: 1, url: "http://store/p1" }], expiresAt: 0 } };
+      }
+      if (req.url === "http://store/p1") return { status: 200, headers: { ETag: "\"e1\"" } };
+      return { status: 201, json: assetResult };
+    });
     const p = preparePayload("photo.png", "image/png", new Uint8Array(5000));
-    expect(await uploadViaSession("http://srv", session(p), {}, deps())).toEqual(assetResult);
-    expect(requests).toHaveLength(2);
-    expect(requests[1].url).toContain("/uploads/u1/complete");
-    expect(JSON.parse(new TextDecoder().decode(requests[1].body))).toEqual({ parts: [] });
+    expect(await uploadViaSession("http://srv", session(p), deps())).toEqual(assetResult);
+    expect(requests[1].body).toEqual(p.data);
+    expect(JSON.parse(new TextDecoder().decode(requests[2].body))).toEqual({ parts: [{ partNumber: 1, etag: "\"e1\"" }] });
   });
 
   test("refuses a server that ignored the stated encoding", async () => {
-    fakeServer(() => ({ status: 201, json: { uploadId: "u1", parts: [], contentEncoding: "gzip", expiresAt: 0 } }));
+    fakeServer(() => ({ status: 201, json: { uploadId: "u1", parts: [{ partNumber: 1, url: "http://store/p1" }], contentEncoding: "gzip", expiresAt: 0 } }));
     const p = preparePayload("photo.png", "image/png", new Uint8Array(5000));
-    await expect(uploadViaSession("http://srv", session(p), {}, deps())).rejects.toThrow(/predates this CLI/);
-  });
-
-  test("blob_claimed falls back to a direct upload when one is offered", async () => {
-    fakeServer(() => conflict("blob_claimed"));
-    const fallback = vi.fn(async () => assetResult as never);
-    const p = preparePayload("photo.png", "image/png", new Uint8Array(5000));
-    expect(await uploadViaSession("http://srv", session(p), { fallback }, deps())).toEqual(assetResult);
-    expect(fallback).toHaveBeenCalledOnce();
-  });
-
-  test("blob_claimed without a fallback backs off a bounded number of times, then explains", async () => {
-    const requests = fakeServer(() => conflict("blob_claimed"));
-    const d = deps();
-    const p = preparePayload("photo.png", "image/png", new Uint8Array(5000));
-    await expect(uploadViaSession("http://srv", session(p), {}, d)).rejects.toThrow(/still in progress in this workspace/);
-    expect(d.sleep.mock.calls.map((c) => c[0])).toEqual(BLOB_CLAIMED_DELAYS_MS);
-    expect(requests).toHaveLength(BLOB_CLAIMED_DELAYS_MS.length + 1);
+    await expect(uploadViaSession("http://srv", session(p), deps())).rejects.toThrow(/predates this CLI/);
   });
 
   test("blob_unavailable at completion starts a new session", async () => {
@@ -243,7 +222,7 @@ describe("upload sessions", () => {
       if (req.url.endsWith("/uploads")) {
         sessions++;
         return sessions === 1
-          ? { status: 201, json: { uploadId: "u1", parts: [], expiresAt: 0 } }
+          ? { status: 201, json: { uploadId: "u1", url: "http://store/put", method: "PUT", headers: {}, expiresAt: 0 } }
           : { status: 201, json: { uploadId: "u2", url: "http://store/put", method: "PUT", headers: {}, expiresAt: 0 } };
       }
       if (req.url.includes("/uploads/u1/complete")) return conflict("blob_unavailable");
@@ -251,9 +230,9 @@ describe("upload sessions", () => {
       return { status: 201, json: assetResult };
     });
     const p = preparePayload("photo.png", "image/png", new Uint8Array(5000));
-    expect(await uploadViaSession("http://srv", session(p), {}, deps())).toEqual(assetResult);
+    expect(await uploadViaSession("http://srv", session(p), deps())).toEqual(assetResult);
     expect(requests.map((r) => new URL(r.url).pathname)).toEqual([
-      "/api/v1/assets/uploads", "/api/v1/assets/uploads/u1/complete",
+      "/api/v1/assets/uploads", "/put", "/api/v1/assets/uploads/u1/complete",
       "/api/v1/assets/uploads", "/put", "/api/v1/assets/uploads/u2/complete",
     ]);
   });
@@ -261,7 +240,7 @@ describe("upload sessions", () => {
   test("a 501 means no presigned uploads", async () => {
     fakeServer(() => ({ status: 501, json: { error: "no" } }));
     const p = preparePayload("photo.png", "image/png", new Uint8Array(5000));
-    expect(await uploadViaSession("http://srv", session(p), {}, deps())).toBeNull();
+    expect(await uploadViaSession("http://srv", session(p), deps())).toBeNull();
   });
 });
 

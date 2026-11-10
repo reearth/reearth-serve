@@ -1,9 +1,7 @@
 import type { MultipartUploadResult, PresignedUploadResult, UploadSession } from "../model";
-import type { FileStorage, PresignedPut, PresignedUrlGenerator, UploadSessionStore } from "../repository";
+import type { PresignedPut, PresignedUrlGenerator, UploadSessionStore } from "../repository";
 import { shouldCompress } from "../compression";
 import { generateId, storageKey } from "./shared";
-import { placeSessionUpload, type BlobContext, type Placement } from "../../blob/usecase";
-import type { BlobRefKey } from "../../blob/model";
 
 // Upload window: scale with declared size so multi-GB archives uploaded over
 // slow links don't have their presigned URLs (and the KV session that the
@@ -35,14 +33,12 @@ export async function createUploadSession(
   _ttlSeconds: number,
   options?: {
     sessionId?: string | null; projectId?: string | null; skipExtraction?: boolean;
-    /** Blob ledger and scope: a declared upload claims its blob key (ADR-017 §3). Omitted, it does not. */
-    blob?: BlobContext;
     /**
-     * The object store, to look at bytes the scope already holds before a
-     * gzip session reuses them (`isGzipBlob`). Without it such a session does
-     * not reuse.
+     * The upload's blob scope (`blobScope`), when it declared a hash: the
+     * scope in which completion may adopt an identical blob (ADR-017 §4).
+     * It never changes where the bytes are uploaded.
      */
-    storage?: FileStorage;
+    blobScope?: string | null;
   },
 ): Promise<PresignedUploadResult | MultipartUploadResult> {
   const id = generateId();
@@ -57,105 +53,17 @@ export async function createUploadSession(
   const sha256 = params.sha256?.toLowerCase();
   const expiresAt = now + urlExpirySeconds * 1000;
 
-  // Neither a multipart upload nor (on R2, unconfirmed) a presigned single PUT
-  // is verified by the store as it is written, so a declared hash claims the
-  // blob key for the session's lifetime instead of just reserving it. A live
-  // claim by another session throws `BlobClaimedError` (409). Bytes the scope
-  // already holds are reused with no transfer (ADR-017 §4); bytes that cannot
-  // be reused (unverified, being deleted) send this upload to the classic key.
-  const placement: Placement = options?.blob
-    ? await placeSessionUpload(
-      options.blob.refs, options.blob.scope, sha256, storageKey(id, params.filename), { id, expiresAt }, now,
-      compress && !stated ? (key) => isGzipBlob(options.storage, key) : undefined,
-    )
-    : { key: storageKey(id, params.filename) };
-  if (placement.reuse && placement.ref) {
-    return startReuseSession(sessions, {
-      id, now, expiresAt, urlExpirySeconds, contentType, compress, sha256: placement.ref.sha256, ref: placement.ref,
-      filename: params.filename, size: params.size,
-    }, options);
-  }
-  try {
-    return await startSession(sessions, presignedUrls, {
-      id, now, expiresAt, urlExpirySeconds, contentType, compress, sha256, placement,
-      filename: params.filename, size: params.size, partCount: params.partCount,
-    }, options);
-  } catch (e) {
-    if (placement.ref && options?.blob) await options.blob.refs.releaseClaim(placement.ref.key, id).catch(() => {});
-    throw e;
-  }
-}
-
-/**
- * Whether stored bytes are gzip, by their magic number — the guard on reusing
- * them for a session the server decided to compress.
- *
- * Only for that case: a session whose client stated `contentEncoding` gets no
- * guard, for the same reason a direct upload gets none (below).
- *
- * A session's encoding is the server's decision, not a description of the
- * client's bytes: the client is told to gzip, and its declared hash must be
- * of the gzipped bytes (the open issue on predicting that decision). A client
- * that hashed the raw file instead would, uploading, fail verification. Reused,
- * its asset would label raw bytes `gzip` and be served broken. Bytes that do
- * not start like gzip are therefore not reused for a gzip session: it falls
- * back to an upload, which settles the hash the usual way. A direct upload
- * needs no such guard — its `Content-Encoding` is the client's own statement
- * about the very bytes the hash names, so reuse records what a full upload of
- * those bytes would.
- */
-async function isGzipBlob(storage: FileStorage | undefined, key: string): Promise<boolean> {
-  if (!storage) return false;
-  const head = await storage.get(key, { offset: 0, length: 2 });
-  if (!head) return false;
-  const start = new Uint8Array(await new Response(head.body).arrayBuffer());
-  return start.length === 2 && start[0] === 0x1f && start[1] === 0x8b;
-}
-
-/**
- * A session for bytes the scope already holds (ADR-017 §4): nothing to upload.
- *
- * The response is a multipart session with no parts — the shape every client
- * already handles. A client uploads nothing and calls `complete` as usual
- * (with `{ "parts": [] }` or no body), which creates the asset from the
- * existing blob. `contentEncoding` is the server's decision for this file, as
- * for any session, and is what the asset records: the declared hash names the
- * bytes as they would have been stored, so the blob holds exactly those.
- *
- * No claim is taken: nothing is written, so there is no writer to exclude.
- * Whether the blob is still there is settled at completion.
- */
-async function startReuseSession(
-  sessions: UploadSessionStore,
-  params: {
-    id: string; now: number; expiresAt: number; urlExpirySeconds: number; contentType: string;
-    compress: boolean; sha256: string; ref: BlobRefKey; filename: string; size: number;
-  },
-  options?: { sessionId?: string | null; projectId?: string | null; skipExtraction?: boolean },
-): Promise<MultipartUploadResult> {
-  const session: UploadSession = {
-    id: params.id,
-    filename: params.filename,
-    contentType: params.contentType,
-    size: params.size,
-    createdAt: params.now,
-    expiresAt: params.expiresAt,
-    ...(params.compress && { contentEncoding: "gzip" }),
-    sha256: params.sha256,
-    ...(options?.sessionId && { sessionId: options.sessionId }),
-    ...(options?.projectId && { projectId: options.projectId }),
-    ...(options?.skipExtraction && { skipExtraction: true }),
-    blobKey: params.ref.key,
-    blobScope: params.ref.scope,
-    blobReuse: true,
-  };
-  await sessions.save(session, params.urlExpirySeconds);
-  return {
-    uploadId: params.id,
-    parts: [],
-    ...(params.compress && { contentEncoding: "gzip" }),
-    expiresAt: session.expiresAt,
-  };
+  // Every session uploads to its own classic key, declared or not, whatever
+  // the scope holds (ADR-017 §4). The URL handed to the client names the key,
+  // so a key chosen by what the scope holds would tell the client whether
+  // those bytes are already stored. Deduplication happens after the bytes are
+  // confirmed (core/blob/adoption.ts), out of the client's sight.
+  return startSession(sessions, presignedUrls, {
+    id, now, expiresAt, urlExpirySeconds, contentType, compress, sha256,
+    key: storageKey(id, params.filename),
+    blobScope: sha256 ? options?.blobScope ?? undefined : undefined,
+    filename: params.filename, size: params.size, partCount: params.partCount,
+  }, options);
 }
 
 async function startSession(
@@ -163,15 +71,14 @@ async function startSession(
   presignedUrls: PresignedUrlGenerator,
   params: {
     id: string; now: number; expiresAt: number; urlExpirySeconds: number; contentType: string;
-    compress: boolean; sha256: string | undefined; placement: Placement;
+    compress: boolean; sha256: string | undefined; key: string; blobScope: string | undefined;
     filename: string; size: number; partCount?: number;
   },
   options?: { sessionId?: string | null; projectId?: string | null; skipExtraction?: boolean },
 ): Promise<PresignedUploadResult | MultipartUploadResult> {
-  const { id, now, urlExpirySeconds, contentType, compress, sha256, placement } = params;
-  const key = placement.key;
+  const { id, now, urlExpirySeconds, contentType, compress, sha256, key } = params;
   const encodingOpts = compress ? { contentEncoding: "gzip" as const } : undefined;
-  const blobFields = placement.ref ? { blobKey: placement.ref.key, blobScope: placement.ref.scope } : {};
+  const blobFields = params.blobScope ? { blobScope: params.blobScope } : {};
 
   // Multipart upload
   if (params.partCount && params.partCount > 1) {
@@ -408,37 +315,30 @@ if (import.meta.vitest) {
     expect(vi.mocked(sessions.save).mock.calls[0][0].contentEncoding).toBe("gzip");
   });
 
-  test("a stated gzip session reuses bytes without the magic-number guard; an unstated one keeps it", async () => {
-    const { blobKey } = await import("../../blob/model");
-    const sha = "d".repeat(64);
-    const key = blobKey("ws1", sha);
-    // Not gzip: the bytes the stated client hashed are what it says it sends.
-    const storage = {
-      get: vi.fn(async () => ({ body: new Response(new TextEncoder().encode("plain bytes")).body! })),
-    } as unknown as FileStorage;
-    const ready = { key, scope: "ws1", sha256: sha, refCount: 1, state: "ready" as const };
-    const refs = {
-      find: vi.fn(async () => ready),
-      claim: vi.fn(async () => "claimed" as const),
-      reserve: vi.fn(async () => true),
-      releaseClaim: vi.fn(async () => {}),
-    } as unknown as import("../../blob/repository").BlobRefStore;
+  test("a declared session uploads to its own classic key and only records the scope for adoption", async () => {
+    // Whatever the scope holds, the URL names `assets/{id}/{filename}`: the
+    // key never depends on the ledger, so it cannot tell the client anything.
+    for (const partCount of [undefined, 3]) {
+      const sessions = mockSessions();
+      const presigned = mockPresignedUrls();
+      const result = await createUploadSession(
+        sessions, presigned,
+        { filename: "data.json", contentType: "application/json", size: 5000, partCount, sha256: "d".repeat(64), contentEncoding: "gzip" },
+        3600, { blobScope: "ws1" },
+      );
+      const urls = "url" in result ? [result.url] : result.parts.map((p) => p.url);
+      expect(urls.length).toBe(partCount ?? 1);
+      for (const url of urls) expect(url).toContain(`/assets/${result.uploadId}/data.json`);
+      const saved = vi.mocked(sessions.save).mock.calls[0][0];
+      expect(saved).toMatchObject({ sha256: "d".repeat(64), blobScope: "ws1" });
+      expect(saved).not.toHaveProperty("blobKey");
+    }
+  });
 
-    const stated = await createUploadSession(
-      mockSessions(), mockPresignedUrls(),
-      { filename: "data.json", contentType: "application/json", size: 5000, sha256: sha, contentEncoding: "gzip" },
-      3600, { blob: { refs, scope: "ws1" }, storage },
-    ) as MultipartUploadResult;
-    expect(stated.parts).toEqual([]);
-    expect(stated.contentEncoding).toBe("gzip");
-    expect(storage.get).not.toHaveBeenCalled();
-
-    const unstated = await createUploadSession(
-      mockSessions(), mockPresignedUrls(),
-      { filename: "data.json", contentType: "application/json", size: 5000, sha256: sha },
-      3600, { blob: { refs, scope: "ws1" }, storage },
-    );
-    expect("url" in unstated).toBe(true);
+  test("an undeclared session records no scope", async () => {
+    const sessions = mockSessions();
+    await createUploadSession(sessions, mockPresignedUrls(), { filename: "a.bin", contentType: "", size: 10 }, 3600, { blobScope: "ws1" });
+    expect(vi.mocked(sessions.save).mock.calls[0][0]).not.toHaveProperty("blobScope");
   });
 
   test("upload session body accepts only gzip or identity as contentEncoding", async () => {

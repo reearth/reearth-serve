@@ -235,7 +235,7 @@ describe("OpenAPI document", () => {
   test("publishes the error codes and the stated upload encoding", async () => {
     const spec = await loadSpec() as unknown as { components: { schemas: Record<string, { properties?: Record<string, unknown>; enum?: string[] }> } };
     expect(spec.components.schemas.Error.properties).toHaveProperty("code");
-    expect(spec.components.schemas.ErrorCode.enum).toEqual(["checksum_mismatch", "upload_under_verification", "blob_claimed", "blob_unavailable"]);
+    expect(spec.components.schemas.ErrorCode.enum).toEqual(["checksum_mismatch", "upload_under_verification", "blob_unavailable"]);
     expect(spec.components.schemas.CreateUploadSessionRequest.properties).toHaveProperty("contentEncoding");
     expect(spec.components.schemas.UploadEncoding.enum).toEqual(["gzip", "identity"]);
     expect(spec.components.schemas.FileEntry.properties).toHaveProperty("sha256");

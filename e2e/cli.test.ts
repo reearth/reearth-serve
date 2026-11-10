@@ -91,9 +91,9 @@ describe("CLI", () => {
     expect(asset.sha256).toBe(createHash("sha256").update("cli test content").digest("hex"));
   });
 
-  test("CLI asset upload of the same bytes creates a version via the hash-only request", () => {
-    // Over the CLI's probe threshold (1 MiB) and not a compressible name, so
-    // the version is created from the hash alone: the bytes are already there.
+  test("CLI asset upload of the same bytes creates a version, sending the whole file", () => {
+    // Not a compressible name, so the stored bytes are the file's. Whether the
+    // workspace already holds them changes nothing the CLI sees (ADR-017 §4).
     const big = join(tmpDir, "blob.dat");
     const bytes = randomBytes(1536 * 1024);
     writeFileSync(big, bytes);

@@ -5,7 +5,7 @@
  * The reference-count statements that ride inside `SqlAtomicWrites` live here
  * too, so every statement that touches `blob_refs` is in one file.
  */
-import type { BlobRefKey } from "../../core/blob/model";
+import { attachThreshold, type BlobRefKey } from "../../core/blob/model";
 import type { BlobRef, BlobRefStore, BlobState } from "../../core/blob/repository";
 import type { Row, SqlClient, SqlStatement, SqlValue } from "../../core/sql/port";
 import { queryAll, queryFirst } from "./helpers";
@@ -41,12 +41,14 @@ export function blobAttachStatement(ref: BlobRefKey, state: "ready" | "verifying
 
 /**
  * One more row references a blob whose bytes the upload did not write,
- * because the blob already held them (ADR-017 §4, phase P3). Unlike
- * `blobAttachStatement` this is conditional: the blob must still be `ready`
- * and referenced by at least one other row — the state in which its object is
- * known to exist (a `ready` row at zero may be a reservation whose write
- * failed). If it is not, a statement here fails and takes the whole batch
- * with it, so the asset or version row is never committed without its bytes.
+ * because the blob already held them (ADR-017 §4): a direct upload that
+ * discarded its body, or a presigned upload adopting the blob at completion.
+ * Unlike `blobAttachStatement` this is conditional: the blob must still be
+ * `ready`, and either referenced by another row or unreferenced only since
+ * after the upload looked it up at `since` (`stillAttachable`,
+ * core/blob/usecase.ts — such a blob's object is protected by the grace
+ * period). If it does not qualify, a statement here fails and takes the whole
+ * batch with it, so the row is never committed without its bytes.
  *
  * D1 has no interactive transactions and SQLite's `RAISE()` works only inside
  * triggers, so the failure is a NOT NULL violation on `blob_refs.state`:
@@ -56,25 +58,90 @@ export function blobAttachStatement(ref: BlobRefKey, state: "ready" | "verifying
  *
  * Either aborts the batch. A qualifying row is incremented and keeps its state.
  * The caller tells this failure from others by reading the row again
- * (`BlobUnavailableError`, core/blob/usecase.ts), so nothing here depends on
- * the driver's error wording.
+ * (`reuseFailure`, core/blob/usecase.ts), so nothing here depends on the
+ * driver's error wording.
+ *
+ * `guard`, when given, is an extra SQL condition that must hold for anything
+ * to happen at all; when it does not, both statements do nothing and the
+ * batch goes on. Adoption on an existing
+ * asset row uses it (`blobAdoptStatements`).
  */
-export function blobAttachExistingStatements(ref: BlobRefKey, now: number): SqlStatement[] {
+export function blobAttachExistingStatements(
+  ref: BlobRefKey,
+  since: number,
+  now: number,
+  guard?: SqlGuard,
+): SqlStatement[] {
+  const insertGuard = guard?.(5);
+  const updateGuard = guard?.(4);
   return [
     {
       sql: `INSERT INTO blob_refs (key, scope, sha256, ref_count, state, created_at, updated_at)
               SELECT ?1, ?2, ?3, 0, NULL, ?4, ?4
-               WHERE NOT EXISTS (SELECT 1 FROM blob_refs WHERE key = ?1)`,
-      args: [ref.key, ref.scope, ref.sha256, now],
+               WHERE NOT EXISTS (SELECT 1 FROM blob_refs WHERE key = ?1)${insertGuard ? ` AND ${insertGuard.sql}` : ""}`,
+      args: [ref.key, ref.scope, ref.sha256, now, ...(insertGuard?.args ?? [])],
     },
     {
       sql: `UPDATE blob_refs
                SET ref_count = ref_count + 1,
-                   state = CASE WHEN state = 'ready' AND ref_count > 0 THEN state ELSE NULL END,
+                   state = CASE WHEN state = 'ready' AND (ref_count > 0 OR zero_since >= ?3) THEN state ELSE NULL END,
                    zero_since = NULL,
                    updated_at = ?2
-             WHERE key = ?1`,
-      args: [ref.key, now],
+             WHERE key = ?1${updateGuard ? ` AND ${updateGuard.sql}` : ""}`,
+      args: [ref.key, now, attachThreshold(since), ...(updateGuard?.args ?? [])],
+    },
+  ];
+}
+
+/**
+ * An extra condition for a statement, built for the parameter number its
+ * arguments start at (each statement has its own parameters before it).
+ */
+type SqlGuard = (firstParam: number) => { sql: string; args: SqlValue[] };
+
+/**
+ * A classic object superseded by adoption, recorded for deletion after the
+ * grace period: a `retired` row at zero references whose `zero_since` is now.
+ * The grace sweep deletes it like an unreferenced blob. Its key is the
+ * classic key, which no lookup of a blob ever produces, so nothing reserves
+ * or attaches to it. `INSERT OR IGNORE`: a repeat changes nothing.
+ */
+export function blobRetireStatement(retired: BlobRefKey, now: number, guard?: SqlGuard): SqlStatement {
+  const g = guard?.(5);
+  return {
+    sql: `INSERT OR IGNORE INTO blob_refs (key, scope, sha256, ref_count, state, zero_since, created_at, updated_at)
+            SELECT ?1, ?2, ?3, 0, 'retired', ?4, ?4, ?4${g ? ` WHERE ${g.sql}` : ""}`,
+    args: [retired.key, retired.scope, retired.sha256, now, ...(g?.args ?? [])],
+  };
+}
+
+/**
+ * Switch an existing asset row from its classic object to the scope's blob
+ * with the same bytes (adoption after the integrity job confirmed the hash),
+ * in the batch that settles the job. Three steps, each guarded by the same
+ * condition — the asset still exists, still has no `blob_key`, and its hash is
+ * the blob's — evaluated before the last step changes it:
+ *
+ * 1. attach to the blob (`blobAttachExistingStatements`; fails the batch if
+ *    the blob no longer qualifies);
+ * 2. retire the classic object (`blobRetireStatement`);
+ * 3. set `blob_key`.
+ *
+ * A row that was deleted, or already adopted, meanwhile makes all three do
+ * nothing, so a repeat cannot count a reference twice or retire bytes a row
+ * still reads.
+ */
+export function blobAdoptStatements(assetId: string, ref: BlobRefKey, since: number, retired: BlobRefKey, now: number): SqlStatement[] {
+  const stillClassic: SqlGuard = (first) => ({
+    sql: `EXISTS (SELECT 1 FROM assets WHERE id = ?${first} AND blob_key IS NULL AND sha256 = ?${first + 1})`,
+    args: [assetId, ref.sha256],
+  });
+  return [
+    ...blobAttachExistingStatements(ref, since, now, stillClassic),
+    blobRetireStatement(retired, now, stillClassic),
+    {
+      sql: "UPDATE assets SET blob_key = ?1 WHERE id = ?2 AND blob_key IS NULL AND sha256 = ?3",
+      args: [ref.key, assetId, ref.sha256],
     },
   ];
 }
@@ -155,31 +222,6 @@ export class SqlBlobRefStore implements BlobRefStore {
     return result.rowsAffected > 0;
   }
 
-  async claim(ref: BlobRefKey, claimId: string, expiresAt: number, now: number): Promise<"claimed" | "busy" | "exists"> {
-    const result = await this.db.execute(
-      `INSERT INTO blob_refs (key, scope, sha256, ref_count, state, claim_id, claim_expires_at, created_at, updated_at)
-         VALUES (?1, ?2, ?3, 0, 'uploading', ?4, ?5, ?6, ?6)
-         ON CONFLICT(key) DO UPDATE SET
-           claim_id = excluded.claim_id,
-           claim_expires_at = excluded.claim_expires_at,
-           updated_at = excluded.updated_at
-         WHERE state = 'uploading' AND claim_expires_at < excluded.updated_at`,
-      [ref.key, ref.scope, ref.sha256, claimId, expiresAt, now],
-    );
-    if (result.rowsAffected > 0) return "claimed";
-    const existing = await this.find(ref.key);
-    // Gone between the two statements (a sweep finished): try once more.
-    if (!existing) return this.claim(ref, claimId, expiresAt, now);
-    return existing.state === "uploading" ? "busy" : "exists";
-  }
-
-  async releaseClaim(key: string, claimId: string): Promise<void> {
-    await this.db.execute(
-      "DELETE FROM blob_refs WHERE key = ?1 AND state = 'uploading' AND claim_id = ?2 AND ref_count = 0",
-      [key, claimId],
-    );
-  }
-
   async markVerified(key: string, now: number): Promise<void> {
     await this.db.execute(
       "UPDATE blob_refs SET state = 'ready', updated_at = ?2 WHERE key = ?1 AND state = 'verifying'",
@@ -190,7 +232,7 @@ export class SqlBlobRefStore implements BlobRefStore {
   async markDeleting(key: string, zeroBefore: number, now: number): Promise<boolean> {
     const result = await this.db.execute(
       `UPDATE blob_refs SET state = 'deleting', updated_at = ?3
-         WHERE key = ?1 AND ref_count = 0 AND state IN ('ready', 'verifying')
+         WHERE key = ?1 AND ref_count = 0 AND state IN ('ready', 'verifying', 'retired')
            AND zero_since IS NOT NULL AND zero_since <= ?2`,
       [key, zeroBefore, now],
     );
@@ -216,7 +258,7 @@ export class SqlBlobRefStore implements BlobRefStore {
       `SELECT key FROM blob_refs
          WHERE ref_count = 0
            AND (state = 'deleting'
-                OR (state IN ('ready', 'verifying') AND zero_since IS NOT NULL AND zero_since <= ?1))
+                OR (state IN ('ready', 'verifying', 'retired') AND zero_since IS NOT NULL AND zero_since <= ?1))
          ORDER BY zero_since ASC
          LIMIT ?2`,
       [zeroBefore, limit],

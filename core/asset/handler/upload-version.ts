@@ -35,7 +35,7 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
         401: jsonError("Anonymous upload disabled, or invalid token / session ID"),
         404: jsonError("Asset not found"),
         413: jsonError("Upload exceeds storage capacity"),
-        409: jsonError("The asset's first upload is still being verified against its declared SHA-256 (`code: upload_under_verification`), or the stored copy this upload matched was deleted while it was in progress (`code: blob_unavailable`); upload again later"),
+        409: jsonError("The asset's first upload is still being verified against its declared SHA-256 (`code: upload_under_verification`), or a concurrent change on the server kept the upload from being stored (`code: blob_unavailable`; upload again)"),
         422: jsonError("Declared SHA-256 does not match the uploaded bytes; nothing was stored"),
       },
     }),
@@ -67,7 +67,7 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
 
       // Resolved up front so the counters ride along in the version's batch.
       const scopes = await usageScopes(c, asset.projectId);
-      const blob = await blobContext(c, asset.projectId, sha256);
+      const blob = await blobContext(c, asset.projectId, asset.sessionId, sha256);
 
       const result = await uploadVersion(
         metadata, writes, storage, id,

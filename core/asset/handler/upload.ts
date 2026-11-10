@@ -71,7 +71,7 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
 
     // Resolved up front so the counters ride along in the upload's batch.
     const scopes = await usageScopes(c, projectId);
-    const blob = await blobContext(c, projectId, sha256);
+    const blob = await blobContext(c, projectId, sessionId, sha256);
 
     try {
       const result = await uploadAsset(

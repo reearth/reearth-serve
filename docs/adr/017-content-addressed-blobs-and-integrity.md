@@ -1,6 +1,7 @@
 # ADR-017: Content-Addressed Blobs, Upload Integrity, and the Scope of Deduplication
 
-- **Status:** Accepted — P1a–P5 implemented
+- **Status:** Accepted — P1a–P5 implemented; amended 2026-11-10 (see
+  "Post-review change" under Implementation status)
 - **Date:** 2026-09-16
 - **Deciders:** @rot1024
 - **Related:** ADR-000 (upload paths), ADR-005 (versions), ADR-010 (large
@@ -121,80 +122,114 @@ URL, which is deliberate:
   version's blob is a hash, and a hash names one byte sequence. The year-long
   `immutable` cache policy (ADR-013 A2) rests on structure, not on discipline.
 
-**Only a declared hash gets a blob key.** The key has to be known before
-the first byte is written, and without a declaration the hash is known
-only after the last. A direct `PUT` cannot be buffered (the Worker has
-128 MB), and a presigned upload's key is fixed when the session is
-created. Staging under a temporary key and copying afterwards would work,
-but for a 250 GiB multipart object the copy is itself a multipart job. So:
+**Only a declared direct upload is written to a blob key.** The key has to
+be known before the first byte is written, and without a declaration the
+hash is known only after the last. A direct `PUT` cannot be buffered (the
+Worker has 128 MB). A presigned upload's key is fixed when the session is
+created, and the URL handed to the client names it, so it must not depend
+on what the scope already holds (§4): a session always uploads to its
+classic key, and is moved to the blob afterwards when the scope holds the
+same bytes ("adoption"). Staging under a temporary key and copying
+afterwards would let a session create a blob too, but for a 250 GiB
+multipart object the copy is itself a multipart job. So:
 
 | Upload | Stored at | Recorded |
 |--------|-----------|----------|
-| Hash declared | `blobs/{scope}/{sha256}` | `sha256`, `integrity` |
+| Direct, hash declared | `blobs/{scope}/{sha256}` | `sha256`, `integrity` |
+| Presigned, hash declared | `assets/{assetId}/{filename}`; once the hash is confirmed, the row moves to `blobs/{scope}/{sha256}` if that blob exists | `sha256`, `integrity` |
 | No hash declared | `assets/{assetId}/v/{versionId}/{filename}`, as today | `sha256` (computed), `integrity` |
 
-Both kinds are verified as §2 says; only the first takes part in
-deduplication (§4). The CLI always declares, so in practice CLI uploads
-land in `blobs/` and only direct API callers (`curl`, hand-rolled
-presigned clients) stay on the per-version key. The version row records
-which key holds its bytes, so readers do not have to guess.
+All are verified as §2 says; only declared uploads take part in
+deduplication (§4). The CLI always declares, so its direct uploads (every
+new version, and first uploads with `--direct`) land in `blobs/`, and its
+presigned first uploads are adopted when the scope already holds their
+bytes. The row records which key holds its bytes, so readers do not have
+to guess.
 
-**One writer per blob.** A store-verified write (direct `PUT` with the
-declared hash, presigned single `PUT` with a checksum header) cannot leave
-wrong bytes under a blob key: a mismatch writes nothing. A presigned
-multipart upload can, because the store checks parts, not the whole
-object, and the whole-object hash is confirmed only afterwards. To keep a
-bad multipart upload from overwriting a good blob:
-
-- if the blob already exists in the scope, the session short-circuits
-  (§4) and no upload URL is issued;
-- otherwise the session claims the blob in the ledger (`blob_refs` row in
-  an `uploading` state); a second session for the same scope and hash is
-  refused with 409 until the claim completes or expires;
-- a verification failure deletes the blob only while the claim is still
-  the sole reference.
+**One writer per blob.** Only store-verified writes go to a blob key: a
+direct `PUT` through the Worker with the declared hash, where a mismatch
+writes nothing, so two such writes racing on a key can only write the same
+bytes. Presigned uploads never write a blob key — a multipart upload is
+checked part by part, not as a whole, and could leave wrong bytes under a
+good blob's key — so they need no claim, and nothing is ever refused
+because another upload of the same bytes is under way. A direct upload
+that finds the key held by a sweep's lock (or, on rows from before
+2026-11-10, by a session's claim or an unverified blob) writes its classic
+key instead. A verification failure deletes a blob only while nothing else
+references it.
 
 **Scope.** `{scope}` is the workspace ID. A project with no workspace uses
-`p_{projectId}`, and demo-mode assets use `_demo` (below). The scope is the
-unit of deduplication in §4.
+`p_{projectId}`, and a demo-mode asset (no project) uses
+`_demo_{sessionId}`, the anonymous session that uploaded it (below). The
+scope is the unit of deduplication in §4.
 
 Extracted archive entries and derived slots keep their per-version prefix.
 Their hashes are recorded in the extraction manifest and slot metadata
 (ADR-015 §3), and content-addressing them individually is a follow-up — the
 small-file count makes a blob-per-entry layout a different cost question.
 
-Demo-mode assets (no project, one-hour TTL) get a blob namespace of their
-own, `blobs/_demo/…`, so a demo upload never touches a workspace's blobs.
+Demo-mode assets (no project, one-hour TTL) get a blob namespace per
+anonymous session, `blobs/_demo_{sessionId}/…`, so a demo upload never
+touches a workspace's blobs or another session's. (Until 2026-11-10 every
+demo upload shared `_demo`, which let any anonymous caller probe for, and
+obtain, another's demo file by its hash.)
 
-### 4. Deduplication is scoped to the workspace, and never short-circuits across it
+### 4. Deduplication is invisible to the uploader, and scoped to the workspace
 
-The blob key includes the workspace ID on purpose. Deduplication — one blob
-for many versions — happens **inside a workspace only**.
+The blob key includes the scope on purpose. Deduplication — one blob for
+many versions — happens **inside a scope only**, and even there it is
+**never visible to the uploader**. (Amended on 2026-11-10; the first
+version allowed short-circuits inside a workspace. See
+"Post-review change" under Implementation status.)
 
-Within a workspace, short-circuiting is allowed and is a feature: the CLI
-may send `X-Content-SHA256` with an empty body, and if the blob exists the
-version is created without transfer (`ifGenerationMatch: 0`-style idempotent
-upload, for free). Everyone in a workspace can already read its assets, so
-"this file is already here" tells them nothing they could not see in the
-list.
+- **The bytes are always transferred.** Every upload sends the whole file,
+  and the server reads all of it, even once a match is certain. There is no
+  hash-only request: an empty body with a declared hash is an upload of zero
+  bytes, checked like any other (422 unless the hash is that of zero bytes),
+  and the answer is decided without consulting the ledger. A presigned
+  session always issues upload URLs.
+- **What a duplicate saves is storage, never bandwidth or time.** A direct
+  upload whose bytes the scope already holds is received and hashed in full,
+  then not written. A presigned upload is stored at its own key and, once
+  its hash is confirmed, moved onto the existing blob; its own object is
+  deleted a grace period later.
+- **No response depends on a duplicate.** The status, the fields, the jobs
+  that are created and listed, and the storage usage (ADR-004, charged per
+  row as if every row were a copy) are the same whether or not the bytes
+  were new. No blob creation time, no reference count. A quota that fails to
+  move on a duplicate would itself be a signal.
+- **What a client sees never depends on the ledger.** A presigned URL names
+  its object key, so a session's key is always its own classic key; a key
+  chosen by what the scope holds would answer the question. A session is
+  never refused, delayed or redirected because another upload of the same
+  bytes is in progress.
+- **The work matches where it can.** Up to the last byte both kinds of
+  direct upload do the same thing at the client's pace (read and hash); the
+  tail is one store round trip in each (the `put`'s commit, or a `head` of
+  the existing blob), then the same row write. Adoption of a presigned
+  upload changes which statements ride in a write that happens anyway, and
+  the superseded object is deleted later by the cleanup cron, not inline.
 
-Across workspaces, Serve **never** answers differently for a duplicate:
+Why inside a workspace too. The first version reasoned that everyone in a
+workspace can already read its assets, so "this file is already here"
+tells them nothing. That does not hold for demo uploads, which have no
+workspace and all shared one scope, and it stops holding once per-project
+roles arrive (ADR-016: an account may start honouring `resource_id`
+without a Serve release). Then an editor of project A could learn that
+project B holds a file — or, by uploading its hash, obtain it. Making
+deduplication invisible everywhere removes the need to reason about who
+may read what inside a scope.
 
-- The full body is received, hashed, and — if the bytes already exist in
-  *this* workspace — not written again; if they exist only in *another*
-  workspace, they are written again under this workspace's key. Cross-tenant
-  storage saving is given up. Cross-tenant bandwidth saving was never on the
-  table, since saving it is the leak.
-- The response has the same shape and the same fields whether or not the
-  bytes were new. No blob creation time, no reference count.
-- Storage usage (ADR-004) is charged per version, as if every version were
-  a copy. A quota that fails to move on a duplicate is itself a signal.
-- The body is read to the end even once a match is certain. Finishing
-  early is a signal.
-- The finalisation step does the same work in both cases (a duplicate does
-  a no-op write of comparable cost) so the tail of the request does not
-  differ measurably. Edge timing noise would likely hide the difference;
-  matching the work costs nothing and removes the argument.
+The workspace scope stays, for two reasons. It is defence in depth: if
+anything about a duplicate ever did leak, it would leak only inside one
+tenant. And it keeps a blob's lifecycle inside one tenant: references,
+grace periods and deletion never cross workspaces, and deleting one
+workspace's assets never touches another's bytes.
+
+Across workspaces nothing changes from the first version: bytes held only
+in another workspace are written again under this workspace's key, and
+cross-tenant storage saving is given up. Cross-tenant bandwidth saving was
+never on the table, since saving it is the leak.
 
 Public assets (`access: public`, ADR-014) are the one place where
 cross-workspace sharing would be harmless — anyone can read them anyway. It
@@ -250,16 +285,17 @@ backed by a blob.
 One blob per hash across the whole deployment. Rejected for the reason in
 the Context: it turns upload into an oracle for "does anyone here have this
 file", which is unacceptable under ADR-014 and unnecessary for the storage
-bill at Serve's scale. Workspace-scoped deduplication keeps the idempotent
-upload where it is safe and gives up the saving where it is not.
+bill at Serve's scale. Workspace-scoped, invisible deduplication keeps the
+storage saving where it is cheap to keep and gives it up where it is not.
 
 ### Proof of possession instead of scoping
 
 Answer a hash-only upload with a challenge (send bytes at these offsets)
 before short-circuiting. Rejected as the primary defence: it stops an
 attacker who knows only the hash, not one who holds the file — and the
-marketplace threat is the latter. It could be added on top of §4 to make
-in-workspace hash-only uploads stricter, but it is not needed there.
+marketplace threat is the latter, who could still learn that the bytes are
+already stored. Since 2026-11-10 there is no hash-only upload at all (§4),
+so there is nothing for a challenge to guard.
 
 ### No hashing; keep the convention
 
@@ -277,10 +313,12 @@ route — is small.
   upload rather than poisoning the store.
 - Version immutability is structural. The year-long cache policy stops
   depending on nobody ever overwriting a key.
-- Idempotent re-upload inside a workspace, and the CLI's `file sync` gets a
-  real content hash instead of an ETag that may or may not be an MD5.
+- Identical bytes inside a workspace are stored once, and the CLI's
+  `file sync` gets a real content hash instead of an ETag that may or may
+  not be an MD5.
 - ADR-015's derivation keys have their first element.
-- Deduplication cannot be used to probe other tenants.
+- Deduplication cannot be used to probe other tenants, other projects, or
+  other anonymous sessions: nothing an uploader sees depends on it.
 
 ### Negative
 
@@ -291,6 +329,8 @@ route — is small.
   are `pending` for that window. For a 250 GiB archive that is minutes.
 - No cross-tenant storage saving, by design. Ten workspaces holding the
   same PLATEAU archive hold it ten times.
+- No bandwidth saving anywhere, by design (since 2026-11-10): a re-upload of
+  bytes the workspace holds is a full upload.
 - The Node runtime (ADR-012) has no store-side checksum on `put`; it
   verifies by hashing the stream in-process, which is what it already does
   for everything else.
@@ -405,7 +445,9 @@ not vouch for is now hashed once by Serve.
 
 **P2 — the blob layer (done).** Declared uploads are stored at
 `blobs/{scope}/{sha256}`; undeclared ones keep their per-asset key. URLs,
-responses and usage accounting do not change.
+responses and usage accounting do not change. The notes below describe P2
+as shipped; where the post-review change of 2026-11-10 altered it, the
+bullet says so.
 
 - Ledger: migration `0009_blob_layer.sql` adds `blob_key` to `assets` and
   `asset_versions` (NULL = the classic key) and the `blob_refs` table (`key`,
@@ -423,6 +465,8 @@ responses and usage accounting do not change.
   responses go through `core/asset/response.ts`, which drops it.
 - Scope: `blobScope` (`core/blob/model.ts`) — the project's workspace,
   `p_{projectId}` when the project has none, `_demo` without a project.
+  *(Changed on 2026-11-10; see Post-review change.)* Demo uploads now use
+  `_demo_{sessionId}`.
 - States: `uploading` (claimed by a session, no reference yet), `verifying`
   (claim completed, hash not yet confirmed), `ready`, and `deleting` — the lock
   a sweep takes before it removes an object. Nothing reserves, claims or
@@ -438,17 +482,19 @@ responses and usage accounting do not change.
   (`AtomicWrites.createAsset` / `createVersion`, `blob` input), after the bytes.
   A failed row write no longer deletes the object when it is a blob: other
   rows may reference it, and the sweeps reclaim it if none does.
-- Presigned sessions with a declared hash, single PUT or multipart, *claim*
-  the key (R2 keeping the single PUT's checksum is still unconfirmed, so it is
-  not treated as store-verified). A live claim by another session → **409**;
-  the claim lasts as long as the session. When the blob already holds bytes
-  (`ready`, `verifying`, `deleting`) the session falls back to its classic key:
-  refusing would break a client that uploads the same file twice, and
-  overwriting is what §3 forbids. P3 replaces the fallback with the
-  short-circuit. Completion checks the claim is still the session's, then
-  turns it into the first reference — `ready` if the store vouched for the
-  hash, `verifying` otherwise. A store-reported mismatch at completion deletes
-  the object before releasing the claim.
+- Presigned sessions with a declared hash, single PUT or multipart, *claim* the
+  key. *(Changed on 2026-11-10; see Post-review change.)* Sessions no longer
+  claim or write blob keys; they upload to their classic key and are adopted
+  afterwards. As shipped, they claimed it (R2 keeping the single PUT's checksum
+  is still unconfirmed, so it is not treated as store-verified). A live claim by
+  another session → **409**; the claim lasts as long as the session. When the
+  blob already holds bytes (`ready`, `verifying`, `deleting`) the session falls
+  back to its classic key: refusing would break a client that uploads the same
+  file twice, and overwriting is what §3 forbids. P3 replaces the fallback with
+  the short-circuit. Completion checks the claim is still the session's, then
+  turns it into the first reference — `ready` if the store vouched for the hash,
+  `verifying` otherwise. A store-reported mismatch at completion deletes the
+  object before releasing the claim.
 - P1b on a blob: a match marks it `ready`. A mismatch deletes the asset
   through `deleteAsset` (which releases its reference) and then the object
   only if no other row references the key (`discardRejectedBlob`). In P2
@@ -475,7 +521,10 @@ responses and usage accounting do not change.
 
 **P3 — deduplication inside the scope (done).** An upload of bytes the
 scope already holds no longer writes them again. Responses, URLs and usage
-accounting do not change.
+accounting do not change. The empty-body request, the `parts: []` session
+and the 409s for sessions described below were removed on 2026-11-10 (see
+Post-review change); the direct-upload path and the conditional attach
+remain, the latter with a relaxed condition.
 
 - When bytes can be reused (`isReusable`, `core/blob/usecase.ts`): the blob is
   `ready` and at least one row references it. Rows are written only after
@@ -501,55 +550,61 @@ accounting do not change.
   `sha256`, `integrity: verified`, the blob key. `/files` serves an original by
   its row's type and encoding, never the object's metadata, so the first
   writer's metadata on a shared blob does not leak into later rows.
-- Empty body. A direct upload with `X-Content-SHA256` may send
-  `Content-Length: 0` (or no body). That is an ordinary upload of zero bytes:
-  when the scope holds the declared bytes, the asset or version is created
-  from them; when it does not, the empty body is checked against the
-  declaration like any other body — 422 with the usual message, and no
-  reservation is taken. The SHA-256 of zero bytes matches an empty body, so
-  that declaration stores (or reuses) an empty file. Without a declared hash,
-  `Content-Length: 0` is still 400.
+- Empty body. *(Changed on 2026-11-10; see Post-review change.)* Now always a
+  mismatch unless the hash is that of zero bytes. As shipped: a direct upload
+  with `X-Content-SHA256` could send `Content-Length: 0` (or no body). That is
+  an ordinary upload of zero bytes: when the scope holds the declared bytes, the
+  asset or version is created from them; when it does not, the empty body is
+  checked against the declaration like any other body — 422 with the usual
+  message, and no reservation is taken. The SHA-256 of zero bytes matches an
+  empty body, so that declaration stores (or reuses) an empty file. Without a
+  declared hash, `Content-Length: 0` is still 400.
 - Presigned sessions with a declared hash of reusable bytes take no claim and
-  issue no URL. The response is a `MultipartUploadSession` with `parts: []`
-  (whatever `partCount` was), plus `contentEncoding` when the server
-  compresses the file, as for any session. That shape is the least
-  disruptive one: the CLI and any client that handles multipart already
-  upload nothing for an empty list and then call `complete`, which creates
-  the asset (`verified`, no verification job, the blob's size, the session's
-  encoding). Creating the asset at session creation instead would have given
-  the session endpoint a second response type. The session records
-  `blobReuse`. The 409 for a live claim and the fallback to the classic key
-  for `verifying`, `deleting` and unreferenced blobs are unchanged.
-- Encoding on sessions. A session's `contentEncoding` is the server's
-  decision, and a client must hash the gzipped bytes it will send. A client
-  that hashed the raw file would fail verification when uploading; reused, its
-  asset would label raw bytes `gzip`. So a session the server compresses
-  reuses a blob only if the blob starts with the gzip magic bytes (a two-byte
-  range read); otherwise it falls back to an upload. A direct upload needs no
-  such check, because its `Content-Encoding` is the client's own statement
-  about the bytes the hash names.
-- Races. The reference is attached in the same batch as the row, and on
-  condition (`BlobAttach.existing`; `blobAttachExistingStatements`,
+  issue no URL. *(Changed on 2026-11-10; see Post-review change.)* Removed:
+  every session issues URLs. As shipped: the response was a `MultipartUploadSession` with
+  `parts: []` (whatever `partCount` was), plus `contentEncoding` when the server
+  compresses the file, as for any session. That shape is the least disruptive
+  one: the CLI and any client that handles multipart already upload nothing for
+  an empty list and then call `complete`, which creates the asset (`verified`,
+  no verification job, the blob's size, the session's encoding). Creating the
+  asset at session creation instead would have given the session endpoint a
+  second response type. The session records `blobReuse`. The 409 for a live
+  claim and the fallback to the classic key for `verifying`, `deleting` and
+  unreferenced blobs are unchanged.
+- Encoding on sessions. *(Changed on 2026-11-10; see Post-review change.)* The
+  guard went with session reuse: adoption follows a confirmed hash of the bytes
+  actually uploaded, so the row's encoding is that upload's own. As shipped: a
+  session's `contentEncoding` is the server's decision, and a client must hash
+  the gzipped bytes it will send. A client that hashed the raw file would fail
+  verification when uploading; reused, its asset would label raw bytes `gzip`.
+  So a session the server compresses reuses a blob only if the blob starts with
+  the gzip magic bytes (a two-byte range read); otherwise it falls back to an
+  upload. A direct upload needs no such check, because its `Content-Encoding` is
+  the client's own statement about the bytes the hash names.
+- Races. *(Changed on 2026-11-10; see Post-review change.)* The condition now
+  also accepts a `ready` blob unreferenced only since the lookup
+  (`stillAttachable`), and a session never answers 409. As shipped: the
+  reference is attached in the same batch as the row, and on condition
+  (`BlobAttach.existing`; `blobAttachExistingStatements`,
   `adapters/sql/blob-refs.ts`): the blob must still be `ready` with
-  `ref_count > 0`. D1 has no interactive transaction and `RAISE()` works only
-  in triggers, so a failed condition is a NOT NULL violation on
-  `blob_refs.state` (an INSERT for a missing row, an UPDATE for one that does
-  not qualify), which aborts the whole batch: no row, no usage, no reference.
-  The use case then reads the blob row again; if it no longer qualifies the
-  error is `BlobUnavailableError`, otherwise the original error is passed on,
-  so no driver wording is parsed. The body is gone by then and was not
-  stored, so the route answers **409** ("deleted while the upload was in
-  progress … upload again"). 409 rather than 503: nothing is wrong with the
-  server, the resource changed under the request, a retry succeeds at once
-  (it finds no reusable blob and writes in full), and the other "retry once
-  the state changes" answers on these routes are already 409. A session
-  whose blob is gone at completion (head or attach) answers 409 and is
-  deleted, since it can never complete; the client starts a new one. The
+  `ref_count > 0`. D1 has no interactive transaction and `RAISE()` works only in triggers, so
+  a failed condition is a NOT NULL violation on `blob_refs.state` (an INSERT for
+  a missing row, an UPDATE for one that does not qualify), which aborts the
+  whole batch: no row, no usage, no reference. The use case then reads the blob
+  row again; if it no longer qualifies the error is `BlobUnavailableError`,
+  otherwise the original error is passed on, so no driver wording is parsed. The
+  body is gone by then and was not stored, so the route answers **409**
+  ("deleted while the upload was in progress … upload again"). 409 rather than
+  503: nothing is wrong with the server, the resource changed under the request,
+  a retry succeeds at once (it finds no reusable blob and writes in full), and
+  the other "retry once the state changes" answers on these routes are already
+  409. A session whose blob is gone at completion (head or attach) answers 409
+  and is deleted, since it can never complete; the client starts a new one. The
   condition requires a reference, not only `ready`, because a blob may reach
-  zero during the read, be swept after its grace period, and be re-reserved
-  by a failed upload as `ready` with no object. Sweeps need `BLOB_GRACE_MS` at
-  zero and the `deleting` lock, so in practice the 409 happens only when the
-  last other row holding the bytes is deleted while the body is in flight.
+  zero during the read, be swept after its grace period, and be re-reserved by a
+  failed upload as `ready` with no object. Sweeps need `BLOB_GRACE_MS` at zero
+  and the `deleting` lock, so in practice the 409 happens only when the last
+  other row holding the bytes is deleted while the body is in flight.
 - Usage (ADR-004) moves per row as before: a reused upload increments the
   project and workspace counters by its size in the same batch.
 - P1b. A reused upload attaches to a `ready`, already verified blob, so its
@@ -620,7 +675,9 @@ usage accounting do not change, and nothing moves into the blob layer.
 
 **P5 — the CLI declares every upload (done).** Every CLI upload now
 declares the SHA-256 of the bytes it sends, uses deduplication where it can,
-and handles the 409s by their reason. `file sync` compares by SHA-256 where
+and handles the 409s by their reason. The hash-only probe, the `parts: []`
+path and the `blob_claimed` handling were removed on 2026-11-10 (see
+Post-review change). `file sync` compares by SHA-256 where
 the ledger has a confirmed one. Code: `cli/transfer.ts` (uploads),
 `cli/hash.ts` (streaming hashes), `cli/sync-compare.ts` (sync).
 
@@ -633,7 +690,10 @@ the ledger has a confirmed one. Code: `cli/transfer.ts` (uploads),
   it. A local disk is much faster than any upload link, and that first pass
   is what lets an upload of bytes the workspace holds skip the transfer.
   Hashing while uploading and sending the hash at completion would need the
-  blob key to be decided at completion, which §3 rules out.
+  blob key to be decided at completion, which §3 rules out. *(Changed on
+  2026-11-10: no transfer is skipped any more, and sessions no longer have a
+  blob key. The hash is still needed up front: a single PUT carries it as the
+  signed checksum, and a direct upload sends it ahead of the body.)*
 - What the hash covers: the bytes sent, after the CLI's own gzip. Direct
   uploads already stated their encoding (`Content-Encoding`). Upload sessions
   now take it too (below), so the CLI never predicts the server.
@@ -655,23 +715,27 @@ the ledger has a confirmed one. Code: `cli/transfer.ts` (uploads),
   reusing a blob for it records what a full upload of those bytes would.
 - Direct uploads (first upload with `--direct` or when presigned uploads are
   unavailable, and every new version) of 1 MiB or more send the hash alone
-  first (`Content-Length: 0`). A 201 means the workspace held the bytes and
-  nothing else is sent; a 422 (not held) or a 400 (a server older than P3)
-  is followed by the full upload. Below 1 MiB the probe would cost about as
-  much as the transfer it might save, so the file is sent at once. A version
-  upload probes too, so a 409 for a pending first upload costs no transfer.
+  first. *(Changed on 2026-11-10; see Post-review change.)* Removed: every
+  upload sends the whole file. As shipped, they sent it (`Content-Length: 0`). A
+  201 means the workspace held the bytes and nothing else is sent; a 422 (not
+  held) or a 400 (a server older than P3) is followed by the full upload. Below
+  1 MiB the probe would cost about as much as the transfer it might save, so the
+  file is sent at once. A version upload probes too, so a 409 for a pending
+  first upload costs no transfer.
 - Sessions for bytes the workspace holds come back with `parts: []`; the CLI
-  uploads nothing and completes with `{ "parts": [] }`. The CLI now also
-  computes `partCount` from the bytes it sends, not from the raw size; a
-  compressible file between 100 MB and 1 GiB used to request parts for its
-  raw size and then send empty trailing parts, which multipart completion
-  refuses.
-- Error codes. The `Error` schema gained an optional `code` (`ErrorCode` in
-  the OpenAPI document): `checksum_mismatch` (422), `upload_under_verification`,
-  `blob_claimed` and `blob_unavailable` (409). One mapper
-  (`core/asset/handler/errors.ts`) turns the four errors into status, message
-  and code for all four upload routes, so an error has one code everywhere.
-  The CLI branches on the code, never on the message.
+  uploads nothing and completes with `{ "parts": [] }`. *(Changed on 2026-11-10;
+  see Post-review change.)* No server sends such a session any more; the CLI's
+  part loop handles an empty list harmlessly but no longer mentions it. The CLI
+  now also computes `partCount` from the bytes it sends, not from the raw size;
+  a compressible file between 100 MB and 1 GiB used to request parts for its raw
+  size and then send empty trailing parts, which multipart completion refuses.
+- Error codes. The `Error` schema gained an optional `code` (`ErrorCode` in the
+  OpenAPI document): `checksum_mismatch` (422), `upload_under_verification`,
+  `blob_claimed` and `blob_unavailable` (409). *(Changed on 2026-11-10; see
+  Post-review change.)* `blob_claimed` is gone from the enum: it was never
+  released. One mapper (`core/asset/handler/errors.ts`) turns the four errors
+  into status, message and code for all four upload routes, so an error has one
+  code everywhere. The CLI branches on the code, never on the message.
 - What the CLI does with each 409:
   - `upload_under_verification`: it waits, polling `GET /api/v1/assets/{id}`
     (5 s, doubling to 60 s) rather than re-sending the body, and uploads the
@@ -679,13 +743,14 @@ the ledger has a confirmed one. Code: `cli/transfer.ts` (uploads),
     `asset upload` bounds the wait (default 30; 0 fails at once). A 404 while
     waiting means the first upload failed verification and was deleted, and
     the CLI says that.
-  - `blob_claimed`: a file the Worker accepts directly (100 MB or less after
-    gzip) is uploaded directly at once; a direct upload stores at the classic
-    key when the blob is claimed, so it succeeds. A larger file retries the
-    session after 10, 20, 40, 60, 60 and 60 s, then stops with an explanation.
+  - `blob_claimed`: *(Changed on 2026-11-10; see Post-review change.)* removed.
+    As shipped: a file the Worker accepts directly (100 MB or less after gzip)
+    is uploaded directly at once; a direct upload stores at the classic key when
+    the blob is claimed, so it succeeds. A larger file retries the session after
+    10, 20, 40, 60, 60 and 60 s, then stops with an explanation.
   - `blob_unavailable`: retried at once, up to twice. On a session the retry
-    is a new session, since the old one is spent; it finds no reusable blob
-    and uploads.
+    is a new session, since the old one is spent. (Since 2026-11-10 only a
+    direct upload can get it.)
 - `file sync`: the file listing's entry for a single-file asset now carries
   `sha256`, `integrity` and `contentEncoding`. Sync compares by SHA-256 when
   the hash is `verified` and the file is not stored gzipped (the hash names
@@ -694,6 +759,93 @@ the ledger has a confirmed one. Code: `cli/transfer.ts` (uploads),
   MD5 `hash`, then to size, as before. Local hashes are streamed.
 
 All five phases are implemented.
+
+**Post-review change (2026-11-10).** A security review found that
+deduplication inside a scope was observable, and it was decided that it
+must not be, in any scope. Two findings:
+
+1. Every demo upload shared the scope `_demo`. Any anonymous caller could
+   send a hash-only upload and, if another anonymous user's demo asset with
+   those bytes was alive, get 201 and a new asset serving them: an
+   existence oracle and a fetch-by-hash.
+2. §4's justification for in-workspace short-circuits ("everyone in a
+   workspace can read its assets") fails once per-project roles arrive
+   (ADR-016). An editor of project A could then obtain project B's file by
+   its hash.
+
+What changed (§3 and §4 above are rewritten to match):
+
+- Demo scope (`blobScope`, `core/blob/model.ts`): `_demo_{sessionId}`, one
+  per anonymous session. Session IDs are 16 hex characters, so the scope is
+  one path segment that cannot collide with a workspace ID or `p_…`, and
+  `parseBlobKey` and the orphan sweep need no change. A demo upload without
+  a well-formed session ID gets no scope and is stored at its classic key.
+  Rows and objects under the old `_demo` keep working and are swept as
+  usual once unreferenced.
+- Direct uploads (`core/blob/direct-upload.ts`): the empty-body short-circuit
+  is gone. An empty body with a declared hash other than that of zero bytes
+  is 422 before the ledger is looked at. The P3 path stays: a full body is
+  read and hashed, and discarded when the scope holds a reusable blob, with
+  the same response. Its tail is a `head` where a fresh upload has the
+  `put`'s commit (see `confirmReuse` for why that is comparable enough).
+- Presigned sessions (`core/asset/usecase/create-upload-session.ts`): every
+  session uploads to its classic per-asset key and issues upload URLs.
+  Claiming the blob key when it is free and falling back to the classic key
+  otherwise was considered and rejected: the URL names the key, so which of
+  the two a client got would itself reveal whether the scope holds the
+  bytes. Sessions therefore take no claim at all, never answer 409, and
+  store only the scope (`UploadSession.blobScope`) for later.
+- Adoption (`core/blob/adoption.ts`). Once a declared upload's hash is
+  confirmed — at completion when the store vouched for it, or when the P1b
+  job matches — and the scope holds a reusable blob with that hash, the row
+  is switched to the blob in the write that happens anyway: at completion
+  the asset is created with the blob key, a conditional reference
+  (`BlobAttach.existing`) and a `retired` row for the classic object; after
+  verification the job's write carries the same three steps, each guarded
+  on the asset still having no `blob_key` and the blob's hash
+  (`blobAdoptStatements`, `adapters/sql/blob-refs.ts`). If the blob no
+  longer qualifies, the write fails as a whole and is repeated without
+  adoption (`writeWithAdoption`): the row stays on its classic key and
+  nothing differs for anyone. Responses, job rows, usage counters and the
+  request's store round trips are the same with and without adoption.
+  Undeclared uploads are never adopted, and a P1b mismatch on a classic-key
+  upload deletes it exactly as before.
+- When the classic object is deleted. Not inline, but by the grace sweep
+  `BLOB_GRACE_MS` (24 h) after the switch: the `retired` row is a
+  `blob_refs` row at zero references, keyed by the classic key, which
+  `listSweepable` and `markDeleting` treat like an unreferenced blob and
+  which no blob lookup can produce. Readers resolve the key from the row on
+  every request (`originalKey`), so new reads go to the blob at once, but a
+  `/files` response in flight, an extraction launched at completion with the
+  classic key (it runs in parallel with verification and can take hours),
+  or a queued thumbnail keep reading the classic object until it goes.
+  Deleting inline would also have given an adopting request an extra store
+  round trip that a non-adopting one does not make.
+- `blob_key` now moves at most once: classic → blob, by adoption, and never
+  back or between blobs. The asset upsert still keeps an existing value
+  over the model's, so a stale copy of the row cannot undo the switch.
+- The conditional attach (`stillAttachable`; `blobAttachExistingStatements`)
+  also accepts a `ready` blob that lost its last reference after the upload
+  looked it up: such a blob's `zero_since` is later than the lookup, and no
+  sweep may take it for a day, so its object is there. This removes the
+  ordinary case of `blob_unavailable`, the one answer only a duplicate could
+  get; what is left needs a ledger that disagrees with the store, or an
+  upload longer than the grace period. Its message no longer mentions a
+  stored copy.
+- Error codes: `blob_claimed` is removed from `ErrorCode` (nothing that used
+  it was released). `blob_unavailable` stays for direct uploads.
+- The CLI (`cli/transfer.ts`) no longer probes with the hash alone and no
+  longer handles `blob_claimed`; it still declares the hash on every upload
+  and handles `upload_under_verification` and `blob_unavailable`.
+- Code that only rows written by P2–P5 can reach is kept, so deployments
+  that ran this branch settle correctly: `uploading` claims (dropped by the
+  sweep when expired, taken over by `reserve`), `verifying` blobs
+  (`markVerified`, `discardRejectedBlob`). Nothing writes either state any
+  more. Sessions created by the pre-change code (with a claimed `blobKey`
+  or `blobReuse`) are not completed by the new code (completion looks at the
+  classic key and finds nothing, or fails to complete a multipart upload
+  started at the blob key); they existed only on development deployments of
+  this branch and expire within 24 hours.
 
 **Open issues.**
 
@@ -712,7 +864,8 @@ All five phases are implemented.
   notify the uploader (ADR-018 §6 asks for one).
 - `deleteAsset` leaves job rows behind, so the jobs of a deleted asset stay
   listed. This predates ADR-017.
-- A blob whose verification runs out of retries stays `verifying`: it keeps
+- (Rows from before 2026-11-10 only.) A blob whose verification runs out of
+  retries stays `verifying`: it keeps
   serving, is never reused (later uploads of it go to their classic key), and
   is swept once nothing references it. Marking a verified blob `ready` is a
   write of its own after the row's; if it is lost, the blob is in that same
@@ -737,22 +890,38 @@ All five phases are implemented.
   cron ticks running at the same moment could both select a row; the result
   is one duplicate read, and the second write finds the row hashed and does
   nothing.
-- A direct upload that reuses bytes gets 409 if the last other row holding
-  them is deleted while its body is in flight: the bytes are still there, but
-  the attach requires a reference. Relaxing that would need a way to tell
-  such a blob from a re-reserved one with no object.
+- `blob_unavailable` is still an answer only a duplicate can get. Since
+  2026-11-10 it needs a ledger that disagrees with the store (a referenced
+  blob whose object is missing) or a direct upload that takes longer than
+  `BLOB_GRACE_MS`, so in practice it does not happen; it is not removed,
+  because the body is gone by then and there is nothing else to answer.
 - An empty file can be uploaded directly only with
   `X-Content-SHA256: e3b0c442…b855` (the hash of zero bytes); without a
   declaration `Content-Length: 0` is still 400, as before P3.
-- The gzip check on reusing bytes for a session the server decided to
-  compress looks at the magic number only. It rules out the likely mistake (a
-  hash of the raw file), not every byte sequence that starts with `1f 8b`.
-  Since P5 it applies only to clients that do not state `contentEncoding`.
-- A session's claim cannot be given up early. An interrupted upload (a CLI
-  killed mid-transfer) keeps the blob claimed until its session expires, up to
-  24 hours for a large file, and every other session for the same bytes in the
-  workspace gets `blob_claimed` meanwhile. The CLI works around it only for
-  files small enough to upload directly. An abort endpoint would release it.
+- Presigned uploads never create a blob (§3): a file first uploaded through
+  a session is stored at its classic key and is deduplicated only against
+  blobs that direct uploads created. The CLI uploads first uploads through
+  sessions, so two large first uploads of the same file are two objects
+  until one of them is re-uploaded directly (as a version). Promoting a
+  confirmed classic object into the blob layer — a server-side copy, a
+  multipart copy for a large one — would close this; nothing does it yet.
+- The tail of a direct upload whose bytes are discarded is a `head` where a
+  fresh upload has the `put`'s commit. Both are one store round trip, but
+  they are not the same operation; a caller timing many uploads to the
+  millisecond might tell them apart through edge noise. Writing the bytes
+  again would equalise it at the cost of the write it saves.
+- Adoption keeps two copies of the bytes for `BLOB_GRACE_MS` (the blob and
+  the retired classic object). For a 250 GiB upload that is a day of double
+  storage.
+- `retired` rows live in `blob_refs` although they are not blobs: the grace
+  sweep was the mechanism with the right delay, and a row keyed by a classic
+  key cannot meet any blob lookup. A separate table would be cleaner if more
+  kinds of delayed deletion appear.
+- The job write after verification rewrites the asset row with an upsert, so
+  an asset deleted between the job's read and its write comes back (this
+  predates the post-review change). With adoption such a row also takes a
+  blob reference, which keeps the blob from being swept until the row is
+  deleted again.
 - The CLI's wait for a pending first upload is 30 minutes by default. Hashing
   a 250 GiB upload can take about that long once the container is running, so
   a version uploaded right after such an upload may need a longer `--wait`.

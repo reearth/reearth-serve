@@ -6,20 +6,44 @@ import type { BlobRefKey } from "../blob/model";
 /**
  * A reference to a blob, taken in the same batch as the row that holds it
  * (ADR-017 §5). The row's `blobKey` is `ref.key`. `state` is what a claimed
- * key becomes: `ready` when the store vouched for the bytes, `verifying` when
- * the integrity job has yet to.
+ * key becomes (claims exist only from before the post-review change): `ready`
+ * when the store vouched for the bytes, `verifying` when the integrity job
+ * has yet to.
  */
 export interface BlobAttach {
   ref: BlobRefKey;
   state: "ready" | "verifying";
   /**
-   * The upload skipped writing the bytes because the blob already held them
-   * (ADR-017 §4, phase P3). The reference is then taken only if the blob is
-   * still `ready` and referenced by another row; otherwise the whole write
-   * fails and nothing is committed, so no row can point at bytes that may
-   * not be there. `state` is not applied: the blob keeps the one it has.
+   * The upload did not write the blob's bytes because the blob already held
+   * them (ADR-017 §4): a direct upload that discarded its body, or a presigned
+   * upload adopting the blob. The reference is then taken only if the blob
+   * still qualifies (`stillAttachable` for a lookup at `since`); otherwise the
+   * whole write fails and nothing is committed, so no row can point at bytes
+   * that may not be there. `state` is not applied: the blob keeps the one it
+   * has.
    */
-  existing?: boolean;
+  existing?: { since: number };
+  /**
+   * The classic object this upload wrote and no longer needs, because the row
+   * references the blob instead (adoption). Recorded `retired` in the same
+   * write and deleted by the grace sweep `BLOB_GRACE_MS` later, never inline:
+   * see `BLOB_GRACE_MS`.
+   */
+  retire?: BlobRefKey;
+}
+
+/**
+ * Switching an existing asset row from its classic object to the scope's
+ * blob with the same bytes (ADR-017 §4, adoption after verification). The
+ * write happens only while the row still has no blob key and still has
+ * `ref.sha256`; it fails as a whole if the blob no longer qualifies.
+ */
+export interface BlobAdoption {
+  ref: BlobRefKey;
+  /** When the blob was found reusable (see `BlobAttach.existing`). */
+  since: number;
+  /** The classic object to retire; `key` is the row's classic key. */
+  retire: BlobRefKey;
 }
 
 export interface ListResult<T> {
@@ -147,8 +171,12 @@ export interface AtomicWrites {
    * A job row plus the row that mirrors its status: the version for a
    * version's job, the asset otherwise. A version's job may still pass the
    * asset to extend its expiry.
+   *
+   * `adopt` (with `asset`) switches the asset row to a blob in the same write
+   * (ADR-017 §4): the integrity job confirmed the hash and the scope holds
+   * those bytes. See `BlobAdoption`.
    */
-  saveJob(input: { job: Job; asset?: AssetMetadata; version?: AssetVersion }): Promise<void>;
+  saveJob(input: { job: Job; asset?: AssetMetadata; version?: AssetVersion; adopt?: BlobAdoption }): Promise<void>;
   /**
    * Removes the asset row and all its version rows, decrements each usage
    * scope by the asset's size plus its versions' sizes, and records

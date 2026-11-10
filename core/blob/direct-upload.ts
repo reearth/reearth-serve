@@ -9,24 +9,22 @@
  *   before. The store verifies a declared hash and writes nothing on a
  *   mismatch.
  * - The scope already holds the declared bytes (`isReusable`): the body is
- *   still read to its end and hashed (§4: finishing early would be a signal,
- *   and the hash is what makes the row `verified`), a mismatch is still
+ *   still read to its end and hashed, a mismatch is still
  *   `ChecksumMismatchError`, but nothing is written. The caller attaches with
  *   `BlobAttach.existing`, which fails the row write if the blob stopped
- *   qualifying meanwhile.
- * - An empty body with a declared hash is how a client asks for a version
- *   without transfer (§4). It is an ordinary upload of zero bytes: it reuses
- *   the blob when the scope has one, and otherwise its bytes (none) are checked
- *   against the declaration like any other body — a mismatch unless the
- *   declaration is the empty-string hash, in which case an empty file is
- *   stored. Nothing about other scopes enters into it.
+ *   qualifying meanwhile. This path needs the whole body: what it saves is a
+ *   second copy in storage, never the transfer (ADR-017 §4).
+ * - An empty body is an upload of zero bytes and nothing else. With a declared
+ *   hash other than the empty-string SHA-256 it is a mismatch (422), decided
+ *   before the ledger is consulted: there is no way to ask for stored bytes by
+ *   hash alone.
  *
  * Runtime-agnostic (ADR-012): hashing goes through `FileStorage.digest`.
  */
 import type { FileStorage } from "../asset/repository";
 import { ChecksumMismatchError, EMPTY_SHA256 } from "../asset/integrity";
 import type { BlobRefKey } from "./model";
-import { BlobUnavailableError, findReusableBlob, placeDirectUpload, type BlobContext, type Placement } from "./usecase";
+import { BlobUnavailableError, placeDirectUpload, type BlobContext, type Placement } from "./usecase";
 
 export interface DirectUploadBody {
   body: ReadableStream<Uint8Array>;
@@ -43,8 +41,11 @@ export interface StoredDirectUpload {
   key: string;
   /** The blob the row must reference, when `key` is one. */
   ref?: BlobRefKey;
-  /** The bytes were already stored and were not written by this upload. */
-  reused: boolean;
+  /**
+   * The bytes were already stored and were not written by this upload; the
+   * blob was found reusable at `since` (for `BlobAttach.existing`).
+   */
+  reuse?: { since: number };
   /** SHA-256 of the stored bytes. */
   sha256: string;
   /** Size of the stored bytes. */
@@ -60,14 +61,12 @@ export async function storeDirectUpload(
 ): Promise<StoredDirectUpload> {
   const declared = file.sha256;
 
-  // Zero bytes cannot hash to anything but the empty-string SHA-256, so such
-  // a declaration is satisfiable only by bytes the scope already holds. No
-  // reservation, no write: there is nothing to put.
+  // Zero bytes hash to the empty-string SHA-256 and to nothing else. The
+  // answer does not depend on what the scope holds, so the ledger is not
+  // looked at: a hash-only request is just a wrong declaration.
   if (file.size === 0 && declared && declared !== EMPTY_SHA256) {
     await file.body.cancel().catch(() => {});
-    const reusable = blob ? await findReusableBlob(blob.refs, blob.scope, declared) : null;
-    if (!reusable) throw new ChecksumMismatchError(declared, EMPTY_SHA256);
-    return confirmReuse(storage, reusable, declared);
+    throw new ChecksumMismatchError(declared, EMPTY_SHA256);
   }
 
   const placement: Placement = blob
@@ -77,7 +76,7 @@ export async function storeDirectUpload(
   if (placement.reuse && declared) {
     const { sha256 } = await storage.digest(file.body, file.size);
     if (sha256 !== declared) throw new ChecksumMismatchError(declared, sha256);
-    return confirmReuse(storage, placement, declared);
+    return confirmReuse(storage, placement, declared, placement.reuse);
   }
 
   // Declared or not, the store hands back the hash of what it stored, so the
@@ -87,25 +86,33 @@ export async function storeDirectUpload(
     ...(file.contentEncoding && { contentEncoding: file.contentEncoding }),
     ...(declared && { sha256: declared }),
   });
-  return { key: placement.key, ...(placement.ref && { ref: placement.ref }), reused: false, sha256: stored.sha256, size: file.size };
+  return { key: placement.key, ...(placement.ref && { ref: placement.ref }), sha256: stored.sha256, size: file.size };
 }
 
 /**
- * The finalisation of a reused upload: a `head` of the blob where a fresh
- * upload has its `put`. It is one store round trip in place of another, it
- * confirms the object is there before a row is written to point at it, and it
- * supplies the size an empty-bodied request does not carry. The ledger's
- * `isReusable` already implies the object exists; a missing one here would
- * mean the ledger is wrong, and the upload is refused rather than recorded.
+ * The finalisation of an upload whose bytes the scope already held: a `head`
+ * of the blob where a fresh upload has its `put`.
  *
- * Matching the write's cost exactly is not needed for §4: reuse only ever
- * happens inside the uploader's own scope, where "these bytes are already
- * here" is not a secret. An upload whose bytes exist only in another
- * workspace writes them like any fresh upload, so its timing is a fresh
- * upload's.
+ * Why this is comparable enough. Up to the last byte the two paths do the
+ * same thing at the client's pace: read the whole body and hash it (`digest`
+ * here, the store's own hashing inside `put` there). What remains after the
+ * last byte is one store round trip in each — the `put`'s commit, or this
+ * `head` — followed by the same row write and the same response. The `head`
+ * is not filler: it confirms the object is there before a row is written to
+ * point at it (the ledger's `isReusable` already implies it; a missing object
+ * means the ledger is wrong, and the upload is refused rather than recorded).
+ * Writing the bytes again to equalise the cost exactly was rejected: it gives
+ * up the write it saves for a difference of one round trip's variance, which
+ * edge timing noise already swamps. The residual is listed in ADR-017's open
+ * issues.
  */
-async function confirmReuse(storage: FileStorage, placement: Placement, sha256: string): Promise<StoredDirectUpload> {
+async function confirmReuse(
+  storage: FileStorage,
+  placement: Placement,
+  sha256: string,
+  reuse: { since: number },
+): Promise<StoredDirectUpload> {
   const head = await storage.head(placement.key);
   if (!head) throw new BlobUnavailableError(placement.key);
-  return { key: placement.key, ...(placement.ref && { ref: placement.ref }), reused: true, sha256, size: head.size };
+  return { key: placement.key, ...(placement.ref && { ref: placement.ref }), reuse, sha256, size: head.size };
 }

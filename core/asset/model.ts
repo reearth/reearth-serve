@@ -80,16 +80,10 @@ export interface UploadSession {
   /** Declared SHA-256 of the stored bytes, lowercase hex (ADR-017 §1). */
   sha256?: string;
   /**
-   * The blob key this session claimed and uploads to (ADR-017 §3). Absent:
-   * the session uploads to the classic `assets/{id}/{filename}`.
+   * The blob scope of a declared upload (`blobScope`, ADR-017 §3): where
+   * completion looks for an identical blob to adopt once the hash is
+   * confirmed. The session itself always uploads to its classic
+   * `assets/{id}/{filename}` (ADR-017 §4).
    */
-  blobKey?: string;
-  /** The claimed blob's scope, carried to completion with `blobKey`. */
   blobScope?: string;
-  /**
-   * The scope already held the declared bytes at `blobKey` when the session
-   * was created (ADR-017 §4): no claim was taken, no upload URL issued, and
-   * completion attaches to the existing blob instead of finishing an upload.
-   */
-  blobReuse?: boolean;
 }

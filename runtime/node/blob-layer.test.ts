@@ -1,5 +1,7 @@
-// The blob layer (ADR-017 §3, §5; phase P2) end to end on the Node runtime:
-// the real routes, SQLite ledger and the in-memory object store.
+// The blob layer (ADR-017 §3, §5; phase P2 as amended by the post-review
+// change) end to end on the Node runtime: the real routes, SQLite ledger and
+// the in-memory object store. Uploads here are demo uploads, scoped to their
+// anonymous session (`_demo_{sessionId}`).
 //
 // Presigned sessions use the same stand-in generator as the P1b suite: its
 // "completed upload" writes the simulated client's bytes straight into the
@@ -25,6 +27,8 @@ let sessionId: string;
 let uploaded: string;
 
 const storage = () => runtime.deps.storage as MemoryFileStorage;
+/** Demo uploads (no project) are scoped to their anonymous session. */
+const demoPrefix = () => `blobs/_demo_${sessionId}/`;
 const blobKeys = async () => (await storage().list("blobs/")).keys;
 
 function fakePresigned(store: MemoryFileStorage): PresignedUrlGenerator {
@@ -94,7 +98,7 @@ describe("direct uploads", () => {
     const body = bytes("declared bytes");
     const { asset, url } = await uploadDeclared("data.bin", body);
 
-    expect(await blobKeys()).toEqual([`blobs/_demo/${sha256(body)}`]);
+    expect(await blobKeys()).toEqual([`${demoPrefix()}${sha256(body)}`]);
     expect((await storage().list(`assets/${asset.id}/`)).keys).toEqual([]);
     expect(url).toBe(`http://localhost:8788/files/${asset.id}/data.bin`);
 
@@ -130,7 +134,7 @@ describe("direct uploads", () => {
     const body = bytes("shared bytes");
     const a = await uploadDeclared("a.bin", body);
     const b = await uploadDeclared("b.bin", body);
-    const key = `blobs/_demo/${sha256(body)}`;
+    const key = `${demoPrefix()}${sha256(body)}`;
     expect(await blobKeys()).toEqual([key]);
     expect(await runtime.deps.blobRefs.find(key)).toMatchObject({ refCount: 2 });
 
@@ -161,7 +165,7 @@ describe("direct uploads", () => {
       expect(res.status).toBe(201);
       versionIds.push(((await res.json()) as { version: { id: string } }).version.id);
     }
-    const key = `blobs/_demo/${sha256(body)}`;
+    const key = `${demoPrefix()}${sha256(body)}`;
     expect(await runtime.deps.blobRefs.find(key)).toMatchObject({ refCount: 2 });
 
     expect((await call("DELETE", `/api/v1/assets/${id}/versions/${versionIds[1]}`)).status).toBe(204);
@@ -174,7 +178,7 @@ describe("direct uploads", () => {
   test("a demo upload that expires releases its blob through the same delete", async () => {
     const body = bytes("short-lived");
     const { asset } = await uploadDeclared("data.bin", body);
-    const key = `blobs/_demo/${sha256(body)}`;
+    const key = `${demoPrefix()}${sha256(body)}`;
     await runtime.deps.metadata.update(asset.id, { expiresAt: Date.now() - 1000 });
 
     await runCron(runtime);
@@ -189,88 +193,97 @@ describe("direct uploads", () => {
 
     const zip = new Uint8Array([0x50, 0x4b, 0x05, 0x06, ...new Array(18).fill(0)]);
     const archive = await uploadDeclared("site.zip", zip, "application/zip");
-    expect(extraction).toHaveBeenCalledWith(expect.objectContaining({ assetId: archive.asset.id, archiveKey: `blobs/_demo/${sha256(zip)}` }));
+    expect(extraction).toHaveBeenCalledWith(expect.objectContaining({ assetId: archive.asset.id, archiveKey: `${demoPrefix()}${sha256(zip)}` }));
 
     // The same bytes as a new version: its run reads the blob too, now and on a retry.
     const v = await upload(`/api/v1/assets/${archive.asset.id}`, zip, "site.zip", { "X-Content-SHA256": sha256(zip) });
     const { version } = (await v.json()) as { version: { id: string; jobId: string } };
-    expect(extraction).toHaveBeenLastCalledWith(expect.objectContaining({ versionId: version.id, archiveKey: `blobs/_demo/${sha256(zip)}` }));
+    expect(extraction).toHaveBeenLastCalledWith(expect.objectContaining({ versionId: version.id, archiveKey: `${demoPrefix()}${sha256(zip)}` }));
     const job = (await runtime.deps.jobs.find(version.jobId))!;
     expect(await extractionMessageForJob(job, runtime.deps.metadata, runtime.deps.versions))
-      .toMatchObject({ archiveKey: `blobs/_demo/${sha256(zip)}` });
+      .toMatchObject({ archiveKey: `${demoPrefix()}${sha256(zip)}` });
 
     const png = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 1, 2, 3, 4]);
     await uploadDeclared("pic.png", png, "image/png");
-    expect(thumbnail).toHaveBeenCalledWith(expect.objectContaining({ sourceKey: `blobs/_demo/${sha256(png)}` }));
+    expect(thumbnail).toHaveBeenCalledWith(expect.objectContaining({ sourceKey: `${demoPrefix()}${sha256(png)}` }));
+  });
+});
+
+describe("demo scopes", () => {
+  test("two anonymous sessions uploading the same declared bytes get different blobs, and the second reuses nothing of the first", async () => {
+    const body = bytes("the same demo bytes");
+    const a = await uploadDeclared("a.bin", body);
+    const keyA = `${demoPrefix()}${sha256(body)}`;
+
+    // A second anonymous session.
+    const other = await call("POST", "/api/v1/assets", bytes("other seed"), {
+      "Content-Type": "application/octet-stream", "Content-Length": "10", "X-Filename": "seed.txt", "X-Session-Id": "",
+    });
+    const sessionB = other.headers.get("X-Session-Id")!;
+    expect(sessionB).not.toBe(sessionId);
+    const put = vi.spyOn(storage(), "put");
+    sessionId = sessionB;
+    const b = await uploadDeclared("b.bin", body);
+    const keyB = `${demoPrefix()}${sha256(body)}`;
+
+    expect(keyB).not.toBe(keyA);
+    // B wrote its own copy: nothing of A's was looked up as reusable.
+    expect(put).toHaveBeenCalledWith(keyB, expect.anything(), expect.anything(), body.byteLength, expect.anything());
+    expect(await runtime.deps.blobRefs.find(keyA)).toMatchObject({ refCount: 1 });
+    expect(await runtime.deps.blobRefs.find(keyB)).toMatchObject({ refCount: 1 });
+    expect(Object.keys(b.asset).sort()).toEqual(Object.keys(a.asset).sort());
   });
 });
 
 describe("presigned sessions", () => {
-  test("a declared session claims the blob; a second one gets 409 until the first completes", async () => {
+  test("a declared session uploads to its own classic key; a concurrent one for the same bytes does too, with no 409", async () => {
     uploaded = "multipart bytes";
     const declared = sha256(uploaded);
     const first = await createSession("data.bin", declared);
     expect(first.status).toBe(201);
     const { uploadId, parts } = (await first.json()) as { uploadId: string; parts: { url: string }[] };
-    expect(parts[0].url).toContain(`blobs/_demo/${declared}`);
+    expect(parts[0].url).toContain(`assets/${uploadId}/data.bin`);
 
     const second = await createSession("other.bin", declared);
-    expect(second.status).toBe(409);
-    // A single PUT is held to the same rule.
-    expect((await createSession("other.bin", declared, true)).status).toBe(409);
+    expect(second.status).toBe(201);
+    const secondJson = (await second.json()) as { uploadId: string; parts: { url: string }[] };
+    expect(secondJson.parts[0].url).toContain(`assets/${secondJson.uploadId}/other.bin`);
+    const single = await createSession("third.bin", declared, true);
+    expect(single.status).toBe(201);
+    expect(((await single.json()) as { url: string }).url).toContain("/assets/");
 
-    const done = await complete(uploadId);
-    expect(done.status).toBe(201);
-    const key = `blobs/_demo/${declared}`;
-    expect(await runtime.deps.blobRefs.find(key)).toMatchObject({ refCount: 1, state: "verifying" });
-    expect(await blobKeys()).toEqual([key]);
+    // Sessions take no claim on the blob key.
+    expect(await runtime.deps.blobRefs.find(`${demoPrefix()}${declared}`)).toBeNull();
+
+    expect((await complete(uploadId)).status).toBe(201);
+    expect(await blobKeys()).toEqual([]);
     const file = await call("GET", `/files/${uploadId}/data.bin`);
     expect(await file.text()).toBe("multipart bytes");
-
-    // The claim completed but the blob is still verifying: it cannot be
-    // reused yet (ADR-017 §4), so a new session goes to its own key.
-    const third = await createSession("again.bin", declared);
-    expect(third.status).toBe(201);
-    const thirdJson = (await third.json()) as { uploadId: string; parts: { url: string }[] };
-    expect(thirdJson.parts[0].url).toContain(`assets/${thirdJson.uploadId}/again.bin`);
   });
 
-  test("the verification job reads the blob and marks it ready on a match", async () => {
+  test("the verification job reads the classic key; with nothing to adopt the row stays there, verified", async () => {
     uploaded = "verify me";
     const send = vi.spyOn(runtime.deps.extractionQueue!, "send");
     const created = (await (await createSession("data.bin", sha256(uploaded))).json()) as { uploadId: string };
     expect((await complete(created.uploadId)).status).toBe(201);
-    const key = `blobs/_demo/${sha256(uploaded)}`;
+    const key = `assets/${created.uploadId}/data.bin`;
     expect(send).toHaveBeenCalledWith(expect.objectContaining({ kind: "integrity-verification", objectKey: key }));
 
     await runCron(runtime);
 
-    expect(await runtime.deps.metadata.find(created.uploadId)).toMatchObject({ integrity: "verified" });
-    expect(await runtime.deps.blobRefs.find(key)).toMatchObject({ refCount: 1, state: "ready" });
+    const asset = await runtime.deps.metadata.find(created.uploadId);
+    expect(asset).toMatchObject({ integrity: "verified", sha256: sha256(uploaded) });
+    expect(asset).not.toHaveProperty("blobKey");
+    expect(await storage().head(key)).not.toBeNull();
   });
 
-  test("a claimed archive's extraction reads the blob", async () => {
+  test("an archive's extraction reads the classic key", async () => {
     uploaded = "PK not really a zip";
     const send = vi.spyOn(runtime.deps.extractionQueue!, "send");
     const created = (await (await createSession("site.zip", sha256(uploaded))).json()) as { uploadId: string };
     expect((await complete(created.uploadId)).status).toBe(201);
     expect(send).toHaveBeenCalledWith(expect.objectContaining({
-      jobId: created.uploadId, archiveKey: `blobs/_demo/${sha256(uploaded)}`,
+      jobId: created.uploadId, archiveKey: `assets/${created.uploadId}/site.zip`,
     }));
-  });
-
-  test("an expired claim is dropped by the sweep and the key can be claimed again", async () => {
-    uploaded = "abandoned";
-    const declared = sha256(uploaded);
-    expect((await createSession("data.bin", declared)).status).toBe(201);
-    expect((await createSession("data.bin", declared)).status).toBe(409);
-
-    const key = `blobs/_demo/${declared}`;
-    const claim = (await runtime.deps.blobRefs.find(key))!;
-    const deps = { blobRefs: runtime.deps.blobRefs, storage: storage(), cache: runtime.deps.cache };
-    const result = await sweepBlobs(deps, new SubrequestBudget(1000), claim.claimExpiresAt! + 1);
-    expect(result.droppedClaims).toBe(1);
-    expect(await runtime.deps.blobRefs.find(key)).toBeNull();
-    expect((await createSession("data.bin", declared)).status).toBe(201);
   });
 });

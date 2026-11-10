@@ -33,6 +33,7 @@ import { deleteAsset } from "../asset/usecase/delete";
 import { generateId, usageScopesFor } from "../asset/usecase/shared";
 import { originalKey } from "../blob/model";
 import { discardRejectedBlob } from "../blob/usecase";
+import { findAdoptionForAsset, writeWithAdoption } from "../blob/adoption";
 import type { MetadataStore } from "../asset/repository";
 import { retryDelaySeconds } from "../extraction/backoff";
 import { JOB_MAX_RETRIES, type Job } from "../job/model";
@@ -152,13 +153,21 @@ export async function applyVerificationResult(
 
   const computed = report.sha256.toLowerCase();
   if (!asset.sha256 || asset.sha256 === computed) {
-    await deps.writes.saveJob({
+    // A declared upload whose bytes are now confirmed may be one the scope
+    // already holds: the row then moves to that blob in the same write and its
+    // classic object is retired (ADR-017 §4, core/blob/adoption.ts). The job,
+    // the row's `integrity` and everything a client can list are the same
+    // either way. An undeclared upload is never adopted.
+    const adoption = asset.sha256 ? await findAdoptionForAsset(deps, asset, computed, now) : null;
+    await writeWithAdoption(deps.blobRefs, adoption, (adopt) => deps.writes.saveJob({
       job: { ...job, status: "completed", updatedAt: now, completedAt: now, startedAt: job.startedAt ?? now },
       asset: { ...asset, sha256: computed, integrity: "verified" },
-    });
-    // A claimed blob becomes reusable once its bytes are confirmed. Outside
-    // the row's write, and harmless if lost: a blob stuck `verifying` is only
-    // never reused, and new uploads of it go to their classic key.
+      ...(adopt && { adopt }),
+    }));
+    // A claimed blob becomes reusable once its bytes are confirmed (only rows
+    // from before the post-review change have one: sessions no longer claim).
+    // Outside the row's write, and harmless if lost: a blob stuck `verifying`
+    // is only never reused, and new uploads of it go to their classic key.
     if (asset.blobKey) await deps.blobRefs.markVerified(asset.blobKey, now);
     return "verified";
   }
@@ -194,11 +203,11 @@ async function rejectUpload(deps: VerificationDeps, job: Job, asset: AssetMetada
     now,
   });
 
-  // The rejected bytes are a blob outside the asset's prefix when the upload
-  // declared its hash. The delete above released the asset's reference; the
-  // object goes only if nothing else references the key (ADR-017 §3). In P2
-  // nothing can — only a `ready` blob takes new references — but the rule is
-  // what keeps a later short-circuit (P3) from losing someone else's bytes.
+  // A pending upload is a blob only if a session claimed the key before the
+  // post-review change; today every session uploads to its classic key, which
+  // the delete above removed with the asset's prefix. For such a blob the
+  // delete released the asset's reference, and the object goes only if
+  // nothing else references the key (ADR-017 §3).
   if (asset.blobKey && !(await discardRejectedBlob(deps.blobRefs, deps.storage, asset.blobKey, now))) {
     console.warn(`integrity: kept blob ${asset.blobKey} of rejected asset ${asset.id}: other rows still reference it`);
   }

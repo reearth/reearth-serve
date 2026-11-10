@@ -10,7 +10,7 @@ import type { AssetMetadata, AssetUploadResult, SiteHost } from "../shared/api";
 import { output } from "./helpers";
 import { zipDirectory } from "./zip";
 import {
-  bufferSource, DIRECT_UPLOAD_LIMIT, preparePayload, uploadDirect, uploadLargeFile, uploadVersionDirect, uploadViaSession,
+  bufferSource, preparePayload, uploadDirect, uploadLargeFile, uploadVersionDirect, uploadViaSession,
 } from "./transfer";
 
 /** Over this size `upload` streams the file from disk instead of reading it into memory. */
@@ -127,7 +127,7 @@ async function uploadAndConfigure(filePath: string, opts: UploadOptions): Promis
     const presigned = await uploadViaSession(opts.endpoint, {
       fileName, contentType, originalSize: payload.originalSize, encoding: payload.encoding, sha256: payload.sha256,
       skipExtraction: payload.skipExtraction, source: bufferSource(payload.data),
-    }, { fallback: payload.data.byteLength <= DIRECT_UPLOAD_LIMIT ? direct : undefined });
+    });
     result = presigned ?? await direct();
   }
 
@@ -149,7 +149,7 @@ export interface VersionUploadOptions {
 /**
  * `asset upload <id> <file>`: a new version, always through the Worker (the
  * server has no upload sessions for versions). Declares the hash like every
- * upload, and tries the hash alone first for a large enough file.
+ * upload and sends the whole file.
  */
 export async function doUploadVersion(assetId: string, filePath: string, opts: VersionUploadOptions): Promise<void> {
   try {

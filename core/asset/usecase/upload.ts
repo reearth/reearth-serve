@@ -24,8 +24,8 @@ export async function uploadAsset(
     /**
      * Declared SHA-256 of the body, lowercase hex (ADR-017 §1). The store
      * verifies it and writes nothing on a mismatch (`ChecksumMismatchError`).
-     * With `size` 0 it asks for the bytes the scope already holds (§4; see
-     * `storeDirectUpload`).
+     * With `size` 0 it must be the SHA-256 of zero bytes; anything else is a
+     * mismatch, whatever the scope holds (§4; see `storeDirectUpload`).
      */
     sha256?: string;
   },
@@ -99,10 +99,10 @@ export async function uploadAsset(
     try {
       await writes.createAsset({
         asset, job, usageScopes: options?.usageScopes,
-        ...(stored.ref && { blob: { ref: stored.ref, state: "ready" as const, ...(stored.reused && { existing: true }) } }),
+        ...(stored.ref && { blob: { ref: stored.ref, state: "ready" as const, ...(stored.reuse && { existing: stored.reuse }) } }),
       });
     } catch (e) {
-      throw stored.reused && options?.blob ? await reuseFailure(options.blob.refs, key, e) : e;
+      throw stored.reuse && options?.blob ? await reuseFailure(options.blob.refs, key, stored.reuse.since, e) : e;
     }
 
     // Enqueue only after the rows are committed: the consumer reads them.

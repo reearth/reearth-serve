@@ -7,12 +7,13 @@ import { MemoryKeyValue } from "../../adapters/memory/memory-kv";
 import { SqlBlobRefStore } from "../../adapters/sql/blob-refs";
 import { SqlAtomicWrites } from "../../adapters/sql/writes";
 import { SqlProjectStore } from "../../adapters/sql/stores";
+import type { SqlClient } from "../sql/port";
 import { SubrequestBudget } from "../cleanup/usecase";
 import type { AssetMetadata } from "../asset/model";
-import { BLOB_GRACE_MS, blobRefKey } from "./model";
+import { ATTACH_CLOCK_SKEW_MS, BLOB_GRACE_MS, blobRefKey, type BlobRefKey } from "./model";
 import {
-  BlobClaimedError, blobScopeFor, BlobUnavailableError, discardRejectedBlob, findReusableBlob, ORPHAN_CURSOR_KEY, ORPHAN_PAGE_SIZE,
-  placeDirectUpload, placeSessionUpload, reuseFailure, sweepBlobs,
+  blobScopeFor, BlobUnavailableError, discardRejectedBlob, findReusableBlob, ORPHAN_CURSOR_KEY, ORPHAN_PAGE_SIZE,
+  placeDirectUpload, reuseFailure, stillAttachable, sweepBlobs,
 } from "./usecase";
 
 const sha = (n: number) => n.toString(16).padStart(2, "0").repeat(32);
@@ -23,9 +24,10 @@ let writes: SqlAtomicWrites;
 let storage: MemoryFileStorage;
 let cache: MemoryKeyValue;
 let projects: SqlProjectStore;
+let sql: SqlClient;
 
 beforeEach(() => {
-  const sql = createSqliteClient();
+  sql = createSqliteClient();
   refs = new SqlBlobRefStore(sql);
   writes = new SqlAtomicWrites(sql);
   projects = new SqlProjectStore(sql);
@@ -46,16 +48,30 @@ function assetWith(id: string, blobKey: string): AssetMetadata {
   return { id, filename: "f", contentType: "t", size: 1, createdAt: 1, expiresAt: 0, blobKey };
 }
 
+/**
+ * An `uploading` claim as a presigned session wrote it before the post-review
+ * change. Nothing writes one any more; the sweeps and `reserve` still handle
+ * the rows that exist.
+ */
+async function legacyClaim(ref: BlobRefKey, claimId: string, expiresAt: number, now: number): Promise<void> {
+  await sql.execute(
+    `INSERT INTO blob_refs (key, scope, sha256, ref_count, state, claim_id, claim_expires_at, created_at, updated_at)
+       VALUES (?1, ?2, ?3, 0, 'uploading', ?4, ?5, ?6, ?6)`,
+    [ref.key, ref.scope, ref.sha256, claimId, expiresAt, now],
+  );
+}
+
 const sweep = (now = NOW, budget = new SubrequestBudget(1000)) => sweepBlobs({ blobRefs: refs, storage, cache }, budget, now);
 
 describe("blobScopeFor", () => {
-  test("follows the project's workspace, falls back to p_{id}, and is _demo without a project", async () => {
+  test("follows the project's workspace, falls back to p_{id}, and is the session's own demo scope without a project", async () => {
     await projects.save({ id: "p1", name: "p", createdAt: 1, updatedAt: 1, ownerId: "u", workspaceId: "w1" });
     await projects.save({ id: "p2", name: "p", createdAt: 1, updatedAt: 1, ownerId: "u" });
-    expect(await blobScopeFor(projects, "p1")).toBe("w1");
+    expect(await blobScopeFor(projects, "p1", "0123456789abcdef")).toBe("w1");
     expect(await blobScopeFor(projects, "p2")).toBe("p_p2");
-    expect(await blobScopeFor(projects, null)).toBe("_demo");
-    expect(await blobScopeFor(projects, undefined)).toBe("_demo");
+    expect(await blobScopeFor(projects, null, "0123456789abcdef")).toBe("_demo_0123456789abcdef");
+    expect(await blobScopeFor(projects, undefined, "fedcba9876543210")).toBe("_demo_fedcba9876543210");
+    expect(await blobScopeFor(projects, null)).toBeNull();
   });
 });
 
@@ -67,48 +83,27 @@ describe("placement", () => {
     // Reserved but not yet referenced: a second direct upload writes it too.
     expect(await placeDirectUpload(refs, "w1", sha(1), "assets/b/f", NOW)).toEqual({ key: ref.key, ref });
 
-    await refs.claim(blobRefKey("w1", sha(2)), "s1", NOW + 1000, NOW);
+    await legacyClaim(blobRefKey("w1", sha(2)), "s1", NOW + 1000, NOW);
     expect(await placeDirectUpload(refs, "w1", sha(2), "assets/c/f", NOW)).toEqual({ key: "assets/c/f" });
   });
 
-  test("the scope keeps workspaces apart", async () => {
+  test("the scope keeps workspaces and demo sessions apart", async () => {
     const a = await placeDirectUpload(refs, "w1", sha(1), "assets/a/f", NOW);
     const b = await placeDirectUpload(refs, "w2", sha(1), "assets/b/f", NOW);
     expect(a.key).toBe(`blobs/w1/${sha(1)}`);
     expect(b.key).toBe(`blobs/w2/${sha(1)}`);
-  });
-
-  test("a session claims a free key, 409s on a live claim, falls back on an existing blob, and retakes an expired claim", async () => {
-    const ref = blobRefKey("w1", sha(3));
-    expect(await placeSessionUpload(refs, "w1", sha(3), "assets/s1/f", { id: "s1", expiresAt: NOW + 1000 }, NOW))
-      .toEqual({ key: ref.key, ref });
-    await expect(placeSessionUpload(refs, "w1", sha(3), "assets/s2/f", { id: "s2", expiresAt: NOW + 5000 }, NOW + 10))
-      .rejects.toBeInstanceOf(BlobClaimedError);
-    // Past the first session's expiry the key is claimable again.
-    expect(await placeSessionUpload(refs, "w1", sha(3), "assets/s2/f", { id: "s2", expiresAt: NOW + 5000 }, NOW + 2000))
-      .toEqual({ key: ref.key, ref });
-
-    // Completed and verified: the next session reuses the bytes (ADR-017 §4).
-    await writes.createAsset({ asset: assetWith("a1", ref.key), blob: { ref, state: "ready" } });
-    expect(await placeSessionUpload(refs, "w1", sha(3), "assets/s3/f", { id: "s3", expiresAt: NOW + 5000 }, NOW + 3000))
-      .toEqual({ key: ref.key, ref, reuse: true });
-    // Reusing takes no claim.
-    expect(await refs.find(ref.key)).toMatchObject({ state: "ready", refCount: 1 });
-    expect((await refs.find(ref.key))?.claimId).toBeUndefined();
-    expect(await placeSessionUpload(refs, "w1", undefined, "assets/s4/f", { id: "s4", expiresAt: NOW }, NOW))
-      .toEqual({ key: "assets/s4/f" });
+    const demoA = await placeDirectUpload(refs, "_demo_aaaaaaaaaaaaaaaa", sha(1), "assets/c/f", NOW);
+    const demoB = await placeDirectUpload(refs, "_demo_bbbbbbbbbbbbbbbb", sha(1), "assets/d/f", NOW);
+    expect(demoA.key).not.toBe(demoB.key);
   });
 
   describe("reuse (ADR-017 §4)", () => {
-    const session = (id: string) => ({ id, expiresAt: NOW + 5000 });
-
-    test("a ready, referenced blob is reused by direct uploads and sessions, in its own scope only", async () => {
+    test("a ready, referenced blob is reused by direct uploads, in its own scope only", async () => {
       const ref = blobRefKey("w1", sha(20));
       await writes.createAsset({ asset: assetWith("a1", ref.key), blob: { ref, state: "ready" } });
 
-      expect(await placeDirectUpload(refs, "w1", sha(20), "assets/b/f", NOW)).toEqual({ key: ref.key, ref, reuse: true });
-      expect(await placeSessionUpload(refs, "w1", sha(20), "assets/s/f", session("s1"), NOW)).toEqual({ key: ref.key, ref, reuse: true });
-      expect(await findReusableBlob(refs, "w1", sha(20))).toEqual({ key: ref.key, ref, reuse: true });
+      expect(await placeDirectUpload(refs, "w1", sha(20), "assets/b/f", NOW)).toEqual({ key: ref.key, ref, reuse: { since: NOW } });
+      expect(await findReusableBlob(refs, "w1", sha(20), NOW)).toEqual({ key: ref.key, ref, reuse: { since: NOW } });
 
       // Another workspace with the same bytes writes its own blob.
       const other = blobRefKey("w2", sha(20));
@@ -116,42 +111,60 @@ describe("placement", () => {
       expect(await placeDirectUpload(refs, "w2", sha(20), "assets/c/f", NOW)).toEqual({ key: other.key, ref: other });
     });
 
-    test("a ready blob with no reference is not reused: a direct upload reserves and writes, a session falls back", async () => {
+    test("a ready blob with no reference is not reused: a direct upload reserves and writes", async () => {
       const ref = blobRefKey("w1", sha(21));
       expect(await refs.reserve(ref, NOW)).toBe(true); // a reservation whose upload may have failed
       expect(await placeDirectUpload(refs, "w1", sha(21), "assets/b/f", NOW)).toEqual({ key: ref.key, ref });
-      expect(await placeSessionUpload(refs, "w1", sha(21), "assets/s/f", session("s1"), NOW)).toEqual({ key: "assets/s/f" });
       expect(await findReusableBlob(refs, "w1", sha(21))).toBeNull();
     });
 
-    test("a verifying blob is not reused: both kinds fall back to the classic key", async () => {
+    test("a verifying blob is not reused: a direct upload falls back to the classic key", async () => {
       const ref = blobRefKey("w1", sha(22));
-      await refs.claim(ref, "s0", NOW + 1000, NOW);
       await writes.createAsset({ asset: assetWith("a1", ref.key), blob: { ref, state: "verifying" } });
       expect(await placeDirectUpload(refs, "w1", sha(22), "assets/b/f", NOW)).toEqual({ key: "assets/b/f" });
-      expect(await placeSessionUpload(refs, "w1", sha(22), "assets/s/f", session("s1"), NOW)).toEqual({ key: "assets/s/f" });
     });
 
-    test("a blob being deleted is not reused: both kinds fall back to the classic key", async () => {
+    test("a blob being deleted is not reused: a direct upload falls back to the classic key", async () => {
       const ref = blobRefKey("w1", sha(23));
       await refs.markOrphanDeleting(ref, NOW);
       expect(await placeDirectUpload(refs, "w1", sha(23), "assets/b/f", NOW)).toEqual({ key: "assets/b/f" });
-      expect(await placeSessionUpload(refs, "w1", sha(23), "assets/s/f", session("s1"), NOW)).toEqual({ key: "assets/s/f" });
     });
 
-    test("a live claim still answers 409 to a session", async () => {
-      await refs.claim(blobRefKey("w1", sha(24)), "s0", NOW + 1000, NOW);
-      await expect(placeSessionUpload(refs, "w1", sha(24), "assets/s/f", session("s1"), NOW)).rejects.toBeInstanceOf(BlobClaimedError);
+    test("stillAttachable: referenced, or unreferenced only since the lookup; never another state", () => {
+      const row = { key: "k", scope: "w1", sha256: sha(1), createdAt: 0, updatedAt: 0 };
+      expect(stillAttachable({ ...row, state: "ready", refCount: 1 }, NOW)).toBe(true);
+      expect(stillAttachable({ ...row, state: "ready", refCount: 0, zeroSince: NOW + 10 }, NOW)).toBe(true);
+      expect(stillAttachable({ ...row, state: "ready", refCount: 0, zeroSince: NOW - ATTACH_CLOCK_SKEW_MS }, NOW)).toBe(true);
+      expect(stillAttachable({ ...row, state: "ready", refCount: 0, zeroSince: NOW - ATTACH_CLOCK_SKEW_MS - 1 }, NOW)).toBe(false);
+      expect(stillAttachable({ ...row, state: "ready", refCount: 0 }, NOW)).toBe(false);
+      expect(stillAttachable({ ...row, state: "verifying", refCount: 1 }, NOW)).toBe(false);
+      expect(stillAttachable({ ...row, state: "deleting", refCount: 0, zeroSince: NOW }, NOW)).toBe(false);
+      expect(stillAttachable(null, NOW)).toBe(false);
+    });
+
+    test("a blob whose last row goes away during the upload can still be attached to: its object is in its grace period", async () => {
+      const ref = blobRefKey("w1", sha(27));
+      await writes.createAsset({ asset: assetWith("a1", ref.key), blob: { ref, state: "ready" } });
+      const found = await findReusableBlob(refs, "w1", sha(27));
+      await writes.deleteAsset({ asset: assetWith("a1", ref.key), cleanupPrefix: "assets/a1/" });
+      expect(await refs.find(ref.key)).toMatchObject({ refCount: 0 });
+
+      await writes.createAsset({ asset: assetWith("a2", ref.key), blob: { ref, state: "ready", existing: found!.reuse } });
+      expect(await refs.find(ref.key)).toMatchObject({ refCount: 1, state: "ready" });
+      expect((await refs.find(ref.key))?.zeroSince).toBeUndefined();
     });
 
     test("reuseFailure: a blob that stopped qualifying becomes BlobUnavailableError; anything else is passed through", async () => {
       const ref = blobRefKey("w1", sha(25));
       const original = new Error("D1 hiccup");
-      expect(await reuseFailure(refs, ref.key, original)).toBeInstanceOf(BlobUnavailableError);
+      expect(await reuseFailure(refs, ref.key, NOW, original)).toBeInstanceOf(BlobUnavailableError);
       await writes.createAsset({ asset: assetWith("a1", ref.key), blob: { ref, state: "ready" } });
-      expect(await reuseFailure(refs, ref.key, original)).toBe(original);
+      expect(await reuseFailure(refs, ref.key, NOW, original)).toBe(original);
+      // Unreferenced since long before the lookup: not attachable.
       await writes.deleteAsset({ asset: assetWith("a1", ref.key), cleanupPrefix: "assets/a1/" });
-      expect(await reuseFailure(refs, ref.key, original)).toBeInstanceOf(BlobUnavailableError);
+      expect(await reuseFailure(refs, ref.key, Date.now() + BLOB_GRACE_MS, original)).toBeInstanceOf(BlobUnavailableError);
+      // Unreferenced only since after the lookup: still attachable, so not the blob's fault.
+      expect(await reuseFailure(refs, ref.key, Date.now() - 1000, original)).toBe(original);
     });
   });
 });
@@ -159,7 +172,7 @@ describe("placement", () => {
 describe("discardRejectedBlob", () => {
   test("deletes the bytes when the rejected upload was the only reference", async () => {
     const ref = blobRefKey("w1", sha(4));
-    await refs.claim(ref, "s1", NOW + 1000, NOW);
+    await legacyClaim(ref, "s1", NOW + 1000, NOW);
     await putObject(ref.key);
     await writes.createAsset({ asset: assetWith("a1", ref.key), blob: { ref, state: "verifying" } });
     await writes.deleteAsset({ asset: assetWith("a1", ref.key), cleanupPrefix: "assets/a1/" });
@@ -171,10 +184,10 @@ describe("discardRejectedBlob", () => {
 
   test("a reuse attempt cannot attach to a blob still verifying, so a rejection still deletes it", async () => {
     const ref = blobRefKey("w1", sha(26));
-    await refs.claim(ref, "s1", NOW + 1000, NOW);
+    await legacyClaim(ref, "s1", NOW + 1000, NOW);
     await putObject(ref.key);
     await writes.createAsset({ asset: assetWith("a1", ref.key), blob: { ref, state: "verifying" } });
-    await expect(writes.createAsset({ asset: assetWith("a2", ref.key), blob: { ref, state: "ready", existing: true } })).rejects.toThrow();
+    await expect(writes.createAsset({ asset: assetWith("a2", ref.key), blob: { ref, state: "ready", existing: { since: NOW } } })).rejects.toThrow();
     await writes.deleteAsset({ asset: assetWith("a1", ref.key), cleanupPrefix: "assets/a1/" });
 
     expect(await discardRejectedBlob(refs, storage, ref.key, NOW)).toBe(true);
@@ -219,6 +232,26 @@ describe("sweepBlobs: grace period", () => {
     expect(await exists(ref.key)).toBe(true);
   });
 
+  test("a classic object retired by adoption is deleted after the grace period, like an unreferenced blob", async () => {
+    const blob = blobRefKey("w1", sha(14));
+    await putObject(blob.key);
+    await putObject("assets/a2/f");
+    await writes.createAsset({ asset: assetWith("a1", blob.key), blob: { ref: blob, state: "ready" } });
+    const retiredAt = Date.now();
+    const retire = { key: "assets/a2/f", scope: "w1", sha256: sha(14) };
+    await writes.createAsset({ asset: assetWith("a2", blob.key), blob: { ref: blob, state: "ready", existing: { since: retiredAt }, retire } });
+    expect(await refs.find("assets/a2/f")).toMatchObject({ state: "retired", refCount: 0 });
+
+    expect((await sweep(retiredAt + BLOB_GRACE_MS - 1000)).swept).toEqual([]);
+    expect(await exists("assets/a2/f")).toBe(true);
+    expect((await sweep(retiredAt + BLOB_GRACE_MS + 1000)).swept).toEqual(["assets/a2/f"]);
+    expect(await exists("assets/a2/f")).toBe(false);
+    expect(await refs.find("assets/a2/f")).toBeNull();
+    // The blob both rows share is untouched.
+    expect(await exists(blob.key)).toBe(true);
+    expect(await refs.find(blob.key)).toMatchObject({ refCount: 2 });
+  });
+
   test("a lock left by a crashed sweep is finished on the next pass", async () => {
     const ref = blobRefKey("w1", sha(8));
     await putObject(ref.key);
@@ -228,9 +261,9 @@ describe("sweepBlobs: grace period", () => {
     expect(await refs.find(ref.key)).toBeNull();
   });
 
-  test("expired upload claims are dropped, live ones kept", async () => {
-    await refs.claim(blobRefKey("w1", sha(9)), "s1", NOW - 1, 0);
-    await refs.claim(blobRefKey("w1", sha(10)), "s2", NOW + 1000, 0);
+  test("expired upload claims (from before the post-review change) are dropped, live ones kept", async () => {
+    await legacyClaim(blobRefKey("w1", sha(9)), "s1", NOW - 1, 0);
+    await legacyClaim(blobRefKey("w1", sha(10)), "s2", NOW + 1000, 0);
     expect((await sweep()).droppedClaims).toBe(1);
     expect(await refs.find(blobRefKey("w1", sha(9)).key)).toBeNull();
     expect(await refs.find(blobRefKey("w1", sha(10)).key)).not.toBeNull();

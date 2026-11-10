@@ -9,7 +9,10 @@ import {
   CLEANUP_PENDING_ADD_SQL,
 } from "./stores";
 import { parseSiteHost, SITE_HOSTS_RELEASE_BY_ASSET_SQL } from "./site-hosts";
-import { blobAttachExistingStatements, blobAttachStatement, blobReleaseForAssetStatements, blobReleaseForVersionStatements } from "./blob-refs";
+import {
+  blobAdoptStatements, blobAttachExistingStatements, blobAttachStatement, blobReleaseForAssetStatements,
+  blobReleaseForVersionStatements, blobRetireStatement,
+} from "./blob-refs";
 
 // Runs before the version and asset rows are deleted in the same batch: it
 // reads their sizes, and the EXISTS guard skips it once the asset is gone.
@@ -96,9 +99,11 @@ export class SqlAtomicWrites implements AtomicWrites {
     return results[results.length - 1].rowsAffected > 0;
   }
 
-  async saveJob({ job, asset, version }: Parameters<AtomicWrites["saveJob"]>[0]): Promise<void> {
+  async saveJob({ job, asset, version, adopt }: Parameters<AtomicWrites["saveJob"]>[0]): Promise<void> {
     const statements: SqlStatement[] = [{ sql: JOB_UPSERT_SQL, args: jobUpsertArgs(job) }];
     if (asset) statements.push({ sql: ASSET_UPSERT_SQL, args: assetUpsertArgs(asset) });
+    // After the upsert, so the guard sees the hash this write records.
+    if (asset && adopt) statements.push(...blobAdoptStatements(asset.id, adopt.ref, adopt.since, adopt.retire, Date.now()));
     if (version) statements.push({ sql: VERSION_EXTRACTION_UPDATE_SQL, args: versionExtractionUpdateArgs(version) });
     await this.db.batch(statements);
   }
@@ -106,12 +111,16 @@ export class SqlAtomicWrites implements AtomicWrites {
 
 // A blob the upload wrote (or a claim it completes) is attached
 // unconditionally; one it found already stored only while that blob still
-// qualifies, failing the batch otherwise (ADR-017 §4).
+// qualifies, failing the batch otherwise (ADR-017 §4). A classic object the
+// row no longer needs is retired in the same batch.
 function blobStatements(blob: BlobAttach): SqlStatement[] {
   const now = Date.now();
-  return blob.existing
-    ? blobAttachExistingStatements(blob.ref, now)
-    : [blobAttachStatement(blob.ref, blob.state, now)];
+  return [
+    ...(blob.existing
+      ? blobAttachExistingStatements(blob.ref, blob.existing.since, now)
+      : [blobAttachStatement(blob.ref, blob.state, now)]),
+    ...(blob.retire ? [blobRetireStatement(blob.retire, now)] : []),
+  ];
 }
 
 function usageStatements(scopes: string[] | undefined, sizeBytes: number): SqlStatement[] {

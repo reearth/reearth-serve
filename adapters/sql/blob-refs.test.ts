@@ -40,6 +40,15 @@ function version(id: string, assetId: string, blobKey?: string): AssetVersion {
 
 const READY = { ref: REF, state: "ready" as const };
 
+/** An `uploading` claim as sessions wrote it before the post-review change (nothing writes one now). */
+async function legacyClaim(f: ReturnType<typeof fixture>, ref: typeof REF, claimId: string, expiresAt: number, now: number) {
+  await f.sql.execute(
+    `INSERT INTO blob_refs (key, scope, sha256, ref_count, state, claim_id, claim_expires_at, created_at, updated_at)
+       VALUES (?1, ?2, ?3, 0, 'uploading', ?4, ?5, ?6, ?6)`,
+    [ref.key, ref.scope, ref.sha256, claimId, expiresAt, now],
+  );
+}
+
 describe("blob_key on rows", () => {
   test("is read back on assets and versions, and absent for the classic layout", async () => {
     const f = fixture();
@@ -124,9 +133,9 @@ describe("reference counts in the row writes", () => {
     expect(await f.refs.find(REF.key)).toMatchObject({ refCount: 1 });
   });
 
-  test("completing a claim turns it into the first reference", async () => {
+  test("completing a legacy claim turns it into the first reference", async () => {
     const f = fixture();
-    expect(await f.refs.claim(REF, "s1", 5000, 1000)).toBe("claimed");
+    await legacyClaim(f, REF, "s1", 5000, 1000);
     await f.writes.createAsset({ asset: asset("a1", REF.key), blob: { ref: REF, state: "verifying" } });
     const row = await f.refs.find(REF.key);
     expect(row).toMatchObject({ refCount: 1, state: "verifying" });
@@ -137,7 +146,8 @@ describe("reference counts in the row writes", () => {
 });
 
 describe("attaching to bytes already stored (ADR-017 §4)", () => {
-  const EXISTING = { ref: REF, state: "ready" as const, existing: true };
+  // Looked up "now": a blob unreferenced since long before that does not qualify.
+  const EXISTING = { ref: REF, state: "ready" as const, existing: { since: Date.now() } };
 
   test("a ready, referenced blob takes one more reference and keeps its state", async () => {
     const f = fixture();
@@ -156,11 +166,15 @@ describe("attaching to bytes already stored (ADR-017 §4)", () => {
     ["no ledger row", async () => {}],
     ["a ready row nothing references (a reservation)", async (f) => { await f.refs.reserve(REF, 1); }],
     ["a blob still verifying", async (f) => {
-      await f.refs.claim(REF, "s1", 10, 1);
       await f.writes.createAsset({ asset: asset("a0", REF.key), blob: { ref: REF, state: "verifying" } });
     }],
     ["a blob a sweep has locked", async (f) => { await f.refs.markOrphanDeleting(REF, 1); }],
-    ["a live claim", async (f) => { await f.refs.claim(REF, "s1", Number.MAX_SAFE_INTEGER, 1); }],
+    ["a live legacy claim", async (f) => { await legacyClaim(f, REF, "s1", Number.MAX_SAFE_INTEGER, 1); }],
+    ["a ready row unreferenced since long before the lookup", async (f) => {
+      await f.writes.createAsset({ asset: asset("a0", REF.key), blob: READY });
+      await f.writes.deleteAsset({ asset: asset("a0", REF.key), cleanupPrefix: "assets/a0/" });
+      await f.sql.execute("UPDATE blob_refs SET zero_since = 1 WHERE key = ?1", [REF.key]);
+    }],
   ];
   for (const [name, setup] of notReusable) {
     test(`fails and commits nothing for ${name}`, async () => {
@@ -181,12 +195,78 @@ describe("attaching to bytes already stored (ADR-017 §4)", () => {
     });
   }
 
-  test("fails once the last other reference is gone, even though the row is still ready", async () => {
+  test("succeeds when the last other reference went away after the lookup: the object is in its grace period", async () => {
     const f = fixture();
     await f.writes.createAsset({ asset: asset("a1", REF.key), blob: READY });
+    const since = Date.now();
     await f.writes.deleteAsset({ asset: asset("a1", REF.key), cleanupPrefix: "assets/a1/" });
-    await expect(f.writes.createAsset({ asset: asset("a2", REF.key), blob: EXISTING })).rejects.toThrow();
-    expect(await f.refs.find(REF.key)).toMatchObject({ refCount: 0, state: "ready" });
+    await f.writes.createAsset({ asset: asset("a2", REF.key), blob: { ...READY, existing: { since } } });
+    expect(await f.refs.find(REF.key)).toMatchObject({ refCount: 1, state: "ready" });
+  });
+
+  test("retire records the superseded classic object at zero references, in the same write", async () => {
+    const f = fixture();
+    await f.writes.createAsset({ asset: asset("a1", REF.key), blob: READY });
+    const retire = { key: "assets/a2/data.bin", scope: "w1", sha256: SHA };
+    await f.writes.createAsset({ asset: asset("a2", REF.key), blob: { ...EXISTING, retire } });
+    const row = await f.refs.find(retire.key);
+    expect(row).toMatchObject({ state: "retired", refCount: 0 });
+    expect(row?.zeroSince).toBeGreaterThan(0);
+    // Not a blob: no lookup by hash finds it, and reserve never touches it.
+    expect(await f.refs.find(blobRefKey("w1", SHA).key)).toMatchObject({ refCount: 2 });
+  });
+
+  test("a failed attach retires nothing", async () => {
+    const f = fixture();
+    const retire = { key: "assets/a2/data.bin", scope: "w1", sha256: SHA };
+    await expect(f.writes.createAsset({ asset: asset("a2", REF.key), blob: { ...EXISTING, retire } })).rejects.toThrow();
+    expect(await f.refs.find(retire.key)).toBeNull();
+  });
+});
+
+describe("adopting a blob for an existing asset row (ADR-017 §4)", () => {
+  const job = (id: string) => ({ id, assetId: "a2", type: "integrity-verification" as const, status: "completed" as const, createdAt: 1, updatedAt: 1 });
+  const classic = { key: "assets/a2/data.bin", scope: "w1", sha256: SHA };
+
+  test("switches blob_key, takes the reference and retires the classic object in the job's write", async () => {
+    const f = fixture();
+    await f.writes.createAsset({ asset: asset("a1", REF.key), blob: READY, usageScopes: ["project:p1"] });
+    await f.writes.createAsset({ asset: { ...asset("a2"), integrity: "pending" }, usageScopes: ["project:p1"] });
+    const usage = await f.usage.get("project:p1");
+
+    await f.writes.saveJob({ job: job("j1"), asset: asset("a2"), adopt: { ref: REF, since: Date.now(), retire: classic } });
+
+    expect(await f.assets.find("a2")).toMatchObject({ blobKey: REF.key, integrity: "verified" });
+    expect(await f.refs.find(REF.key)).toMatchObject({ refCount: 2, state: "ready" });
+    expect(await f.refs.find(classic.key)).toMatchObject({ state: "retired", refCount: 0 });
+    expect(await f.usage.get("project:p1")).toEqual(usage);
+
+    // A repeat (or a stale copy of the row) changes nothing: blob_key only ever moves once.
+    await f.writes.saveJob({ job: job("j1"), asset: asset("a2"), adopt: { ref: REF, since: Date.now(), retire: classic } });
+    expect(await f.refs.find(REF.key)).toMatchObject({ refCount: 2 });
+    await f.writes.saveJob({ job: job("j2"), asset: asset("a2") });
+    expect((await f.assets.find("a2"))?.blobKey).toBe(REF.key);
+  });
+
+  test("a blob that stopped qualifying fails the whole write: no job, no switch, nothing retired", async () => {
+    const f = fixture();
+    await f.writes.createAsset({ asset: { ...asset("a2"), integrity: "pending" } });
+    await expect(f.writes.saveJob({ job: job("j1"), asset: asset("a2"), adopt: { ref: REF, since: Date.now(), retire: classic } }))
+      .rejects.toThrow();
+    expect(await f.assets.find("a2")).toMatchObject({ integrity: "pending" });
+    expect(await f.assets.find("a2")).not.toHaveProperty("blobKey");
+    expect(await f.refs.find(classic.key)).toBeNull();
+    expect(await f.refs.find(REF.key)).toBeNull();
+  });
+
+  test("a row whose hash is not the blob's is left alone", async () => {
+    const f = fixture();
+    await f.writes.createAsset({ asset: asset("a1", REF.key), blob: READY });
+    await f.writes.createAsset({ asset: { ...asset("a2"), sha256: "cd".repeat(32) } });
+    await f.writes.saveJob({ job: job("j1"), asset: { ...asset("a2"), sha256: "cd".repeat(32) }, adopt: { ref: REF, since: Date.now(), retire: classic } });
+    expect(await f.refs.find(REF.key)).toMatchObject({ refCount: 1 });
+    expect(await f.refs.find(classic.key)).toBeNull();
+    expect(await f.assets.find("a2")).not.toHaveProperty("blobKey");
   });
 });
 
@@ -206,15 +286,15 @@ describe("SqlBlobRefStore", () => {
     expect((await f.refs.find(REF.key))?.zeroSince).toBeUndefined();
   });
 
-  test("reserve refuses a live claim, an unverified blob and a sweep's lock, and takes over an expired claim", async () => {
-    const { refs, writes } = fixture();
-    await refs.claim(REF, "s1", 5000, 1000);
+  test("reserve refuses a live legacy claim, an unverified blob and a sweep's lock, and takes over an expired claim", async () => {
+    const f = fixture();
+    const { refs, writes } = f;
+    await legacyClaim(f, REF, "s1", 5000, 1000);
     expect(await refs.reserve(REF, 4000)).toBe(false);
     expect(await refs.reserve(REF, 6000)).toBe(true);
     expect(await refs.find(REF.key)).toMatchObject({ state: "ready", zeroSince: 6000 });
 
     const verifying = blobRefKey("w1", "01".repeat(32));
-    await refs.claim(verifying, "s2", 5000, 1000);
     await writes.createAsset({ asset: asset("a9", verifying.key), blob: { ref: verifying, state: "verifying" } });
     expect(await refs.reserve(verifying, 2000)).toBe(false);
 
@@ -223,34 +303,12 @@ describe("SqlBlobRefStore", () => {
     expect(await refs.reserve(orphan, 2000)).toBe(false);
   });
 
-  test("claim: one session at a time, 409-busy until it expires, and never over existing bytes", async () => {
-    const { refs } = fixture();
-    expect(await refs.claim(REF, "s1", 5000, 1000)).toBe("claimed");
-    expect(await refs.claim(REF, "s2", 9000, 2000)).toBe("busy");
-    // The first claim lapses; the second session can take the key.
-    expect(await refs.claim(REF, "s2", 9000, 6000)).toBe("claimed");
-    expect((await refs.find(REF.key))?.claimId).toBe("s2");
-
-    const ready = blobRefKey("w1", "03".repeat(32));
-    await refs.reserve(ready, 1000);
-    expect(await refs.claim(ready, "s3", 9000, 2000)).toBe("exists");
-  });
-
-  test("releaseClaim drops only the named session's claim", async () => {
-    const { refs } = fixture();
-    await refs.claim(REF, "s1", 5000, 1000);
-    await refs.releaseClaim(REF.key, "other");
-    expect(await refs.find(REF.key)).not.toBeNull();
-    await refs.releaseClaim(REF.key, "s1");
-    expect(await refs.find(REF.key)).toBeNull();
-  });
-
   test("markDeleting locks only unreferenced blobs old enough, and the lock blocks new writers", async () => {
     const f = fixture();
     await f.refs.reserve(REF, 1000);
     expect(await f.refs.markDeleting(REF.key, 500, 3000)).toBe(false); // too young
     expect(await f.refs.markDeleting(REF.key, 1000, 3000)).toBe(true);
-    expect(await f.refs.claim(REF, "s1", 9000, 3000)).toBe("exists");
+    expect(await f.refs.reserve(REF, 3000)).toBe(false);
     await f.refs.removeDeleted(REF.key);
     expect(await f.refs.find(REF.key)).toBeNull();
 
@@ -269,7 +327,7 @@ describe("SqlBlobRefStore", () => {
     expect((await refs.find(other.key))?.state).toBe("ready");
   });
 
-  test("listSweepable: unreferenced past the cutoff, plus abandoned locks; dropExpiredClaims: lapsed claims", async () => {
+  test("listSweepable: unreferenced or retired past the cutoff, plus abandoned locks; dropExpiredClaims: lapsed claims", async () => {
     const f = fixture();
     const old = blobRefKey("w1", "06".repeat(32));
     const young = blobRefKey("w1", "07".repeat(32));
@@ -279,9 +337,13 @@ describe("SqlBlobRefStore", () => {
     await f.refs.reserve(young, 9000);
     await f.refs.markOrphanDeleting(locked, 9000);
     await f.writes.createAsset({ asset: asset("a1", held.key), blob: { ref: held, state: "ready" } });
-    await f.refs.claim(REF, "s1", 4000, 1000);
+    await legacyClaim(f, REF, "s1", 4000, 1000);
+    // A retired classic object is swept on the same clock.
+    await f.writes.createAsset({ asset: asset("a2", held.key), blob: { ref: held, state: "ready", existing: { since: Date.now() }, retire: { key: "assets/a2/data.bin", scope: "w1", sha256: SHA } } });
+    await f.sql.execute("UPDATE blob_refs SET zero_since = 1000 WHERE key = 'assets/a2/data.bin'");
 
-    expect((await f.refs.listSweepable(5000, 10)).sort()).toEqual([locked.key, old.key].sort());
+    expect((await f.refs.listSweepable(5000, 10)).sort()).toEqual([locked.key, old.key, "assets/a2/data.bin"].sort());
+    expect(await f.refs.markDeleting("assets/a2/data.bin", 5000, 6000)).toBe(true);
 
     expect(await f.refs.dropExpiredClaims(3000, 10)).toBe(0);
     expect(await f.refs.dropExpiredClaims(5000, 10)).toBe(1);

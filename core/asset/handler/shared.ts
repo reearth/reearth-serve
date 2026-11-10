@@ -77,16 +77,21 @@ export async function usageScopes(
 
 /**
  * The blob ledger and scope an upload into `projectId` is placed with
- * (ADR-017 §3). Resolved only when the upload declared a hash: an undeclared
- * one never touches the blob layer, so it pays no project lookup for it.
+ * (ADR-017 §3); for a demo upload (no project), the scope of `sessionId`, the
+ * anonymous session that owns the asset. Resolved only when the upload
+ * declared a hash: an undeclared one never touches the blob layer, so it pays
+ * no project lookup for it. Undefined, too, when there is no scope (a demo
+ * upload without a session ID); the upload is then stored at its classic key.
  */
 export async function blobContext(
   c: Context<AppEnv>,
   projectId: string | null | undefined,
+  sessionId: string | null | undefined,
   sha256: string | undefined,
 ): Promise<BlobContext | undefined> {
   if (!sha256) return undefined;
-  return { refs: c.get("blobRefs"), scope: await blobScopeFor(c.get("projects"), projectId) };
+  const scope = await blobScopeFor(c.get("projects"), projectId, sessionId);
+  return scope ? { refs: c.get("blobRefs"), scope } : undefined;
 }
 
 /**
@@ -94,8 +99,10 @@ export async function blobContext(
  * `POST /api/v1/assets/{id}`), checked before a byte is read.
  *
  * `Content-Length` must be positive — except with `X-Content-SHA256`, where 0
- * (or no body at all) asks for the bytes the workspace already holds
- * (ADR-017 §4). The use case answers that request; this only lets it through.
+ * (or no body at all) is an upload of an empty file. The use case checks the
+ * empty body against the declaration like any other body: it is stored only
+ * when the declaration is the SHA-256 of zero bytes, and answers 422
+ * otherwise, whatever the workspace holds (ADR-017 §4).
  */
 export function parseDirectUploadHeaders(c: Context<AppEnv>):
   | { ok: true; filename: string; size: number; sha256: string | undefined; body: ReadableStream<Uint8Array> }

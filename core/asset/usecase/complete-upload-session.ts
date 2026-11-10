@@ -11,7 +11,8 @@ import type { JobQueue } from "../../queue/port";
 import type { ExtractionMessage } from "../../extraction/handler";
 import { newVerificationJob, verificationMessage, type VerificationMessage } from "../../integrity/verification";
 import type { BlobRefStore } from "../../blob/repository";
-import { BlobUnavailableError, discardClaimedUpload, reuseFailure } from "../../blob/usecase";
+import { findAdoption, writeWithAdoption } from "../../blob/adoption";
+import { originalKey } from "../../blob/model";
 
 export async function completeUploadSession(
   sessions: UploadSessionStore,
@@ -28,7 +29,7 @@ export async function completeUploadSession(
     extractionQueue?: JobQueue<ExtractionMessage> | null; verificationQueue?: JobQueue<VerificationMessage> | null;
     thumbnailQueue?: JobQueue<ThumbnailMessage> | null;
     skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string;
-    /** The blob ledger; required to complete a session that claimed a blob key. */
+    /** The blob ledger, for adopting an identical blob (ADR-017 §4). Without it nothing is adopted. */
     blobRefs?: BlobRefStore;
   },
 ): Promise<(AssetUploadResult & { asset: AssetMetadata }) | null> {
@@ -38,14 +39,8 @@ export async function completeUploadSession(
   // Verify session ownership
   if (session.sessionId && options?.sessionId && session.sessionId !== options.sessionId) return null;
 
-  // Where createUploadSession sent the bytes: the blob key it claimed, or the
-  // asset's own key.
-  const key = session.blobKey ?? storageKey(id, session.filename);
-  const blobRef = session.blobKey && session.blobScope && session.sha256
-    ? { key: session.blobKey, scope: session.blobScope, sha256: session.sha256 }
-    : undefined;
-  const blobRefs = options?.blobRefs;
-  if (blobRef && !blobRefs) throw new Error(`completeUploadSession: session ${id} claimed ${blobRef.key} but no blob ledger was given`);
+  // Every session uploads to the asset's own key (ADR-017 §4).
+  const key = storageKey(id, session.filename);
   const url = `${baseUrl}/files/${id}/${encodeURIComponent(session.filename)}`;
   const archiveFormat = detectArchiveFormat(session.filename);
   const siteUrl = siteUrlFor({ assetId: id, baseUrl, siteHostSuffix: options?.siteHostSuffix, archive: Boolean(archiveFormat) });
@@ -59,17 +54,6 @@ export async function completeUploadSession(
     return { asset: existing, url, ...(siteUrl && { siteUrl }) };
   }
 
-  // A session for bytes the scope already held (ADR-017 §4) uploaded nothing
-  // and claimed nothing; it attaches to the blob if the blob is still there.
-  const reuse = Boolean(session.blobReuse && blobRef);
-  // The blob went away between session and completion: this session can
-  // never succeed, so it is spent and the client starts a new one, which
-  // will upload the bytes.
-  const unavailable = async (): Promise<never> => {
-    await sessions.delete(id);
-    throw new BlobUnavailableError(key);
-  };
-
   // Complete the multipart upload unless a previous attempt already did and
   // then failed on the metadata write: the session survives that failure so
   // the client can retry, and the completed UploadId cannot be completed twice.
@@ -80,35 +64,18 @@ export async function completeUploadSession(
     await presignedUrls.completeMultipartUpload(key, session.s3UploadId, parts);
     head = await storage.head(key);
   }
-  if (!head) return reuse ? unavailable() : null;
+  if (!head) return null;
 
-  // A claim that lapsed (the session outlived its expiry in KV) may since
-  // have been taken by another upload, which may have rewritten the key. This
-  // session no longer owns those bytes, so it neither records nor deletes them.
-  if (blobRef && !reuse) {
-    const claim = await blobRefs!.find(blobRef.key);
-    if (claim?.state !== "uploading" || claim.claimId !== id) return null;
-  }
-
-  // Reused bytes are a `ready` blob: verified when it became ready, so the
-  // row is `verified` with no job. Otherwise the store's report decides.
-  const integrity: Pick<AssetMetadata, "sha256" | "integrity"> = reuse
-    ? { sha256: session.sha256, integrity: "verified" }
-    : await sessionIntegrity(session, head, async () => {
-      // A store that holds a different hash than the one declared would have
-      // refused the write; reaching here means the bytes are not what the client
-      // promised, so they are not kept and the session is spent (ADR-017 §2).
-      // A claimed blob key is still this session's alone, so it goes too.
-      if (blobRef) await discardClaimedUpload(blobRefs!, storage, blobRef.key, id);
-      else await storage.delete(key);
-      await sessions.delete(id);
-    });
+  const integrity = await sessionIntegrity(session, head, async () => {
+    // A store that holds a different hash than the one declared would have
+    // refused the write; reaching here means the bytes are not what the client
+    // promised, so they are not kept and the session is spent (ADR-017 §2).
+    await storage.delete(key);
+    await sessions.delete(id);
+  });
 
   const now = Date.now();
-  // What the uploaded object was stored with — for reused bytes, what this
-  // session told the client to send (the blob's own metadata belongs to
-  // whichever upload wrote it; `/files` serves by the row, not the object).
-  const contentEncoding = reuse ? session.contentEncoding : head.contentEncoding;
+  const contentEncoding = head.contentEncoding;
 
   // projectId is bound at createUploadSession time (after membership check)
   // and re-verified by the handler before we get here; use the session's copy
@@ -132,7 +99,6 @@ export async function completeUploadSession(
     }),
     ...(options?.sessionId && { sessionId: options.sessionId }),
     ...(projectId && { projectId }),
-    ...(blobRef && { blobKey: blobRef.key }),
   };
 
   // Create extraction job for archives (unless skipped)
@@ -157,6 +123,16 @@ export async function completeUploadSession(
   // extraction wrote.
   const verificationJob = asset.integrity === "pending" ? newVerificationJob(asset, now) : undefined;
 
+  // A declared hash the store confirmed may already be held by the scope: the
+  // row then references that blob instead of the object just uploaded, which
+  // is retired (ADR-017 §4, core/blob/adoption.ts). The lookup runs for every
+  // confirmed declared upload, so the request does the same work either way;
+  // an unconfirmed one is adopted, if at all, when its verification matches.
+  const blobRefs = options?.blobRefs;
+  const adoption = blobRefs && session.sha256 && asset.integrity === "verified" && asset.sha256 === session.sha256
+    ? await findAdoption(blobRefs, session.blobScope, asset, session.sha256, now)
+    : null;
+
   // Job row, asset row and storage-usage counters in one atomic write (ADR-012 §3).
   // On failure the uploaded object and the session are both kept, so the
   // client's retry of `complete` succeeds without re-uploading. Deleting the
@@ -165,26 +141,17 @@ export async function completeUploadSession(
   // ponytail: an upload whose client never retries leaves an object with no
   // row; sweep keys with no asset row from cron if that ever shows up in R2 usage.
   //
-  // The claim becomes the blob's first reference in the same write: `ready`
-  // when the store vouched for the hash, `verifying` until the job does.
-  //
-  // Reused bytes attach only while the blob still qualifies (ADR-017 §4); if
-  // it no longer does, the session is spent like one whose blob vanished.
-  try {
-    await writes.createAsset({
-      asset, job, verificationJob, usageScopes: projectId ? options?.usageScopes : [],
-      ...(blobRef && {
-        blob: reuse
-          ? { ref: blobRef, state: "ready" as const, existing: true }
-          : { ref: blobRef, state: asset.integrity === "verified" ? "ready" as const : "verifying" as const },
-      }),
-    });
-  } catch (e) {
-    if (!reuse) throw e;
-    const failure = await reuseFailure(blobRefs!, key, e);
-    if (failure instanceof BlobUnavailableError) await unavailable();
-    throw failure;
-  }
+  // With an adoption the blob reference and the classic object's retirement
+  // ride in the same write; if the blob stopped qualifying, the write is made
+  // again without them and the row keeps its own key.
+  const adopted = await writeWithAdoption(blobRefs, adoption, (a) => writes.createAsset({
+    asset: a ? { ...asset, blobKey: a.ref.key } : asset,
+    job, verificationJob, usageScopes: projectId ? options?.usageScopes : [],
+    ...(a && { blob: { ref: a.ref, state: "ready" as const, existing: { since: a.since }, retire: a.retire } }),
+  }));
+  if (adopted) asset.blobKey = adopted.ref.key;
+  // Readers of the bytes from here on go through the row (`originalKey`).
+  const objectKey = originalKey(asset);
 
   // Enqueue only after the rows are committed: the consumer reads them.
   if (job && archiveFormat && options?.extractionQueue) {
@@ -192,7 +159,7 @@ export async function completeUploadSession(
       await options.extractionQueue.send({
         jobId: id,
         assetId: id,
-        archiveKey: key,
+        archiveKey: objectKey,
         archiveFilename: session.filename,
         archiveFormat,
       });
@@ -212,7 +179,7 @@ export async function completeUploadSession(
 
   await enqueueThumbnail(options?.thumbnailQueue ?? null, {
     assetId: id,
-    sourceKey: key,
+    sourceKey: objectKey,
     contentType: asset.contentType,
     size: asset.size,
   });

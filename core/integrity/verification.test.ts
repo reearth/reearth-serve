@@ -142,17 +142,16 @@ describe("applyVerificationResult", () => {
     expect(queue.sent).toEqual([]);
   });
 
-  describe("a declared upload stored as a blob (ADR-017 §3)", () => {
+  describe("a declared upload stored as a blob by a pre-change session claim (ADR-017 §3)", () => {
     const KEY = `blobs/w1/${OTHER}`;
 
-    /** A completed claim: the asset references the blob, which is `verifying`. */
+    /** A completed legacy claim: the asset references the blob, which is `verifying`. */
     async function seedBlob(): Promise<Job> {
       const asset: AssetMetadata = {
         id: "a1", filename: "data.bin", contentType: "application/octet-stream", size: BODY.length, createdAt: 1,
         expiresAt: 0, projectId: "p1", integrity: "pending", sha256: OTHER, blobKey: KEY,
       };
       const job = newVerificationJob(asset, 1);
-      expect(await deps.blobRefs.claim({ key: KEY, scope: "w1", sha256: OTHER }, "a1", Date.now() + 60_000, Date.now())).toBe("claimed");
       await storage.put(KEY, new Blob([BODY]).stream(), "application/octet-stream", BODY.length);
       await deps.writes.createAsset({
         asset, verificationJob: job, usageScopes: ["project:p1", "workspace:w1"],
@@ -184,8 +183,8 @@ describe("applyVerificationResult", () => {
 
     test("a mismatch keeps the blob while another row still references it", async () => {
       const job = await seedBlob();
-      // Nothing in P2 attaches to an unverified blob; another asset holding
-      // the key stands in for a later phase that might.
+      // Nothing attaches to an unverified blob; another asset holding the key
+      // stands in for a ledger that says otherwise.
       await deps.writes.createAsset({
         asset: { id: "b1", filename: "x", contentType: "t", size: 1, createdAt: 1, expiresAt: 0, blobKey: KEY },
         blob: { ref: { key: KEY, scope: "w1", sha256: OTHER }, state: "verifying" },
@@ -196,6 +195,102 @@ describe("applyVerificationResult", () => {
       expect(await deps.metadata.find("a1")).toBeNull();
       expect(await storage.head(KEY)).not.toBeNull();
       expect(await deps.blobRefs.find(KEY)).toMatchObject({ refCount: 1 });
+    });
+  });
+
+  describe("adoption after a match (ADR-017 §4)", () => {
+    const BLOB = `blobs/w1/${ACTUAL}`;
+
+    /** Another asset in the workspace already holds the uploaded bytes as a blob. */
+    async function seedExistingBlob(): Promise<void> {
+      await storage.put(BLOB, new Blob([BODY]).stream(), "application/octet-stream", BODY.length);
+      await deps.writes.createAsset({
+        asset: { id: "b1", filename: "x", contentType: "t", size: BODY.length, createdAt: 1, expiresAt: 0, projectId: "p1", sha256: ACTUAL, integrity: "verified", blobKey: BLOB },
+        blob: { ref: { key: BLOB, scope: "w1", sha256: ACTUAL }, state: "ready" },
+      });
+    }
+
+    test("a declared upload whose bytes the workspace holds moves to that blob; its classic object is retired, not deleted", async () => {
+      await seedExistingBlob();
+      const { job } = await seed({ declared: ACTUAL });
+      const usageBefore = await usage.get("workspace:w1");
+
+      expect(await applyVerificationResult(deps, job, { status: "completed", sha256: ACTUAL })).toBe("verified");
+
+      const asset = (await deps.metadata.find("a1"))!;
+      expect(asset).toMatchObject({ sha256: ACTUAL, integrity: "verified", blobKey: BLOB });
+      expect(await deps.jobs.find(job.id)).toMatchObject({ status: "completed" });
+      expect(await deps.blobRefs.find(BLOB)).toMatchObject({ refCount: 2, state: "ready" });
+      // Still readable for anyone who resolved it before the switch; the grace sweep deletes it later.
+      expect(await storage.head("assets/a1/data.bin")).not.toBeNull();
+      expect(await deps.blobRefs.find("assets/a1/data.bin")).toMatchObject({ state: "retired", refCount: 0 });
+      expect(await usage.get("workspace:w1")).toEqual(usageBefore);
+    });
+
+    test("without such a blob the row stays on its classic key, with the same verdict", async () => {
+      const { job } = await seed({ declared: ACTUAL });
+      expect(await applyVerificationResult(deps, job, { status: "completed", sha256: ACTUAL })).toBe("verified");
+      const asset = (await deps.metadata.find("a1"))!;
+      expect(asset).toMatchObject({ sha256: ACTUAL, integrity: "verified" });
+      expect(asset).not.toHaveProperty("blobKey");
+      expect(await deps.blobRefs.find("assets/a1/data.bin")).toBeNull();
+    });
+
+    test("an undeclared upload is never adopted", async () => {
+      await seedExistingBlob();
+      const { job } = await seed();
+      expect(await applyVerificationResult(deps, job, { status: "completed", sha256: ACTUAL })).toBe("verified");
+      expect(await deps.metadata.find("a1")).not.toHaveProperty("blobKey");
+    });
+
+    test("a blob in another workspace is never adopted", async () => {
+      await deps.projects.save({ id: "p9", name: "q", createdAt: 1, updatedAt: 1, ownerId: "u9", workspaceId: "w9" });
+      const other = `blobs/w9/${ACTUAL}`;
+      await deps.writes.createAsset({
+        asset: { id: "b9", filename: "x", contentType: "t", size: 1, createdAt: 1, expiresAt: 0, projectId: "p9", blobKey: other },
+        blob: { ref: { key: other, scope: "w9", sha256: ACTUAL }, state: "ready" },
+      });
+      const { job } = await seed({ declared: ACTUAL });
+      await applyVerificationResult(deps, job, { status: "completed", sha256: ACTUAL });
+      expect(await deps.metadata.find("a1")).not.toHaveProperty("blobKey");
+      expect(await deps.blobRefs.find(other)).toMatchObject({ refCount: 1 });
+    });
+
+    test("a blob that stops qualifying before the write leaves the row on its classic key, verified and still served", async () => {
+      await seedExistingBlob();
+      const { job } = await seed({ declared: ACTUAL });
+      // The blob is found, then a sweep locks it before the job's write lands.
+      const find = deps.blobRefs.find.bind(deps.blobRefs);
+      let lookups = 0;
+      vi.spyOn(deps.blobRefs, "find").mockImplementation(async (key) => {
+        const row = await find(key);
+        if (key === BLOB && lookups++ === 0) {
+          await (deps.writes as SqlAtomicWrites).deleteAsset({ asset: (await deps.metadata.find("b1"))!, cleanupPrefix: "assets/b1/" });
+          await deps.blobRefs.markDeleting(BLOB, Number.MAX_SAFE_INTEGER, Date.now());
+        }
+        return row;
+      });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      expect(await applyVerificationResult(deps, job, { status: "completed", sha256: ACTUAL })).toBe("verified");
+      warn.mockRestore();
+
+      const asset = (await deps.metadata.find("a1"))!;
+      expect(asset).toMatchObject({ integrity: "verified" });
+      expect(asset).not.toHaveProperty("blobKey");
+      expect(await deps.jobs.find(job.id)).toMatchObject({ status: "completed" });
+      expect(await storage.head("assets/a1/data.bin")).not.toBeNull();
+      expect(await deps.blobRefs.find("assets/a1/data.bin")).toBeNull();
+    });
+
+    test("a mismatch on a classic-key upload deletes it as before, whatever the workspace holds", async () => {
+      await seedExistingBlob();
+      const { job } = await seed({ declared: OTHER });
+      const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+      expect(await applyVerificationResult(deps, job, { status: "completed", sha256: ACTUAL })).toBe("rejected");
+      warn.mockRestore();
+      expect(await deps.metadata.find("a1")).toBeNull();
+      expect(await deps.blobRefs.find(BLOB)).toMatchObject({ refCount: 1, state: "ready" });
+      expect(await storage.head(BLOB)).not.toBeNull();
     });
   });
 
