@@ -1,6 +1,6 @@
 # ADR-017: Content-Addressed Blobs, Upload Integrity, and the Scope of Deduplication
 
-- **Status:** Proposed
+- **Status:** Accepted — P1a–P5 implemented
 - **Date:** 2026-09-16
 - **Deciders:** @rot1024
 - **Related:** ADR-000 (upload paths), ADR-005 (versions), ADR-010 (large
