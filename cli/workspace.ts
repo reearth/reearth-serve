@@ -9,19 +9,23 @@ interface MeResponse {
   workspaces: (Workspace & { role: string })[];
 }
 
+function timestamp(ms: number | undefined): string {
+  return ms === undefined ? "unknown" : new Date(ms).toISOString();
+}
+
 function formatWorkspace(ws: Workspace & { role?: string }): string {
   const lines = [
     `ID:      ${ws.id}`,
     `Name:    ${ws.name}`,
-    `Created: ${new Date(ws.createdAt).toISOString()}`,
-    `Updated: ${new Date(ws.updatedAt).toISOString()}`,
+    `Created: ${timestamp(ws.createdAt)}`,
+    `Updated: ${timestamp(ws.updatedAt)}`,
   ];
   if (ws.role) lines.push(`Role:    ${ws.role}`);
   return lines.join("\n");
 }
 
 function formatMember(m: Member): string {
-  return `${m.userId}  ${m.role}  (joined ${new Date(m.createdAt).toISOString()})`;
+  return `${m.userId}  ${m.role}  (joined ${timestamp(m.createdAt)})`;
 }
 
 export function registerWorkspaceCommands(

@@ -71,6 +71,10 @@ The production endpoint is `https://serve.reearth.land`. Point the CLI at it via
 | UI | React Router (SSR) + Tailwind CSS |
 | CLI | Commander.js + tsx |
 
+### Optional adapters
+
+- [Accounts](./adapters/accounts/README.md). Set `ACCOUNTS_URL` to take workspaces, members and decisions from an external accounts service.
+
 ### Project Structure
 
 | Directory | Description |

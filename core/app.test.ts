@@ -277,6 +277,22 @@ describe("directory and decision failures", () => {
     expect(await res.json()).toEqual({ error: "Authorization service unavailable" });
   });
 
+  test("with an external directory, a project needs a workspace and none is saved without one", async () => {
+    const save = vi.fn(async () => {});
+    const app = createApp(fakeDeps({
+      projects: { ...projectsWith(project), save },
+      tenancy: signedInTenancy(async () => true),
+    }));
+    const res = await app.request("/api/v1/projects", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: "ownerless" }),
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toEqual({ error: "workspaceId is required" });
+    expect(save).not.toHaveBeenCalled();
+  });
+
   test("any other error keeps the plain 500", async () => {
     const logged = vi.spyOn(console, "error").mockImplementation(() => {});
     const app = createApp(fakeDeps({

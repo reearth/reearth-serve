@@ -112,7 +112,7 @@ export function buildNodeRuntime(env: Env = process.env): NodeRuntime {
       audience: config.oidcAudience,
       jwksCache: kv,
     },
-    tenancy: buildTenancy(config.tenancy, { sql }),
+    tenancy: buildTenancy(config.tenancy, { sql, kv }),
     containers: new UnavailableContainerLauncher(),
     extractionStuckThresholdMs: STUCK_THRESHOLD_MS,
     limits: { subrequestBudget: CLEANUP_SUBREQUEST_BUDGET },

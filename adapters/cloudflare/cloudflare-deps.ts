@@ -111,7 +111,7 @@ export function buildDeps(env: Env): Deps {
         ? parseInt(env.JWKS_CACHE_TTL_SECONDS, 10)
         : undefined,
     },
-    tenancy: buildTenancy(parseTenancyConfig(env), { sql }),
+    tenancy: buildTenancy(parseTenancyConfig(env), { sql, kv }),
     containers: new CloudflareContainerLauncher({
       archiveExtractor: env.ARCHIVE_EXTRACTOR ?? null,
       thumbnailGenerator: env.THUMBNAIL_GENERATOR ?? null,

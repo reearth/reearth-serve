@@ -12,12 +12,14 @@ const RULES = [
   "3: core/ and shared/ name neither accounts nor Re:Earth",
   "4: only core/auth/access.ts calls Authorizer.check",
   "5: only adapters/ reveal a bearer credential",
+  "6: outside tests, adapters/accounts/ loads only through a dynamic import",
 ] as const;
 type Rule = (typeof RULES)[number];
-const [LAYERING, ACCOUNTS_INDEX, NEUTRAL_NAMES, ONE_DECISION_PATH, CREDENTIAL_REVEAL] = RULES;
+const [LAYERING, ACCOUNTS_INDEX, NEUTRAL_NAMES, ONE_DECISION_PATH, CREDENTIAL_REVEAL, LAZY_ACCOUNTS] = RULES;
 
 const SOURCE_ROOTS = ["app", "adapters", "cli", "core", "e2e", "runtime", "shared"];
 const IMPORT_SPECIFIER = /(?:\bfrom\s*|\bimport\s*\(?\s*)["']([^"']+)["']/g;
+const STATIC_IMPORT_SPECIFIER = /\b(?:import|export)\s+(?!type\b)(?:[^"';()]*?\bfrom\s*)?["']([^"']+)["']/g;
 const ALLOWED_NAMES = /reearth-serve|@reearth\//gi;
 const FORBIDDEN_NAMES = [/\baccounts\b/i, /re:?earth/i];
 const AUTHORIZER_CHECK = /authorizer\s*\??\.\s*check\s*\(/i;
@@ -34,8 +36,8 @@ function callsAuthorizerCheck(source: string): boolean {
   return aliases.some((alias) => new RegExp(`(?<![\\w$])${alias.replace(/\$/g, "\\$")}\\s*\\??\\.\\s*check\\s*\\(`).test(source));
 }
 
-function importsOf(file: SourceFile): string[] {
-  return [...file.source.matchAll(IMPORT_SPECIFIER)]
+function importsOf(file: SourceFile, pattern = IMPORT_SPECIFIER): string[] {
+  return [...file.source.matchAll(pattern)]
     .map((m) => m[1])
     .filter((spec) => spec.startsWith("."))
     .map((spec) => posix.join(posix.dirname(file.path), spec));
@@ -67,6 +69,10 @@ function rulesBrokenBy(file: SourceFile): Rule[] {
   }
   if (!under(file.path, "adapters") && file.path !== CREDENTIAL_MODULE && REVEAL_CALL.test(file.source)) {
     broken.push(CREDENTIAL_REVEAL);
+  }
+  const shipped = !under(file.path, "adapters/accounts", "e2e") && !file.path.endsWith(".test.ts");
+  if (shipped && importsOf(file, STATIC_IMPORT_SPECIFIER).some((target) => under(target, "adapters/accounts"))) {
+    broken.push(LAZY_ACCOUNTS);
   }
   return broken;
 }
@@ -115,10 +121,10 @@ describe("each rule reports a planted file", () => {
   });
 
   test("rule 2 reports a file outside adapters/accounts/ importing past its index", () => {
-    expect(reported("runtime/node/deps.ts", 'import { Client } from "../../adapters/accounts/client";'))
+    expect(reported("runtime/node/deps.ts", 'const { Client } = await import("../../adapters/accounts/client");'))
       .toEqual([{ rule: ACCOUNTS_INDEX, path: "runtime/node/deps.ts" }]);
-    expect(reported("adapters/tenancy.ts", 'import { a } from "./accounts";')).toEqual([]);
-    expect(reported("adapters/tenancy.ts", 'import { a } from "./accounts/index";')).toEqual([]);
+    expect(reported("adapters/tenancy.ts", 'const { a } = await import("./accounts");')).toEqual([]);
+    expect(reported("adapters/tenancy.ts", 'const { a } = await import("./accounts/index");')).toEqual([]);
     expect(reported("adapters/accounts/tenancy.ts", 'import { Client } from "./client";')).toEqual([]);
   });
 
@@ -152,6 +158,22 @@ describe("each rule reports a planted file", () => {
 
   test("rule 4 accepts a check on something that is not the authorizer", () => {
     expect(reported("core/project/handler.ts", 'const { authorizer: a } = c.get("tenancy");\nawait other.check(a);')).toEqual([]);
+  });
+
+  test.each([
+    ["a named import", 'import { accountsTenancy } from "./accounts";'],
+    ["a side-effect import", 'import "./accounts/index";'],
+    ["a re-export", 'export { accountsTenancy } from "./accounts";'],
+    ["a multi-line import", 'import {\n  accountsTenancy,\n} from "./accounts";'],
+  ])("rule 6 reports %s of adapters/accounts/ outside tests", (_, source) => {
+    expect(reported("adapters/tenancy.ts", source)).toEqual([{ rule: LAZY_ACCOUNTS, path: "adapters/tenancy.ts" }]);
+  });
+
+  test("rule 6 accepts a dynamic import, a type import, a test file and the e2e harness", () => {
+    expect(reported("adapters/tenancy.ts", 'loaded ??= import("./accounts").then((m) => m.accountsTenancy(o));')).toEqual([]);
+    expect(reported("adapters/tenancy.ts", 'import type { Tenancy } from "./accounts";')).toEqual([]);
+    expect(reported("adapters/tenancy.test.ts", 'import { accountsTenancy } from "./accounts";')).toEqual([]);
+    expect(reported("e2e/accounts-helpers.ts", 'import { ACCOUNTS_SERVICE } from "../adapters/accounts";')).toEqual([]);
   });
 
   test("rule 5 reports a credential revealed outside adapters/", () => {

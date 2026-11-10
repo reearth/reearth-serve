@@ -20,6 +20,7 @@ interface Env {
   JWKS_CACHE_TTL_SECONDS?: string;
   // Authorization
   CERBOS_ENDPOINT?: string;
+  ACCOUNTS_URL?: string;
   // Shared secret for /api/internal/* (container ↔ worker callbacks).
   // Required in production; without it the internal API rejects every request.
   INTERNAL_API_SECRET?: string;
