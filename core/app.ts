@@ -7,12 +7,13 @@ import { jobRoutes, jobInternalRoutes } from "./job/handler";
 import { projectRoutes } from "./project/handler";
 import { workspaceRoutes } from "./workspace/handler";
 import { meRoutes } from "./me/handler";
-import { authMiddleware } from "./auth/middleware";
+import { authMiddleware, verifyAccessToken } from "./auth/middleware";
 import { sessionMiddleware } from "./session/middleware";
 import { normalizeSiteHostSuffix, siteHostMiddleware } from "./site/middleware";
 import { composeSiteHostResolver } from "./site/resolver";
 import { bindsCaller, tenancyErrorResponse, tenancyMiddleware, TENANCY_RETRY_AFTER_SECONDS } from "./tenancy/middleware";
 import type { AppEnv, Deps } from "./types";
+import type { BearerVerifier } from "./access/restricted";
 import { buildSpec, jsonError, jsonResponse } from "./openapi";
 import { healthExamples } from "./openapi-examples";
 import { healthResponseSchema } from "../shared/openapi";
@@ -91,7 +92,10 @@ export function createApp(deps: Deps) {
   app.use("*", exceptInternalApi(exceptFileDelivery(sessionMiddleware(deps.sessions, deps.sessionTtlSeconds))));
 
   // Inject dependencies into all routes
-  app.use("*", injectDeps(deps, { siteHost: false }));
+  const bearerVerifier: BearerVerifier | null = deps.auth.issuer
+    ? (jwt) => verifyAccessToken(jwt, deps.auth)
+    : null;
+  app.use("*", injectDeps(deps, { siteHost: false, bearerVerifier }));
 
   // Public API (versioned)
   app.get("/api/v1/health",
@@ -193,14 +197,19 @@ function declareTenancyUnavailable(spec: Spec): Spec {
 function siteApp(deps: Deps) {
   const app = new Hono<AppEnv>();
   // No auth and no session middleware: a hosted page is capability-URL file
-  // delivery, and the handlers below read neither `user` nor `sessionId`.
-  app.use("*", injectDeps(deps, { siteHost: true }));
+  // delivery, and the handlers below read neither `user` nor `sessionId`. No
+  // bearer verifier either: a restricted asset on a site host accepts only a
+  // delivery token (ADR-014 §5).
+  app.use("*", injectDeps(deps, { siteHost: true, bearerVerifier: null }));
   app.route("/files", fileRoutes);
   return app;
 }
 
 /** Request-independent collaborators, read off the context by every handler. */
-function injectDeps(deps: Deps, opts: { siteHost: boolean }): MiddlewareHandler<AppEnv> {
+function injectDeps(
+  deps: Deps,
+  opts: { siteHost: boolean; bearerVerifier: BearerVerifier | null },
+): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     c.set("metadata", deps.metadata);
     c.set("versions", deps.versions);
@@ -226,6 +235,7 @@ function injectDeps(deps: Deps, opts: { siteHost: boolean }): MiddlewareHandler<
     c.set("signingSecret", deps.signingSecret);
     c.set("credentialedOrigins", deps.credentialedOrigins);
     c.set("siteHost", opts.siteHost);
+    c.set("bearerVerifier", opts.bearerVerifier);
     await next();
   };
 }

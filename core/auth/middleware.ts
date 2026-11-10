@@ -1,7 +1,7 @@
 import { createMiddleware } from "hono/factory";
 import { jwtVerify, type JWTVerifyGetKey, type JSONWebKeySet } from "jose";
 import type { AppEnv } from "../types";
-import { BearerCredential } from "./types";
+import { BearerCredential, type VerifiedCaller } from "./types";
 import type { KeyValue } from "../kv/port";
 import { resolveJWKS } from "./jwks";
 
@@ -23,6 +23,48 @@ export interface AuthConfig {
   jwks?: JWTVerifyGetKey;
 }
 
+type Verification =
+  | { ok: true; caller: VerifiedCaller }
+  | { ok: false; reason: "no_subject" | "invalid" };
+
+async function verify(token: string, config: AuthConfig & { issuer: string }): Promise<Verification> {
+  try {
+    const jwks = config.jwks ?? await resolveJWKS(config.issuer, {
+      cache: config.jwksCache, ttlSeconds: config.jwksCacheTtlSeconds,
+    });
+    const { payload } = await jwtVerify(token, jwks, {
+      issuer: config.issuer,
+      ...(config.audience && { audience: config.audience }),
+    });
+    if (typeof payload.sub !== "string" || payload.sub === "") return { ok: false, reason: "no_subject" };
+    return {
+      ok: true,
+      caller: {
+        kind: "user",
+        sub: payload.sub,
+        email: payload.email as string | undefined,
+        name: payload.name as string | undefined,
+        credential: new BearerCredential(token),
+      },
+    };
+  } catch {
+    return { ok: false, reason: "invalid" };
+  }
+}
+
+/**
+ * Verify an OIDC access token the way the middleware does. Null for any
+ * failure, a JWKS fetch failure included, and always null when no issuer is
+ * configured. `/files` calls it itself, because the middleware skips that
+ * path (ADR-014 §5).
+ */
+export async function verifyAccessToken(token: string, config: AuthConfig): Promise<VerifiedCaller | null> {
+  const issuer = config.issuer;
+  if (!issuer) return null;
+  const result = await verify(token, { ...config, issuer });
+  return result.ok ? result.caller : null;
+}
+
 /**
  * JWT authentication middleware.
  *
@@ -30,10 +72,6 @@ export interface AuthConfig {
  */
 export function authMiddleware(config: AuthConfig) {
   const issuer = config.issuer;
-  const audience = config.audience;
-  const jwksOverride = config.jwks;
-  const cache = config.jwksCache;
-  const ttlSeconds = config.jwksCacheTtlSeconds;
 
   return createMiddleware<AppEnv>(async (c, next) => {
     // No OIDC configured — everything is demo mode
@@ -53,29 +91,11 @@ export function authMiddleware(config: AuthConfig) {
       return c.json({ error: "Invalid Authorization header format. Expected: Bearer <token>" }, 401);
     }
 
-    const token = match[1];
-
-    try {
-      const jwks = jwksOverride ?? await resolveJWKS(issuer, { cache, ttlSeconds });
-      const { payload } = await jwtVerify(token, jwks, {
-        issuer,
-        ...(audience && { audience }),
-      });
-      if (typeof payload.sub !== "string" || payload.sub === "") {
-        return c.json({ error: "Token has no subject" }, 401);
-      }
-
-      c.set("caller", {
-        kind: "user",
-        sub: payload.sub,
-        email: payload.email as string | undefined,
-        name: payload.name as string | undefined,
-        credential: new BearerCredential(token),
-      });
-    } catch {
-      return c.json({ error: "Invalid or expired token" }, 401);
+    const result = await verify(match[1], { ...config, issuer });
+    if (!result.ok) {
+      return c.json({ error: result.reason === "no_subject" ? "Token has no subject" : "Invalid or expired token" }, 401);
     }
-
+    c.set("caller", result.caller);
     return next();
   });
 }
@@ -251,5 +271,29 @@ if (import.meta.vitest) {
       headers: { Authorization: `Bearer ${token}` },
     });
     expect(res.status).toBe(200);
+  });
+
+  test("the middleware keeps its distinct 401 messages", async () => {
+    const app = createTestApp({ issuer: TEST_ISSUER, jwks: localJWKS });
+    const noSub = await new SignJWT({})
+      .setProtectedHeader({ alg: "RS256", kid: "test-key" })
+      .setIssuer(TEST_ISSUER).setExpirationTime("1h").sign(privateKey);
+    const bodyOf = async (authorization: string) =>
+      (await app.request("/test", { headers: { Authorization: authorization } })).json();
+    expect(await bodyOf(`Bearer ${noSub}`)).toEqual({ error: "Token has no subject" });
+    expect(await bodyOf("Bearer nope")).toEqual({ error: "Invalid or expired token" });
+    expect(await bodyOf("Basic abc")).toEqual({ error: "Invalid Authorization header format. Expected: Bearer <token>" });
+  });
+
+  test("verifyAccessToken returns the caller for a valid token and null for anything else", async () => {
+    const config = { issuer: TEST_ISSUER, audience: TEST_AUDIENCE, jwks: localJWKS };
+    const caller = await verifyAccessToken(await buildToken(), config);
+    expect(caller).toMatchObject({ kind: "user", sub: "user-1", email: "test@example.com" });
+    expect(await verifyAccessToken("not-a-jwt", config)).toBeNull();
+    expect(await verifyAccessToken(await buildToken({ expiresIn: "-1s" }), config)).toBeNull();
+    expect(await verifyAccessToken(await buildToken(), {})).toBeNull();
+    const unreachable = vi.fn(async () => { throw new Error("JWKS fetch failed"); });
+    expect(await verifyAccessToken(await buildToken(), { ...config, jwks: unreachable as unknown as JWTVerifyGetKey })).toBeNull();
+    expect(unreachable).toHaveBeenCalled();
   });
 }

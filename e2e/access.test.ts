@@ -1,6 +1,6 @@
 import { describe, test, expect, beforeAll } from "vitest";
 import { execSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { BASE, createProjectForAuth, MOCK_OIDC, signToken, uploadFileWithAuth } from "./helpers";
@@ -261,5 +261,100 @@ describe("password-protected sites", { skip: !mockOidcAvailable }, () => {
     expect(res.status).toBe(200);
     expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
     await res.body?.cancel();
+  });
+});
+
+/** Member-only reads with an OIDC bearer (ADR-014 §1, §5, §6). */
+describe("restricted assets", { skip: !mockOidcAvailable }, () => {
+  const GEOJSON = '{"type":"FeatureCollection","features":[]}';
+  let token: string;
+  let assetId: string;
+  let fileUrl: string;
+  let configDir: string;
+
+  function cli(args: string): string {
+    return execSync(`npx tsx cli/index.ts --endpoint ${BASE} --json ${args}`, {
+      encoding: "utf-8", env: { ...process.env, REEARTH_SERVE_CONFIG_DIR: configDir },
+    });
+  }
+
+  beforeAll(async () => {
+    token = await signToken({ sub: "e2e-restricted-member" });
+    const projectId = await createProjectForAuth(token, "e2e-restricted");
+    const { status, body } = await uploadFileWithAuth(
+      new TextEncoder().encode(GEOJSON), "data.geojson", "application/geo+json", token, projectId,
+    );
+    expect(status).toBe(201);
+    assetId = body.asset.id;
+    expect(body.asset.type ?? "file").toBe("file");
+    fileUrl = `${BASE}/files/${assetId}/data.geojson`;
+
+    configDir = mkdtempSync(join(tmpdir(), "serve-e2e-restricted-config-"));
+    writeFileSync(
+      join(configDir, "credentials.json"),
+      JSON.stringify({ accessToken: token, expiresAt: Date.now() + 3600_000 }),
+    );
+    writeFileSync(join(configDir, "config.json"), JSON.stringify({ defaultProject: projectId }));
+  });
+
+  test("PATCH restricts a single-file project asset", async () => {
+    const res = await fetch(`${BASE}/api/v1/assets/${assetId}`, {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      body: JSON.stringify({ access: "restricted" }),
+    });
+    expect(res.status).toBe(200);
+    const { asset } = await res.json() as { asset: { access?: string } };
+    expect(asset.access).toBe("restricted");
+  });
+
+  test("no bearer is 401 with the Bearer and ServeToken challenge", async () => {
+    const res = await fetch(fileUrl, { headers: { Origin: "https://viewer.example.net" } });
+    expect(res.status).toBe(401);
+    expect(res.headers.get("WWW-Authenticate")).toBe("Bearer, ServeToken");
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect(res.headers.get("Access-Control-Expose-Headers")).toBe("WWW-Authenticate, Retry-After");
+    expect(await res.json()).toEqual({ error: "authentication required" });
+  });
+
+  test("an invalid bearer is the same 401", async () => {
+    const res = await fetch(fileUrl, { headers: { Authorization: "Bearer not-a-jwt" } });
+    expect(res.status).toBe(401);
+    await res.body?.cancel();
+  });
+
+  test("a signed-in non-member gets 404, like a missing asset", async () => {
+    const stranger = await signToken({ sub: "e2e-restricted-stranger" });
+    const res = await fetch(fileUrl, { headers: { Authorization: `Bearer ${stranger}` } });
+    expect(res.status).toBe(404);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect(await res.json()).toEqual({ error: "File not found" });
+  });
+
+  test("a member reads it, privately, with uncredentialed CORS", async () => {
+    const res = await fetch(fileUrl, { headers: { Authorization: `Bearer ${token}`, Origin: BASE } });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(GEOJSON);
+    expect(res.headers.get("Cache-Control")).toContain("private");
+    expect(res.headers.get("Vary")).toContain("Authorization");
+    expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(res.headers.get("Access-Control-Allow-Credentials")).toBeNull();
+  });
+
+  test("`file cp` downloads it with the login token", () => {
+    const dest = join(mkdtempSync(join(tmpdir(), "serve-e2e-restricted-cp-")), "out.geojson");
+    cli(`file cp ${assetId}:data.geojson ${dest}`);
+    expect(readFileSync(dest, "utf-8")).toBe(GEOJSON);
+  });
+
+  test("`asset protect --off` and `--restricted` switch the mode", async () => {
+    expect((JSON.parse(cli(`asset protect ${assetId} --off`)) as { asset: { access?: string } }).asset.access).toBe("public");
+    const open = await fetch(fileUrl);
+    expect(open.status).toBe(200);
+    await open.body?.cancel();
+    expect((JSON.parse(cli(`asset protect ${assetId} --restricted`)) as { asset: { access?: string } }).asset.access).toBe("restricted");
+    const closed = await fetch(fileUrl);
+    expect(closed.status).toBe(401);
+    await closed.body?.cancel();
   });
 });
