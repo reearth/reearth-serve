@@ -489,6 +489,11 @@ export const createUploadSessionBodySchema = component("CreateUploadSessionReque
    * the server. Omitted, the server decides as before.
    */
   contentEncoding: uploadEncodingSchema.optional(),
+  /**
+   * Store an archive without extracting it — the session counterpart of the
+   * direct upload's `X-Skip-Extraction: true` header.
+   */
+  skipExtraction: z.boolean().optional(),
 }));
 
 export const completeUploadBodySchema = component("CompleteUploadSessionRequest", z.object({

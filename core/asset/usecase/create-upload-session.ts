@@ -232,6 +232,7 @@ async function startSession(
     ...(compress && { contentEncoding: "gzip" }),
     ...(options?.sessionId && { sessionId: options.sessionId }),
     ...(options?.projectId && { projectId: options.projectId }),
+    ...(options?.skipExtraction && { skipExtraction: true }),
     ...(sha256 && { sha256 }),
     ...blobFields,
   };

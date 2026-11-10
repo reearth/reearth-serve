@@ -64,7 +64,10 @@ export function registerCreateUploadSessionRoute(app: Hono<AppEnv>) {
           partCount: body.partCount,
           sha256: body.sha256,
           contentEncoding: body.contentEncoding,
-        }, ttlSeconds, { sessionId, projectId: projectResult.projectId, blob, storage: c.get("storage") });
+        }, ttlSeconds, {
+          sessionId, projectId: projectResult.projectId, blob, storage: c.get("storage"),
+          ...(body.skipExtraction && { skipExtraction: true }),
+        });
         return c.json(result, 201);
       } catch (e) {
         const known = uploadErrorResponse(e);
