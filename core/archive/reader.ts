@@ -118,7 +118,7 @@ export async function buildView(
   if (directory.size > memoryLimit) {
     const survey = await surveyStream(storage, source, directory);
     if (!survey) return { ok: false, reason: "corrupt" };
-    return { ok: true, view: scanView(storage, source.key, directory, survey, onStale), bytes: 256 };
+    return { ok: true, view: scanView(storage, source.key, directory, survey.rules, survey.directoryRecordCount, onStale), bytes: 256 };
   }
 
   const cd = directory.bytesFromTail ?? (await readDirectory(storage, source.key, directory));
@@ -127,11 +127,12 @@ export async function buildView(
   const parser = createDirectoryParser(directory, survey.observe);
   if (!parser.push(cd) || parser.end() === null) return { ok: false, reason: "corrupt" };
   const rules = survey.result();
-  const table = buildTable(cd, directory, rules);
-  if (!table) return { ok: false, reason: "corrupt" };
+  const built = buildTable(cd, directory, rules);
+  if (!built) return { ok: false, reason: "corrupt" };
+  const { table, directoryRecordCount } = built;
   return {
     ok: true,
-    view: memoryView(table, directory.entryCount, rules.rootPrefix, directory.etag),
+    view: memoryView(table, directoryRecordCount, rules.rootPrefix, directory.etag),
     bytes: table.records.byteLength + table.names.byteLength,
   };
 }
@@ -149,7 +150,8 @@ async function surveyStream(storage: FileStorage, source: ArchiveSource, directo
   for await (const chunk of chunks(file.body)) {
     if (!parser.push(chunk)) return null;
   }
-  return parser.end() === null ? null : survey.result();
+  const directoryRecordCount = parser.end();
+  return directoryRecordCount === null ? null : { rules: survey.result(), directoryRecordCount };
 }
 
 function readerOver(view: TableView, archive: ArchiveObject, cached: { builtThisRequest: boolean; evict: () => void }): ArchiveReader {

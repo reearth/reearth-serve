@@ -317,6 +317,36 @@ func TestExtractionWorker_Tar(t *testing.T) {
 	}
 }
 
+func TestExtractionWorker_TarSkipsPathsOutsideTheRoot(t *testing.T) {
+	storage := NewMemoryStorage()
+	ctx := context.Background()
+	archiveData := buildTarArchive(map[string]string{"../evil.txt": "x", "a/../../evil2.txt": "x", "ok.txt": "ok"})
+	archiveKey := "assets/tar-escape/archive.tar"
+	if err := storage.PutObject(ctx, archiveKey, bytes.NewReader(archiveData), int64(len(archiveData)), "application/x-tar", nil); err != nil {
+		t.Fatal(err)
+	}
+	worker := NewExtractionWorker(storage, ExtractionConfig{
+		AssetID:         "tar-escape",
+		ArchiveKey:      archiveKey,
+		ArchiveFilename: "archive.tar",
+		ArchiveFormat:   "tar",
+		MaxConcurrency:  1,
+		CheckpointEvery: 10,
+	})
+	if err := worker.Run(ctx); err != nil {
+		t.Fatalf("worker.Run failed: %v", err)
+	}
+	manifest := readManifest(t, storage, "tar-escape")
+	if len(manifest) != 1 || manifest[0].Path != "ok.txt" {
+		t.Fatalf("manifest = %+v, want only ok.txt", manifest)
+	}
+	for _, key := range storage.Keys() {
+		if strings.Contains(key, "..") {
+			t.Errorf("stored %q outside the files/ root", key)
+		}
+	}
+}
+
 func TestExtractionWorker_ZipCompression(t *testing.T) {
 	storage := NewMemoryStorage()
 	ctx := context.Background()

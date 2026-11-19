@@ -1,6 +1,5 @@
 {
   "archive": "prepended.zip",
-  "extractorParity": true,
   "entries": [
     {
       "path": "a.txt",

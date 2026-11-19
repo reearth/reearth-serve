@@ -1,6 +1,5 @@
 {
   "archive": "deflate.zip",
-  "extractorParity": true,
   "entries": [
     {
       "path": "a.txt",

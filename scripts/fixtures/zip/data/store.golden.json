@@ -1,6 +1,5 @@
 {
   "archive": "store.zip",
-  "extractorParity": true,
   "entries": [
     {
       "path": "img/tile.png",
