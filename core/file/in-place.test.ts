@@ -25,7 +25,7 @@ const SITE: SyntheticEntry[] = [
 ];
 
 /** The seeded archive's version replaced by a just-uploaded zip that no extractor has touched. */
-async function arrived(entries: SyntheticEntry[] = SITE, status: "pending" | "ready" = "pending") {
+async function arrived(entries: SyntheticEntry[] = SITE, status: "pending" | "ready" | undefined = "pending") {
   const f = await fixture();
   const bytes = writeZip(entries);
   const version = f.versions.versions.get(VERSION_ID)!;
@@ -163,6 +163,17 @@ describe("serving a zip entry in place, before extraction", () => {
     expect(get).not.toHaveBeenCalled();
     const ok = await f.get("index.html", { Authorization: `Basic ${btoa("x:hunter2")}` });
     expect(ok.status).toBe(200);
+  });
+});
+
+describe("a zip uploaded with extraction skipped", () => {
+  test("is read in place, rules included, without probing an extracted tree first", async () => {
+    const f = await arrived([...SITE, { name: "_headers", data: text("/index.html\n  X-From-Zip: yes\n") }], undefined);
+    await f.get("index.html");
+    const get = vi.spyOn(f.storage, "get");
+    const res = await f.get("index.html");
+    expect(res.headers.get("X-From-Zip")).toBe("yes");
+    expect(get.mock.calls.map(([key]) => key)).toEqual([ORIGINAL, ORIGINAL]);
   });
 });
 
