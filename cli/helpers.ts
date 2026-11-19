@@ -87,6 +87,7 @@ export function formatJob(job: Job): string {
     `Status:    ${job.status}`,
     `Updated:   ${new Date(job.updatedAt).toISOString()}`,
   ];
+  if (job.failureClass) lines.push(`Failure class: ${job.failureClass}`);
   if (job.startedAt) lines.push(`Started:   ${new Date(job.startedAt).toISOString()}`);
   if (job.completedAt) lines.push(`Completed: ${new Date(job.completedAt).toISOString()}`);
   if (job.totalFiles) {
