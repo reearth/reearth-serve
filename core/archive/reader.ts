@@ -2,9 +2,9 @@ import type { StoredFile } from "../asset/model";
 import type { FileStorage } from "../asset/repository";
 import type { ArchiveCache, Built } from "./cache";
 import { contentTypeOf } from "./content-type";
-import { buildTable, createSurvey, type TableEntry } from "./table";
+import { buildTable, createSurvey, type EntryTable, type NameRules, type TableEntry } from "./table";
 import { gzipMember, GZIP_HEADER_BYTES, GZIP_TRAILER_BYTES } from "./transmux";
-import { memoryView, scanView, type TableView } from "./views";
+import { IndexUnusable, memoryView, openIndexedView, scanView, type TableView } from "./views";
 import { chunks, createDirectoryParser, locateDirectory, readAll, type Directory, type DirectoryRefusal } from "./zip/directory";
 import { readEntryBytes, type ArchiveObject, type Span } from "./zip/entry";
 
@@ -74,7 +74,8 @@ export type ArchiveOpenFailure = "not-found" | "unsupported-method" | "encrypted
 
 export type ArchiveOpenResult =
   | { ok: true; file: StoredFile; originalSize: number }
-  | { ok: false; reason: ArchiveOpenFailure };
+  | { ok: false; reason: ArchiveOpenFailure }
+  | { ok: false; reason: "unsatisfiable"; size: number };
 
 export interface ArchiveReader {
   /** The lone root folder stripped from every path, "" when none. */
@@ -88,21 +89,68 @@ export interface ArchiveReader {
 
 /**
  * Open a zip original for in-place reads. A warm open costs no storage reads.
- * A cold one costs one tail read, plus one central directory read when the
- * directory lies outside the last MiB. It never reads extracted objects or
- * the manifest.
+ * A cold one with a container index reads the index head and then a page per
+ * lookup. Without one it costs one tail read, plus one central directory read
+ * when the directory lies outside the last MiB. It never reads extracted
+ * objects or the manifest.
  */
 export async function openArchive(deps: ArchiveDeps, source: ArchiveSource): Promise<OpenResult> {
   const cacheKey = `${source.key}#${source.size}`;
   const evict = () => deps.archives.evict(cacheKey);
+  const trusted = source.index && !deps.archives.distrusted(cacheKey) ? source : { ...source, index: undefined };
   let builtThisRequest = false;
   const built = await deps.archives.load(cacheKey, () => {
     builtThisRequest = true;
-    return buildView(deps.storage, source, evict);
+    return buildView(deps.storage, trusted, evict);
   });
   if (!built.ok) return built;
-  const archive: ArchiveObject = { storage: deps.storage, key: source.key, size: source.size, etag: built.view.etag };
-  return { ok: true, reader: readerOver(built.view, archive, { builtThisRequest, evict }) };
+  const archive: ArchiveObject = { storage: deps.storage, key: source.key, dataEnd: built.view.dataEnd, etag: built.view.etag };
+  const reader = readerOver(built.view, archive, { builtThisRequest, evict });
+  if (built.view.from !== "index") return { ok: true, reader };
+  return {
+    ok: true,
+    reader: fallingBack(reader, (reason) => {
+      console.warn(`archive: index ${source.index} for ${source.key} distrusted (${reason})`);
+      deps.archives.distrust(cacheKey);
+      return openArchive(deps, source);
+    }),
+  };
+}
+
+/**
+ * An index answers for speed only. Anything that suggests it is wrong for
+ * this original sends the call to the central directory instead.
+ */
+function fallingBack(indexed: ArchiveReader, reopen: (reason: string) => Promise<OpenResult>): ArchiveReader {
+  const guarded = async <T>(answer: () => Promise<T>, fallback: (reader: ArchiveReader) => Promise<T>): Promise<T> => {
+    try {
+      return await answer();
+    } catch (e) {
+      if (!(e instanceof IndexUnusable)) throw e;
+      const opened = await reopen(e.message);
+      if (!opened.ok) throw new Error(`archive is not readable from its central directory (${opened.reason})`);
+      return fallback(opened.reader);
+    }
+  };
+  return {
+    rootPrefix: indexed.rootPrefix,
+    entryCount: indexed.entryCount,
+    stat: (path) => guarded(() => indexed.stat(path), (reader) => reader.stat(path)),
+    list: (query) => guarded(() => indexed.list(query), (reader) => reader.list(query)),
+    async open(path, options) {
+      let reason: string;
+      try {
+        const read = await indexed.open(path, options);
+        if (read.ok || (read.reason !== "changed" && read.reason !== "corrupt")) return read;
+        reason = `entry read for ${path} was ${read.reason}`;
+      } catch (e) {
+        if (!(e instanceof IndexUnusable)) throw e;
+        reason = e.message;
+      }
+      const reopened = await reopen(reason);
+      return reopened.ok ? reopened.reader.open(path, options) : { ok: false, reason: "changed" };
+    },
+  };
 }
 
 export async function buildView(
@@ -111,6 +159,12 @@ export async function buildView(
   onStale: () => void,
   memoryLimit = MEMORY_DIRECTORY_LIMIT,
 ): Promise<Built> {
+  if (source.index) {
+    const indexed = await openIndexedView(storage, source.index, source.size);
+    if (indexed.ok) return indexed;
+    console.warn(`archive: index ${source.index} for ${source.key} not used (${indexed.reason})`);
+  }
+
   const located = await locateDirectory(storage, source.key, source.size);
   if (!located.ok) return located;
   const directory = located.directory;
@@ -118,22 +172,35 @@ export async function buildView(
   if (directory.size > memoryLimit) {
     const survey = await surveyStream(storage, source, directory);
     if (!survey) return { ok: false, reason: "corrupt" };
-    return { ok: true, view: scanView(storage, source.key, directory, survey, onStale), bytes: 256 };
+    return { ok: true, view: scanView(storage, source.key, directory, survey.rules, survey.directoryRecordCount, onStale), bytes: 256 };
   }
 
-  const cd = directory.bytesFromTail ?? (await readDirectory(storage, source.key, directory));
-  if (!cd) return { ok: false, reason: "missing" };
-  const survey = createSurvey(source.filename);
-  const parser = createDirectoryParser(directory, survey.observe);
-  if (!parser.push(cd) || parser.end() === null) return { ok: false, reason: "corrupt" };
-  const rules = survey.result();
-  const table = buildTable(cd, directory, rules);
-  if (!table) return { ok: false, reason: "corrupt" };
+  const read = await directoryTable(storage, source, directory);
+  if (!read.ok) return read;
+  const { table, rules, directoryRecordCount } = read;
   return {
     ok: true,
-    view: memoryView(table, directory.entryCount, rules.rootPrefix, directory.etag),
+    view: memoryView(table, directoryRecordCount, rules.rootPrefix, directory),
     bytes: table.records.byteLength + table.names.byteLength,
   };
+}
+
+export async function directoryTable(
+  storage: FileStorage,
+  source: ArchiveSource,
+  directory: Directory,
+): Promise<{ ok: true; table: EntryTable; rules: NameRules; directoryRecordCount: number } | { ok: false; reason: DirectoryRefusal }> {
+  const cd = directory.bytesFromTail ?? (await readDirectory(storage, source.key, directory));
+  if (!cd) return { ok: false, reason: "missing" };
+  const rules = surveyBytes(cd, directory, source.filename);
+  const built = rules && buildTable(cd, directory, rules);
+  return built && rules ? { ok: true, rules, ...built } : { ok: false, reason: "corrupt" };
+}
+
+export function surveyBytes(cd: Uint8Array, directory: Directory, filename: string): NameRules | null {
+  const survey = createSurvey(filename);
+  const parser = createDirectoryParser(directory, survey.observe);
+  return parser.push(cd) && parser.end() !== null ? survey.result() : null;
 }
 
 async function readDirectory(storage: FileStorage, key: string, directory: Directory): Promise<Uint8Array | null> {
@@ -141,7 +208,7 @@ async function readDirectory(storage: FileStorage, key: string, directory: Direc
   return file && readAll(file.body, directory.size);
 }
 
-async function surveyStream(storage: FileStorage, source: ArchiveSource, directory: Directory) {
+export async function surveyStream(storage: FileStorage, source: ArchiveSource, directory: Directory) {
   const file = await storage.get(source.key, { offset: directory.offset, length: directory.size });
   if (!file) return null;
   const survey = createSurvey(source.filename);
@@ -149,7 +216,8 @@ async function surveyStream(storage: FileStorage, source: ArchiveSource, directo
   for await (const chunk of chunks(file.body)) {
     if (!parser.push(chunk)) return null;
   }
-  return parser.end() === null ? null : survey.result();
+  const directoryRecordCount = parser.end();
+  return directoryRecordCount === null ? null : { rules: survey.result(), directoryRecordCount };
 }
 
 function readerOver(view: TableView, archive: ArchiveObject, cached: { builtThisRequest: boolean; evict: () => void }): ArchiveReader {
@@ -178,11 +246,17 @@ function readerOver(view: TableView, archive: ArchiveObject, cached: { builtThis
       if (!entry) return { ok: false, reason: "not-found" };
       const info = toInfo(entry);
       if (!info.readable) return { ok: false, reason: info.unreadableReason === "encrypted" ? "encrypted" : "unsupported-method" };
+      if (!sizesAgree(entry)) return { ok: false, reason: "corrupt" };
+      const requested = options?.range;
+      if (requested && (requested.offset >= entry.size || requested.length <= 0)) return { ok: false, reason: "unsatisfiable", size: entry.size };
+      if (entry.size === 0) {
+        return { ok: true, file: { body: new Blob([]).stream(), size: 0, contentType: info.contentType, etag: entryEtag(view.etag, entry) }, originalSize: 0 };
+      }
 
-      const range = entry.method === STORED && options?.range ? clamp(options.range, entry.size) : null;
+      const range = entry.method === STORED && requested ? clamp(requested, entry.size) : null;
       const read = await readEntryBytes(archive, entry, range ?? undefined);
       if (!read.ok) {
-        if (read.reason === "mismatch" && cached.builtThisRequest) return { ok: false, reason: "corrupt" };
+        if (read.reason === "corrupt" || (read.reason === "mismatch" && cached.builtThisRequest)) return { ok: false, reason: "corrupt" };
         return stale();
       }
 
@@ -199,6 +273,12 @@ function readerOver(view: TableView, archive: ArchiveObject, cached: { builtThis
       return { ok: true, file, originalSize: entry.size };
     },
   };
+}
+
+/** A stored entry's bytes are its data, and deflate never encodes a non-empty entry in zero bytes. */
+function sizesAgree(entry: TableEntry): boolean {
+  if (entry.method === STORED) return entry.compressedSize === entry.size;
+  return entry.compressedSize > 0 || entry.size === 0;
 }
 
 function clamp(range: Span, size: number): Span {

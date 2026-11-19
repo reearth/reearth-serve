@@ -1,4 +1,4 @@
-import { existsSync, rmSync, statSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { Command } from "commander";
 import { PATHS } from "../shared/paths";
@@ -10,12 +10,14 @@ import {
   downloadFile,
   formatBytes,
   listLocalFiles,
-  localHash,
+  matchesListing,
   output,
   parseSrc,
   resolveSitePassword,
   SITE_PASSWORD_ENV,
   streamNdjson,
+  unservable,
+  unservableSummary,
 } from "./helpers";
 
 /**
@@ -107,6 +109,7 @@ export function registerFileCommands(program: Command, file: Command) {
 
         let downloaded = 0;
         let skipped = 0;
+        const refused = { unavailable: 0, undecodable: 0 };
         const queue = [...files];
 
         async function worker() {
@@ -115,14 +118,16 @@ export function registerFileCommands(program: Command, file: Command) {
             const relativePath = prefix ? entry.path.slice(prefix.length).replace(/^\//, "") || entry.path.split("/").pop()! : entry.path;
             const localPath = join(dest, relativePath);
             const url = `${opts.endpoint}${PATHS.file(assetId, entry.path)}`;
-            const ok = await downloadFile(url, localPath, force, auth);
-            if (ok) {
-              downloaded++;
-            } else {
-              skipped++;
+            try {
+              if (await downloadFile(url, localPath, force, auth)) downloaded++;
+              else skipped++;
+            } catch (err) {
+              const kind = unservable(err);
+              if (!kind) throw err;
+              refused[kind]++;
             }
             if (!opts.json) {
-              process.stdout.write(`\r  ${downloaded + skipped}/${files.length}`);
+              process.stdout.write(`\r  ${downloaded + skipped + refused.unavailable + refused.undecodable}/${files.length}`);
             }
           }
         }
@@ -132,10 +137,10 @@ export function registerFileCommands(program: Command, file: Command) {
         await Promise.all(workers);
 
         if (opts.json) {
-          output({ ok: true, count: downloaded, skipped, dest }, true);
+          output({ ok: true, count: downloaded, skipped, ...refused, dest }, true);
         } else {
-          const msg = skipped > 0 ? ` (${skipped} skipped, use -f to overwrite)` : "";
-          console.log(`\nDone: ${downloaded} file(s) downloaded to ${dest}${msg}`);
+          const notes = [...(skipped > 0 ? [`${skipped} skipped, use -f to overwrite`] : []), ...unservableSummary(refused)];
+          console.log(`\nDone: ${downloaded} file(s) downloaded to ${dest}${notes.length > 0 ? ` (${notes.join(", ")})` : ""}`);
         }
         return;
       }
@@ -253,19 +258,16 @@ export function registerFileCommands(program: Command, file: Command) {
         remotePaths.add(entry.path);
         const localPath = join(destDir, entry.path);
 
-        if (existsSync(localPath)) {
-          const local = entry.hash ? localHash(localPath, entry.hash) : null;
-          const same = local !== null ? local === entry.hash : statSync(localPath).size === entry.size;
-          if (same) {
-            skipped++;
-            continue;
-          }
+        if (existsSync(localPath) && matchesListing(localPath, entry)) {
+          skipped++;
+          continue;
         }
 
         toDownload.push(entry);
       }
 
       let downloaded = 0;
+      const refused = { unavailable: 0, undecodable: 0 };
       const queue = [...toDownload];
 
       async function worker() {
@@ -273,10 +275,16 @@ export function registerFileCommands(program: Command, file: Command) {
           const entry = queue.shift()!;
           const localPath = join(destDir, entry.path);
           const url = `${opts.endpoint}${PATHS.file(assetId, entry.path)}`;
-          await downloadFile(url, localPath, true, auth);
-          downloaded++;
+          try {
+            await downloadFile(url, localPath, true, auth);
+            downloaded++;
+          } catch (err) {
+            const kind = unservable(err);
+            if (!kind) throw err;
+            refused[kind]++;
+          }
           if (!opts.json) {
-            process.stdout.write(`\r  ${downloaded + skipped}/${remoteFiles.length}`);
+            process.stdout.write(`\r  ${downloaded + refused.unavailable + refused.undecodable + skipped}/${remoteFiles.length}`);
           }
         }
       }
@@ -299,12 +307,13 @@ export function registerFileCommands(program: Command, file: Command) {
       }
 
       if (opts.json) {
-        output({ ok: true, downloaded, skipped, deleted, totalSize, dest: destDir }, true);
+        output({ ok: true, downloaded, skipped, deleted, ...refused, totalSize, dest: destDir }, true);
       } else {
         const parts: string[] = [];
         if (downloaded > 0) parts.push(`${downloaded} downloaded`);
         if (skipped > 0) parts.push(`${skipped} unchanged`);
         if (deleted > 0) parts.push(`${deleted} deleted`);
+        parts.push(...unservableSummary(refused));
         console.log(`\nDone: ${parts.join(", ")}`);
       }
     });

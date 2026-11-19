@@ -58,7 +58,7 @@ export function registerListFilesRoute(app: Hono<AppEnv>) {
           .pipeThrough(filterNdjsonByPrefix(prefix))
           .pipeThrough(new TextEncoderStream()));
       }
-      const source = archiveSource(layout);
+      const source = layout === layouts[0] ? archiveSource(layout) : null;
       if (!source) continue;
       const opened = await openArchive({ storage, archives: c.get("archives") }, source);
       if (opened.ok) return ndjson(entryLines(opened.reader, prefix));

@@ -1,6 +1,5 @@
 {
   "archive": "site.zip",
-  "extractorParity": true,
   "entries": [
     {
       "path": "assets/app.js",

@@ -1,6 +1,5 @@
 {
   "archive": "root-mismatch.zip",
-  "extractorParity": true,
   "entries": [
     {
       "path": "site/app.js",

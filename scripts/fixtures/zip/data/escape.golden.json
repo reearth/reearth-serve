@@ -1,6 +1,5 @@
 {
   "archive": "escape.zip",
-  "extractorParity": false,
   "entries": [
     {
       "path": "abs.txt",
