@@ -213,10 +213,10 @@ Questions).
 
 A response body Serve sends with `Content-Encoding: gzip` is always a
 single gzip member. A concatenation of members is valid gzip by RFC 1952,
-but clients do not read it: Chromium decodes the first member and drops
-the rest without an error, curl and wget do the same, and
-`DecompressionStream("gzip")` in workerd and Node throws on the second
-member (Measurement 1). BGZF, which is a run of members, is therefore not
+but clients do not read it: Chromium, Firefox and WebKit decode the
+first member and drop the rest without an error, curl and wget do the
+same, and `DecompressionStream("gzip")` in workerd and Node throws on
+the second member (Measurement 1). BGZF, which is a run of members, is therefore not
 a delivery format.
 
 A repacked object is instead one gzip member whose DEFLATE stream is
@@ -524,17 +524,19 @@ local workerd Worker with `encodeBody: "manual"`.
 
 | Client | Result |
 |---|---|
-| Chromium 156 | First member only, no error (BGZF arrives as 65,280 bytes) |
+| Chromium 156, Firefox 144, WebKit 26 | First member only, no error (BGZF arrives as 65,280 bytes) |
 | curl 8.7.1, wget | First member only |
 | `DecompressionStream("gzip")`, workerd and Node | Throws on the second member |
 | Python requests, Go net/http, Node fetch (undici) | All members |
 
 §5 was rewritten from BGZF to full-flush segments in one member. That
-layout returned the exact bytes in Chromium, curl, workerd and Node
+layout returned the exact bytes in Chromium, Firefox, WebKit, curl,
+workerd and Node
 `DecompressionStream`, for the whole object, a 30-segment cut and a single
 segment, with the trailer CRC built by `crc32_combine`. A local workerd
 Worker that assembled the member itself, from one `Range` read of the raw
-segments and a segment table, gave Chromium the exact bytes too.
+segments and a segment table, gave all three browsers the exact bytes
+too.
 
 The size cost of the flushes, against one unbroken deflate stream at
 level 6, on four PLATEAU bldg `.gml` files of 26 to 43 MB:
