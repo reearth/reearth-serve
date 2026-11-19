@@ -155,7 +155,7 @@ export async function buildView(
   memoryLimit = MEMORY_DIRECTORY_LIMIT,
 ): Promise<Built> {
   if (source.index) {
-    const indexed = await openIndexedView(storage, source.index, source.size);
+    const indexed = await openIndexedView(storage, source.index, source);
     if (indexed.ok) return indexed;
     console.warn(`archive: index ${source.index} for ${source.key} not used (${indexed.reason})`);
   }

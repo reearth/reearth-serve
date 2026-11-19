@@ -162,6 +162,7 @@ export interface StorageUsageStore {
 export interface FileStorage {
   put(key: string, body: ReadableStream<Uint8Array>, contentType: string, size: number, options?: { contentEncoding?: string }): Promise<void>;
   get(key: string, range?: { offset: number; length: number }): Promise<StoredFile | null>;
+  /** `etag` is in HTTP form (quoted), the same form `get` returns. */
   head(key: string): Promise<{ size: number; contentEncoding?: string; etag?: string } | null>;
   delete(key: string): Promise<void>;
   /**

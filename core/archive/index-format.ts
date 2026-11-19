@@ -1,5 +1,5 @@
 import type { LegacyEncoding } from "./names";
-import { nameAt, RECORD, sliceTable, type EntryTable, type NameRules } from "./table";
+import { compare, nameAt, RECORD, sliceTable, wellFormed, type EntryTable, type NameRules } from "./table";
 import { crc32, type Directory } from "./zip/directory";
 
 /**
@@ -74,12 +74,19 @@ export interface PageRef {
   crc32: number;
   count: number;
   firstName: Uint8Array;
+  nextFirstName: Uint8Array | null;
 }
 
 export interface IndexFence {
   header: IndexHeader;
   rootPrefix: string;
   pages: PageRef[];
+}
+
+export interface IndexExpectation {
+  sourceSize: number;
+  sourceEtag: string | undefined;
+  objectSize: number;
 }
 
 export type IndexRejection = "truncated" | "magic" | "version" | "format" | "header-crc" | "fence-crc" | "size" | "etag";
@@ -142,7 +149,7 @@ export function encodeIndex({ table, rules, directory, directoryRecordCount, sou
   return out;
 }
 
-export function readHeader(bytes: Uint8Array, expect: { size: number; etag?: string }): { ok: true; header: IndexHeader } | { ok: false; reason: IndexRejection } {
+export function readHeader(bytes: Uint8Array, expect: IndexExpectation): { ok: true; header: IndexHeader } | { ok: false; reason: IndexRejection } {
   if (bytes.byteLength < HEADER) return { ok: false, reason: "truncated" };
   if (MAGIC.some((b, i) => bytes[i] !== b)) return { ok: false, reason: "magic" };
   const view = new DataView(bytes.buffer, bytes.byteOffset, HEADER);
@@ -171,40 +178,58 @@ export function readHeader(bytes: Uint8Array, expect: { size: number; etag?: str
   if (!Number.isSafeInteger(header.fenceEnd) || header.fenceEnd < HEADER + header.rootPrefixLength + header.pageCount * FENCE_RECORD) {
     return { ok: false, reason: "format" };
   }
-  if (header.sourceSize !== expect.size) return { ok: false, reason: "size" };
-  if (expect.etag !== undefined && header.sourceEtag !== undefined && header.sourceEtag !== expect.etag) return { ok: false, reason: "etag" };
+  if (header.fenceEnd > expect.objectSize) return { ok: false, reason: "truncated" };
+  if (header.sourceSize !== expect.sourceSize) return { ok: false, reason: "size" };
+  if (!sameEtag(header.sourceEtag, expect.sourceEtag)) return { ok: false, reason: "etag" };
   return { ok: true, header };
 }
 
-export function readFence(bytes: Uint8Array, header: IndexHeader): { ok: true; fence: IndexFence } | { ok: false; reason: IndexRejection } {
+export function readFence(bytes: Uint8Array, header: IndexHeader, objectSize: number): { ok: true; fence: IndexFence } | { ok: false; reason: IndexRejection } {
   if (bytes.byteLength < header.fenceEnd) return { ok: false, reason: "truncated" };
   if (crc32(bytes.subarray(HEADER, header.fenceEnd)) !== header.fenceCrc) return { ok: false, reason: "fence-crc" };
   const view = new DataView(bytes.buffer, bytes.byteOffset, header.fenceEnd);
   const fenceStart = HEADER + header.rootPrefixLength;
   let nameCursor = fenceStart + header.pageCount * FENCE_RECORD;
+  let pageEnd = header.fenceEnd;
   const pages: PageRef[] = [];
   for (let p = 0; p < header.pageCount; p++) {
     const at = fenceStart + p * FENCE_RECORD;
     const firstLength = view.getUint32(at + 16, true);
     if (nameCursor + firstLength > header.fenceEnd) return { ok: false, reason: "format" };
-    pages.push({
+    const page: PageRef = {
       offset: view.getFloat64(at, true),
       length: view.getUint32(at + 8, true),
       crc32: view.getUint32(at + 12, true),
       count: Math.min(header.pageEntries, header.count - p * header.pageEntries),
       firstName: bytes.slice(nameCursor, nameCursor + firstLength),
-    });
+      nextFirstName: null,
+    };
+    if (page.offset !== pageEnd || page.length < page.count * RECORD) return { ok: false, reason: "format" };
+    const previous = pages[p - 1];
+    if (previous) {
+      if (compare(previous.firstName, page.firstName) >= 0) return { ok: false, reason: "format" };
+      previous.nextFirstName = page.firstName;
+    }
+    pages.push(page);
+    pageEnd += page.length;
     nameCursor += firstLength;
   }
-  if (nameCursor !== header.fenceEnd) return { ok: false, reason: "format" };
+  if (nameCursor !== header.fenceEnd || pageEnd !== objectSize) return { ok: false, reason: "format" };
   const rootPrefix = decoder.decode(bytes.subarray(HEADER, fenceStart));
   return { ok: true, fence: { header, rootPrefix, pages } };
 }
 
-export function readPage(bytes: Uint8Array, page: PageRef): EntryTable | null {
+export function readPage(bytes: Uint8Array, page: PageRef, dataEnd: number): EntryTable | null {
   const records = page.count * RECORD;
   if (bytes.byteLength !== page.length || records > bytes.byteLength || crc32(bytes) !== page.crc32) return null;
-  return { count: page.count, records: new DataView(bytes.buffer, bytes.byteOffset, records), names: bytes.subarray(records) };
+  const table = { count: page.count, records: new DataView(bytes.buffer, bytes.byteOffset, records), names: bytes.subarray(records) };
+  if (!wellFormed(table, dataEnd) || compare(nameAt(table, 0), page.firstName) !== 0) return null;
+  if (page.nextFirstName && compare(nameAt(table, page.count - 1), page.nextFirstName) >= 0) return null;
+  return table;
+}
+
+function sameEtag(recorded: string | undefined, current: string | undefined): boolean {
+  return recorded !== undefined && recorded === current;
 }
 
 function sum(parts: Uint8Array[]): number {

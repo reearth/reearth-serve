@@ -3,7 +3,7 @@ import { MemoryFileStorage } from "../../adapters/memory/storage";
 import { writeZip } from "../../adapters/memory/zip";
 import type { FileStorage } from "../asset/repository";
 import { createArchiveCache, openArchive, toArchivePath, type ArchivePath, type ArchiveReader, type ArchiveSource } from "./index";
-import { encodeIndex } from "./index-format";
+import { encodeIndex, INDEX_HEAD_BYTES } from "./index-format";
 import { directoryTable } from "./reader";
 import { crc32, locateDirectory } from "./zip/directory";
 
@@ -321,7 +321,7 @@ describe("an index that breaks the format's structure falls back, even with vali
   });
 });
 
-describe("reads of the index never allocate past the index object's size", () => {
+describe("reads of the index never allocate past the index object's size or the fixed head read", () => {
   async function largestIndexRead(index: Uint8Array, zip: Uint8Array) {
     const requested: number[] = [];
     await expectCentralDirectoryAnswers(index, zip, {
@@ -338,7 +338,7 @@ describe("reads of the index never allocate past the index object's size", () =>
   test("a header that claims a 300 MB fence", async () => {
     const b = big.slice();
     dv(b).setFloat64(H.fenceEnd, 300_000_000, true);
-    expect(await largestIndexRead(refresh(b), bigZip)).toBeLessThanOrEqual(b.byteLength);
+    expect(await largestIndexRead(refresh(b), bigZip)).toBeLessThanOrEqual(Math.max(b.byteLength, INDEX_HEAD_BYTES));
   });
 
   test("a header that claims 2^32-1 entries and the matching fence", async () => {
@@ -348,13 +348,13 @@ describe("reads of the index never allocate past the index object's size", () =>
     dv(b).setUint32(H.pageCount, pages, true);
     dv(b).setFloat64(H.fenceEnd, HEADER + dv(b).getUint16(H.rootLen, true) + pages * FENCE, true);
     dv(b).setUint32(H.headerCrc, crc32(b.subarray(0, H.headerCrc)), true);
-    expect(await largestIndexRead(b, bigZip)).toBeLessThanOrEqual(b.byteLength);
+    expect(await largestIndexRead(b, bigZip)).toBeLessThanOrEqual(Math.max(b.byteLength, INDEX_HEAD_BYTES));
   });
 
   test("a page that claims 512 MB", async () => {
     const b = good.slice();
     dv(b).setUint32(fenceAt(b, 0) + 8, 512 * 1024 * 1024, true);
-    expect(await largestIndexRead(refresh(b), zipA)).toBeLessThanOrEqual(b.byteLength);
+    expect(await largestIndexRead(refresh(b), zipA)).toBeLessThanOrEqual(Math.max(b.byteLength, INDEX_HEAD_BYTES));
   });
 });
 

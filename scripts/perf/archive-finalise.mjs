@@ -12,7 +12,7 @@
 // upload completion latency, whose head minus trunk difference is the added
 // finalisation, and the first entry request after upload. Part 2 runs head's
 // code in this process over the memory adapters, because wrangler dev logs no
-// R2 operations: it times finaliseArchive alone and counts the storage reads
+// R2 operations: it times finaliseArchive alone and counts the storage reads, HEADs
 // and CPU of a cold first-entry read with and without the index.
 import { parseArgs } from "node:util";
 import { register } from "tsx/esm/api";
@@ -144,9 +144,10 @@ async function inProcess() {
     const bytes = zips.get(count);
     const memory = new MemoryFileStorage(1 << 30);
     let reads = 0;
+    let heads = 0;
     const storage = {
       put: (...a) => memory.put(...a),
-      head: (k) => memory.head(k),
+      head: (k) => { heads++; return memory.head(k); },
       delete: (k) => memory.delete(k),
       list: (p, o) => memory.list(p, o),
       get: (k, r) => { reads++; return memory.get(k, r); },
@@ -164,6 +165,7 @@ async function inProcess() {
     const source = { key: `${root}/${filename}`, size: bytes.byteLength, filename };
     const cold = async (src) => {
       const before = reads;
+      const headsBefore = heads;
       const cpu = process.cpuUsage();
       const opened = await openArchive({ storage, archives: createArchiveCache() }, src);
       if (!opened.ok) throw new Error(opened.reason);
@@ -173,7 +175,7 @@ async function inProcess() {
       const text = await new Response(read.file.body).text();
       if (text !== entryBody(i)) throw new Error(`cold read of ${count} returned the wrong body`);
       const used = process.cpuUsage(cpu);
-      return { reads: reads - before, cpuMs: (used.user + used.system) / 1000 };
+      return { reads: reads - before, heads: heads - headsBefore, cpuMs: (used.user + used.system) / 1000 };
     };
     const index = finalised.container && "index" in finalised.container ? finalised.container.index : undefined;
     const withIndex = index ? await cold({ ...source, index }) : null;
@@ -183,6 +185,7 @@ async function inProcess() {
       finaliseMs,
       finaliseCpuMs: (finaliseCpu.user + finaliseCpu.system) / 1000,
       indexedReads: withIndex?.reads ?? NaN,
+      indexedHeads: withIndex?.heads ?? NaN,
       indexedCpuMs: withIndex?.cpuMs ?? NaN,
       cdReads: withoutIndex.reads,
       cdCpuMs: withoutIndex.cpuMs,
@@ -223,11 +226,11 @@ for (let r = 1; r <= runs; r++) {
   }
 }
 console.log("\nIn process, head code over memory storage (median of %d runs; cold = fresh archive cache)", runs);
-console.log("entries | container | finalise ms | finalise CPU ms | cold reads indexed | cold CPU ms indexed | cold reads CD | cold CPU ms CD");
+console.log("entries | container | finalise ms | finalise CPU ms | cold reads indexed | cold HEADs indexed | cold CPU ms indexed | cold reads CD | cold CPU ms CD");
 for (const count of sizes) {
   const rows = local.filter((r) => r.count === count);
   const m = (key) => median(rows.map((r) => r[key]));
   console.log(
-    `${count} | ${rows[0].container} | ${fmt(m("finaliseMs"))} | ${fmt(m("finaliseCpuMs"))} | ${fmt(m("indexedReads"))} | ${fmt(m("indexedCpuMs"))} | ${fmt(m("cdReads"))} | ${fmt(m("cdCpuMs"))}`,
+    `${count} | ${rows[0].container} | ${fmt(m("finaliseMs"))} | ${fmt(m("finaliseCpuMs"))} | ${fmt(m("indexedReads"))} | ${fmt(m("indexedHeads"))} | ${fmt(m("indexedCpuMs"))} | ${fmt(m("cdReads"))} | ${fmt(m("cdCpuMs"))}`,
   );
 }
