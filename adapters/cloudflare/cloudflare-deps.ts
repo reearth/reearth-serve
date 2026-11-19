@@ -20,7 +20,7 @@ import { CloudflareCustomHostnames } from "./custom-hostnames";
 import { NoopProvisioner, type CustomHostnameProvisioner } from "../../core/site/provisioner";
 import { apexHost } from "../../core/site/middleware";
 import { parseCredentialedOrigins } from "../../core/file/cors";
-import { parseCompatHost } from "../../core/compat/model";
+import { parseCompatHosts } from "../../core/compat/hosts";
 import { checkSiteIsolation, PUBLIC_SUFFIX_OVERRIDE_NOTICE } from "../../core/site/isolation";
 import { WebCryptoDeliveryTokenCodec } from "../webcrypto/delivery-token";
 import { parseDeliveryTokenKeys, type DeliveryTokenCodec } from "../../core/access/token";
@@ -53,6 +53,7 @@ export function buildDeps(env: Env): Deps {
   }
   const objectStore = r2Credentials(env);
   const tenancyConfig = parseTenancyConfig(env);
+  const compatHosts = parseCompatHosts({ api: env.COMPAT_GCS_HOST, objects: env.COMPAT_OBJECTS_HOST }, env.BASE_URL);
   // One KeyValue per invocation, shared by every store that only needs
   // "JSON blob under a key with a TTL" (ADR-012 §2).
   const kv = new CloudflareKeyValue(env.KV);
@@ -103,8 +104,8 @@ export function buildDeps(env: Env): Deps {
     signingSecret: env.SIGNING_SECRET || undefined,
     credentialedOrigins: parseCredentialedOrigins(env.CREDENTIALED_ORIGINS),
     compat: new SqlCompatStore(sql),
-    compatApiHost: parseCompatHost(env.COMPAT_GCS_HOST),
-    compatObjectsHost: parseCompatHost(env.COMPAT_OBJECTS_HOST, "COMPAT_OBJECTS_HOST"),
+    compatApiHost: compatHosts.api,
+    compatObjectsHost: compatHosts.objects,
 
     sessions: new KeyValueSessionStore(kv),
     sessionTtlSeconds: SESSION_TTL_SECONDS,

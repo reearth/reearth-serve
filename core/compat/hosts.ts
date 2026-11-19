@@ -1,5 +1,5 @@
 import type { MiddlewareHandler } from "hono";
-import { parseBucketName, type BucketName } from "./model";
+import { parseBucketName, parseCompatHost, type BucketName } from "./model";
 
 export type CompatHostConfig = { api: string | undefined; objects: string | undefined };
 
@@ -9,7 +9,22 @@ export type CompatHost =
   | { kind: "objects-virtual-host"; bucket: BucketName };
 
 function hostname(host: string): string {
-  return host.trim().toLowerCase().replace(/:\d+$/, "");
+  return host.trim().toLowerCase().replace(/:\d+$/, "").replace(/\.$/, "");
+}
+
+export function parseCompatHosts(env: { api: string | undefined; objects: string | undefined }, baseUrl: string): CompatHostConfig {
+  const cfg = { api: parseCompatHost(env.api), objects: parseCompatHost(env.objects, "COMPAT_OBJECTS_HOST") };
+  const apex = new URL(baseUrl).host;
+  if (classifyCompatHost(apex, { api: cfg.api, objects: undefined })) {
+    throw new Error(`COMPAT_GCS_HOST "${cfg.api}" is the BASE_URL host "${apex}"`);
+  }
+  if (classifyCompatHost(apex, { api: undefined, objects: cfg.objects })) {
+    throw new Error(`COMPAT_OBJECTS_HOST "${cfg.objects}" covers the BASE_URL host "${apex}"`);
+  }
+  if (cfg.api && cfg.objects && hostname(cfg.api) === hostname(cfg.objects)) {
+    throw new Error(`COMPAT_GCS_HOST "${cfg.api}" is the same host as COMPAT_OBJECTS_HOST "${cfg.objects}"`);
+  }
+  return cfg;
 }
 
 export function classifyCompatHost(host: string | null | undefined, cfg: CompatHostConfig): CompatHost | null {
@@ -45,6 +60,11 @@ if (import.meta.vitest) {
     ["storage.example.com", cfg, { kind: "gcs-api" }],
     ["STORAGE.Example.COM", cfg, { kind: "gcs-api" }],
     ["storage.example.com:8443", cfg, { kind: "gcs-api" }],
+    ["storage.example.com.", cfg, { kind: "gcs-api" }],
+    ["storage.example.com.:8443", cfg, { kind: "gcs-api" }],
+    ["objects.example.com.", cfg, { kind: "objects-path-style" }],
+    ["media.objects.example.com.:443", cfg, { kind: "objects-virtual-host", bucket: "media" as BucketName }],
+    ["storage.example.com..", cfg, null],
     ["storage.localhost:8788", { api: "storage.localhost:8788", objects: undefined }, { kind: "gcs-api" }],
     ["storage.localhost", { api: "storage.localhost:8788", objects: undefined }, { kind: "gcs-api" }],
     ["objects.example.com", cfg, { kind: "objects-path-style" }],
@@ -61,6 +81,22 @@ if (import.meta.vitest) {
     ["media.objects.example.com", { api: "storage.example.com", objects: undefined }, null],
   ])("%s", (host, config, expected) => {
     expect(classifyCompatHost(host, config)).toEqual(expected);
+  });
+
+  test.each<[string, string | undefined, string | undefined, string]>([
+    ["https://example.com", "example.com", undefined, "COMPAT_GCS_HOST"],
+    ["http://localhost:8788", "localhost:9000", undefined, "COMPAT_GCS_HOST"],
+    ["https://example.com", undefined, "example.com", "COMPAT_OBJECTS_HOST"],
+    ["https://media.objects.example.com", undefined, "objects.example.com", "COMPAT_OBJECTS_HOST"],
+    ["https://example.com", "storage.example.com", "storage.example.com:8443", "COMPAT_OBJECTS_HOST"],
+  ])("BASE_URL %s with COMPAT_GCS_HOST %s and COMPAT_OBJECTS_HOST %s is a config error naming %s", (baseUrl, api, objects, setting) => {
+    expect(() => parseCompatHosts({ api, objects }, baseUrl)).toThrow(setting);
+  });
+
+  test("distinct compat hosts beside the apex parse", () => {
+    expect(parseCompatHosts({ api: "storage.example.com", objects: "objects.example.com" }, "https://example.com"))
+      .toEqual({ api: "storage.example.com", objects: "objects.example.com" });
+    expect(parseCompatHosts({ api: undefined, objects: undefined }, "https://example.com")).toEqual({ api: undefined, objects: undefined });
   });
 
   test("a site host stays a site host, and the compat host is not taken for one only because it is checked first", () => {

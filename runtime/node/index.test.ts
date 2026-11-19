@@ -63,6 +63,14 @@ describe("the Node runtime's compat host gate (ADR-019 §5)", () => {
     expect(await res.text()).toContain("<Code>AuthenticationRequired</Code>");
   });
 
+  test("a trailing-dot API host passes the gate as the API host", async () => {
+    for (const host of ["storage.localhost.:8788", "storage.localhost."]) {
+      const res = await layerOn()(new Request("http://localhost:8788/api/v1/health", { headers: { Host: host } }));
+      expect(res.status).toBe(401);
+      expect(await res.text()).toContain("<Code>AuthenticationRequired</Code>");
+    }
+  });
+
   test("the cron endpoint is not reachable on the API host", async () => {
     const res = await layerOn()(request("/internal/cron", "POST"));
     expect(res.headers.get("Content-Type")).toBe("application/xml; charset=UTF-8");

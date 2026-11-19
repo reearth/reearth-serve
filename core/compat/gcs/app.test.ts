@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { SignJWT, importPKCS8 } from "jose";
 import { fixture } from "../../../adapters/memory/fixture";
 import { MemoryProjectStore } from "../../../adapters/memory/site-fixture";
@@ -58,7 +58,42 @@ async function accessToken(f: Fixture, keyFile: KeyFile): Promise<string> {
 
 const bearer = (token: string) => ({ Authorization: `Bearer ${token}` });
 
+const JWT_BEARER = "urn:ietf:params:oauth:grant-type:jwt-bearer";
+
+function postToken(f: Fixture, form: Record<string, string>) {
+  return onApi(f, "/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams(form),
+  });
+}
+
+async function issuedAhead(keyFile: KeyFile, aud: string): Promise<string> {
+  const iat = Math.floor(Date.now() / 1000) + 10 * 365 * 24 * 3600;
+  return new SignJWT({})
+    .setProtectedHeader({ alg: "RS256", kid: keyFile.private_key_id })
+    .setIssuer(keyFile.client_email).setAudience(aud)
+    .setIssuedAt(iat).setExpirationTime(iat + 3600)
+    .sign(await importPKCS8(keyFile.private_key, "RS256"));
+}
+
 describe("POST /token", () => {
+  test("a missing grant_type is invalid_request", async () => {
+    const f = await compatFixture();
+    const res = await postToken(f, { assertion: await assertion(await keyFor(f)) });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: "invalid_request" });
+  });
+
+  test("an assertion issued ten years ahead buys no token, and is no bearer either", async () => {
+    const f = await compatFixture();
+    const keyFile = await keyFor(f);
+    const res = await postToken(f, { grant_type: JWT_BEARER, assertion: await issuedAhead(keyFile, keyFile.token_uri) });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: "invalid_grant" });
+    expect((await onApi(f, "/storage/v1/b/media/o/k", { headers: bearer(await issuedAhead(keyFile, API)) })).status).toBe(401);
+  });
+
   test("an assertion signed with another key is invalid_grant", async () => {
     const f = await compatFixture();
     const keyFile = await keyFor(f);
@@ -101,13 +136,62 @@ describe("objects.get before objects are served", () => {
     expect((await onApi(f, "/storage/v1/b/media/o/a%2Fb.txt", { headers: bearer(token) })).status).toBe(501);
   });
 
-  test("an unknown bucket is 404 NoSuchBucket, and a bucket outside the grant is 403", async () => {
+  test("a bucket outside the grant, in another project or the same one, answers exactly like an unknown bucket", async () => {
     const f = await compatFixture();
+    await f.deps.projects.save({ id: "p2", name: "P2", createdAt: 0, updatedAt: 0, ownerId: "u2", workspaceId: "ws2" });
+    await f.compat.insertBucket({ name: "tenant-b" as BucketName, projectId: "p2", mount: null, createdAt: 0 });
     const token = await accessToken(f, await keyFor(f));
-    const unknown = await onApi(f, "/storage/v1/b/nope-bucket/o/k", { headers: bearer(token) });
-    expect(unknown.status).toBe(404);
-    expect(await unknown.json()).toMatchObject({ error: { message: "The specified bucket does not exist." } });
-    expect((await onApi(f, "/storage/v1/b/other/o/k", { headers: bearer(token) })).status).toBe(403);
+    const answer = async (bucket: string) => {
+      const res = await onApi(f, `/storage/v1/b/${bucket}/o/k`, { headers: bearer(token) });
+      return { status: res.status, body: await res.json() };
+    };
+    const unknown = await answer("nope-bucket");
+    expect(unknown).toMatchObject({ status: 404, body: { error: { message: "The specified bucket does not exist.", errors: [{ reason: "notFound" }] } } });
+    expect(await answer("tenant-b")).toEqual(unknown);
+    expect(await answer("other")).toEqual(unknown);
+  });
+
+  test("a bucket the grant reaches but the authorizer refuses is 403", async () => {
+    const f = await compatFixture({ serviceAuthorizer: { check: async () => false } });
+    const token = await accessToken(f, await keyFor(f));
+    const res = await onApi(f, "/storage/v1/b/media/o/k", { headers: bearer(token) });
+    expect(res.status).toBe(403);
+    expect(await res.json()).toMatchObject({ error: { code: 403, errors: [{ reason: "forbidden" }] } });
+  });
+});
+
+describe("a failing dependency", () => {
+  const failure = new Error("store down");
+
+  function throwing(f: Fixture, method: "findCredential" | "findCredentialByEmail") {
+    Object.assign(f.compat, { [method]: async () => { throw failure; } });
+    return vi.spyOn(console, "error").mockImplementation(() => {});
+  }
+
+  test("answers 500 in the GCS JSON or XML error shape the client can parse", async () => {
+    const f = await compatFixture();
+    const keyFile = await keyFor(f);
+    const logged = throwing(f, "findCredential");
+    const json = await onApi(f, "/storage/v1/b/media/o/k", { headers: bearer(await assertion(keyFile, API)) });
+    expect(json.status).toBe(500);
+    expect(await json.json()).toMatchObject({ error: { code: 500, errors: [{ reason: "backendError" }] } });
+    const xml = await onApi(f, "/media/k", { headers: bearer(await assertion(keyFile, API)) });
+    expect(xml.status).toBe(500);
+    expect(await xml.text()).toContain("<Code>InternalError</Code>");
+    expect(logged).toHaveBeenCalledWith(failure);
+    logged.mockRestore();
+  });
+
+  test("answers an RFC 6749 JSON error at /token", async () => {
+    const f = await compatFixture();
+    const keyFile = await keyFor(f);
+    const logged = throwing(f, "findCredentialByEmail");
+    const res = await postToken(f, { grant_type: JWT_BEARER, assertion: await assertion(keyFile) });
+    expect(res.status).toBe(500);
+    expect(res.headers.get("Cache-Control")).toBe("no-store");
+    expect(await res.json()).toEqual({ error: "server_error", error_description: "The token endpoint failed." });
+    expect(logged).toHaveBeenCalledWith(failure);
+    logged.mockRestore();
   });
 });
 
@@ -162,6 +246,14 @@ describe("hosts", () => {
     const res = await f.app.request("http://storage.localhost:8788/media/k", { headers: { Host: "storage.localhost:8788" } });
     expect(res.status).toBe(401);
     expect(await res.text()).toContain("<Code>AuthenticationRequired</Code>");
+  });
+
+  test("a trailing-dot API host is still the API host", async () => {
+    const f = await compatFixture();
+    for (const host of [`${API_HOST}.`, `${API_HOST}.:443`]) {
+      const res = await f.app.request(`${API}/api/v1/health`, { headers: { Host: host } });
+      expect(res.status).toBe(401);
+    }
   });
 
   test("the apex answers as before with the layer configured", async () => {

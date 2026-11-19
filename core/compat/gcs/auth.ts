@@ -25,7 +25,7 @@ const SELF_SIGNED_AUDIENCES = ["https://storage.googleapis.com/", "https://stora
 export type TokenGrant = { access_token: string; token_type: "Bearer"; expires_in: number };
 
 export type TokenError = {
-  error: "invalid_request" | "unsupported_grant_type" | "invalid_grant" | "temporarily_unavailable";
+  error: "invalid_request" | "unsupported_grant_type" | "invalid_grant" | "temporarily_unavailable" | "server_error";
   error_description: string;
 };
 
@@ -39,9 +39,11 @@ function usable(credential: CompatCredential | null): credential is CompatCreden
   return credential !== null && credential.revokedAt === null;
 }
 
-function withinLifetime(payload: JWTPayload): boolean {
-  return typeof payload.iat === "number" && typeof payload.exp === "number"
-    && payload.exp - payload.iat <= MAX_ASSERTION_LIFETIME_SECONDS;
+function withinLifetime(payload: JWTPayload, now: number): boolean {
+  const { iat, exp } = payload;
+  return typeof iat === "number" && typeof exp === "number"
+    && iat <= Math.floor(now / 1000) + CLOCK_TOLERANCE_SECONDS
+    && exp - iat <= MAX_ASSERTION_LIFETIME_SECONDS;
 }
 
 function claimsOf(token: string): { header: ReturnType<typeof decodeProtectedHeader>; payload: JWTPayload } | null {
@@ -68,7 +70,7 @@ async function verifiedByCredential(
       clockTolerance: CLOCK_TOLERANCE_SECONDS,
     });
     if (payload.sub !== undefined && payload.sub !== credential.clientEmail) return null;
-    return withinLifetime(payload) ? payload : null;
+    return withinLifetime(payload, now) ? payload : null;
   } catch {
     return null;
   }
@@ -83,6 +85,9 @@ export async function exchangeAssertion(
   form: { grantType: string | undefined; assertion: string | undefined },
   cfg: TokenConfig,
 ): Promise<{ ok: true; value: TokenGrant } | { ok: false; status: 400 | 503; value: TokenError }> {
+  if (!form.grantType) {
+    return { ok: false, status: 400, value: { error: "invalid_request", error_description: "grant_type is required" } };
+  }
   if (form.grantType !== JWT_BEARER_GRANT) {
     return { ok: false, status: 400, value: { error: "unsupported_grant_type", error_description: `grant_type must be ${JWT_BEARER_GRANT}` } };
   }
@@ -193,15 +198,18 @@ if (import.meta.vitest) {
     return { credential, keyFile, store, revoke };
   }
 
-  type Claims = { iss?: string; sub?: string; aud?: string; scope?: string; iat?: number; exp?: number };
+  type Claims = { iss?: string; sub?: string; aud?: string; scope?: string; iat?: number | null; exp?: number };
+
+  const TEN_YEARS = 10 * 365 * 24 * 3600;
 
   async function sign(privateKeyPem: string, kid: string, claims: Claims): Promise<string> {
-    const iat = Math.floor(NOW / 1000);
-    return new SignJWT({ ...(claims.scope ? { scope: claims.scope } : {}), ...(claims.sub ? { sub: claims.sub } : {}) })
+    const now = Math.floor(NOW / 1000);
+    const jwt = new SignJWT({ ...(claims.scope ? { scope: claims.scope } : {}), ...(claims.sub ? { sub: claims.sub } : {}) })
       .setProtectedHeader({ alg: "RS256", kid, typ: "JWT" })
-      .setIssuer(claims.iss ?? "")
-      .setIssuedAt(claims.iat ?? iat)
-      .setExpirationTime(claims.exp ?? iat + 3600)
+      .setIssuer(claims.iss ?? "");
+    if (claims.iat !== null) jwt.setIssuedAt(claims.iat ?? now);
+    return jwt
+      .setExpirationTime(claims.exp ?? now + 3600)
       .setAudience(claims.aud ?? `${API}/token`)
       .sign(await importPKCS8(privateKeyPem, "RS256"));
   }
@@ -222,10 +230,19 @@ if (import.meta.vitest) {
       expect(await verifyBearer(k.store, res.value.access_token, cfg)).toEqual(k.credential);
     });
 
+    test("an iat a little ahead, inside the clock tolerance, is accepted", async () => {
+      const k = await issued();
+      const a = await assertion(k, { iat: NOW / 1000 + 60, exp: NOW / 1000 + 60 + 3600 });
+      expect((await exchangeAssertion(k.store, grant(a), cfg)).ok).toBe(true);
+    });
+
     test.each<[string, (k: Awaited<ReturnType<typeof issued>>) => Promise<string>]>([
       ["an expired assertion", (k) => assertion(k, { iat: NOW / 1000 - 7200, exp: NOW / 1000 - 3600 })],
       ["a wrong audience", (k) => assertion(k, { aud: "https://oauth2.googleapis.com/token" })],
       ["a lifetime over one hour", (k) => assertion(k, { exp: NOW / 1000 + 3601 })],
+      ["an iat ten years ahead with a one hour lifetime", (k) => assertion(k, { iat: NOW / 1000 + TEN_YEARS, exp: NOW / 1000 + TEN_YEARS + 3600 })],
+      ["an iat past the clock tolerance", (k) => assertion(k, { iat: NOW / 1000 + 61, exp: NOW / 1000 + 61 + 3600 })],
+      ["no iat", (k) => assertion(k, { iat: null })],
       ["a sub other than the email", (k) => assertion(k, { sub: "someone@else.test" })],
       ["an unknown email", (k) => assertion(k, { iss: "nobody@storage.example.test" })],
       ["another credential's key", async (k) => assertion(k, {}, (await issued()).keyFile.private_key)],
@@ -241,9 +258,19 @@ if (import.meta.vitest) {
       expect(await exchangeAssertion(k.store, grant(a), cfg)).toEqual({ ok: false, status: 400, value: invalidGrant });
     });
 
+    test("a missing grant_type is invalid_request and another grant_type is unsupported_grant_type (RFC 6749 §5.2)", async () => {
+      const k = await issued();
+      const a = await assertion(k);
+      for (const grantType of [undefined, ""]) {
+        expect(await exchangeAssertion(k.store, { grantType, assertion: a }, cfg))
+          .toMatchObject({ ok: false, status: 400, value: { error: "invalid_request" } });
+      }
+      expect(await exchangeAssertion(k.store, { grantType: "client_credentials", assertion: a }, cfg))
+        .toMatchObject({ ok: false, status: 400, value: { error: "unsupported_grant_type" } });
+    });
+
     test("a malformed request is refused before any lookup", async () => {
       const k = await issued();
-      expect((await exchangeAssertion(k.store, { grantType: "client_credentials", assertion: "x" }, cfg)).ok).toBe(false);
       expect(await exchangeAssertion(k.store, { grantType: JWT_BEARER_GRANT, assertion: "not.a.jwt" }, cfg))
         .toEqual({ ok: false, status: 400, value: invalidGrant });
       expect(await exchangeAssertion(k.store, { grantType: JWT_BEARER_GRANT, assertion: undefined }, cfg))
@@ -292,10 +319,12 @@ if (import.meta.vitest) {
       expect(await verifyBearer(k.store, scoped, cfg)).toEqual(k.credential);
     });
 
-    test("a self-signed JWT is refused when expired, for another audience, under another key, revoked, or for an unknown kid", async () => {
+    test("a self-signed JWT is refused when expired, issued ahead, without iat, for another audience, under another key, revoked, or for an unknown kid", async () => {
       const k = await issued();
       const other = await issued();
       expect(await verifyBearer(k.store, await assertion(k, { aud: API, iat: NOW / 1000 - 7200, exp: NOW / 1000 - 3600 }), cfg)).toBeNull();
+      expect(await verifyBearer(k.store, await assertion(k, { aud: API, iat: NOW / 1000 + TEN_YEARS, exp: NOW / 1000 + TEN_YEARS + 3600 }), cfg)).toBeNull();
+      expect(await verifyBearer(k.store, await assertion(k, { aud: API, iat: null }), cfg)).toBeNull();
       expect(await verifyBearer(k.store, await assertion(k, { aud: "https://elsewhere.test" }), cfg)).toBeNull();
       expect(await verifyBearer(k.store, await assertion(k, { aud: API }, other.keyFile.private_key), cfg)).toBeNull();
       expect(await verifyBearer(k.store, await sign(other.keyFile.private_key, other.credential.id, { iss: other.credential.clientEmail, aud: API }), cfg)).toBeNull();

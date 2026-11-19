@@ -1,10 +1,10 @@
 import { Hono } from "hono";
 import type { Deps } from "../../types";
-import { authorizeService } from "../../auth/access";
+import { authorizeService, type Denial } from "../../auth/access";
 import type { ProjectAction } from "../../auth/permissions";
 import type { ServicePrincipal } from "../../auth/types";
 import { parseBucketName, type CompatBucket, type ObjectKey } from "../model";
-import { exchangeAssertion, gcsAuth, type GcsEnv } from "./auth";
+import { exchangeAssertion, gcsAuth, type GcsEnv, type TokenError } from "./auth";
 import { gcsError, surfaceOf, type GcsErrorCode } from "./wire";
 
 export type GcsDeps = Pick<Deps, "compat" | "projects" | "serviceAuthorizer" | "signingSecret">;
@@ -12,6 +12,15 @@ export type GcsDeps = Pick<Deps, "compat" | "projects" | "serviceAuthorizer" | "
 export function gcsApp(deps: GcsDeps, apiOrigin: string) {
   const app = new Hono<GcsEnv>();
   const tokenConfig = { apiOrigin, secret: deps.signingSecret };
+
+  app.onError((err, c) => {
+    console.error(err);
+    if (c.req.path === "/token") {
+      const body: TokenError = { error: "server_error", error_description: "The token endpoint failed." };
+      return c.json(body, 500, { "Cache-Control": "no-store" });
+    }
+    return gcsError(surfaceOf(c.req.path), "backend_error");
+  });
 
   app.post("/token", async (c) => {
     const form = await c.req.parseBody().catch(() => ({} as Record<string, unknown>));
@@ -39,10 +48,11 @@ export function gcsApp(deps: GcsDeps, apiOrigin: string) {
   return app;
 }
 
-/**
- * An unknown bucket is 404. A bucket the credential may not use, in its own
- * project or another, is 403, as GCS answers a caller without permission.
- */
+const DENIAL_CODE: Record<Denial["reason"], GcsErrorCode> = {
+  not_found: "bucket_not_found",
+  forbidden: "forbidden",
+};
+
 async function authorizedBucket(
   deps: GcsDeps,
   service: ServicePrincipal,
@@ -58,5 +68,5 @@ async function authorizedBucket(
     { projectId: bucket.projectId, bucket: bucket.name },
     action,
   );
-  return decision.ok ? { ok: true, bucket } : { ok: false, code: "forbidden" };
+  return decision.ok ? { ok: true, bucket } : { ok: false, code: DENIAL_CODE[decision.reason] };
 }

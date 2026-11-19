@@ -3,9 +3,10 @@ export type GcsErrorCode =
   | "forbidden"
   | "bucket_not_found"
   | "object_not_found"
-  | "not_implemented";
+  | "not_implemented"
+  | "backend_error";
 
-type ErrorSpec = { status: 401 | 403 | 404 | 501; reason: string; xmlCode: string; message: string };
+type ErrorSpec = { status: 401 | 403 | 404 | 500 | 501; reason: string; xmlCode: string; message: string };
 
 const ERRORS: Record<GcsErrorCode, ErrorSpec> = {
   unauthenticated: { status: 401, reason: "authError", xmlCode: "AuthenticationRequired", message: "Invalid Credentials" },
@@ -13,6 +14,7 @@ const ERRORS: Record<GcsErrorCode, ErrorSpec> = {
   bucket_not_found: { status: 404, reason: "notFound", xmlCode: "NoSuchBucket", message: "The specified bucket does not exist." },
   object_not_found: { status: 404, reason: "notFound", xmlCode: "NoSuchKey", message: "The specified key does not exist." },
   not_implemented: { status: 501, reason: "notImplemented", xmlCode: "NotImplemented", message: "This operation is not implemented by this server." },
+  backend_error: { status: 500, reason: "backendError", xmlCode: "InternalError", message: "We encountered an internal error. Please try again." },
 };
 
 export type GcsSurface = "json" | "xml";
