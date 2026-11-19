@@ -5,6 +5,7 @@ import { Writable } from "node:stream";
 import type { AssetMetadata, AssetVersion, FileEntry, Job } from "../shared/api";
 import { loadConfig, loadCredentials, loadOrCreateSessionId, loadSessionId, saveSessionId } from "./config";
 import { refreshAccessToken } from "./auth";
+import { crc32 } from "./zip";
 
 // --- Output helpers ---
 
@@ -272,9 +273,16 @@ export async function downloadFile(
   return true; // downloaded
 }
 
-export function localMd5(filePath: string): string {
-  const data = readFileSync(filePath);
-  return `md5:${createHash("md5").update(data).digest("hex")}`;
+/**
+ * The local file's hash in the scheme of a listing's `hash` (`md5:` from an
+ * extraction manifest, `crc32:` from a zip read in place), or null for a
+ * scheme this CLI cannot compute.
+ */
+export function localHash(filePath: string, remote: string): string | null {
+  const scheme = remote.slice(0, remote.indexOf(":"));
+  if (scheme === "md5") return `md5:${createHash("md5").update(readFileSync(filePath)).digest("hex")}`;
+  if (scheme === "crc32") return `crc32:${crc32(readFileSync(filePath)).toString(16).padStart(8, "0")}`;
+  return null;
 }
 
 export function listLocalFiles(dir: string): string[] {

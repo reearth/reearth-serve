@@ -10,7 +10,7 @@ import {
   downloadFile,
   formatBytes,
   listLocalFiles,
-  localMd5,
+  localHash,
   output,
   parseSrc,
   resolveSitePassword,
@@ -254,18 +254,11 @@ export function registerFileCommands(program: Command, file: Command) {
         const localPath = join(destDir, entry.path);
 
         if (existsSync(localPath)) {
-          if (entry.hash) {
-            const localHash = localMd5(localPath);
-            if (localHash === entry.hash) {
-              skipped++;
-              continue;
-            }
-          } else {
-            const localSize = statSync(localPath).size;
-            if (localSize === entry.size) {
-              skipped++;
-              continue;
-            }
+          const local = entry.hash ? localHash(localPath, entry.hash) : null;
+          const same = local !== null ? local === entry.hash : statSync(localPath).size === entry.size;
+          if (same) {
+            skipped++;
+            continue;
           }
         }
 
