@@ -2,15 +2,10 @@
 //
 //   npx tsx scripts/perf/archive-serve.ts [--requests 20]
 //
-// Runs the real app over the in-memory adapters, so every storage read is
-// counted exactly; wrangler dev logs no R2 operations to count from. "head"
-// serves a just-uploaded 10,000-entry zip in place. "extracted" is the same
-// zip after extraction, which is the only way trunk can serve an entry. Each
-// request is interleaved head, extracted. Cold means a fresh isolate cache.
-// CPU is this process's user plus system time for one request and its body,
-// a proxy for Worker CPU time, not a measurement of it.
+// wrangler dev logs no R2 operations, so reads are counted in process over the
+// memory adapters. CPU is this process's time per request, a proxy for Worker CPU.
 import { parseArgs } from "node:util";
-import { deflateRawSync } from "node:zlib";
+import { deflateRawSync, gunzipSync } from "node:zlib";
 import { ASSET_ID, fixture, VERSION_ID } from "../../adapters/memory/fixture";
 import { writeZip, type SyntheticEntry } from "../../adapters/memory/zip";
 
@@ -51,13 +46,15 @@ async function server(mode: Mode) {
     return get(key, range);
   };
   return {
-    async request(entry: string, headers: Record<string, string>) {
+    async request(entry: string, headers: Record<string, string>, expected: Uint8Array) {
       const before = reads;
       const cpu = process.cpuUsage();
       const res = await f.app.request(`/files/${ASSET_ID}/${entry}`, { headers });
       const body = new Uint8Array(await res.arrayBuffer());
       const used = process.cpuUsage(cpu);
       if (res.status !== 200) throw new Error(`${mode} ${entry}: ${res.status}`);
+      const plain = res.headers.get("Content-Encoding") === "gzip" ? new Uint8Array(gunzipSync(body)) : body;
+      if (Buffer.compare(plain, expected) !== 0) throw new Error(`${mode} ${entry}: body differs from the entry`);
       return { reads: reads - before, cpuMs: (used.user + used.system) / 1000, bytes: body.byteLength };
     },
   };
@@ -70,8 +67,8 @@ for (const c of cases) {
   for (let i = 0; i < requests; i++) {
     for (const mode of ["head", "extracted"] as const) {
       const s = await server(mode);
-      const cold = await s.request(c.entry, c.headers);
-      const warm = await s.request(c.entry, c.headers);
+      const cold = await s.request(c.entry, c.headers, c.bytes);
+      const warm = await s.request(c.entry, c.headers, c.bytes);
       rows.push({ mode, entry: c.entry, temperature: "cold", reads: cold.reads, cpuMs: cold.cpuMs });
       rows.push({ mode, entry: c.entry, temperature: "warm", reads: warm.reads, cpuMs: warm.cpuMs });
     }
