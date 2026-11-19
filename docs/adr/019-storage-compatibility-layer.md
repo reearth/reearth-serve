@@ -227,7 +227,18 @@ one is refused. The final chunk is staged too, so the client's
 A commit has one owner. The move to committing records a random owner
 token; any other request gets a retryable `503` until the owner finishes
 or has been silent for a fixed time, and a takeover is another
-compare-and-set. Each owner writes under asset or version ids derived
+compare-and-set. While it copies staged bytes, the owner refreshes its
+timestamp and its key lease at a quarter of that time, so a slow but
+live owner is never displaced. The owner publishes only while it still
+holds the commit: the create-asset and create-version writes take an
+optional guard, and the adapter checks it inside the same atomic batch
+that inserts the row, its job and its usage increments (for SQL, every
+statement selects only when the session is at the owner's revision and,
+on an overwrite, the key's lease carries the owner's token). If the
+guard fails, nothing is written and the request answers `503`. A
+takeover, a cancel or the expiry sweep therefore also stops any later
+publish by the old owner. The guard is an additive, optional input to
+`AtomicWrites`; the storage ports do not change. Each owner writes under asset or version ids derived
 from its own token, so no two owners can collide on one row or delete
 each other's bytes. The bind of a new key and the move to committed land
 in one batch, and an overwrite records its target asset first, so a
