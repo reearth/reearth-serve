@@ -1,5 +1,5 @@
 import type { ArchiveSource } from "../archive";
-import type { AssetMetadata, AssetVersion } from "./model";
+import type { AssetMetadata, AssetVersion, ContainerMeta } from "./model";
 
 /**
  * One storage layout an asset's bytes may live under. Versioned assets use
@@ -17,6 +17,8 @@ export interface Layout {
   originalSize?: number;
   archive: boolean;
   archiveFormat?: string;
+  /** What upload finalisation recorded; absent when it did not run. */
+  container?: ContainerMeta;
 }
 
 export function assetLayouts(asset: AssetMetadata, version: AssetVersion | null): Layout[] {
@@ -34,6 +36,7 @@ function layoutOf(root: string, row: AssetMetadata | AssetVersion): Layout {
     originalSize: row.originalSize,
     archive: row.type === "archive",
     archiveFormat: row.archiveFormat,
+    container: row.container,
   };
 }
 
@@ -51,5 +54,6 @@ export function manifestKey(layout: Layout): string {
 
 export function archiveSource(layout: Layout): ArchiveSource | null {
   if (layout.archiveFormat !== "zip") return null;
-  return { key: mainKey(layout), size: layout.size, filename: layout.filename };
+  const index = layout.container && "index" in layout.container ? layout.container.index : undefined;
+  return { key: mainKey(layout), size: layout.size, filename: layout.filename, ...(index && { index }) };
 }

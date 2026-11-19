@@ -35,6 +35,11 @@ export function containerIndexKey(root: string): string {
   return `${root}/_archive/container.v1`;
 }
 
+/** Objects finalisation wrote, for a caller that compensates a failed row write. */
+export function writtenKeys(finalised: ArchiveFinalisation): string[] {
+  return finalised.container && "index" in finalised.container ? [finalised.container.index] : [];
+}
+
 const QUIET_REFUSALS = new Set(["missing", "not-zip", "encoded-original"]);
 
 /**

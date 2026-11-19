@@ -220,10 +220,12 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
   const src = fileSource({ storage, archives: c.get("archives") }, asset, version);
   const isArchive = src.layouts.some((l) => l.archive);
 
-  // `_headers` / `_redirects` (ADR-013 C3). The rules were parsed once, at
-  // extraction time; this is all the request pays for them.
+  // `_headers` / `_redirects` (ADR-013 C3), parsed once at upload finalisation
+  // or at extraction. A row finalisation ran on has no rules when it has no
+  // `hosting`, so only rows from before finalisation parse them per request.
+  const finalised = (version ?? asset).container !== undefined;
   const hosting = isArchive
-    ? hostingFor(asset, version) ?? (src.inPlace && !src.tryExtracted ? await readSiteHostingInPlace(src, src.inPlace) : null)
+    ? hostingFor(asset, version) ?? (src.inPlace && !src.tryExtracted && !finalised ? await readSiteHostingInPlace(src, src.inPlace) : null)
     : null;
 
   // The control files are the site's configuration, not its content. They are

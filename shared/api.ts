@@ -167,10 +167,10 @@ export const siteHostingSchema = z.object({
  * (`too-large`). An absent `container` means finalisation did not run or failed.
  */
 const directorySpanSchema = z.object({ offset: z.number(), size: z.number() });
-export const containerSchema = z.union([
+export const containerSchema = component("Container", z.union([
   z.object({ index: z.string(), directory: directorySpanSchema, rootPrefix: z.string() }),
   z.object({ skipped: z.enum(["small", "too-large"]), directory: directorySpanSchema, rootPrefix: z.string() }),
-]);
+]));
 
 // --- Asset ---
 
