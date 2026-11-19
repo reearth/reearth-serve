@@ -6,6 +6,7 @@ export type {
   ArchiveFormat,
   AssetMetadata,
   AssetVersion,
+  ContainerMeta,
   AssetUploadResult,
   PresignedUploadResult,
   MultipartUploadResult,

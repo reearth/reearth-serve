@@ -84,7 +84,7 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
         metadata, writes, storage, id,
         { name: filename, type: c.req.header("Content-Type") || "application/octet-stream", body, size, contentEncoding, originalSize },
         baseUrl,
-        { extractionQueue, thumbnailQueue, skipExtraction, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix") },
+        { extractionQueue, thumbnailQueue, skipExtraction, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix"), archives: c.get("archives") },
       ).catch((e: unknown) => {
         if (e instanceof Error && e.message.includes("exceeds storage capacity")) return "over-capacity" as const;
         throw e;

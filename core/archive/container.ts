@@ -20,11 +20,6 @@ export type ContainerOutcome =
   | { ok: true; skipped: "small" | "too-large"; directory: DirectorySpan; rootPrefix: string }
   | { ok: false; reason: DirectoryRefusal };
 
-/**
- * Write the container index for `source` to `target`. Refusals come back as
- * values; a failed put throws. The bytes are a pure function of the original,
- * so a rerun overwrites an orphan with identical bytes.
- */
 export async function buildContainerIndex(
   storage: FileStorage,
   source: ArchiveSource,

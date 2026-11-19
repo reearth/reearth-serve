@@ -26,8 +26,8 @@ import { rowToModel, modelToRow, encodeCursor, decodeCursor, queryAll, queryFirs
 // `hosting` is ADR-013 C3's parsed `_headers` / `_redirects` — system metadata
 // in the ADR-005 sense, which is exactly what this column is for, so it needs
 // no migration and no new column.
-const ASSET_META_KEYS = ["contentEncoding", "originalSize", "archiveFormat", "fileCount", "extractedSize", "jobId", "hosting"];
-const VERSION_META_KEYS = ["contentEncoding", "originalSize", "archiveFormat", "fileCount", "extractedSize", "jobId", "hosting"];
+const ASSET_META_KEYS = ["contentEncoding", "originalSize", "archiveFormat", "fileCount", "extractedSize", "jobId", "hosting", "container"];
+const VERSION_META_KEYS = ["contentEncoding", "originalSize", "archiveFormat", "fileCount", "extractedSize", "jobId", "hosting", "container"];
 const JOB_META_KEYS = [
   "completedAt",
   "startedAt",

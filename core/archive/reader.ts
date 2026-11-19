@@ -33,7 +33,6 @@ export interface ArchiveSource {
   size: number;
   /** The uploaded filename, which decides whether a lone root folder is stripped. */
   filename: string;
-  /** The container index object recorded in the row's `container.index`. Readers take it from there and never derive it. */
   index?: string;
 }
 
@@ -117,10 +116,6 @@ export async function openArchive(deps: ArchiveDeps, source: ArchiveSource): Pro
   };
 }
 
-/**
- * An index answers for speed only. Anything that suggests it is wrong for
- * this original sends the call to the central directory instead.
- */
 function fallingBack(indexed: ArchiveReader, reopen: (reason: string) => Promise<OpenResult>): ArchiveReader {
   const guarded = async <T>(answer: () => Promise<T>, fallback: (reader: ArchiveReader) => Promise<T>): Promise<T> => {
     try {
