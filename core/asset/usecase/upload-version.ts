@@ -30,12 +30,12 @@ export async function uploadVersion(
     originalSize?: number;
   },
   baseUrl: string,
-  options?: { extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string },
+  options?: { extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string; versionId?: string; userMeta?: Record<string, unknown> },
 ): Promise<UploadVersionResult | null> {
   const asset = await metadata.find(assetId);
   if (!asset) return null;
 
-  const versionId = generateId();
+  const versionId = options?.versionId ?? generateId();
   const now = Date.now();
   const contentType = file.type || "application/octet-stream";
   const key = versionStorageKey(assetId, versionId, file.name);
@@ -64,6 +64,7 @@ export async function uploadVersion(
       ...(!options?.skipExtraction && { status: "pending" as const }),
       archiveFormat,
     }),
+    ...(options?.userMeta && { userMeta: options.userMeta }),
   };
 
   // Create extraction job for archives

@@ -228,9 +228,13 @@ With `COMPAT_GCS_HOST` set, Serve answers part of the Google Cloud Storage JSON 
 | Method | Path | Description |
 |--------|------|-------------|
 | `POST` | `/token` | OAuth jwt-bearer grant: an RS256 assertion signed with the key file, `aud` the key file's `token_uri`, at most one hour long. Answers an access token valid for one hour |
-| `GET` | `/storage/v1/b/{bucket}/o/{key}` | Object metadata. A missing key answers 404, which the client reads as `ErrObjectNotExist` |
+| `POST` | `/upload/storage/v1/b/{bucket}/o?uploadType=multipart` | Write an object from a `multipart/related` body (JSON metadata, then the bytes), buffered up to 32 MiB (413 above). A new key becomes a new asset; an existing key gets a new version of its asset. A declared `crc32c` or `md5Hash` that does not match the bytes answers 400 |
+| `POST` | `/upload/storage/v1/b/{bucket}/o?uploadType=media&name={key}` | Write an object from the raw body. `Content-Length` is required (411 without it) |
+| `GET` | `/storage/v1/b/{bucket}/o/{key}` | Object metadata. `generation` is 1 for the first upload and the version number plus one after it; `md5Hash` and `crc32c` appear only when Serve hashed the stored bytes on write. A missing key answers 404, which the client reads as `ErrObjectNotExist` |
+| `GET` | `/storage/v1/b/{bucket}/o` | List objects with `prefix`, `delimiter=/`, `startOffset`, `endOffset`, `maxResults` and `pageToken`. A page holds at most 200 items. `matchGlob`, `versions=true` and any other delimiter answer 501 |
+| `DELETE` | `/storage/v1/b/{bucket}/o/{key}` | Delete the asset the key names. Answers 204 for a key that names nothing, once the credential may delete in the bucket |
 
-Every call except `/token` takes `Authorization: Bearer` with that access token or with a self-signed RS256 JWT whose `kid` is the credential id. The credential is read on every request, so revoking it stops its tokens at once. An unknown bucket answers 404, a bucket outside the credential's grant 403, and every operation not built yet 501 in the GCS error shape. The access token is signed with `SIGNING_SECRET`; without it `/token` answers 503.
+Every call except `/token` takes `Authorization: Bearer` with that access token or with a self-signed RS256 JWT whose `kid` is the credential id. The credential is read on every request, so revoking it stops its tokens at once. A bucket that does not exist or lies outside the credential's grant answers 404, a call above the credential's role 403, and every operation not built yet 501 in the GCS error shape. Two writers on one new key cannot both create an asset. The second gets a retryable 503. The access token is signed with `SIGNING_SECRET`; without it `/token` answers 503.
 
 ### File Delivery
 

@@ -22,9 +22,9 @@ export async function uploadAsset(
   },
   ttlSeconds: number,
   baseUrl: string,
-  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string },
+  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string; id?: string; userMeta?: Record<string, unknown> },
 ): Promise<AssetUploadResult> {
-  const id = generateId();
+  const id = options?.id ?? generateId();
   const now = Date.now();
   const contentType = file.type || "application/octet-stream";
   const key = storageKey(id, file.name);
@@ -51,6 +51,7 @@ export async function uploadAsset(
     }),
     ...(options?.sessionId && { sessionId: options.sessionId }),
     ...(options?.projectId && { projectId: options.projectId }),
+    ...(options?.userMeta && { userMeta: options.userMeta }),
   };
 
   // Create extraction job for archives (unless skipped)

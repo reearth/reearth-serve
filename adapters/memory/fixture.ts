@@ -414,10 +414,14 @@ export async function fixture(overrides?: Partial<Deps>) {
     metadata,
     versions,
     storage,
-    // Only delete is exercised through the app; uploads have their own tests.
     writes: {
-      createAsset: () => { throw new Error('fake dependency "writes.createAsset" was called unexpectedly'); },
-      createVersion: () => { throw new Error('fake dependency "writes.createVersion" was called unexpectedly'); },
+      async createAsset({ asset }) {
+        await metadata.save(asset);
+      },
+      async createVersion({ version }) {
+        const numbers = [...versions.versions.values()].filter((v) => v.assetId === version.assetId).map((v) => v.version);
+        return versions.save({ ...version, version: Math.max(0, ...numbers) + 1 });
+      },
       saveJob: () => { throw new Error('fake dependency "writes.saveJob" was called unexpectedly'); },
       async deleteAsset({ asset, releasedAt }) {
         metadata.assets.delete(asset.id);

@@ -1,3 +1,5 @@
+import type { ProjectStore } from "../../project/repository";
+
 export function generateId(): string {
   return crypto.randomUUID().replace(/-/g, "").slice(0, 16);
 }
@@ -35,4 +37,15 @@ export function legacyThumbsPrefix(assetId: string): string {
 
 export function legacyThumbKey(assetId: string, filename: string): string {
   return `assets/${assetId}/_thumbs/${filename}`;
+}
+
+export async function usageScopesFor(
+  projects: Pick<ProjectStore, "find">,
+  projectId: string | null | undefined,
+): Promise<string[]> {
+  if (!projectId) return [];
+  const scopes = [`project:${projectId}`];
+  const project = await projects.find(projectId);
+  if (project?.workspaceId) scopes.push(`workspace:${project.workspaceId}`);
+  return scopes;
 }
