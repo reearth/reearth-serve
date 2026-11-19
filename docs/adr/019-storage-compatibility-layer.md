@@ -199,8 +199,14 @@ key first takes a lease on its binding row in one conditional update,
 and checks `ifGenerationMatch` only while it holds the lease. A second
 writer, or a delete during a write, gets a retryable `503`, so two
 writers with the same precondition cannot both succeed and a write never
-completes onto a deleted asset. A claim or lease whose holder crashed is
-taken over after a fixed age, and a sweep removes old claims.
+completes onto a deleted asset. A writer renews its claim or lease while
+it copies, and only while it still holds it. One that went silent for a
+fixed age is taken over, its old holder can never renew it again, and a
+sweep removes old claims. A commit publishes only while it still holds
+its session revision and, on an overwrite, the lease on a binding that
+still names the asset it writes. A swept or cancelled session is marked
+gone before its staged chunks are queued for cleanup, so a failed
+cleanup is retried on the next sweep.
 
 **Resumable uploads are staged, then committed once.** The Go client
 uploads anything at or above its 16 MiB chunk size as a resumable
