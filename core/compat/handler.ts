@@ -10,7 +10,8 @@ import {
   compatCredentialParamSchema, compatCredentialSchema, compatKeyFileSchema, createCompatBucketBodySchema,
   issueCompatCredentialBodySchema,
 } from "../../shared/compat";
-import { isCredentialRole, parseBucketName, type CompatCredential, type CredentialId } from "./model";
+import { isServiceRole } from "../auth/types";
+import { parseBucketName, type CompatCredential, type CredentialId } from "./model";
 import { issueCredential } from "./credential";
 
 function toCredentialDto(c: CompatCredential): z.infer<typeof compatCredentialSchema> {
@@ -155,7 +156,7 @@ export function registerProjectCompatRoutes(app: Hono<AppEnv>) {
 
       if (!access.value.workspaceId) return c.json({ error: "Credentials need a project in a workspace" }, 400);
       const body = c.req.valid("json");
-      if (!isCredentialRole(body.role)) return c.json({ error: "role must be viewer or editor" }, 400);
+      if (!isServiceRole(body.role)) return c.json({ error: "role must be viewer or editor" }, 400);
       const name = parseBucketName(body.bucket);
       const bucket = name ? await c.get("compat").findBucket(name) : null;
       if (!bucket || bucket.projectId !== access.value.id) return c.json({ error: "Bucket not found" }, 404);
@@ -166,12 +167,12 @@ export function registerProjectCompatRoutes(app: Hono<AppEnv>) {
         projectId: bucket.projectId,
         bucket: bucket.name,
         role: body.role,
-        label: body.label ?? null,
+        label: body.label || null,
         createdBy: user.id,
         apiOrigin,
         now: Date.now(),
       });
-      await c.get("compat").insertCredential(credential);
+      if (!await c.get("compat").insertCredential(credential)) return c.json({ error: "Bucket not found" }, 404);
       return c.json(keyFile, 201);
     },
   );

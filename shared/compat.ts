@@ -4,7 +4,9 @@ import { component, enumComponent, roleSchema } from "./api";
 export const compatStripRuleSchema = enumComponent("CompatStripRule", z.enum(["none", "skip-top"]));
 
 export const compatMountRuleSchema = component("CompatMountRule", z.object({
-  prefix: z.string().refine((p) => p === "" || p.endsWith("/"), { message: "prefix must be empty or end in '/'" }),
+  prefix: z.string().refine((p) => p === "" || (p.endsWith("/") && !p.startsWith("/")), {
+    message: "prefix must be empty, or end in '/' and not start with it",
+  }),
   depth: z.number().int().min(1).max(8),
   strip: compatStripRuleSchema,
 }).describe("How a key maps to the folder that names one asset: `depth` path segments after `prefix`."));

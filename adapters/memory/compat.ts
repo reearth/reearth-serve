@@ -2,9 +2,14 @@ import type {
   Binding, BindingKind, BucketName, CompatBucket, CompatCredential, CredentialId,
   ExactHashes, UploadId, UploadSession,
 } from "../../core/compat/model";
-import type { BindingKey, ClaimResult, CompatStore, DeleteBucketResult } from "../../core/compat/repository";
+import {
+  newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatStore, type DeleteBucketResult,
+} from "../../core/compat/repository";
+import { isServiceRole } from "../../core/auth/types";
 
-type Row = { bucket: BucketName; key: string; kind: BindingKind; assetId: string | null; claimedAt: number };
+type Row = {
+  bucket: BucketName; key: string; kind: BindingKind; assetId: string | null; claimedAt: number; claimToken: ClaimToken;
+};
 
 export class MemoryCompatStore implements CompatStore {
   readonly buckets = new Map<string, CompatBucket>();
@@ -34,6 +39,13 @@ export class MemoryCompatStore implements CompatStore {
     this.buckets.delete(name);
     return "deleted";
   }
+  async deleteProject(projectId: string): Promise<void> {
+    const names = new Set([...this.buckets.values()].filter((b) => b.projectId === projectId).map((b) => b.name));
+    for (const [id, row] of this.bindings) if (names.has(row.bucket)) this.bindings.delete(id);
+    for (const [id, u] of this.uploads) if (names.has(u.bucket)) this.uploads.delete(id);
+    for (const [id, c] of this.credentials) if (c.projectId === projectId) this.credentials.delete(id);
+    for (const name of names) this.buckets.delete(name);
+  }
 
   async findBinding(bucket: BucketName, key: BindingKey): Promise<Binding | null> {
     const row = this.bindings.get(rowKey(bucket, key));
@@ -43,24 +55,25 @@ export class MemoryCompatStore implements CompatStore {
     const id = rowKey(bucket, key);
     const row = this.bindings.get(id);
     if (!row || (row.assetId === null && row.claimedAt < staleBefore)) {
-      this.bindings.set(id, { bucket, key, kind, assetId: null, claimedAt: now });
-      return { kind: "claimed", token: now };
+      const token = newClaimToken();
+      this.bindings.set(id, { bucket, key, kind, assetId: null, claimedAt: now, claimToken: token });
+      return { kind: "claimed", token };
     }
     const binding = toBinding(row);
     return binding ? { kind: "bound", binding } : { kind: "busy" };
   }
-  async bind(bucket: BucketName, key: BindingKey, token: number, assetId: string): Promise<boolean> {
+  async bind(bucket: BucketName, key: BindingKey, token: ClaimToken, assetId: string): Promise<boolean> {
     const row = this.bindings.get(rowKey(bucket, key));
     if (!row) return false;
     if (row.assetId === assetId) return true;
-    if (row.assetId !== null || row.claimedAt !== token) return false;
+    if (row.assetId !== null || row.claimToken !== token) return false;
     row.assetId = assetId;
     return true;
   }
-  async releaseClaim(bucket: BucketName, key: BindingKey, token: number): Promise<void> {
+  async releaseClaim(bucket: BucketName, key: BindingKey, token: ClaimToken): Promise<void> {
     const id = rowKey(bucket, key);
     const row = this.bindings.get(id);
-    if (row && row.assetId === null && row.claimedAt === token) this.bindings.delete(id);
+    if (row && row.assetId === null && row.claimToken === token) this.bindings.delete(id);
   }
   async deleteBinding(bucket: BucketName, key: BindingKey): Promise<void> {
     this.bindings.delete(rowKey(bucket, key));
@@ -86,11 +99,13 @@ export class MemoryCompatStore implements CompatStore {
   async findCredentialByEmail(clientEmail: string): Promise<CompatCredential | null> {
     return [...this.credentials.values()].find((c) => c.clientEmail === clientEmail) ?? null;
   }
-  async insertCredential(credential: CompatCredential): Promise<void> {
-    if (this.credentials.has(credential.id) || (await this.findCredentialByEmail(credential.clientEmail))) {
-      throw new Error(`credential ${credential.id} already exists`);
-    }
+  async insertCredential(credential: CompatCredential): Promise<boolean> {
+    if (!isServiceRole(credential.role)) throw new Error(`CHECK constraint failed: role ${credential.role}`);
+    const taken = [...this.credentials.values()].some((c) => c.id === credential.id || c.clientEmail === credential.clientEmail);
+    if (taken) throw new Error(`credential ${credential.id} already exists`);
+    if (this.buckets.get(credential.bucket)?.projectId !== credential.projectId) return false;
     this.credentials.set(credential.id, { ...credential });
+    return true;
   }
   async listCredentials(projectId: string): Promise<CompatCredential[]> {
     return [...this.credentials.values()]

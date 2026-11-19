@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import type { AppEnv } from "../types";
-import type { AuthUser, ServicePrincipal } from "./types";
+import type { AuthUser, ServicePrincipal, ServiceRole } from "./types";
 import type { Authorizer, AuthzRequest } from "./authorizer";
 import type { AssetMetadata } from "../asset/model";
 import type { Job } from "../job/model";
@@ -8,8 +8,10 @@ import type { Member } from "../member/model";
 import type { MemberStore } from "../member/repository";
 import type { Project } from "../project/model";
 import type { ProjectStore } from "../project/repository";
-import { withinPolicy, type ProjectAction, type WorkspaceAction } from "./permissions";
+import { allows, withinPolicy, type ProjectAction, type WorkspaceAction } from "./permissions";
 import type { Role } from "../../shared/api";
+
+const SERVICE_CEILING = "editor" satisfies ServiceRole;
 
 export type AccessContext = {
   user: AuthUser | null;
@@ -84,6 +86,7 @@ export async function authorizeService(
   if (grant.bucket !== null && grant.bucket !== target.bucket) return notFound;
   const project = await ctx.projects.find(target.projectId);
   if (!project?.workspaceId) return notFound;
+  if (!allows(SERVICE_CEILING, "project", action)) return forbidden;
   const principal = { id: `service:${service.id}`, role: service.grant.role };
   return decideProject(ctx, project, project.workspaceId, principal, action);
 }
@@ -310,6 +313,17 @@ if (import.meta.vitest) {
       const { access, authorizer } = ctx();
       expect(await authorizeService(access, service({ role: "viewer" }), media, "create_asset")).toEqual(FORBIDDEN);
       expect(await authorizeService(access, service(), media, "manage_compat")).toEqual(FORBIDDEN);
+      expect(authorizer.check).not.toHaveBeenCalled();
+    });
+
+    test("a grant whose stored role is above editor still cannot act above editor", async () => {
+      const { access, authorizer } = ctx();
+      for (const role of ["admin", "owner"]) {
+        const grant = service({ role: role as ServicePrincipal["grant"]["role"] });
+        for (const action of ["delete", "manage_compat", "manage_webhooks"] as const) {
+          expect(await authorizeService(access, grant, media, action)).toEqual(FORBIDDEN);
+        }
+      }
       expect(authorizer.check).not.toHaveBeenCalled();
     });
 

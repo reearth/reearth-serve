@@ -136,8 +136,8 @@ SSR on Node is out of scope, and any other path returns 404 saying so.
 | `SITE_DOMAIN_IS_PUBLIC_SUFFIX` | (unset) | `"true"` skips that check, for a domain on the Public Suffix List (and for `localhost`); logged at startup |
 | `SITE_DNS_RESOLVER_URL` | `https://cloudflare-dns.com/dns-query` | DNS-over-HTTPS endpoint the custom-domain TXT check is asked of |
 | `SITE_FALLBACK_ORIGIN` | (unset) | What a customer CNAMEs their domain at; unset ⇒ the host of `BASE_URL` |
-| `COMPAT_GCS_HOST` | (unset) | Host the GCS-compatible API answers on (ADR-019), e.g. `storage.example.com`; key files name `<scheme of BASE_URL>://<host>/token` as their token endpoint. Unset ⇒ the API is off and issuing a credential answers 503 |
-| `COMPAT_OBJECTS_HOST` | (unset) | Read-only public objects host of ADR-019 §6, e.g. `objects.example.com` (with `{bucket}.objects.example.com`). Reserved: every request there answers 501 until it is built |
+| `COMPAT_GCS_HOST` | (unset) | Host the GCS-compatible API answers on (ADR-019), e.g. `storage.example.com`; a bare `host[:port]`, and a scheme or path refuses to start; key files name `<scheme of BASE_URL>://<host>/token` as their token endpoint. Unset ⇒ the API is off and issuing a credential answers 503 |
+| `COMPAT_OBJECTS_HOST` | (unset) | Read-only public objects host of ADR-019 §6, e.g. `objects.example.com` (with `{bucket}.objects.example.com`); a bare `host[:port]` like `COMPAT_GCS_HOST`. Reserved: every request there answers 501 until it is built |
 | `CERBOS_ENDPOINT` | (unset) | Cerbos PDP base URL (http or https); unset ⇒ the built-in policy table decides (see [Authorization](#authorization)). Any other value fails at startup |
 | `OBJECT_STORE_*` | (unset) | Reserved for the future S3 adapter; until then storage is in-process |
 | `CONTAINER_LAUNCHER` | `none` | Only `none` is implemented; any other value fails at startup |

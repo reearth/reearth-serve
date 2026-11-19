@@ -126,6 +126,19 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ CREDENTIALED_ORIGINS: "https://a.example.com/app" })).toThrow(/CREDENTIALED_ORIGINS/);
   });
 
+  test("COMPAT_GCS_HOST takes a bare host[:port], and anything else refuses to start", () => {
+    expect(loadConfig({}).compatApiHost).toBeUndefined();
+    for (const good of ["storage.example.test", "storage.localhost:8788", "localhost"]) {
+      expect(loadConfig({ COMPAT_GCS_HOST: good }).compatApiHost).toBe(good);
+    }
+    for (const bad of [
+      "https://storage.example.test", "storage.example.test/", "storage.example.test/gcs", "Storage.example.test",
+      "user@storage.example.test", "storage.example.test:99999", "storage..example.test", " storage.example.test",
+    ]) {
+      expect(() => loadConfig({ COMPAT_GCS_HOST: bad })).toThrow(/COMPAT_GCS_HOST/);
+    }
+  });
+
   test("site hosts refuse to start on the API's own registrable domain", () => {
     const sites = { SITE_HOST_SUFFIX: ".sites.example.net", SITE_REGISTRABLE_DOMAIN: "example.net" };
     // The Node default BASE_URL does not count: the operator must say it.

@@ -4,7 +4,8 @@ import { fixture } from "../../../adapters/memory/fixture";
 import { MemoryProjectStore } from "../../../adapters/memory/site-fixture";
 import type { Deps } from "../../types";
 import { issueCredential, type KeyFile } from "../credential";
-import type { BucketName, CredentialId, CredentialRole, ObjectKey } from "../model";
+import type { BucketName, CredentialId, ObjectKey } from "../model";
+import type { ServiceRole } from "../../auth/types";
 
 const API_HOST = "storage.example.test";
 const API = `https://${API_HOST}`;
@@ -21,7 +22,7 @@ async function compatFixture(overrides: Partial<Deps> = {}) {
 
 type Fixture = Awaited<ReturnType<typeof compatFixture>>;
 
-async function keyFor(f: Fixture, role: CredentialRole = "viewer"): Promise<KeyFile> {
+async function keyFor(f: Fixture, role: ServiceRole = "viewer"): Promise<KeyFile> {
   const { credential, keyFile } = await issueCredential({
     projectId: "p1", bucket: "media" as BucketName, role, label: null, createdBy: "u1", apiOrigin: API, now: Date.now(),
   });

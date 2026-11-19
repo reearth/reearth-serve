@@ -4,7 +4,7 @@ import { MemoryCompatStore } from "../memory/compat";
 import { SqlCompatStore } from "./compat";
 import { SqlAtomicWrites } from "./writes";
 import { SqlMetadataStore } from "./stores";
-import type { CompatStore } from "../../core/compat/repository";
+import type { BindingKey, ClaimToken, CompatStore } from "../../core/compat/repository";
 import type {
   BucketName, CompatBucket, CompatCredential, CredentialId, FolderKey, ObjectKey, UploadId, UploadSession,
 } from "../../core/compat/model";
@@ -32,6 +32,12 @@ function credential(over: Partial<CompatCredential> = {}): CompatCredential {
     revokedAt: null,
     ...over,
   };
+}
+
+async function claimed(s: CompatStore, k: BindingKey, now: number, staleBefore = 0): Promise<ClaimToken> {
+  const result = await s.claim(media, k, k.endsWith("/") ? "folder" : "object", now, staleBefore);
+  if (result.kind !== "claimed") throw new Error(`expected a claim, got ${result.kind}`);
+  return result.token;
 }
 
 function upload(over: Partial<UploadSession> = {}): UploadSession {
@@ -87,6 +93,32 @@ describe.each([
       expect((await s.findCredential("c1" as CredentialId))?.revokedAt).toBeNull();
     });
 
+    test("deleting a project removes its buckets, bindings, uploads and credentials, and frees the names", async () => {
+      const s = make();
+      const other = "other" as BucketName;
+      await s.insertBucket(bucket());
+      await s.insertBucket(bucket({ name: other, projectId: "p2" }));
+      await s.insertCredential(credential());
+      await s.insertCredential(credential({ id: "c2" as CredentialId, clientEmail: "c2@x", projectId: "p2", bucket: other }));
+      await s.bind(media, key, await claimed(s, key, 1000), "a1");
+      await s.claim(other, key, "object", 1000, 0);
+      await s.createUpload(upload());
+      await s.createUpload(upload({ id: "up2" as UploadId, bucket: other }));
+
+      await s.deleteProject("p1");
+
+      expect(await s.listBuckets("p1")).toEqual([]);
+      expect(await s.listCredentials("p1")).toEqual([]);
+      expect(await s.findBinding(media, key)).toBeNull();
+      expect(await s.findUpload("up1" as UploadId)).toBeNull();
+      expect(await s.insertBucket(bucket())).toBe(true);
+      expect(await s.findBinding(media, key)).toBeNull();
+      expect(await s.listBuckets("p2")).toHaveLength(1);
+      expect(await s.listCredentials("p2")).toHaveLength(1);
+      expect(await s.claim(other, key, "object", 1000, 0)).toEqual({ kind: "busy" });
+      expect(await s.findUpload("up2" as UploadId)).not.toBeNull();
+    });
+
     test("another project's bucket, or a missing one, is absent", async () => {
       const s = make();
       await s.insertBucket(bucket());
@@ -99,34 +131,45 @@ describe.each([
   describe("claims and bindings", () => {
     test("a fresh claim wins, and a second writer is busy while it is fresh", async () => {
       const s = make();
-      expect(await s.claim(media, key, "object", 1000, 500)).toEqual({ kind: "claimed", token: 1000 });
+      expect(await s.claim(media, key, "object", 1000, 500)).toEqual({ kind: "claimed", token: expect.any(String) });
       expect(await s.claim(media, key, "object", 1100, 600)).toEqual({ kind: "busy" });
       expect(await s.findBinding(media, key)).toBeNull();
     });
 
     test("a stale claim is taken over, and the old holder can no longer bind or release it", async () => {
       const s = make();
-      await s.claim(media, key, "object", 1000, 0);
-      expect(await s.claim(media, key, "object", 9000, 2000)).toEqual({ kind: "claimed", token: 9000 });
-      expect(await s.bind(media, key, 1000, "old-asset")).toBe(false);
-      await s.releaseClaim(media, key, 1000);
-      expect(await s.bind(media, key, 9000, "new-asset")).toBe(true);
+      const old = await claimed(s, key, 1000);
+      const fresh = await claimed(s, key, 9000, 2000);
+      expect(await s.bind(media, key, old, "old-asset")).toBe(false);
+      await s.releaseClaim(media, key, old);
+      expect(await s.bind(media, key, fresh, "new-asset")).toBe(true);
       expect(await s.findBinding(media, key)).toEqual({ kind: "object", bucket: media, key, assetId: "new-asset" });
+    });
+
+    test("claims in the same millisecond get distinct tokens, so a late release cannot free a newer claim", async () => {
+      const s = make();
+      const first = await claimed(s, key, 1000);
+      await s.releaseClaim(media, key, first);
+      const second = await claimed(s, key, 1000);
+      expect(second).not.toBe(first);
+      await s.releaseClaim(media, key, first);
+      expect(await s.claim(media, key, "object", 1000, 0)).toEqual({ kind: "busy" });
+      expect(await s.bind(media, key, first, "stale-writer")).toBe(false);
+      expect(await s.bind(media, key, second, "a1")).toBe(true);
     });
 
     test("bind is idempotent for the same asset and refuses another", async () => {
       const s = make();
-      await s.claim(media, folder, "folder", 1000, 0);
-      expect(await s.bind(media, folder, 1000, "a1")).toBe(true);
-      expect(await s.bind(media, folder, 1000, "a1")).toBe(true);
-      expect(await s.bind(media, folder, 1000, "a2")).toBe(false);
+      const token = await claimed(s, folder, 1000);
+      expect(await s.bind(media, folder, token, "a1")).toBe(true);
+      expect(await s.bind(media, folder, token, "a1")).toBe(true);
+      expect(await s.bind(media, folder, token, "a2")).toBe(false);
       expect(await s.findBinding(media, folder)).toEqual({ kind: "folder", bucket: media, key: folder, assetId: "a1" });
     });
 
     test("a bound key is reported as bound, never taken over however old", async () => {
       const s = make();
-      await s.claim(media, key, "object", 1000, 0);
-      await s.bind(media, key, 1000, "a1");
+      await s.bind(media, key, await claimed(s, key, 1000), "a1");
       expect(await s.claim(media, key, "object", 99_000, 98_000)).toEqual({
         kind: "bound", binding: { kind: "object", bucket: media, key, assetId: "a1" },
       });
@@ -134,11 +177,10 @@ describe.each([
 
     test("releasing a claim frees the key; releasing a bound key does nothing", async () => {
       const s = make();
-      await s.claim(media, key, "object", 1000, 0);
-      await s.releaseClaim(media, key, 1000);
-      expect(await s.claim(media, key, "object", 1100, 0)).toEqual({ kind: "claimed", token: 1100 });
-      await s.bind(media, key, 1100, "a1");
-      await s.releaseClaim(media, key, 1100);
+      await s.releaseClaim(media, key, await claimed(s, key, 1000));
+      const token = await claimed(s, key, 1100);
+      await s.bind(media, key, token, "a1");
+      await s.releaseClaim(media, key, token);
       expect(await s.findBinding(media, key)).not.toBeNull();
       await s.deleteBinding(media, key);
       expect(await s.findBinding(media, key)).toBeNull();
@@ -147,8 +189,8 @@ describe.each([
     test("scan returns bound rows in byte order within the range, skipping claims", async () => {
       const s = make();
       for (const [i, k] of ["b/2", "b/1", "a/1", "b/é", "c/1", "b/3"].entries()) {
-        await s.claim(media, k as ObjectKey, "object", 1000 + i, 0);
-        if (k !== "b/3") await s.bind(media, k as ObjectKey, 1000 + i, `asset-${k}`);
+        const token = await claimed(s, k as ObjectKey, 1000 + i);
+        if (k !== "b/3") await s.bind(media, k as ObjectKey, token, `asset-${k}`);
       }
       const keys = (await s.scanBindings(media, "b/", "b0", 10)).map((b) => b.key);
       expect(keys).toEqual(["b/1", "b/2", "b/é"]);
@@ -167,15 +209,43 @@ describe.each([
   describe("credentials", () => {
     test("insert, find by id and email, and list by project", async () => {
       const s = make();
-      await s.insertCredential(credential());
+      await s.insertBucket(bucket());
+      expect(await s.insertCredential(credential())).toBe(true);
       expect(await s.findCredential("c1" as CredentialId)).toEqual(credential());
       expect(await s.findCredentialByEmail("c1@storage.example.test")).toEqual(credential());
       expect(await s.listCredentials("p1")).toEqual([credential()]);
       expect(await s.listCredentials("p2")).toEqual([]);
     });
 
+    test("a credential is not inserted for a missing bucket or another project's bucket", async () => {
+      const s = make();
+      expect(await s.insertCredential(credential())).toBe(false);
+      await s.insertBucket(bucket({ projectId: "p2" }));
+      expect(await s.insertCredential(credential())).toBe(false);
+      expect(await s.findCredential("c1" as CredentialId)).toBeNull();
+    });
+
+    test("a credential issued against a bucket deleted before the insert never exists, so a recreated bucket inherits nothing", async () => {
+      const s = make();
+      await s.insertBucket(bucket());
+      expect(await s.deleteBucket("p1", media, 2000)).toBe("deleted");
+      expect(await s.insertCredential(credential())).toBe(false);
+      await s.insertBucket(bucket());
+      expect(await s.listCredentials("p1")).toEqual([]);
+    });
+
+    test("a role above editor is refused like the SQL CHECK", async () => {
+      const s = make();
+      await s.insertBucket(bucket());
+      for (const role of ["admin", "owner"]) {
+        await expect(s.insertCredential(credential({ role: role as CompatCredential["role"] }))).rejects.toThrow(/CHECK/);
+      }
+      expect(await s.listCredentials("p1")).toEqual([]);
+    });
+
     test("revoke keeps the first time and refuses another project's credential", async () => {
       const s = make();
+      await s.insertBucket(bucket());
       await s.insertCredential(credential());
       expect(await s.revokeCredential("p2", "c1" as CredentialId, 50)).toBe(false);
       expect(await s.revokeCredential("p1", "c1" as CredentialId, 100)).toBe(true);
@@ -218,8 +288,7 @@ describe("SqlAtomicWrites.deleteAsset", () => {
     await metadata.save(asset, 3600);
     const other = "assets/cc/dd/" as FolderKey;
     for (const [k, id] of [[key, "a1"], [other, "a2"]] as const) {
-      await store.claim(media, k, "object", 1000, 0);
-      await store.bind(media, k, 1000, id);
+      await store.bind(media, k, await claimed(store, k, 1000), id);
     }
     await store.putHashes("v1", "a1", { md5: new Uint8Array(16), crc32c: 1 });
     await store.putHashes("v2", "a2", { md5: new Uint8Array(16), crc32c: 2 });

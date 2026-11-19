@@ -12,9 +12,15 @@ import type {
 
 export type BindingKey = ObjectKey | FolderKey;
 
+export type ClaimToken = string & { readonly __brand: "ClaimToken" };
+
+export function newClaimToken(): ClaimToken {
+  return crypto.randomUUID() as ClaimToken;
+}
+
 export type ClaimResult =
   /** This call inserted the claim or took over a stale one. `token` guards bind and release. */
-  | { kind: "claimed"; token: number }
+  | { kind: "claimed"; token: ClaimToken }
   /** The key already names an asset. */
   | { kind: "bound"; binding: Binding }
   /** Another writer's fresh claim holds the key. Retryable. */
@@ -33,6 +39,11 @@ export interface CompatStore {
    * still binds a key is left alone.
    */
   deleteBucket(projectId: string, name: BucketName, revokedAt: number): Promise<DeleteBucketResult>;
+  /**
+   * Remove every bucket of `projectId` with its bindings and upload sessions,
+   * and delete the project's credentials, all or nothing. The assets stay.
+   */
+  deleteProject(projectId: string): Promise<void>;
 
   /** Bound rows only; a claim with no asset yet reads as absent. */
   findBinding(bucket: BucketName, key: BindingKey): Promise<Binding | null>;
@@ -43,9 +54,9 @@ export interface CompatStore {
    * `assetId`, including a repeat of the same bind; false when the claim was
    * lost to a takeover or the key names another asset.
    */
-  bind(bucket: BucketName, key: BindingKey, token: number, assetId: string): Promise<boolean>;
+  bind(bucket: BucketName, key: BindingKey, token: ClaimToken, assetId: string): Promise<boolean>;
   /** Drop the claim `token` this writer failed to fill. No-op once bound or taken over. */
-  releaseClaim(bucket: BucketName, key: BindingKey, token: number): Promise<void>;
+  releaseClaim(bucket: BucketName, key: BindingKey, token: ClaimToken): Promise<void>;
   deleteBinding(bucket: BucketName, key: BindingKey): Promise<void>;
   /** Bound rows with key in [from, until), ascending by key, at most `limit`. */
   scanBindings(bucket: BucketName, from: string, until: string | null, limit: number): Promise<Binding[]>;
@@ -55,7 +66,11 @@ export interface CompatStore {
 
   findCredential(id: CredentialId): Promise<CompatCredential | null>;
   findCredentialByEmail(clientEmail: string): Promise<CompatCredential | null>;
-  insertCredential(credential: CompatCredential): Promise<void>;
+  /**
+   * Insert only while the credential's bucket exists in its project, checked
+   * in the same step as the insert. False when the bucket is gone.
+   */
+  insertCredential(credential: CompatCredential): Promise<boolean>;
   listCredentials(projectId: string): Promise<CompatCredential[]>;
   /** Revoke a credential of `projectId`. Keeps the first revocation time. False when no such credential. */
   revokeCredential(projectId: string, id: CredentialId, at: number): Promise<boolean>;

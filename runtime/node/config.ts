@@ -7,6 +7,7 @@ import { parseDeliveryTokenKeys, type DeliveryKeyRing } from "../../core/access/
 import { parseTenancyConfig, type TenancyConfig } from "../../adapters/tenancy";
 
 import { parseCredentialedOrigins } from "../../core/file/cors";
+import { parseCompatHost } from "../../core/compat/model";
 import { checkSiteIsolation } from "../../core/site/isolation";
 
 export type ContainerLauncherKind = "none";
@@ -111,8 +112,8 @@ export function loadConfig(env: Env): NodeConfig {
     objectStore: objectStore(env),
     containerLauncher: containerLauncher(env.CONTAINER_LAUNCHER),
     deliveryTokenKeys: env.DELIVERY_TOKEN_KEYS ? parseDeliveryTokenKeys(env.DELIVERY_TOKEN_KEYS) : null,
-    compatApiHost: env.COMPAT_GCS_HOST || undefined,
-    compatObjectsHost: env.COMPAT_OBJECTS_HOST || undefined,
+    compatApiHost: parseCompatHost(env.COMPAT_GCS_HOST),
+    compatObjectsHost: parseCompatHost(env.COMPAT_OBJECTS_HOST, "COMPAT_OBJECTS_HOST"),
   };
 }
 
