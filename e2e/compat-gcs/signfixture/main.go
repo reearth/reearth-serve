@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"time"
 
 	"cloud.google.com/go/storage"
@@ -41,6 +42,35 @@ type fixture struct {
 	Key             string            `json:"key"`
 	ContentType     string            `json:"contentType"`
 	ContentEncoding string            `json:"contentEncoding"`
+	Cases           []signedCase      `json:"cases"`
+}
+
+type signedCase struct {
+	Name string `json:"name"`
+	Key  string `json:"key"`
+	URL  string `json:"url"`
+}
+
+var caseKeys = map[string]string{
+	"reserved characters":        "a&b=c;d,e:f@g$h?i#j.txt",
+	"brackets and quotes":        "[b]{c}|p^c`t\"q<l>.txt",
+	"an emoji":                   "emoji \U0001F600.txt",
+	"a fullwidth character":      "fullwidth \uFF01.txt",
+	"an escaped-looking percent": "pct%2Fslash%20.txt",
+	"an empty segment":           "a//b",
+	"a trailing slash":           "trailing/",
+	"a dot segment":              "a/./b",
+	"a dot-dot segment":          "a/../b",
+}
+
+var caseQuery = map[string][]string{
+	"\U0001F600": {"astral"},
+	"\uFF01":     {"fullwidth"},
+	"\uE000":     {"private use"},
+	"\u00FC":     {"two bytes"},
+	"b c":        {"d+e"},
+	"~t":         {"~v"},
+	"k":          {"2", "1"},
 }
 
 func main() {
@@ -107,6 +137,25 @@ func run() error {
 		return err
 	}
 
+	var cases []signedCase
+	for name, k := range caseKeys {
+		u, err := client.Bucket(bucket).SignedURL(k, &storage.SignedURLOptions{
+			Scheme: storage.SigningSchemeV4, Method: http.MethodGet, Expires: time.Now().Add(15 * time.Minute),
+		})
+		if err != nil {
+			return err
+		}
+		cases = append(cases, signedCase{Name: "a key with " + name, Key: k, URL: u})
+	}
+	u, err := client.Bucket(bucket).SignedURL("plain.txt", &storage.SignedURLOptions{
+		Scheme: storage.SigningSchemeV4, Method: http.MethodGet, Expires: time.Now().Add(15 * time.Minute), QueryParameters: caseQuery,
+	})
+	if err != nil {
+		return err
+	}
+	cases = append(cases, signedCase{Name: "query keys outside the BMP, in U+E000 to U+FFFF and repeated", Key: "plain.txt", URL: u})
+	sort.Slice(cases, func(i, j int) bool { return cases[i].Name < cases[j].Name })
+
 	enc := json.NewEncoder(os.Stdout)
 	enc.SetIndent("", "  ")
 	enc.SetEscapeHTML(false)
@@ -123,5 +172,6 @@ func run() error {
 		Key:             key,
 		ContentType:     "application/geo+json",
 		ContentEncoding: "gzip",
+		Cases:           cases,
 	})
 }

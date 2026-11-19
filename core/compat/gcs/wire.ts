@@ -11,6 +11,10 @@ export type GcsErrorCode =
   | "bucket_not_found"
   | "object_not_found"
   | "length_required"
+  | "invalid_digest"
+  | "bad_digest"
+  | "below_length_range"
+  | "above_length_range"
   | "precondition_failed"
   | "too_large"
   | "not_implemented"
@@ -33,6 +37,10 @@ const ERRORS: Record<GcsErrorCode, ErrorSpec> = {
   bucket_not_found: { status: 404, reason: "notFound", xmlCode: "NoSuchBucket", message: "The specified bucket does not exist." },
   object_not_found: { status: 404, reason: "notFound", xmlCode: "NoSuchKey", message: "The specified key does not exist." },
   length_required: { status: 411, reason: "required", xmlCode: "MissingContentLength", message: "Content-Length is required." },
+  invalid_digest: { status: 400, reason: "invalid", xmlCode: "InvalidDigest", message: "The Content-MD5 you specified is not valid." },
+  bad_digest: { status: 400, reason: "invalid", xmlCode: "BadDigest", message: "The Content-MD5 you specified did not match what we received." },
+  below_length_range: { status: 400, reason: "invalid", xmlCode: "EntityTooSmall", message: "The body is shorter than x-goog-content-length-range allows." },
+  above_length_range: { status: 400, reason: "invalid", xmlCode: "EntityTooLarge", message: "The body is longer than x-goog-content-length-range allows." },
   precondition_failed: { status: 412, reason: "conditionNotMet", xmlCode: "PreconditionFailed", message: "At least one of the pre-conditions you specified did not hold." },
   too_large: { status: 413, reason: "uploadTooLarge", xmlCode: "EntityTooLarge", message: "The request body is too large for this upload type." },
   not_implemented: { status: 501, reason: "notImplemented", xmlCode: "NotImplemented", message: "This operation is not implemented by this server." },

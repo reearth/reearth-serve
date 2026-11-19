@@ -24,6 +24,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"hash/crc32"
@@ -440,7 +441,7 @@ func resumable16M(ctx context.Context, client *storage.Client, cfg config) error
 }
 
 // cmsSignedURL signs a PUT the way CMS IssueUploadAssetLink does.
-func cmsSignedURL(client *storage.Client, cfg config, key string, expires time.Duration) (string, error) {
+func cmsSignedURL(client *storage.Client, cfg config, key string, expires time.Duration, headers ...string) (string, error) {
 	return client.Bucket(cfg.bucket).SignedURL(key, &storage.SignedURLOptions{
 		Scheme:      storage.SigningSchemeV4,
 		Method:      http.MethodPut,
@@ -451,17 +452,21 @@ func cmsSignedURL(client *storage.Client, cfg config, key string, expires time.D
 			"reearth-x-project":   {"p1"},
 			"reearth-x-public":    {"true"},
 		},
-		Headers: []string{"Content-Encoding: gzip"},
+		Headers: append([]string{"Content-Encoding: gzip"}, headers...),
 	})
 }
 
-func sendSigned(ctx context.Context, method, rawURL, contentType string, body []byte) (int, string, error) {
+func sendSigned(ctx context.Context, method, rawURL, contentType string, body []byte, headers ...string) (int, string, error) {
 	req, err := http.NewRequestWithContext(ctx, method, rawURL, bytes.NewReader(body))
 	if err != nil {
 		return 0, "", err
 	}
 	req.Header.Set("Content-Type", contentType)
 	req.Header.Set("Content-Encoding", "gzip")
+	for _, h := range headers {
+		name, value, _ := strings.Cut(h, ":")
+		req.Header.Set(name, strings.TrimSpace(value))
+	}
 	res, err := http.DefaultClient.Do(req)
 	if err != nil {
 		return 0, "", err
@@ -511,6 +516,9 @@ func signedPut(ctx context.Context, client *storage.Client, cfg config) error {
 	if err := putSigned(ctx, client, cfg, key, signed, pattern(1024, 4)); err != nil {
 		return err
 	}
+	if err := signedMetadata(ctx, client, cfg); err != nil {
+		return err
+	}
 	if cfg.pathPrefix == "" {
 		return nil
 	}
@@ -526,6 +534,71 @@ func signedPut(ctx context.Context, client *storage.Client, cfg config) error {
 	rewritten.Scheme = "http"
 	rewritten.Path = path.Join(cfg.pathPrefix, rewritten.Path)
 	return putSigned(ctx, client, cfg, key, rewritten.String(), pattern(512, 5))
+}
+
+func signedMetadata(ctx context.Context, client *storage.Client, cfg config) error {
+	key := "assets/ab/cdef/meta.geojson"
+	owner := "x-goog-meta-owner: alice"
+	signed, err := cmsSignedURL(client, cfg, key, 15*time.Minute, owner)
+	if err != nil {
+		return fmt.Errorf("sign: %w", err)
+	}
+	status, code, err := sendSigned(ctx, http.MethodPut, signed, "application/geo+json", []byte("m"), owner)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("signed PUT with metadata: want 200, got %d %s", status, code)
+	}
+	attrs, err := client.Bucket(cfg.bucket).Object(key).Attrs(ctx)
+	if err != nil {
+		return fmt.Errorf("attrs: %w", err)
+	}
+	fmt.Printf("signed x-goog-meta-owner: Attrs metadata owner=%s\n", attrs.Metadata["owner"])
+	return nil
+}
+
+func signedHeaderRefusals(ctx context.Context, client *storage.Client, cfg config) error {
+	approved := md5.Sum([]byte("approved"))
+	md5URL, err := client.Bucket(cfg.bucket).SignedURL("assets/ab/cdef/md5.geojson", &storage.SignedURLOptions{
+		Scheme:      storage.SigningSchemeV4,
+		Method:      http.MethodPut,
+		Expires:     time.Now().Add(15 * time.Minute),
+		ContentType: "application/geo+json",
+		MD5:         base64.StdEncoding.EncodeToString(approved[:]),
+		Headers:     []string{"Content-Encoding: gzip"},
+	})
+	if err != nil {
+		return fmt.Errorf("sign: %w", err)
+	}
+	cases := []struct {
+		name, key, header string
+		body              []byte
+	}{
+		{"content-md5 of other bytes", "md5.geojson", "Content-MD5: " + base64.StdEncoding.EncodeToString(approved[:]), []byte("tampered")},
+		{"outside x-goog-content-length-range", "range.geojson", "x-goog-content-length-range: 0,1", []byte("xx")},
+		{"create-only over an existing object", "once.geojson", "x-goog-if-generation-match: 0", []byte("x")},
+		{"unsupported signed header", "acl.geojson", "x-goog-acl: private", []byte("x")},
+	}
+	for _, c := range cases {
+		signed := md5URL
+		if c.key != "md5.geojson" {
+			if signed, err = cmsSignedURL(client, cfg, "assets/ab/cdef/"+c.key, 15*time.Minute, c.header); err != nil {
+				return fmt.Errorf("sign: %w", err)
+			}
+		}
+		if c.key == "once.geojson" {
+			if status, code, err := sendSigned(ctx, http.MethodPut, signed, "application/geo+json", c.body, c.header); err != nil || status != http.StatusOK {
+				return fmt.Errorf("create-only first PUT: %d %s %v", status, code, err)
+			}
+		}
+		status, code, err := sendSigned(ctx, http.MethodPut, signed, "application/geo+json", c.body, c.header)
+		if err != nil {
+			return fmt.Errorf("%s: %w", c.name, err)
+		}
+		fmt.Printf("%s: %d %s\n", c.name, status, code)
+	}
+	return nil
 }
 
 func signedRefusals(ctx context.Context, client *storage.Client, cfg config) error {
@@ -556,6 +629,9 @@ func signedRefusals(ctx context.Context, client *storage.Client, cfg config) err
 			return fmt.Errorf("%s: %w", c.name, err)
 		}
 		fmt.Printf("%s: %d %s\n", c.name, status, code)
+	}
+	if err := signedHeaderRefusals(ctx, client, cfg); err != nil {
+		return err
 	}
 	if err := revoke(ctx, cfg); err != nil {
 		return err

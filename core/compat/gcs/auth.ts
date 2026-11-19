@@ -6,7 +6,7 @@ import type { CompatStore } from "../repository";
 import { isSignedRequest, verifySignedUrl, type SignedUrlFailure } from "./signed-url";
 import { gcsError, surfaceOf, type GcsErrorCode } from "./wire";
 
-export type GcsEnv = { Variables: { service: ServicePrincipal } };
+export type GcsEnv = { Variables: { service: ServicePrincipal; signedObjectPath?: string } };
 
 export type CredentialLookup = Pick<CompatStore, "findCredential" | "findCredentialByEmail">;
 
@@ -168,14 +168,16 @@ export function servicePrincipal(credential: CompatCredential): ServicePrincipal
 
 export type GcsAuthConfig = Omit<TokenConfig, "now"> & { signedPathPrefix: string | null };
 
-const SIGNED_URL_ERRORS: Record<SignedUrlFailure, [GcsErrorCode, string?]> = {
-  malformed: ["invalid", "Invalid signed URL."],
-  not_yet_valid: ["invalid", "The signed URL is not yet valid."],
-  expired: ["expired_token"],
-  unknown_credential: ["forbidden"],
-  signature_mismatch: ["signature_mismatch"],
-  unsupported: ["not_implemented", "Not implemented: signed x-goog-content-sha256."],
-};
+function signedUrlError(failure: SignedUrlFailure): [GcsErrorCode, string?] {
+  switch (failure.reason) {
+    case "malformed": return ["invalid", "Invalid signed URL."];
+    case "not_yet_valid": return ["invalid", "The signed URL is not yet valid."];
+    case "expired": return ["expired_token"];
+    case "unknown_credential": return ["forbidden"];
+    case "signature_mismatch": return ["signature_mismatch"];
+    case "unsupported": return ["not_implemented", `Not implemented: signed ${failure.header}.`];
+  }
+}
 
 export function gcsAuth(store: CredentialLookup, cfg: GcsAuthConfig): MiddlewareHandler<GcsEnv> {
   const apiHost = new URL(cfg.apiOrigin).host;
@@ -187,8 +189,9 @@ export function gcsAuth(store: CredentialLookup, cfg: GcsAuthConfig): Middleware
         { method: c.req.method, url, headers: c.req.raw.headers },
         { apiHost, pathPrefix: cfg.signedPathPrefix, now: Date.now() },
       );
-      if (!result.ok) return gcsError(surfaceOf(c.req.path), ...SIGNED_URL_ERRORS[result.failure]);
+      if (!result.ok) return gcsError(surfaceOf(c.req.path), ...signedUrlError(result.failure));
       c.set("service", servicePrincipal(result.credential));
+      c.set("signedObjectPath", result.objectPath);
       return next();
     }
     const bearer = /^Bearer\s+(\S+)$/i.exec(c.req.header("Authorization") ?? "")?.[1];

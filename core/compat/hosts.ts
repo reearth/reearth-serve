@@ -5,6 +5,7 @@ export type CompatHostConfig = { api: string | undefined; objects: string | unde
 
 export type CompatHost =
   | { kind: "gcs-api" }
+  | { kind: "gcs-api-virtual-host" }
   | { kind: "objects-path-style" }
   | { kind: "objects-virtual-host"; bucket: BucketName };
 
@@ -30,13 +31,16 @@ export function parseCompatHosts(env: { api: string | undefined; objects: string
 export function classifyCompatHost(host: string | null | undefined, cfg: CompatHostConfig): CompatHost | null {
   if (!host) return null;
   const name = hostname(host);
-  if (cfg.api && name === hostname(cfg.api)) return { kind: "gcs-api" };
-  if (!cfg.objects) return null;
-  const objects = hostname(cfg.objects);
-  if (name === objects) return { kind: "objects-path-style" };
-  if (!name.endsWith(`.${objects}`)) return null;
-  const bucket = parseBucketName(name.slice(0, -objects.length - 1));
-  return bucket ? { kind: "objects-virtual-host", bucket } : null;
+  const api = cfg.api && hostname(cfg.api);
+  if (api && name === api) return { kind: "gcs-api" };
+  const objects = cfg.objects && hostname(cfg.objects);
+  if (objects && name === objects) return { kind: "objects-path-style" };
+  if (objects && name.endsWith(`.${objects}`)) {
+    const bucket = parseBucketName(name.slice(0, -objects.length - 1));
+    return bucket ? { kind: "objects-virtual-host", bucket } : null;
+  }
+  if (api && name.endsWith(`.${api}`) && parseBucketName(name.slice(0, -api.length - 1))) return { kind: "gcs-api-virtual-host" };
+  return null;
 }
 
 export function compatHostMiddleware(
@@ -79,6 +83,9 @@ if (import.meta.vitest) {
     ["", cfg, null],
     ["storage.example.com", { api: undefined, objects: undefined }, null],
     ["media.objects.example.com", { api: "storage.example.com", objects: undefined }, null],
+    ["media.storage.example.com", cfg, { kind: "gcs-api-virtual-host" }],
+    ["media.storage.localhost:8788", { api: "storage.localhost:8788", objects: undefined }, { kind: "gcs-api-virtual-host" }],
+    ["ab.storage.example.com", cfg, null],
   ])("%s", (host, config, expected) => {
     expect(classifyCompatHost(host, config)).toEqual(expected);
   });

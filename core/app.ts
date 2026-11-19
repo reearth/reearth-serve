@@ -211,7 +211,13 @@ function siteApp(deps: Deps) {
 function compatDispatch(deps: Deps): (host: CompatHost, req: Request) => Response | Promise<Response> {
   const apiOrigin = compatApiOrigin(deps.compatApiHost, deps.baseUrl);
   const gcs = apiOrigin ? gcsApp(deps, apiOrigin) : null;
-  return (host, req) => (host.kind === "gcs-api" && gcs ? gcs.fetch(req) : gcsError("xml", "not_implemented"));
+  return (host, req) => {
+    if (host.kind === "gcs-api" && gcs) return gcs.fetch(req);
+    if (host.kind === "gcs-api-virtual-host") {
+      return gcsError("xml", "not_implemented", `Not implemented: virtual-hosted-style URLs. Use path-style URLs on ${deps.compatApiHost}.`);
+    }
+    return gcsError("xml", "not_implemented");
+  };
 }
 
 /** Request-independent collaborators, read off the context by every handler. */

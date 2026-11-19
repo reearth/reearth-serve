@@ -1,14 +1,66 @@
 {
-  "url": "https://storage.example.test:8443/media/assets/ab/cdef0123/my%20file%20%281%29%2B%E3%83%87%E3%83%BC%E3%82%BF.geojson?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=fixture0000000001%40storage.example.test%2F20261119%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20261119T150011Z&X-Goog-Expires=899&X-Goog-Signature=8a7295c9abf13e357f6adb04342abfcc5a5e494b9374e172bf9c10901c9c00560364af3187d0966b4350601122b415cde1bc7e56aaba77107a29bdd68b24f434b9ac334d58593955af8dbb414c3b352159081aa7500a4f4a96f68ef5d303c5b1aa983813af17cee17c94f9c54b8aea3443f614871a5164871a9df650112a286fe2a7c72a5004d38a5028cc21af996b828631853a1db634c830658871bafb19f9074f525d0a7621e358eb918fd9f8bd734f6cee205db0ef38a373a9ca8bc2b15f248781005c4b6e172bc1a3192487f084da261d1dc5c1c367cffe35b12f171dc0f17edb56da2c805ca43c234215ff05cd2ee7a0d0a9be6166e88fd3f64ce0e206&X-Goog-SignedHeaders=content-encoding%3Bcontent-type%3Bhost&x-app-project=p1&x-app-public=true&x-app-workspace=ws+1",
+  "url": "https://storage.example.test:8443/media/assets/ab/cdef0123/my%20file%20%281%29%2B%E3%83%87%E3%83%BC%E3%82%BF.geojson?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=fixture0000000001%40storage.example.test%2F20261119%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20261119T153536Z&X-Goog-Expires=899&X-Goog-Signature=a0a5af32ce5c248eb725f58f588726cdee9ce830c3dd2051a3ff4627799883dcec08c5e63ef1811aed8d0257d526a405a8e56b3e69b1a23c28db902eef0912d746c7551867ac82bf0769b812d46f6ef1c3c7d1eb6d230b061da6d8a3c32e4cf3cd6492a9d4b23c0e32658be0a9bd80f12cc27cbdbe55ad4a0c647e4efc355fa7565ae82f9f2ed3e8ebc3a8c7e4c6bf8017f8b2ed2e5134ad878e80825d2281e2b3623fcfcc351be9081342f1c403d441d68807c82827e9ee78720e83f16f75c472a5f878a7f248168ca6bdced8049c7bc323e41d48013d9e235de3c6bc9db0e2dc06da6b6cf5d76114a38e06e7f54675ceef834c1b0969e943d3c1e6ef64d52a&X-Goog-SignedHeaders=content-encoding%3Bcontent-type%3Bhost&x-app-project=p1&x-app-public=true&x-app-workspace=ws+1",
   "apiHost": "storage.example.test:8443",
   "clientEmail": "fixture0000000001@storage.example.test",
   "publicJwk": {
     "e": "AQAB",
     "kty": "RSA",
-    "n": "0wPaM38UZJkpzpjHqnjiQRslvC14AK8j1-3Sv0ubwr4r-SVLFfMJ58ZN5J6DBku9YRDuj9XDjvJT_i0YJBhLwU4_m9mO33_AccFOlWVQEUKfSfsBgM_ZmkIeyutK6RkNAB5bClB9fmleyCiQF5RC6ziny6qzZFvoB0XpdR77gfDbaej0sD7n2I4aXADrMlDnECuxl12AgarRai8OeRvE7WZVOoSvou21yZH0XJ9gj3gaNV9eFErKkg-R86ODMRRwe9Hs5ZFpGdQPughELVkeKv7_61sTJXQedFJZCQqJMZzniUQTDlxEIcb87lcEEN4ZxVXEia-_5swRtnz8qbtvHQ"
+    "n": "02pRU6QiBhkkvt-MnytmIe9QBy2BPQ0p2GL3jPrNmtz7CHSzvwHy-802KEkAmZtesbhk8STX752SY2bLqZgzZArDe8T9wkPgMOHFSz3vq_-Eb8zgWrK6UiVhNVf5pOKcGkjwvyfe1PAIWvDwun60hZXOZZaa1f42m_Li7llAQB2mQhuF4i5s19xK5p-H4KHR76gBIHIen0wGxHvWOsh8GdoSS2KWB-4L3UpOYWysIDgW5PXH26F-SnWQVDeAQPC7R-VqrGWYJ_9TfL_YW2CGf3LjQWMhc-DRXx3aaVFG4KQVVVzRywNqZWwyA4FhgYRw26woyUv8p2EG1tUoOamO9w"
   },
   "bucket": "media",
   "key": "assets/ab/cdef0123/my file (1)+データ.geojson",
   "contentType": "application/geo+json",
-  "contentEncoding": "gzip"
+  "contentEncoding": "gzip",
+  "cases": [
+    {
+      "name": "a key with a dot segment",
+      "key": "a/./b",
+      "url": "https://storage.example.test:8443/media/a/./b?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=fixture0000000001%40storage.example.test%2F20261119%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20261119T153536Z&X-Goog-Expires=899&X-Goog-Signature=8eb719247ebde1d876f3a5e96eef7b2532a57f68fc73cbc70c4896b35cbb6d571688c4d4ce63de8e7978f9c1c37631c3c573af72c9a2b45081fe2b97742baf9fa5ffede16633305c8d78e4a776f3b48609569330858cc47f1882d5a3ba34d11ba5b97157faf6aadd0cff198658d212df9a039c1e70a4d0db10e1e0901a380ce220e82413bc3d159c2e3d37b26713aa5feaa78e086f7a5ed6ecff3eac64af8f77b0652d76d22c8e99b3ca5cbb59445ceedabf2bc4358c6e51b66794c2809c1151264a653297db78e606e8644e9e2fabeb118b2e2597031350bce01e406e438bd4fd225447749e35eabaf05cc5d57934aa2250525713b0c085fefcb74ced6556e5&X-Goog-SignedHeaders=host"
+    },
+    {
+      "name": "a key with a dot-dot segment",
+      "key": "a/../b",
+      "url": "https://storage.example.test:8443/media/a/../b?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=fixture0000000001%40storage.example.test%2F20261119%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20261119T153536Z&X-Goog-Expires=899&X-Goog-Signature=313883c379bdd7d9bb27c978e35fa673a3c11839ba94831b444b0c33d2b854bf2d8e3649e76efa2e96d40ea4afd4d895be12e35ad8eb7c179937ba9e934722368b9fe25d5f68063c0c35b856460d6cf847fe3a6fd0325093968f8df1603b3132213bc9b1608b31272c4ce822457995d52e4417f91fcbb70114c8bf9730e6c5577dadfa983ee8a9b4f5cfb0ead0207054c19486970437e728ecb3ed36fa8dda06529c474df57a03de88866fa9e87b19151628a672494eb35a4947f3a507ff382dbc570820232e186dfbffe688f449eb7a23ef67f40bc4fe5151ba374745e27b54c1ee1cab1cd5ba584222a4f2e7a5d6864cc7882c8fb6ce641788b9da9d50de9e&X-Goog-SignedHeaders=host"
+    },
+    {
+      "name": "a key with a fullwidth character",
+      "key": "fullwidth ！.txt",
+      "url": "https://storage.example.test:8443/media/fullwidth%20%EF%BC%81.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=fixture0000000001%40storage.example.test%2F20261119%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20261119T153536Z&X-Goog-Expires=899&X-Goog-Signature=b2d12a24c6d882f032cc9e3fe1d366fa156658cc9c14d7540181b4f1ec62787793e092827a7c52977785c0005603796652fcbb9cf1121ed5c0fc3a11e8f3bfdb20d0bc80a5e3a5369185d03d3bba7083602fd314898ed06cb72f607c1c5165009625ab30140a5665e47b9faff6ded38e19f81350d371fb7056325f8d4bb36e36e1ffec619a8bb4e7ab520f0e0e375113fc74541866c3b0ab2f967e502f30d98378c895b0ed243ecf724ebbd8663d9f0cca847a583fc326a861431dd3945db1ec95c92595f06ca9551c99735692bb60c8375cf5ba5b5c8056235855422eb4fa7714e438ab1d0d0eeeb4dded87a5f93cf34ab9dd1d69950c1b568823cd4192f38e&X-Goog-SignedHeaders=host"
+    },
+    {
+      "name": "a key with a trailing slash",
+      "key": "trailing/",
+      "url": "https://storage.example.test:8443/media/trailing/?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=fixture0000000001%40storage.example.test%2F20261119%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20261119T153536Z&X-Goog-Expires=899&X-Goog-Signature=14d579b4c3b117cccaed9b37ace0aa4135127d9a623225f77a06df4172f6c0655183aa846bb5442559208bfe38e7fc99434f38076a07b195cd2d02147d451d7555247c05bd5d646c1a0659f3d61375043712a38823e21ade6d08fab90d4f72523576e6b57a348d91e369d1cff4c39f85d82414c4af75835126fd815312dbd87b9a6e823fff216fb6573f0f6e26b39684768cf9a5b6129018febf734e7fc87e34e97125a0c502cd369088d96dda52fc3dcbe7514175e885f0716e67ef7892ac58262497a23244c9ba166b893f43604a2525d0c39efe1a097a1167272712aaed3110a68d4ca86950b33923c266052e6812e51b3c2ab4669e4c6a680065db55ca32&X-Goog-SignedHeaders=host"
+    },
+    {
+      "name": "a key with an emoji",
+      "key": "emoji 😀.txt",
+      "url": "https://storage.example.test:8443/media/emoji%20%F0%9F%98%80.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=fixture0000000001%40storage.example.test%2F20261119%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20261119T153536Z&X-Goog-Expires=899&X-Goog-Signature=c50384e5760f81fd5279a4ed9f5551fe75add9e900d62e4695d2343999af7d858ceee5ed7fc0ef6929f9c1c8c766186e4e1fb22dc73bb08cedf522a29ccfe1948bc4062926e005100efb50e3c9192e677e64e7de71fe2917577a3fba52bfa140a80e6e858d548429f9b550b4201985f4b1544441df902ba33ada0ecc0088e3cd58c010330554c783932aa7606b1a45e0af53f875baf4c84be2470560b89a4f4e7f735dfcf9bff59fab92bb276dbacd4e008098ad7df6ced73cfa8d04c4117b5b4a094cfb0ad78a4b6634338fcc35e6b2f7cab38ea89b9f5ee49304a5f0d7ce93ba0600ffabcc021233b8c08b0cfcdff0f61c82b7fe8ba7e6cab73dcaaa557759&X-Goog-SignedHeaders=host"
+    },
+    {
+      "name": "a key with an empty segment",
+      "key": "a//b",
+      "url": "https://storage.example.test:8443/media/a//b?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=fixture0000000001%40storage.example.test%2F20261119%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20261119T153536Z&X-Goog-Expires=899&X-Goog-Signature=00b85a775b36ecba7be25f3f1110b6f7029dcb7246fa1d5cbc1eaed3d5688ae3442034d4010adccdc09c967d6daa49aba639ea998251d9468f10db053f209e155af0789d2df197eecf31d30815b8a7fd7c358b1375ba17ae6ac6719a3ba335e298211aa4751647520cf18d754aec5ee0795a283e3c303c71e64d76cc20f14f8c4cb7184c6e9a80be0886910b126c20c008299f4c3e51d5bdc244f8d800487499fca137e46b187ed426c10aebaa1488271ec97e814129a0d981b5805710d3bc32586e0b0d8924ae690812b2e36d4b5c6254eff4e7f2d9a253ab65765d1dc4e0918119798159189942ae1c4f53fe057b8359aaf8994e63647cf61041181ba1252b&X-Goog-SignedHeaders=host"
+    },
+    {
+      "name": "a key with an escaped-looking percent",
+      "key": "pct%2Fslash%20.txt",
+      "url": "https://storage.example.test:8443/media/pct%252Fslash%2520.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=fixture0000000001%40storage.example.test%2F20261119%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20261119T153536Z&X-Goog-Expires=899&X-Goog-Signature=cc5a86a35c06f55b19a3ca5b8033a5d86c80205328e9aa3cf7b7bf719a9920b4d116ca48b45a671b2d7358f13554e35f43f4ed8726769c49e8e0eeae778175963a8e68f2412ce74e2788534be5e5e9bcbde81ff4c28198fdfac55ee2737753381035489f8068fee1acc5a1622de75b7c85dbf886ef44929df7388e59b32667d84a12460ba798be21ca31e8bf0287fe7026380cdc22c9b0da6db9eee736e35eec40ab9264419b8dfe61cc0dcfff25465abc3337af2dc647e1e3f6bc062da9db4ad1210d3e974a5ef6db536d482eeea433e84ec04942d1662ef5db7e42c3b9aebf58180883b8c3949337d47fe6bae269e667f7b713b96f3714674f65f43030d4ec&X-Goog-SignedHeaders=host"
+    },
+    {
+      "name": "a key with brackets and quotes",
+      "key": "[b]{c}|p^c`t\"q<l>.txt",
+      "url": "https://storage.example.test:8443/media/%5Bb%5D%7Bc%7D%7Cp%5Ec%60t%22q%3Cl%3E.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=fixture0000000001%40storage.example.test%2F20261119%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20261119T153536Z&X-Goog-Expires=899&X-Goog-Signature=cd89869a89e2d3060a6f85fbd8013091a0b64849f258932f87f1f0e5d67ff636bc33175021516485ce15cd9371a16e92c24f955a5887571783a4dc5eebc9ac8357d2f44aed4c30854b55db2dea63f44d5aee27c48db8b7337ff6286cf140ac3efa721335904e86679d0f3da08260ffb53a677073d77d99db48edf9e6583dd459221fe0a654201f3c017cccb90d874fdb36ff9714395f4d758c481e9abd3d2b81f78bc88791d0aa9acd19007d05c01b06d05dcdfd2b9bdb04e4472393f54a512b24639b9decf64ad588030cfe9486dc591e0318b9001fc66baaaccc2640df78901af1272d74702096a4f949ea100a4f9cb73f18c31ea473a5d7cafe398b25983c&X-Goog-SignedHeaders=host"
+    },
+    {
+      "name": "a key with reserved characters",
+      "key": "a&b=c;d,e:f@g$h?i#j.txt",
+      "url": "https://storage.example.test:8443/media/a%26b%3Dc%3Bd%2Ce%3Af%40g%24h%3Fi%23j.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=fixture0000000001%40storage.example.test%2F20261119%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20261119T153536Z&X-Goog-Expires=899&X-Goog-Signature=3f550b522f12f9850c875463901a73b8c344487736e472becf1d07f3ee0944ab929f09f756e60201ecc10cacf9ae27bfd631e39e208f2119340bea771eb79ad2e5e075c25050adcd2757a51a651e318a87087d662ae8af0acbfe9008291f61038ace7a9cdc6480a25721bffc14d9ae5be9af7375aef7b9f9e1108b085d6c5fd6ba8e1216d28648fb3e6a3784384255125f070f8b654475fbfe3e98ea3871e7b6d058a3f7ff950e477f1c2cfc9ce0bc8847fd31461a04b2f73d7c4f5eff0bd08699b029d283f4b8f2538ccd042ba8735154ee8738655f7039a6832a4bc8a536b1ecf80c89c8f4cb7ccbf01fd4c196cf25c3af5d54c70518248bd82027f01a818f&X-Goog-SignedHeaders=host"
+    },
+    {
+      "name": "query keys outside the BMP, in U+E000 to U+FFFF and repeated",
+      "key": "plain.txt",
+      "url": "https://storage.example.test:8443/media/plain.txt?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=fixture0000000001%40storage.example.test%2F20261119%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20261119T153536Z&X-Goog-Expires=899&X-Goog-Signature=3f837947671d0c5ee448fbed4de468d9aaada539b3c76d44bee75386b35613d3a541140f2959371c2398b7c645a65aa2004138736bd0c13e721b4f703b64d082d6640fdeaf6ed0f97d8ab1bc3e88bcc41e5426540ceaf580c4010765a97e9bd0d7e01fa489767c118f562c99531011f711bb943911a86f52b424bc5b0789d828656c3eda6467e34649b2dfcf93b835fd5ef7418f935ab24b5a873c34b718d4b218d53c921207edea7f82ba1df31bb6dd0e60533a3a06844e0c53024d2e2e2f8691de8efd4af3b3ae422a4bfa591ef98f205b56b72baae65505c04a215584ecf536262169754a33eb03812bff163461bee659148dc116107ec66edaf86212e515&X-Goog-SignedHeaders=host&b+c=d%2Be&k=2&k=1&~t=~v&%C3%BC=two+bytes&%EE%80%80=private+use&%EF%BC%81=fullwidth&%F0%9F%98%80=astral"
+    }
+  ]
 }
