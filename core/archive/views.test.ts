@@ -2,7 +2,7 @@ import { readdirSync, readFileSync } from "node:fs";
 import { describe, expect, test } from "vitest";
 import { MemoryFileStorage } from "../../adapters/memory/storage";
 import { buildView, type ArchiveSource } from "./reader";
-import { writeZip } from "./testing";
+import { writeZip } from "../../adapters/memory/zip";
 import type { ListQuery, TableView } from "./views";
 
 const FIXTURES = new URL("../../scripts/fixtures/zip/data/", import.meta.url);

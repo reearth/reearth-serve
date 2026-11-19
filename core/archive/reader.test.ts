@@ -3,7 +3,7 @@ import { describe, expect, test } from "vitest";
 import { MemoryFileStorage } from "../../adapters/memory/storage";
 import type { FileStorage } from "../asset/repository";
 import { createArchiveCache, openArchive, toArchivePath, type ArchiveReader, type ArchiveSource } from "./index";
-import { writeZip, type SyntheticEntry } from "./testing";
+import { writeZip, type SyntheticEntry } from "../../adapters/memory/zip";
 
 const FIXTURES = new URL("../../scripts/fixtures/zip/data/", import.meta.url);
 
