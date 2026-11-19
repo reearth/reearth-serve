@@ -32,14 +32,14 @@ function hostGet(host: string, path: string): Promise<{ status: number; location
 
 describe("Upload finalisation (ADR-018 P3)", () => {
   test("a single PUT of a large zip records its container index in the asset meta", async () => {
-    const { status, body, sessionId } = await uploadFile(indexedZip(), "tiles.zip", "application/zip");
+    const { status, body, sessionId } = await uploadFile(indexedZip(), "city.zip", "application/zip");
     expect(status).toBe(201);
     const id = body.asset.id as string;
     const expected = { index: `assets/${id}/_archive/container.v1`, rootPrefix: "" };
     expect(body.asset.container).toMatchObject(expected);
 
     const res = await fetch(`${BASE}/api/v1/assets/${id}`, { headers: sessionHeaders(sessionId) });
-    expect((await res.json() as any).container).toMatchObject(expected);
+    expect((await res.json() as any).asset.container).toMatchObject(expected);
 
     const entry = await rawGet(`${BASE}/files/${id}/tiles/00004321/${"n".repeat(64)}.json`);
     expect(entry.status).toBe(200);
@@ -47,7 +47,7 @@ describe("Upload finalisation (ADR-018 P3)", () => {
   });
 
   test("a version upload records the index in the version meta, under the version's root", async () => {
-    const first = await uploadFile(buildMiniZip({ "a.txt": "v1" }), "tiles.zip", "application/zip");
+    const first = await uploadFile(buildMiniZip({ "a.txt": "v1" }), "city.zip", "application/zip");
     const id = first.body.asset.id as string;
     const headers = sessionHeaders(first.sessionId);
     expect(first.body.asset.container).toMatchObject({ skipped: "small" });
@@ -55,7 +55,7 @@ describe("Upload finalisation (ADR-018 P3)", () => {
     const bytes = indexedZip();
     const res = await fetch(`${BASE}/api/v1/assets/${id}`, {
       method: "POST",
-      headers: { ...headers, "Content-Type": "application/zip", "Content-Length": String(bytes.byteLength), "X-Filename": "tiles.zip" },
+      headers: { ...headers, "Content-Type": "application/zip", "Content-Length": String(bytes.byteLength), "X-Filename": "city.zip" },
       body: bytes as BodyInit,
     });
     expect(res.status).toBe(201);
@@ -64,7 +64,7 @@ describe("Upload finalisation (ADR-018 P3)", () => {
     const version = await (await fetch(`${BASE}/api/v1/assets/${id}/versions/${versionId}`, { headers })).json() as any;
     expect(version.version.container).toMatchObject({ index: `assets/${id}/v/${versionId}/_archive/container.v1` });
     const asset = await (await fetch(`${BASE}/api/v1/assets/${id}`, { headers })).json() as any;
-    expect(asset.container).toMatchObject({ skipped: "small" });
+    expect(asset.asset.container).toMatchObject({ skipped: "small" });
   });
 
   test("a tiny zip records skipped small", async () => {
