@@ -1,3 +1,4 @@
+export { buildContainerIndex, CONTAINER_LIMITS, type ContainerLimits, type ContainerOutcome, type DirectorySpan } from "./container";
 export { createArchiveCache, type ArchiveCache } from "./cache";
 export {
   openArchive,

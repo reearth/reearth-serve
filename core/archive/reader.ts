@@ -33,6 +33,8 @@ export interface ArchiveSource {
   size: number;
   /** The uploaded filename, which decides whether a lone root folder is stripped. */
   filename: string;
+  /** The container index object recorded in the row's `container.index`. Readers take it from there and never derive it. */
+  index?: string;
 }
 
 export interface ArchiveDeps {
