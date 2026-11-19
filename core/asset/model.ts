@@ -13,7 +13,7 @@ export type {
 } from "../../shared/api";
 
 // Re-export archive format detection (shared enum values)
-import type { ArchiveFormat } from "../../shared/api";
+import type { ArchiveFormat, AssetMetadata, AssetVersion } from "../../shared/api";
 
 const archiveExtensions: Record<string, ArchiveFormat> = {
   ".zip": "zip",
@@ -32,6 +32,15 @@ export function detectArchiveFormat(filename: string): ArchiveFormat | null {
 }
 
 // Worker-only types (not in shared — use runtime-specific APIs)
+
+/**
+ * Did this row's extraction complete? Readiness alone does not say: a zip
+ * whose extraction failed for good is also ready (ADR-018 §6). Only a
+ * completed job mirrors `fileCount` onto the row.
+ */
+export function extractionCompleted(row: Pick<AssetMetadata | AssetVersion, "status" | "fileCount">): boolean {
+  return row.status === "ready" && row.fileCount !== undefined;
+}
 
 export interface StoredFile {
   body: ReadableStream;

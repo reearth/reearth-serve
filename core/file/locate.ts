@@ -1,6 +1,6 @@
 import { openArchive, toArchivePath, type ArchiveCache, type ArchiveOpenFailure, type ArchiveSource } from "../archive";
 import { archiveSource, assetLayouts, entryKey, mainKey, type Layout } from "../asset/layout";
-import type { AssetMetadata, AssetVersion, StoredFile } from "../asset/model";
+import { extractionCompleted, type AssetMetadata, type AssetVersion, type StoredFile } from "../asset/model";
 import type { FileStorage } from "../asset/repository";
 import { withLength } from "./stream";
 
@@ -41,8 +41,7 @@ export function fileSource(
   version: AssetVersion | null,
 ): FileSource {
   const layouts = assetLayouts(asset, version);
-  const extracted = (version ?? asset).status === "ready";
-  const inPlace = layouts[0].archive && !extracted ? archiveSource(layouts[0]) : null;
+  const inPlace = layouts[0].archive && !extractionCompleted(version ?? asset) ? archiveSource(layouts[0]) : null;
   return { ...deps, layouts, inPlace };
 }
 
