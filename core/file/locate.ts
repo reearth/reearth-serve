@@ -36,8 +36,10 @@ export interface FileSource {
   archives: ArchiveCache;
   layouts: Layout[];
   /**
-   * False while the serving row says extraction has not finished. The
-   * extracted tree is then skipped, so an entry costs only its in-place read.
+   * True when the extracted tree may hold the entry: the serving row says
+   * extraction finished, or the original cannot be read in place. A zip that
+   * is pending, failed or uploaded with extraction skipped is read only in
+   * place, so an entry costs one read and never a miss first.
    */
   extracted: boolean;
   /** The resolved row's own original, when it can be read in place. */
@@ -50,12 +52,12 @@ export function fileSource(
   version: AssetVersion | null,
 ): FileSource {
   const layouts = assetLayouts(asset, version);
-  const status = (version ?? asset).status;
+  const inPlace = layouts[0].archive ? archiveSource(layouts[0]) : null;
   return {
     ...deps,
     layouts,
-    extracted: status === undefined || status === "ready",
-    inPlace: layouts[0].archive ? archiveSource(layouts[0]) : null,
+    extracted: (version ?? asset).status === "ready" || !inPlace,
+    inPlace,
   };
 }
 
@@ -134,7 +136,7 @@ async function locateInPlace(src: FileSource, entryPath: string, range: Span | n
   for (let attempt = 0; attempt < 2; attempt++) {
     const opened = await openArchive(src, src.inPlace);
     if (!opened.ok) {
-      if (opened.reason !== "missing") console.warn(`files: ${src.inPlace.key} is not readable in place (${opened.reason})`);
+      if (opened.reason !== "missing" && opened.reason !== "not-zip") console.warn(`files: ${src.inPlace.key} is not readable in place (${opened.reason})`);
       return null;
     }
     const read = await opened.reader.open(path, { range });
