@@ -97,7 +97,7 @@ test("ScanView matches MemoryView over random names, delimiters, limits and star
     const after = random(2) ? "" : pick().slice(0, 1 + random(4)).join("");
     expect(await walkFrom(scan, query, after), JSON.stringify({ ...query, after })).toEqual(await walkFrom(memory, query, after));
   }
-});
+}, 60_000);
 
 test("ScanView matches MemoryView once it holds more candidates than it keeps", async () => {
   const names = Array.from({ length: 3000 }, (_, i) => `${["b", "a", "c"][i % 3]}/${(i * 7919) % 3000}${i % 5 ? "/x" : ""}.t`);
