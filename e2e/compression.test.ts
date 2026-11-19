@@ -158,7 +158,9 @@ describe("Compression", () => {
     expect(body.contentEncoding).toBeUndefined();
   });
 
-  test("a deflate entry of a just-uploaded zip is one gzip member: header, the entry's raw deflate, trailer", async () => {
+  // Node only: under the Vite dev server undici decodes the body before the
+  // test sees it (see e2e/archive.test.ts).
+  test.skipIf(process.env.E2E_NODE_RUNTIME !== "true")("a deflate entry of a just-uploaded zip is one gzip member: header, the entry's raw deflate, trailer", async () => {
     const zip = new Uint8Array(readFileSync(new URL("../scripts/fixtures/zip/data/deflate.zip", import.meta.url)));
     const { status, body } = await uploadFile(zip, "deflate.zip", "application/zip");
     expect(status).toBe(201);
