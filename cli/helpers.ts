@@ -258,7 +258,6 @@ export class DownloadFailed extends Error {
 
 export type Unservable = "unavailable" | "undecodable";
 
-/** A per-entry answer a bulk download skips and reports: 404 before extraction catches up, 501 for an entry Serve cannot decode. */
 export function unservable(err: unknown): Unservable | null {
   if (!(err instanceof DownloadFailed)) return null;
   if (err.status === 404) return "unavailable";

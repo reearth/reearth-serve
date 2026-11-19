@@ -32,7 +32,6 @@ export interface FileSource {
   storage: FileStorage;
   archives: ArchiveCache;
   layouts: Layout[];
-  /** The zip original, read in place only while no finished extraction can answer for it. */
   inPlace: ArchiveSource | null;
 }
 

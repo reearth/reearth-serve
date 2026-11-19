@@ -10,7 +10,7 @@ const SINGLE_READ_DEPTH = 1 << 20;
 export interface ArchiveObject {
   storage: FileStorage;
   key: string;
-  /** Where the central directory starts, so where every entry's data must end. */
+  /** The central directory's offset: APPNOTE.TXT 4.3.6 places every entry's data before it. */
   dataEnd: number;
   etag: string | undefined;
 }

@@ -24,7 +24,6 @@ export interface ListResult {
 export interface TableView {
   readonly entryCount: number;
   readonly etag: string | undefined;
-  /** Where the central directory starts: no entry's data may reach past it. */
   readonly dataEnd: number;
   readonly rootPrefix: string;
   find(path: string): Promise<TableEntry | null>;
