@@ -1,22 +1,16 @@
 import type { ArchiveFormat, AssetStatus, FailureClass, Job } from "../../shared/api";
 
-const FAILURE_CLASS: Record<Job["type"], Record<ArchiveFormat, FailureClass>> = {
-  "archive-extraction": {
-    zip: "slower-reads",
-    tar: "missing-feature",
-    "tar.gz": "missing-feature",
-    "tar.bz2": "missing-feature",
-  },
-};
-
-const MIRROR_STATUS_ON_FAILURE: Record<FailureClass, AssetStatus> = {
-  "missing-feature": "failed",
-  "slower-reads": "ready",
-  "rejected-version": "failed",
-};
+const FAILURE_CLASS = new Map<Job["type"], Map<string, FailureClass>>([
+  ["archive-extraction", new Map<string, FailureClass>([
+    ["zip", "slower-reads"],
+    ["tar", "missing-feature"],
+    ["tar.gz", "missing-feature"],
+    ["tar.bz2", "missing-feature"],
+  ])],
+]);
 
 export function failureClassOf(type: Job["type"], archiveFormat: ArchiveFormat | undefined): FailureClass {
-  return archiveFormat ? FAILURE_CLASS[type][archiveFormat] : "missing-feature";
+  return FAILURE_CLASS.get(type)?.get(archiveFormat ?? "") ?? "missing-feature";
 }
 
 interface Mirror {
@@ -31,7 +25,7 @@ export function classify(job: Job, mirror: Mirror | null): FailureClass | undefi
 
 export function failMirror(job: Job, mirror: Mirror | null, reason: string): void {
   const failureClass = classify(job, mirror);
-  if (mirror && failureClass) mirror.status = MIRROR_STATUS_ON_FAILURE[failureClass];
+  if (mirror) mirror.status = failureClass === "slower-reads" ? "ready" : "failed";
   console.log(`job ${job.id} (asset ${job.assetId}) failed, failure class ${failureClass ?? "unknown"}: ${reason}`);
 }
 
