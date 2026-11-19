@@ -92,18 +92,29 @@ export async function readSiteHosting(
 }
 
 export async function readSiteHostingInPlace(deps: ArchiveDeps, source: ArchiveSource): Promise<SiteHosting | null> {
-  const opened = await openArchive(deps, source);
-  if (!opened.ok) return null;
-  return parseControlFiles((name) => readInPlace(opened.reader, name));
+  for (let attempt = 0; attempt < 2; attempt++) {
+    const opened = await openArchive(deps, source);
+    if (!opened.ok) return null;
+    let changed = false;
+    const hosting = await parseControlFiles(async (name) => {
+      const file = await readInPlace(opened.reader, name);
+      if (file !== "changed") return file;
+      changed = true;
+      return { kind: "missing" };
+    });
+    if (!changed) return hosting;
+  }
+  return null;
 }
 
-async function readInPlace(reader: ArchiveReader, name: string): Promise<ControlFile> {
+async function readInPlace(reader: ArchiveReader, name: string): Promise<ControlFile | "changed"> {
   const path = toArchivePath(name);
   const entry = path && (await reader.stat(path));
   if (!path || !entry) return { kind: "missing" };
   if (entry.size > MAX_CONTROL_FILE_BYTES) return { kind: "tooLarge" };
   const read = await reader.open(path);
-  return read.ok ? controlFileText(read.file) : { kind: "missing" };
+  if (read.ok) return controlFileText(read.file);
+  return read.reason === "changed" ? "changed" : { kind: "missing" };
 }
 
 async function parseControlFiles(read: (name: string) => Promise<ControlFile>): Promise<SiteHosting | null> {

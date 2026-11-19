@@ -23,7 +23,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-async function serve(entries: FileEntry[], bodies: Record<string, string>): Promise<string> {
+async function serve(entries: FileEntry[], bodies: Record<string, string | number>): Promise<string> {
   server = createServer((req, res) => {
     if (req.url === `/api/v1/assets/${ASSET}/files`) {
       res.setHeader("Content-Type", "application/x-ndjson");
@@ -31,22 +31,26 @@ async function serve(entries: FileEntry[], bodies: Record<string, string>): Prom
       return;
     }
     const name = decodeURIComponent(req.url!.slice(`/files/${ASSET}/`.length));
-    if (name in bodies) res.end(bodies[name]);
-    else res.writeHead(404).end("not found");
+    const body = bodies[name] ?? 404;
+    if (typeof body === "number") res.writeHead(body).end(JSON.stringify({ error: "refused" }));
+    else res.end(body);
   });
   await new Promise<void>((resolve) => server!.listen(0, "127.0.0.1", resolve));
   return `http://127.0.0.1:${(server!.address() as AddressInfo).port}`;
 }
 
-async function sync(endpoint: string, dest: string, json = false): Promise<string[]> {
+async function run(endpoint: string, args: string[], json = false): Promise<string[]> {
   const logs: string[] = [];
   vi.spyOn(console, "log").mockImplementation((line: string) => void logs.push(line));
   vi.spyOn(process.stdout, "write").mockImplementation(() => true);
   const program = new Command().option("--endpoint <url>").option("--json", "", false).exitOverride();
   registerFileCommands(program, program.command("file"));
-  await program.parseAsync(["--endpoint", endpoint, ...(json ? ["--json"] : []), "file", "sync", ASSET, dest], { from: "user" });
+  await program.parseAsync(["--endpoint", endpoint, ...(json ? ["--json"] : []), "file", ...args], { from: "user" });
   return logs;
 }
+
+const sync = (endpoint: string, dest: string, json = false) => run(endpoint, ["sync", ASSET, dest], json);
+const copyAll = (endpoint: string, dest: string, json = false) => run(endpoint, ["cp", "-r", ASSET, dest], json);
 
 const crc = (hex: string) => `crc32:${hex}`;
 
@@ -86,4 +90,41 @@ test("a local file with the listed CRC-32 and size is left alone", async () => {
   writeFileSync(join(dest, "f.txt"), "hello");
   const logs = await sync(endpoint, dest);
   expect(logs.join("\n")).toContain("Done: 1 unchanged");
+});
+
+const MIXED: FileEntry[] = [
+  { path: "ready.txt", size: 5, contentType: "text/plain", hash: crc("3610a686") },
+  { path: "later.txt", size: 3, contentType: "text/plain", hash: crc("00000000") },
+  { path: "packed.bz2", size: 3, contentType: "application/octet-stream", hash: crc("00000000") },
+];
+const MIXED_BODIES = { "ready.txt": "hello", "packed.bz2": 501 };
+
+test("an entry Serve cannot decode is skipped and reported, and the rest still sync", async () => {
+  const endpoint = await serve(MIXED, MIXED_BODIES);
+  const dest = mkdtempSync(join(tmpdir(), "serve-sync-"));
+  const logs = await sync(endpoint, dest);
+  expect(readFileSync(join(dest, "ready.txt"), "utf8")).toBe("hello");
+  expect(existsSync(join(dest, "packed.bz2"))).toBe(false);
+  expect(logs.join("\n")).toContain("1 downloaded, 1 file(s) not yet available (extraction may be in progress), 1 file(s) Serve cannot decode");
+});
+
+test("--json counts the entries Serve cannot decode", async () => {
+  const endpoint = await serve(MIXED, MIXED_BODIES);
+  const logs = await sync(endpoint, mkdtempSync(join(tmpdir(), "serve-sync-")), true);
+  expect(JSON.parse(logs[0])).toMatchObject({ ok: true, downloaded: 1, unavailable: 1, undecodable: 1 });
+});
+
+test("cp -r skips entries not yet available or not decodable and copies the rest", async () => {
+  const endpoint = await serve(MIXED, MIXED_BODIES);
+  const dest = mkdtempSync(join(tmpdir(), "serve-cp-"));
+  const logs = await copyAll(endpoint, dest);
+  expect(readFileSync(join(dest, "ready.txt"), "utf8")).toBe("hello");
+  expect(logs.join("\n")).toContain("Done: 1 file(s) downloaded to");
+  expect(logs.join("\n")).toContain("1 file(s) not yet available (extraction may be in progress), 1 file(s) Serve cannot decode");
+});
+
+test("cp -r --json counts them", async () => {
+  const endpoint = await serve(MIXED, MIXED_BODIES);
+  const logs = await copyAll(endpoint, mkdtempSync(join(tmpdir(), "serve-cp-")), true);
+  expect(JSON.parse(logs[0])).toMatchObject({ ok: true, count: 1, skipped: 0, unavailable: 1, undecodable: 1 });
 });

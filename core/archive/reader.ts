@@ -74,7 +74,8 @@ export type ArchiveOpenFailure = "not-found" | "unsupported-method" | "encrypted
 
 export type ArchiveOpenResult =
   | { ok: true; file: StoredFile; originalSize: number }
-  | { ok: false; reason: ArchiveOpenFailure };
+  | { ok: false; reason: ArchiveOpenFailure }
+  | { ok: false; reason: "unsatisfiable"; size: number };
 
 export interface ArchiveReader {
   /** The lone root folder stripped from every path, "" when none. */
@@ -103,7 +104,7 @@ export async function openArchive(deps: ArchiveDeps, source: ArchiveSource): Pro
     return buildView(deps.storage, trusted, evict);
   });
   if (!built.ok) return built;
-  const archive: ArchiveObject = { storage: deps.storage, key: source.key, size: source.size, etag: built.view.etag };
+  const archive: ArchiveObject = { storage: deps.storage, key: source.key, dataEnd: built.view.dataEnd, etag: built.view.etag };
   const reader = readerOver(built.view, archive, { builtThisRequest, evict });
   if (built.view.from !== "index") return { ok: true, reader };
   return {
@@ -179,7 +180,7 @@ export async function buildView(
   const { table, rules, directoryRecordCount } = read;
   return {
     ok: true,
-    view: memoryView(table, directoryRecordCount, rules.rootPrefix, directory.etag),
+    view: memoryView(table, directoryRecordCount, rules.rootPrefix, directory),
     bytes: table.records.byteLength + table.names.byteLength,
   };
 }
@@ -245,11 +246,17 @@ function readerOver(view: TableView, archive: ArchiveObject, cached: { builtThis
       if (!entry) return { ok: false, reason: "not-found" };
       const info = toInfo(entry);
       if (!info.readable) return { ok: false, reason: info.unreadableReason === "encrypted" ? "encrypted" : "unsupported-method" };
+      if (!sizesAgree(entry)) return { ok: false, reason: "corrupt" };
+      const requested = options?.range;
+      if (requested && (requested.offset >= entry.size || requested.length <= 0)) return { ok: false, reason: "unsatisfiable", size: entry.size };
+      if (entry.size === 0) {
+        return { ok: true, file: { body: new Blob([]).stream(), size: 0, contentType: info.contentType, etag: entryEtag(view.etag, entry) }, originalSize: 0 };
+      }
 
-      const range = entry.method === STORED && options?.range ? clamp(options.range, entry.size) : null;
+      const range = entry.method === STORED && requested ? clamp(requested, entry.size) : null;
       const read = await readEntryBytes(archive, entry, range ?? undefined);
       if (!read.ok) {
-        if (read.reason === "mismatch" && cached.builtThisRequest) return { ok: false, reason: "corrupt" };
+        if (read.reason === "corrupt" || (read.reason === "mismatch" && cached.builtThisRequest)) return { ok: false, reason: "corrupt" };
         return stale();
       }
 
@@ -266,6 +273,12 @@ function readerOver(view: TableView, archive: ArchiveObject, cached: { builtThis
       return { ok: true, file, originalSize: entry.size };
     },
   };
+}
+
+/** A stored entry's bytes are its data, and deflate never encodes a non-empty entry in zero bytes. */
+function sizesAgree(entry: TableEntry): boolean {
+  if (entry.method === STORED) return entry.compressedSize === entry.size;
+  return entry.compressedSize > 0 || entry.size === 0;
 }
 
 function clamp(range: Span, size: number): Span {

@@ -7,7 +7,6 @@ import {
   apiGet,
   basicAuthHeader,
   collectFiles,
-  DownloadFailed,
   downloadFile,
   formatBytes,
   listLocalFiles,
@@ -17,6 +16,8 @@ import {
   resolveSitePassword,
   SITE_PASSWORD_ENV,
   streamNdjson,
+  unservable,
+  unservableSummary,
 } from "./helpers";
 
 /**
@@ -108,6 +109,7 @@ export function registerFileCommands(program: Command, file: Command) {
 
         let downloaded = 0;
         let skipped = 0;
+        const refused = { unavailable: 0, undecodable: 0 };
         const queue = [...files];
 
         async function worker() {
@@ -116,14 +118,16 @@ export function registerFileCommands(program: Command, file: Command) {
             const relativePath = prefix ? entry.path.slice(prefix.length).replace(/^\//, "") || entry.path.split("/").pop()! : entry.path;
             const localPath = join(dest, relativePath);
             const url = `${opts.endpoint}${PATHS.file(assetId, entry.path)}`;
-            const ok = await downloadFile(url, localPath, force, auth);
-            if (ok) {
-              downloaded++;
-            } else {
-              skipped++;
+            try {
+              if (await downloadFile(url, localPath, force, auth)) downloaded++;
+              else skipped++;
+            } catch (err) {
+              const kind = unservable(err);
+              if (!kind) throw err;
+              refused[kind]++;
             }
             if (!opts.json) {
-              process.stdout.write(`\r  ${downloaded + skipped}/${files.length}`);
+              process.stdout.write(`\r  ${downloaded + skipped + refused.unavailable + refused.undecodable}/${files.length}`);
             }
           }
         }
@@ -133,10 +137,10 @@ export function registerFileCommands(program: Command, file: Command) {
         await Promise.all(workers);
 
         if (opts.json) {
-          output({ ok: true, count: downloaded, skipped, dest }, true);
+          output({ ok: true, count: downloaded, skipped, ...refused, dest }, true);
         } else {
-          const msg = skipped > 0 ? ` (${skipped} skipped, use -f to overwrite)` : "";
-          console.log(`\nDone: ${downloaded} file(s) downloaded to ${dest}${msg}`);
+          const notes = [...(skipped > 0 ? [`${skipped} skipped, use -f to overwrite`] : []), ...unservableSummary(refused)];
+          console.log(`\nDone: ${downloaded} file(s) downloaded to ${dest}${notes.length > 0 ? ` (${notes.join(", ")})` : ""}`);
         }
         return;
       }
@@ -263,7 +267,7 @@ export function registerFileCommands(program: Command, file: Command) {
       }
 
       let downloaded = 0;
-      let unavailable = 0;
+      const refused = { unavailable: 0, undecodable: 0 };
       const queue = [...toDownload];
 
       async function worker() {
@@ -275,11 +279,12 @@ export function registerFileCommands(program: Command, file: Command) {
             await downloadFile(url, localPath, true, auth);
             downloaded++;
           } catch (err) {
-            if (!(err instanceof DownloadFailed && err.status === 404)) throw err;
-            unavailable++;
+            const kind = unservable(err);
+            if (!kind) throw err;
+            refused[kind]++;
           }
           if (!opts.json) {
-            process.stdout.write(`\r  ${downloaded + unavailable + skipped}/${remoteFiles.length}`);
+            process.stdout.write(`\r  ${downloaded + refused.unavailable + refused.undecodable + skipped}/${remoteFiles.length}`);
           }
         }
       }
@@ -302,13 +307,13 @@ export function registerFileCommands(program: Command, file: Command) {
       }
 
       if (opts.json) {
-        output({ ok: true, downloaded, skipped, deleted, unavailable, totalSize, dest: destDir }, true);
+        output({ ok: true, downloaded, skipped, deleted, ...refused, totalSize, dest: destDir }, true);
       } else {
         const parts: string[] = [];
         if (downloaded > 0) parts.push(`${downloaded} downloaded`);
         if (skipped > 0) parts.push(`${skipped} unchanged`);
         if (deleted > 0) parts.push(`${deleted} deleted`);
-        if (unavailable > 0) parts.push(`${unavailable} file(s) not yet available (extraction may be in progress)`);
+        parts.push(...unservableSummary(refused));
         console.log(`\nDone: ${parts.join(", ")}`);
       }
     });

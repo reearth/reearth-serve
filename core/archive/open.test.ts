@@ -58,7 +58,7 @@ describe("ArchiveReader.open", () => {
     expect(h.reads.length - before).toBe(1);
   });
 
-  test("a stored entry with a range is one bounded read that returns exactly the range", async () => {
+  test("a stored entry with a range is one read, bounded by the central directory, that returns exactly the range", async () => {
     const data = patterned(5000);
     const h = await harness([{ name: "tile.bin", data }]);
     await h.open("tile.bin");
@@ -66,7 +66,8 @@ describe("ArchiveReader.open", () => {
     const read = await h.open("tile.bin", { offset: 1000, length: 1000 });
     expect(await body(read)).toEqual(data.subarray(1000, 2000));
     expect(read.ok && read.file.range).toEqual({ offset: 1000, length: 1000, totalSize: 5000 });
-    expect(h.reads.slice(before)).toEqual([{ offset: 0, length: Math.min(30 + 8 + 0xffff + 2000, h.bytes.byteLength) }]);
+    const directoryStart = new DataView(h.bytes.buffer).getUint32(h.bytes.byteLength - 6, true);
+    expect(h.reads.slice(before)).toEqual([{ offset: 0, length: Math.min(30 + 8 + 0xffff + 2000, directoryStart) }]);
   });
 
   test("a range deep in a stored entry probes the local header, then reads only the range", async () => {

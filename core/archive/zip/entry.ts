@@ -10,7 +10,8 @@ const SINGLE_READ_DEPTH = 1 << 20;
 export interface ArchiveObject {
   storage: FileStorage;
   key: string;
-  size: number;
+  /** The central directory's offset: APPNOTE.TXT 4.3.6 places every entry's data before it. */
+  dataEnd: number;
   etag: string | undefined;
 }
 
@@ -21,11 +22,13 @@ export interface Span {
 
 export type EntryBytes =
   | { ok: true; body: ReadableStream<Uint8Array> }
-  | { ok: false; reason: "missing" | "changed" | "mismatch" };
+  | { ok: false; reason: "missing" | "changed" | "mismatch" | "corrupt" };
 
 /** A local header's extra field has its own 16-bit length (APPNOTE.TXT 4.3.7), so up to 64 KiB of it may sit between the name and the data. */
 export async function readEntryBytes(archive: ArchiveObject, entry: TableEntry, span: Span = { offset: 0, length: entry.compressedSize }): Promise<EntryBytes> {
   const headerEnd = LOCAL_HEADER + entry.cdNameLength;
+  const fits = (extra: number) => entry.localHeaderOffset + headerEnd + extra + entry.compressedSize <= archive.dataEnd;
+  if (!fits(0)) return { ok: false, reason: "corrupt" };
   if (span.offset > SINGLE_READ_DEPTH) {
     const probe = await fetchRange(archive, entry.localHeaderOffset, headerEnd);
     if (!probe.ok) return probe;
@@ -33,6 +36,7 @@ export async function readEntryBytes(archive: ArchiveObject, entry: TableEntry, 
     await probe.body.cancel().catch(() => {});
     const extra = head && localExtraLength(head, entry);
     if (extra === null) return { ok: false, reason: "mismatch" };
+    if (!fits(extra)) return { ok: false, reason: "corrupt" };
     const data = await fetchRange(archive, entry.localHeaderOffset + headerEnd + extra + span.offset, span.length);
     if (!data.ok) return data;
     return { ok: true, body: exactly(data.body, 0, span.length) };
@@ -43,15 +47,15 @@ export async function readEntryBytes(archive: ArchiveObject, entry: TableEntry, 
   const reader = read.body.getReader();
   const head = await takeFrom(reader, headerEnd);
   const extra = head && localExtraLength(head.bytes, entry);
-  if (!head || extra === null) {
+  if (!head || extra === null || !fits(extra)) {
     await reader.cancel().catch(() => {});
-    return { ok: false, reason: "mismatch" };
+    return { ok: false, reason: head && extra !== null ? "corrupt" : "mismatch" };
   }
   return { ok: true, body: exactly(resume(reader, head.rest), extra + span.offset, span.length) };
 }
 
 async function fetchRange(archive: ArchiveObject, offset: number, length: number): Promise<EntryBytes> {
-  const capped = Math.min(length, archive.size - offset);
+  const capped = Math.min(length, archive.dataEnd - offset);
   if (capped <= 0) return { ok: false, reason: "mismatch" };
   const file = await archive.storage.get(archive.key, { offset, length: capped });
   if (!file) return { ok: false, reason: "missing" };

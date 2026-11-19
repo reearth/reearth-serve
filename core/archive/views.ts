@@ -25,6 +25,7 @@ export interface ListResult {
 export interface TableView {
   readonly entryCount: number;
   readonly etag: string | undefined;
+  readonly dataEnd: number;
   readonly rootPrefix: string;
   /** "index" when answers come from a container index, which may be distrusted and replaced by the central directory. */
   readonly from: "directory" | "index";
@@ -48,7 +49,7 @@ interface SortedEntries {
   upperBound(key: Uint8Array): Promise<number>;
 }
 
-function sortedView(sorted: SortedEntries, fields: Pick<TableView, "entryCount" | "etag" | "rootPrefix" | "from">): TableView {
+function sortedView(sorted: SortedEntries, fields: Pick<TableView, "entryCount" | "etag" | "dataEnd" | "rootPrefix" | "from">): TableView {
   return { ...fields, find: (path) => findIn(sorted, path), list: (query) => listIn(sorted, query) };
 }
 
@@ -90,7 +91,7 @@ async function listIn(sorted: SortedEntries, query: ListQuery): Promise<ListResu
   return result;
 }
 
-export function memoryView(table: EntryTable, entryCount: number, rootPrefix: string, etag: string | undefined): TableView {
+export function memoryView(table: EntryTable, entryCount: number, rootPrefix: string, directory: Pick<Directory, "offset" | "etag">): TableView {
   const whole = { table, start: 0 };
   return sortedView(
     {
@@ -99,7 +100,7 @@ export function memoryView(table: EntryTable, entryCount: number, rootPrefix: st
       lowerBound: async (key) => lowerBound(table, key),
       upperBound: async (key) => upperBound(table, key),
     },
-    { entryCount, etag, rootPrefix, from: "directory" },
+    { entryCount, etag: directory.etag, dataEnd: directory.offset, rootPrefix, from: "directory" },
   );
 }
 
@@ -208,7 +209,7 @@ function indexedView(storage: FileStorage, key: string, fence: IndexFence, pageB
       lowerBound: bound(lowerBound),
       upperBound: bound(upperBound),
     },
-    { entryCount: header.directoryRecordCount, etag: header.sourceEtag, rootPrefix: fence.rootPrefix, from: "index" },
+    { entryCount: header.directoryRecordCount, etag: header.sourceEtag, dataEnd: header.directory.offset, rootPrefix: fence.rootPrefix, from: "index" },
   );
 }
 
@@ -243,6 +244,7 @@ export function scanView(
   return {
     entryCount,
     etag: directory.etag,
+    dataEnd: directory.offset,
     rootPrefix: rules.rootPrefix,
     from: "directory",
     async find(path) {
