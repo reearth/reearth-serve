@@ -216,8 +216,8 @@ single gzip member. A concatenation of members is valid gzip by RFC 1952,
 but clients do not read it: Chromium, Firefox and WebKit decode the
 first member and drop the rest without an error, curl and wget do the
 same, and `DecompressionStream("gzip")` in workerd and Node throws on
-the second member (Measurement 1). BGZF, which is a run of members, is therefore not
-a delivery format.
+the second member (Measurement 1). BGZF, which is a run of members, is
+therefore not a delivery format.
 
 A repacked object is instead one gzip member whose DEFLATE stream is
 written with a full flush at every access point (every 1 MiB of input by
