@@ -57,7 +57,7 @@ function decodeCp437(raw: Uint8Array): string {
 }
 
 function isAscii(raw: Uint8Array): boolean {
-  for (const b of raw) if (b >= 0x80) return false;
+  for (let i = 0; i < raw.length; i++) if (raw[i] >= 0x80) return false;
   return true;
 }
 
