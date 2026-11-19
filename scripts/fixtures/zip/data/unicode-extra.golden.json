@@ -1,6 +1,5 @@
 {
   "archive": "unicode-extra.zip",
-  "extractorParity": false,
   "entries": [
     {
       "path": "Grüße.txt",

@@ -1,6 +1,5 @@
 {
   "archive": "shift_jis.zip",
-  "extractorParity": false,
   "entries": [
     {
       "path": "readme.txt",
