@@ -46,8 +46,32 @@ if (import.meta.vitest) {
       }
     });
 
-    test("an unknown format is treated as a missing feature", () => {
-      expect(failureClassOf("archive-extraction", undefined)).toBe("missing-feature");
+    test.each([undefined, "ZIP", "rar", "zip ", "constructor", "toString", "__proto__"])(
+      "an unknown format %j is treated as a missing feature",
+      (format) => {
+        expect(failureClassOf("archive-extraction", format as ArchiveFormat | undefined)).toBe("missing-feature");
+      },
+    );
+  });
+
+  describe("failMirror", () => {
+    const job = { id: "j1", assetId: "a1", type: "archive-extraction", status: "running", createdAt: 0, updatedAt: 0 } as Job;
+    const failedMirror = (archiveFormat: string) => {
+      const mirror: Mirror = { status: "extracting", archiveFormat: archiveFormat as ArchiveFormat };
+      failMirror({ ...job }, mirror, "boom");
+      return mirror.status;
+    };
+
+    test("a zip mirror stays ready", () => {
+      expect(failedMirror("zip")).toBe("ready");
+    });
+
+    test.each(["tar.gz", "rar", "__proto__", "constructor"])("a %j mirror is failed", (format) => {
+      expect(failedMirror(format)).toBe("failed");
+    });
+
+    test("no mirror is not an error", () => {
+      expect(() => failMirror({ ...job }, null, "boom")).not.toThrow();
     });
   });
 }

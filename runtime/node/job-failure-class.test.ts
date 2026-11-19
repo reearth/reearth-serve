@@ -163,3 +163,22 @@ describe("a zip whose extraction completed", () => {
     expect((await getFile(id, "a.txt")).status).toBe(404);
   });
 });
+
+describe("POST /api/v1/assets/:id/extract", () => {
+  const extract = (id: string) =>
+    app.fetch(new Request(`http://localhost/api/v1/assets/${id}/extract`, { method: "POST", headers: { "X-Session-Id": sessionId } }));
+
+  test("restarts a zip whose extraction failed", async () => {
+    const id = await uploadAsset("a.zip");
+    await reportFailed(id);
+    const res = await extract(id);
+    expect(res.status).toBe(201);
+    expect(await job(id)).toMatchObject({ status: "pending", failureClass: "slower-reads" });
+  });
+
+  test("refuses a zip whose extraction completed", async () => {
+    const id = await uploadAsset("a.zip");
+    await report(id, { status: "completed", fileCount: 1, extractedSize: 8 });
+    expect((await extract(id)).status).toBe(400);
+  });
+});
