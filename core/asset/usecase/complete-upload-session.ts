@@ -2,7 +2,9 @@ import type { AssetMetadata, AssetUploadResult, UploadPart, UploadSession } from
 import { detectArchiveFormat } from "../model";
 import type { AtomicWrites, FileStorage, MetadataStore, PresignedUrlGenerator, UploadSessionStore } from "../repository";
 import type { Job } from "../../job/model";
-import { storageKey } from "./shared";
+import { assetRoot, storageKey } from "./shared";
+import { finaliseArchive } from "./finalise-archive";
+import type { ArchiveCache } from "../../archive";
 import { siteUrlFor } from "../../site/url";
 import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
@@ -19,7 +21,7 @@ export async function completeUploadSession(
   ttlSeconds: number,
   baseUrl: string,
   parts?: UploadPart[],
-  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string },
+  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string; archives?: ArchiveCache },
 ): Promise<AssetUploadResult | null> {
   const session = await sessions.find(id);
   if (!session) return null;
@@ -53,6 +55,10 @@ export async function completeUploadSession(
   }
   if (!head) return null;
 
+  const finalised = await finaliseArchive(
+    { storage, archives: options?.archives },
+    { root: assetRoot(id), filename: session.filename, size: head.size, archiveFormat },
+  );
   const now = Date.now();
 
   // projectId is bound at createUploadSession time (after membership check)
@@ -76,6 +82,7 @@ export async function completeUploadSession(
     }),
     ...(options?.sessionId && { sessionId: options.sessionId }),
     ...(projectId && { projectId }),
+    ...finalised,
   };
 
   // Create extraction job for archives (unless skipped)

@@ -2,7 +2,9 @@ import type { AssetMetadata, AssetUploadResult } from "../model";
 import { detectArchiveFormat } from "../model";
 import type { AtomicWrites, FileStorage } from "../repository";
 import type { Job } from "../../job/model";
-import { generateId, storageKey } from "./shared";
+import { assetRoot, generateId, storageKey } from "./shared";
+import { finaliseArchive, writtenKeys } from "./finalise-archive";
+import type { ArchiveCache } from "../../archive";
 import { siteUrlFor } from "../../site/url";
 import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
@@ -22,7 +24,7 @@ export async function uploadAsset(
   },
   ttlSeconds: number,
   baseUrl: string,
-  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string },
+  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string; archives?: ArchiveCache },
 ): Promise<AssetUploadResult> {
   const id = generateId();
   const now = Date.now();
@@ -34,6 +36,10 @@ export async function uploadAsset(
   );
 
   const archiveFormat = detectArchiveFormat(file.name);
+  const finalised = await finaliseArchive(
+    { storage, archives: options?.archives },
+    { root: assetRoot(id), filename: file.name, size: file.size, archiveFormat },
+  );
 
   const asset: AssetMetadata = {
     id,
@@ -51,6 +57,7 @@ export async function uploadAsset(
     }),
     ...(options?.sessionId && { sessionId: options.sessionId }),
     ...(options?.projectId && { projectId: options.projectId }),
+    ...finalised,
   };
 
   // Create extraction job for archives (unless skipped)
@@ -102,10 +109,13 @@ export async function uploadAsset(
     // compensation the R2 object is orphaned (cleanup drives off D1 rows),
     // so try to delete it. Best-effort: a delete failure here is logged
     // but the original error is what the caller cares about.
-    try {
-      await storage.delete(key);
-    } catch (delErr) {
-      console.error("Failed to clean up R2 object after metadata save failure:", delErr);
+    const orphans = [key, ...writtenKeys(finalised)];
+    for (const orphan of orphans) {
+      try {
+        await storage.delete(orphan);
+      } catch (delErr) {
+        console.error("Failed to clean up R2 object after metadata save failure:", delErr);
+      }
     }
     throw e;
   }

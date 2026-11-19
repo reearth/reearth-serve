@@ -2,7 +2,9 @@ import type { AssetVersion } from "../model";
 import { detectArchiveFormat } from "../model";
 import type { AtomicWrites, FileStorage, MetadataStore } from "../repository";
 import type { Job } from "../../job/model";
-import { generateId, versionStorageKey } from "./shared";
+import { generateId, versionRoot, versionStorageKey } from "./shared";
+import { finaliseArchive, writtenKeys } from "./finalise-archive";
+import type { ArchiveCache } from "../../archive";
 import { siteUrlFor } from "../../site/url";
 import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
@@ -30,7 +32,7 @@ export async function uploadVersion(
     originalSize?: number;
   },
   baseUrl: string,
-  options?: { extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string },
+  options?: { extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string; archives?: ArchiveCache },
 ): Promise<UploadVersionResult | null> {
   const asset = await metadata.find(assetId);
   if (!asset) return null;
@@ -45,6 +47,10 @@ export async function uploadVersion(
   );
 
   const archiveFormat = detectArchiveFormat(file.name);
+  const finalised = await finaliseArchive(
+    { storage, archives: options?.archives },
+    { root: versionRoot(assetId, versionId), filename: file.name, size: file.size, archiveFormat },
+  );
 
   // `version` is assigned by the store inside the INSERT (race-free).
   // We seed 0 here so the field exists on the model; the stored record
@@ -64,6 +70,7 @@ export async function uploadVersion(
       ...(!options?.skipExtraction && { status: "pending" as const }),
       archiveFormat,
     }),
+    ...finalised,
   };
 
   // Create extraction job for archives
@@ -120,10 +127,13 @@ export async function uploadVersion(
   } catch (e) {
     // Compensation: drop the orphaned R2 object so it doesn't leak forever
     // if the D1 version row failed to persist.
-    try {
-      await storage.delete(key);
-    } catch (delErr) {
-      console.error("Failed to clean up R2 object after version save failure:", delErr);
+    const orphans = [key, ...writtenKeys(finalised)];
+    for (const orphan of orphans) {
+      try {
+        await storage.delete(orphan);
+      } catch (delErr) {
+        console.error("Failed to clean up R2 object after version save failure:", delErr);
+      }
     }
     throw e;
   }

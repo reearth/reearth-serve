@@ -2,12 +2,20 @@ export function generateId(): string {
   return crypto.randomUUID().replace(/-/g, "").slice(0, 16);
 }
 
+export function assetRoot(id: string): string {
+  return `assets/${id}`;
+}
+
+export function versionRoot(assetId: string, versionId: string): string {
+  return `assets/${assetId}/v/${versionId}`;
+}
+
 export function storageKey(id: string, filename: string): string {
-  return `assets/${id}/${filename}`;
+  return `${assetRoot(id)}/${filename}`;
 }
 
 export function versionStorageKey(assetId: string, versionId: string, filename: string): string {
-  return `assets/${assetId}/v/${versionId}/${filename}`;
+  return `${versionRoot(assetId, versionId)}/${filename}`;
 }
 
 export function versionFilesPrefix(assetId: string, versionId: string): string {

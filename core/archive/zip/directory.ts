@@ -282,18 +282,29 @@ function isDirectory(rawName: Uint8Array, madeBy: number, externalAttrs: number)
   return false;
 }
 
-const CRC_TABLE = (() => {
-  const table = new Uint32Array(256);
+const CRC32_SLICE8_TABLES = (() => {
+  const tables = new Uint32Array(8 * 256);
   for (let n = 0; n < 256; n++) {
     let c = n;
     for (let k = 0; k < 8; k++) c = c & 1 ? 0xedb88320 ^ (c >>> 1) : c >>> 1;
-    table[n] = c >>> 0;
+    tables[n] = c >>> 0;
   }
-  return table;
+  for (let n = 0; n < 256; n++) {
+    for (let t = 1; t < 8; t++) tables[t * 256 + n] = (tables[(t - 1) * 256 + n] >>> 8) ^ tables[tables[(t - 1) * 256 + n] & 0xff];
+  }
+  return tables;
 })();
 
 export function crc32(bytes: Uint8Array): number {
+  const t = CRC32_SLICE8_TABLES;
   let c = 0xffffffff;
-  for (const b of bytes) c = CRC_TABLE[(c ^ b) & 0xff] ^ (c >>> 8);
+  let i = 0;
+  const n = bytes.length;
+  for (; i + 8 <= n; i += 8) {
+    const lo = (c ^ (bytes[i] | (bytes[i + 1] << 8) | (bytes[i + 2] << 16) | (bytes[i + 3] << 24))) >>> 0;
+    c = t[1792 + (lo & 0xff)] ^ t[1536 + ((lo >>> 8) & 0xff)] ^ t[1280 + ((lo >>> 16) & 0xff)] ^ t[1024 + (lo >>> 24)]
+      ^ t[768 + bytes[i + 4]] ^ t[512 + bytes[i + 5]] ^ t[256 + bytes[i + 6]] ^ t[bytes[i + 7]];
+  }
+  for (; i < n; i++) c = t[(c ^ bytes[i]) & 0xff] ^ (c >>> 8);
   return (c ^ 0xffffffff) >>> 0;
 }

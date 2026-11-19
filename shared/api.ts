@@ -159,6 +159,17 @@ export const siteHostingSchema = z.object({
   warnings: z.array(z.string()),
 });
 
+const directorySpanSchema = z.object({ offset: z.number(), size: z.number() });
+/**
+ * `skipped` says why no index was built: the central directory fits the 1 MiB
+ * tail read (`small`), or it is above the build threshold (`too-large`). An
+ * absent `container` means finalisation did not run or failed.
+ */
+export const containerSchema = component("Container", z.union([
+  z.object({ index: z.string(), directory: directorySpanSchema, rootPrefix: z.string() }),
+  z.object({ skipped: z.enum(["small", "too-large"]), directory: directorySpanSchema, rootPrefix: z.string() }),
+]));
+
 // --- Asset ---
 
 export const assetVersionSchema = component("AssetVersion", z.object({
@@ -184,6 +195,7 @@ export const assetVersionSchema = component("AssetVersion", z.object({
    * is exactly what ADR-005's system/user split reserves for fields serve owns.
    */
   hosting: siteHostingSchema.optional(),
+  container: containerSchema.optional(),
 }));
 
 export const assetMetadataSchema = component("Asset", z.object({
@@ -232,6 +244,7 @@ export const assetMetadataSchema = component("Asset", z.object({
    * a version does carry them, the version's win.
    */
   hosting: siteHostingSchema.optional(),
+  container: containerSchema.optional(),
 }));
 
 export const assetUploadResultSchema = component("AssetUploadResponse", z.object({
@@ -474,6 +487,7 @@ export type AssetAccess = z.infer<typeof assetAccessSchema>;
 export type SiteHeaderRule = z.infer<typeof siteHeaderRuleSchema>;
 export type SiteRedirectRule = z.infer<typeof siteRedirectRuleSchema>;
 export type SiteHosting = z.infer<typeof siteHostingSchema>;
+export type ContainerMeta = z.infer<typeof containerSchema>;
 export type AssetType = z.infer<typeof assetTypeSchema>;
 export type AssetStatus = z.infer<typeof assetStatusSchema>;
 export type ArchiveFormat = z.infer<typeof archiveFormatSchema>;

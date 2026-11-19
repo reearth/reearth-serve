@@ -70,7 +70,7 @@ export interface EntryTable {
   names: Uint8Array;
 }
 
-const RECORD = 52;
+export const RECORD = 52;
 const CD_RECORD_SIZE = 46;
 const NAME_OFFSET = 0;
 const CD_EXTRA_LENGTH = 4;
@@ -155,6 +155,39 @@ function growBytes(bytes: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
   const next = new Uint8Array(bytes.byteLength * 2);
   next.set(bytes);
   return next;
+}
+
+export function sliceTable(table: EntryTable, start: number, end: number): EntryTable {
+  const count = end - start;
+  const records = new DataView(table.records.buffer.slice(table.records.byteOffset + start * RECORD, table.records.byteOffset + end * RECORD));
+  let heap = 0;
+  for (let i = start; i < end; i++) heap += table.records.getUint32(i * RECORD + NAME_LENGTH, true);
+  const names = new Uint8Array(heap);
+  let at = 0;
+  for (let k = 0; k < count; k++) {
+    const name = nameAt(table, start + k);
+    names.set(name, at);
+    records.setUint32(k * RECORD + NAME_OFFSET, at, true);
+    at += name.byteLength;
+  }
+  return { count, records, names };
+}
+
+export function wellFormed(table: EntryTable, dataEnd: number): boolean {
+  const r = table.records;
+  let heap = 0;
+  for (let i = 0; i < table.count; i++) {
+    const at = i * RECORD;
+    if (r.getUint32(at + NAME_OFFSET, true) !== heap) return false;
+    heap += r.getUint32(at + NAME_LENGTH, true);
+    if (heap > table.names.byteLength) return false;
+    if (i > 0 && compare(nameAt(table, i - 1), nameAt(table, i)) >= 0) return false;
+    const offset = r.getFloat64(at + LOCAL_HEADER_OFFSET, true);
+    const compressed = r.getFloat64(at + COMPRESSED_SIZE, true);
+    const size = r.getFloat64(at + SIZE, true);
+    if (![offset, compressed, size].every((n) => Number.isSafeInteger(n) && n >= 0) || offset + compressed > dataEnd) return false;
+  }
+  return heap === table.names.byteLength;
 }
 
 export function nameAt(table: EntryTable, i: number): Uint8Array {
