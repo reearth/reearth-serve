@@ -16,7 +16,7 @@ import {
   applySiteHeaders, siteRedirect, siteRedirectResponse, targetFilePath,
 } from "./site-routing";
 import { errorResponseSchema } from "../../shared";
-import { parseRange, sliceStream } from "./stream";
+import { parseRange, sliceStream, withLength } from "./stream";
 import { archiveFallback, fileSource, hasIndex, isRefused, locate, type Located } from "./locate";
 import {
   THUMBNAIL_SIZES,
@@ -564,8 +564,9 @@ async function serveFile(located: Located, opts: ServeOptions): Promise<Response
   const headers: Record<string, string> = { ...common, "Accept-Ranges": "bytes" };
 
   if (!range) {
-    if (originalSize !== undefined) headers["Content-Length"] = String(originalSize);
-    return new Response(decompressed, { status: 200, headers });
+    if (originalSize === undefined) return new Response(decompressed, { status: 200, headers });
+    headers["Content-Length"] = String(originalSize);
+    return new Response(withLength(decompressed, originalSize), { status: 200, headers });
   }
 
   // Range on gzip: decompress, skip to offset, stream the range

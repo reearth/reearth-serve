@@ -133,3 +133,14 @@ if (import.meta.vitest) {
     expect(result).toEqual(new Uint8Array([2, 3, 4, 5, 6]));
   });
 }
+
+type FixedLengthStreamClass = new (length: number) => TransformStream<Uint8Array, Uint8Array>;
+
+/**
+ * Workers drop a Content-Length header on a stream body and send it chunked
+ * unless the stream itself carries the length; Node needs only the header.
+ */
+export function withLength(body: ReadableStream<Uint8Array>, length: number): ReadableStream<Uint8Array> {
+  const Fixed = (globalThis as { FixedLengthStream?: FixedLengthStreamClass }).FixedLengthStream;
+  return Fixed && length >= 0 ? body.pipeThrough(new Fixed(length)) : body;
+}

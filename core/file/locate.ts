@@ -2,6 +2,7 @@ import { openArchive, toArchivePath, type ArchiveCache, type ArchiveOpenFailure,
 import { archiveSource, assetLayouts, entryKey, mainKey, type Layout } from "../asset/layout";
 import type { AssetMetadata, AssetVersion, StoredFile } from "../asset/model";
 import type { FileStorage } from "../asset/repository";
+import { withLength } from "./stream";
 
 export const INDEX_FILE = "index.html";
 const NOT_FOUND_FILE = "404.html";
@@ -141,8 +142,9 @@ async function locateInPlace(src: FileSource, entryPath: string, range: Span | n
     }
     const read = await opened.reader.open(path, { range });
     if (read.ok) {
+      const length = read.file.range?.length ?? read.file.size;
       return {
-        file: read.file,
+        file: { ...read.file, body: withLength(read.file.body, length) },
         contentType: read.file.contentType,
         contentEncoding: read.file.contentEncoding,
         displayName: displayName(path),
