@@ -68,7 +68,7 @@ describe("GET /api/v1/assets/:id/files on a zip nobody extracted", () => {
 });
 
 describe("GET /api/v1/assets/:id/files when the active version cannot be listed in place", () => {
-  async function overFirstUpload(activeName: string, activeBytes: Uint8Array, archiveFormat: string) {
+  async function overFirstUpload(activeName: string, activeBytes: Uint8Array, archiveFormat: "zip" | "tar.gz") {
     const f = await unextracted("deflate.zip");
     const asset = f.metadata.assets.get(ASSET_ID)!;
     f.metadata.assets.set(ASSET_ID, { ...asset, filename: "store.zip", size: zipBytes("store.zip").byteLength, archiveFormat: "zip" });

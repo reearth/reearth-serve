@@ -50,7 +50,8 @@ export function registerListFilesRoute(app: Hono<AppEnv>) {
       return ndjson(JSON.stringify(entry) + "\n");
     }
 
-    for (const layout of layouts.filter((l) => l.archive)) {
+    for (const [i, layout] of layouts.entries()) {
+      if (!layout.archive) continue;
       const manifest = await storage.get(`${layout.root}/_archive/_manifest.jsonl`);
       if (manifest) {
         return ndjson(manifest.body
@@ -58,7 +59,11 @@ export function registerListFilesRoute(app: Hono<AppEnv>) {
           .pipeThrough(filterNdjsonByPrefix(prefix))
           .pipeThrough(new TextEncoderStream()));
       }
-      if (layout.archiveFormat !== "zip") continue;
+      // Only the active layout's own original may be read in place. The legacy
+      // prefix holds the first upload, so behind a version it is another
+      // version's bytes; it can answer only with a manifest, which the
+      // Cloudflare launcher still writes there for every version.
+      if (i > 0 || layout.archiveFormat !== "zip") continue;
       const source = { key: `${layout.root}/${layout.filename}`, size: layout.size, filename: layout.filename };
       const opened = await openArchive({ storage, archives: c.get("archives") }, source);
       if (opened.ok) return ndjson(entryLines(opened.reader, prefix));
