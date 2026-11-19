@@ -101,7 +101,7 @@ export interface VersionStore {
  */
 export type WriteGuard = {
   upload: { id: string; revision: number };
-  lease?: { bucket: string; key: string; token: string };
+  lease?: { bucket: string; key: string; token: string; assetId: string };
 };
 
 export class HoldLost extends Error {

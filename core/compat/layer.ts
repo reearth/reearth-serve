@@ -144,7 +144,9 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
     bucket: CompatBucket, key: ObjectKey, scopes: string[], meta: PutMeta, body: SizedBody, token: ClaimToken, commit?: UploadCommit,
   ): Promise<Result<ObjectInfo>> {
     if (commit) await dropEarlierAssets(commit, scopes, null);
-    const beat = commit ? beating(body.stream, () => commit.heartbeat()) : null;
+    const beat = commit
+      ? beating(body.stream, async () => (await compat.renewClaim(bucket.name, key, token, now())) && commit.heartbeat())
+      : null;
     if (beat) body = { ...body, stream: beat.stream };
     const checked = lengthCheckedBody(body);
     try {
@@ -217,10 +219,10 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
     }
     return preconditioned(bucket, meta, live, async () => {
       if (commit.overwritingAssetId === null && !(await commit.overwrite(live.asset.id))) return fail({ code: "busy" });
-      const beat = beating(body.stream, async () => (await takeLease(bucket, key, lease)) && commit.heartbeat());
+      const beat = beating(body.stream, async () => (await compat.renewLease(bucket.name, key, lease, now())) && commit.heartbeat());
       return writeVersion(bucket, key, scopes, meta, { ...body, stream: beat.stream }, live.asset, {
         versionId: commit.versionId,
-        guard: () => ({ upload: commit.hold(), lease: { bucket: bucket.name, key, token: lease } }),
+        guard: () => ({ upload: commit.hold(), lease: { bucket: bucket.name, key, token: lease, assetId: live.asset.id } }),
         lost: beat.lost,
       });
     });
