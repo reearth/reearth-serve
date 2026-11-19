@@ -45,7 +45,7 @@ export class R2FileStorage implements FileStorage {
   async head(key: string): Promise<{ size: number; contentEncoding?: string; etag?: string } | null> {
     const obj = await this.bucket.head(key);
     if (!obj) return null;
-    return { size: obj.size, contentEncoding: obj.httpMetadata?.contentEncoding, etag: obj.etag };
+    return { size: obj.size, contentEncoding: obj.httpMetadata?.contentEncoding, etag: obj.httpEtag };
   }
 
   async delete(key: string): Promise<void> {

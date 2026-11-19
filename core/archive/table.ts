@@ -173,6 +173,23 @@ export function sliceTable(table: EntryTable, start: number, end: number): Entry
   return { count, records, names };
 }
 
+export function wellFormed(table: EntryTable, dataEnd: number): boolean {
+  const r = table.records;
+  let heap = 0;
+  for (let i = 0; i < table.count; i++) {
+    const at = i * RECORD;
+    if (r.getUint32(at + NAME_OFFSET, true) !== heap) return false;
+    heap += r.getUint32(at + NAME_LENGTH, true);
+    if (heap > table.names.byteLength) return false;
+    if (i > 0 && compare(nameAt(table, i - 1), nameAt(table, i)) >= 0) return false;
+    const offset = r.getFloat64(at + LOCAL_HEADER_OFFSET, true);
+    const compressed = r.getFloat64(at + COMPRESSED_SIZE, true);
+    const size = r.getFloat64(at + SIZE, true);
+    if (![offset, compressed, size].every((n) => Number.isSafeInteger(n) && n >= 0) || offset + compressed > dataEnd) return false;
+  }
+  return heap === table.names.byteLength;
+}
+
 export function nameAt(table: EntryTable, i: number): Uint8Array {
   const at = i * RECORD;
   const offset = table.records.getUint32(at + NAME_OFFSET, true);

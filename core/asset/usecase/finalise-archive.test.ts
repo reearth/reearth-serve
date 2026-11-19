@@ -184,6 +184,26 @@ describe("presigned multipart completion", { timeout: 60_000 }, () => {
     expect(result?.asset.container).toMatchObject({ index: containerIndexKey("assets/mp1") });
     expect(rows[0].container).toEqual(result?.asset.container);
   });
+
+  test("a failed row write keeps the original and its index for the retry, which records identical bytes", async () => {
+    const storage = new MemoryFileStorage();
+    const bytes = writeZip(manyEntries());
+    await storage.put(`assets/mp2/${FILENAME}`, new Blob([bytes as BlobPart]).stream(), "application/zip", bytes.byteLength);
+    const session = { id: "mp2", filename: FILENAME, contentType: "application/zip", size: bytes.byteLength, createdAt: 1, expiresAt: 2, skipExtraction: true };
+    const sessions = { find: async () => session, save: async () => {}, delete: async () => {} } as unknown as UploadSessionStore;
+    const metadata = { find: async () => null } as unknown as MetadataStore;
+    let attempts = 0;
+    const writes = { createAsset: async () => { if (++attempts === 1) throw new Error("D1 down"); } } as unknown as AtomicWrites;
+    const complete = () => completeUploadSession(sessions, writes, metadata, storage, null, "mp2", 60, "https://x");
+
+    await expect(complete()).rejects.toThrow("D1 down");
+    const kept = await objectBytes(storage, containerIndexKey("assets/mp2"));
+    expect(kept).not.toBeNull();
+
+    const retry = await complete();
+    expect(retry?.asset.container).toMatchObject({ index: containerIndexKey("assets/mp2") });
+    expect(await objectBytes(storage, containerIndexKey("assets/mp2"))).toEqual(kept);
+  });
 });
 
 describe("readers fall back to the central directory", { timeout: 60_000 }, () => {

@@ -14,9 +14,14 @@ const text = (s: string) => new TextEncoder().encode(s);
 
 function counting(inner: FileStorage, options: { etags?: boolean } = {}) {
   const reads: { key: string; offset?: number; length?: number }[] = [];
+  const heads: string[] = [];
   const storage: FileStorage = {
     put: (...a) => inner.put(...a),
-    head: (k) => inner.head(k),
+    head: async (k) => {
+      heads.push(k);
+      const head = await inner.head(k);
+      return head && options.etags === false ? { ...head, etag: undefined } : head;
+    },
     delete: (k) => inner.delete(k),
     list: (p, o) => inner.list(p, o),
     get: async (key, range) => {
@@ -25,7 +30,7 @@ function counting(inner: FileStorage, options: { etags?: boolean } = {}) {
       return file && options.etags === false ? { ...file, etag: undefined } : file;
     },
   };
-  return { storage, reads };
+  return { storage, reads, heads };
 }
 
 async function put(storage: FileStorage, key: string, bytes: Uint8Array) {
@@ -44,7 +49,7 @@ async function indexBytes(storage: FileStorage, source: ArchiveSource): Promise<
 
 async function harness(bytes: Uint8Array, filename = "a.zip", options: { etags?: boolean } = {}) {
   const memory = new MemoryFileStorage();
-  const { storage, reads } = counting(memory, options);
+  const { storage, reads, heads } = counting(memory, options);
   const source: ArchiveSource = { key: `assets/x/${filename}`, size: bytes.byteLength, filename, index: `assets/x/${filename}.idx` };
   await put(memory, source.key, bytes);
   await put(memory, source.index!, await indexBytes(memory, source));
@@ -56,7 +61,7 @@ async function harness(bytes: Uint8Array, filename = "a.zip", options: { etags?:
   };
   const indexReads = () => reads.filter((r) => r.key === source.index).length;
   const distrusted = () => archives.distrusted(`${source.key}#${source.size}`);
-  return { memory, storage, reads, source, archives, open, indexReads, distrusted };
+  return { memory, storage, reads, heads, source, archives, open, indexReads, distrusted };
 }
 
 async function views(bytes: Uint8Array, filename: string): Promise<{ memory: TableView; indexed: TableView }> {
@@ -157,14 +162,17 @@ describe("IndexedView answers exactly what MemoryView answers", () => {
 });
 
 describe("storage reads with an index", () => {
-  test("a cold find and open costs the index head, one page and the entry; a warm one costs the entry", async () => {
+  test("a cold find and open costs a HEAD of the original beside the index head, one page and the entry; a warm one costs the entry", async () => {
     const h = await harness(writeZip(nested));
     const path = "a1/b1/c/f00001.txt";
     expect(await bodyOf(await h.open(), path)).toBe("entry 1");
+    expect(h.heads).toEqual([h.source.key]);
     expect(h.reads.map((r) => r.key)).toEqual([h.source.index, h.source.index, h.source.key]);
 
     h.reads.length = 0;
+    h.heads.length = 0;
     expect(await bodyOf(await h.open(), path)).toBe("entry 1");
+    expect(h.heads).toEqual([]);
     expect(h.reads.map((r) => r.key)).toEqual([h.source.key]);
   });
 
@@ -205,7 +213,7 @@ describe("an index that does not match falls back to the central directory", () 
     expect(h.indexReads()).toBe(0);
   });
 
-  test("an index for another zip of the same size, caught by its etag", async () => {
+  test("an index for another zip of the same size, caught by its etag on open", async () => {
     const h = await harness(writeZip(entries));
     const other = writeZip([{ name: "x.txt", data: text("AAAA") }, { name: "y.txt", data: text("BB") }]);
     expect(other.byteLength).toBe(h.source.size);
@@ -217,13 +225,13 @@ describe("an index that does not match falls back to the central directory", () 
     if (!fresh.ok) throw new Error(fresh.reason);
     expect(await reader.list({})).toEqual(await fresh.reader.list({}));
     expect(await bodyOf(reader, "y.txt")).toBe("BB");
-    expect(h.distrusted()).toBe(true);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("not used (etag)"));
     h.reads.length = 0;
     await h.open();
     expect(h.indexReads()).toBe(0);
   });
 
-  test("an index for another zip of the same size, caught by the local header name without etags", async () => {
+  test("a store without etags never uses the index", async () => {
     const h = await harness(writeZip(entries), "a.zip", { etags: false });
     const other = writeZip([{ name: "y.txt", data: text("BB") }, { name: "x.txt", data: text("AAAA") }]);
     expect(other.byteLength).toBe(h.source.size);
@@ -232,7 +240,7 @@ describe("an index that does not match falls back to the central directory", () 
     expect(await bodyOf(await h.open(), "x.txt")).toBe("AAAA");
     const reader = await h.open();
     expect(await bodyOf(reader, "y.txt")).toBe("BB");
-    expect(h.distrusted()).toBe(true);
+    expect(warn).toHaveBeenCalledWith(expect.stringContaining("not used (etag)"));
     h.reads.length = 0;
     await h.open();
     expect(h.indexReads()).toBe(0);
@@ -241,9 +249,10 @@ describe("an index that does not match falls back to the central directory", () 
   test("a page that fails its CRC-32", async () => {
     const h = await harness(writeZip(nested));
     const index = new Uint8Array(await new Response((await h.memory.get(h.source.index!))!.body).arrayBuffer());
-    const head = readHeader(index, { size: h.source.size });
+    const original = await h.memory.head(h.source.key);
+    const head = readHeader(index, { sourceSize: h.source.size, sourceEtag: original?.etag, objectSize: index.byteLength });
     if (!head.ok) throw new Error(head.reason);
-    const fence = readFence(index, head.header);
+    const fence = readFence(index, head.header, index.byteLength);
     if (!fence.ok) throw new Error(fence.reason);
     index[fence.fence.pages[2].offset + 9] ^= 0x01;
     await put(h.memory, h.source.index!, index);

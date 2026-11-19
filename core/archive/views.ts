@@ -103,10 +103,10 @@ export class IndexUnusable extends Error {}
 
 export type IndexedOpen = { ok: true; view: TableView; bytes: number } | { ok: false; reason: IndexRejection | "missing" | "unreadable" };
 
-export async function openIndexedView(storage: FileStorage, key: string, sourceSize: number, pageBudget = PAGE_BUDGET): Promise<IndexedOpen> {
+export async function openIndexedView(storage: FileStorage, key: string, source: { key: string; size: number }, pageBudget = PAGE_BUDGET): Promise<IndexedOpen> {
   let opened: Awaited<ReturnType<typeof readIndexHead>>;
   try {
-    opened = await readIndexHead(storage, key, sourceSize);
+    opened = await readIndexHead(storage, key, source);
   } catch {
     return { ok: false, reason: "unreadable" };
   }
@@ -114,25 +114,31 @@ export async function openIndexedView(storage: FileStorage, key: string, sourceS
   return { ok: true, view: indexedView(storage, key, opened.fence, pageBudget), bytes: opened.fence.header.fenceEnd + pageBudget };
 }
 
-async function readIndexHead(storage: FileStorage, key: string, sourceSize: number): Promise<{ ok: true; fence: IndexFence } | { ok: false; reason: IndexRejection | "missing" }> {
-  const first = await readObject(storage, key, 0, INDEX_HEAD_BYTES);
+async function readIndexHead(
+  storage: FileStorage,
+  key: string,
+  source: { key: string; size: number },
+): Promise<{ ok: true; fence: IndexFence } | { ok: false; reason: IndexRejection | "missing" }> {
+  const [original, first] = await Promise.all([storage.head(source.key), readObject(storage, key, 0, INDEX_HEAD_BYTES)]);
   if (!first) return { ok: false, reason: "missing" };
-  const head = readHeader(first, { size: sourceSize });
+  if (!original || original.size !== source.size) return { ok: false, reason: "size" };
+  const { objectSize } = first;
+  const head = readHeader(first.bytes, { sourceSize: source.size, sourceEtag: original.etag, objectSize });
   if (!head.ok) return head;
   const { fenceEnd } = head.header;
-  if (fenceEnd <= first.byteLength) return readFence(first, head.header);
-  if (first.byteLength < INDEX_HEAD_BYTES) return { ok: false, reason: "truncated" };
-  const rest = await readObject(storage, key, first.byteLength, fenceEnd - first.byteLength);
+  if (fenceEnd <= first.bytes.byteLength) return readFence(first.bytes, head.header, objectSize);
+  if (first.bytes.byteLength < INDEX_HEAD_BYTES) return { ok: false, reason: "truncated" };
+  const rest = await readObject(storage, key, first.bytes.byteLength, fenceEnd - first.bytes.byteLength);
   if (!rest) return { ok: false, reason: "missing" };
-  const bytes = new Uint8Array(first.byteLength + rest.byteLength);
-  bytes.set(first);
-  bytes.set(rest, first.byteLength);
-  return readFence(bytes, head.header);
+  const bytes = new Uint8Array(first.bytes.byteLength + rest.bytes.byteLength);
+  bytes.set(first.bytes);
+  bytes.set(rest.bytes, first.bytes.byteLength);
+  return readFence(bytes, head.header, objectSize);
 }
 
-async function readObject(storage: FileStorage, key: string, offset: number, length: number): Promise<Uint8Array | null> {
+async function readObject(storage: FileStorage, key: string, offset: number, length: number): Promise<{ bytes: Uint8Array; objectSize: number } | null> {
   const file = await storage.get(key, { offset, length });
-  return file && readAll(file.body, length);
+  return file && { bytes: await readAll(file.body, length), objectSize: file.range?.totalSize ?? file.size };
 }
 
 function indexedView(storage: FileStorage, key: string, fence: IndexFence, pageBudget: number): TableView {
@@ -144,15 +150,14 @@ function indexedView(storage: FileStorage, key: string, fence: IndexFence, pageB
     if (loaded.delete(p)) held -= pages[p].length;
   };
   const load = async (p: number): Promise<EntryTable> => {
-    let bytes: Uint8Array | null;
+    let table: EntryTable | null;
     try {
-      bytes = await readObject(storage, key, pages[p].offset, pages[p].length);
+      const read = await readObject(storage, key, pages[p].offset, pages[p].length);
+      table = read && readPage(read.bytes, pages[p], header.directory.offset);
     } catch (e) {
       throw new IndexUnusable(`index ${key} page ${p} is unreadable: ${e instanceof Error ? e.message : String(e)}`);
     }
-    if (!bytes) throw new IndexUnusable(`index ${key} is missing`);
-    const table = readPage(bytes, pages[p]);
-    if (!table) throw new IndexUnusable(`index ${key} page ${p} fails its CRC-32`);
+    if (!table) throw new IndexUnusable(`index ${key} page ${p} is missing or fails its CRC-32 or its structure checks`);
     return table;
   };
   const page = (p: number): Promise<EntryTable> => {

@@ -23,13 +23,13 @@ function encode(input: IndexInputs): Uint8Array {
   return bytes;
 }
 
-function decode(bytes: Uint8Array, expect: { size: number; etag?: string }) {
-  const head = readHeader(bytes, expect);
+function decode(bytes: Uint8Array, expect: { size: number; etag: string | undefined }) {
+  const head = readHeader(bytes, { sourceSize: expect.size, sourceEtag: expect.etag, objectSize: bytes.byteLength });
   if (!head.ok) return head;
-  const fence = readFence(bytes, head.header);
+  const fence = readFence(bytes, head.header, bytes.byteLength);
   if (!fence.ok) return fence;
   const entries = fence.fence.pages.flatMap((page) => {
-    const table = readPage(bytes.subarray(page.offset, page.offset + page.length), page);
+    const table = readPage(bytes.subarray(page.offset, page.offset + page.length), page, head.header.directory.offset);
     if (!table) throw new Error("page failed its CRC");
     return Array.from({ length: table.count }, (_, i) => entryAt(table, i));
   });
@@ -87,12 +87,12 @@ describe("container index encoding", () => {
       const input = await inputs(numbered(600));
       const bytes = encode(input).slice();
       const damaged = damage(bytes) ?? bytes;
-      expect(decode(damaged, { size: input.sourceSize })).toEqual({ ok: false, reason });
+      expect(decode(damaged, { size: input.sourceSize, etag: input.directory.etag })).toEqual({ ok: false, reason });
     });
 
     test("a source of another size", async () => {
       const input = await inputs(numbered(10));
-      expect(decode(encode(input), { size: input.sourceSize + 1 })).toEqual({ ok: false, reason: "size" });
+      expect(decode(encode(input), { size: input.sourceSize + 1, etag: input.directory.etag })).toEqual({ ok: false, reason: "size" });
     });
 
     test("a source with another etag", async () => {
@@ -100,16 +100,23 @@ describe("container index encoding", () => {
       expect(decode(encode(input), { size: input.sourceSize, etag: '"other"' })).toEqual({ ok: false, reason: "etag" });
     });
 
+    test("an etag missing on either side", async () => {
+      const input = await inputs(numbered(10));
+      expect(decode(encode(input), { size: input.sourceSize, etag: undefined })).toEqual({ ok: false, reason: "etag" });
+      const unrecorded = encode({ ...input, directory: { ...input.directory, etag: undefined } });
+      expect(decode(unrecorded, { size: input.sourceSize, etag: input.directory.etag })).toEqual({ ok: false, reason: "etag" });
+    });
+
     test("a page whose bytes fail its CRC", async () => {
       const input = await inputs(numbered(600));
       const bytes = encode(input).slice();
-      const head = readHeader(bytes, { size: input.sourceSize });
+      const head = readHeader(bytes, { sourceSize: input.sourceSize, sourceEtag: input.directory.etag, objectSize: bytes.byteLength });
       if (!head.ok) throw new Error(head.reason);
-      const fence = readFence(bytes, head.header);
+      const fence = readFence(bytes, head.header, bytes.byteLength);
       if (!fence.ok) throw new Error(fence.reason);
       const page = fence.fence.pages[1];
       bytes[page.offset + 7] ^= 0x01;
-      expect(readPage(bytes.subarray(page.offset, page.offset + page.length), page)).toBeNull();
+      expect(readPage(bytes.subarray(page.offset, page.offset + page.length), page, head.header.directory.offset)).toBeNull();
     });
   });
 });
