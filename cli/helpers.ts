@@ -256,6 +256,23 @@ export class DownloadFailed extends Error {
   }
 }
 
+export type Unservable = "unavailable" | "undecodable";
+
+/** A per-entry answer a bulk download skips and reports: 404 before extraction catches up, 501 for an entry Serve cannot decode. */
+export function unservable(err: unknown): Unservable | null {
+  if (!(err instanceof DownloadFailed)) return null;
+  if (err.status === 404) return "unavailable";
+  if (err.status === 501) return "undecodable";
+  return null;
+}
+
+export function unservableSummary(counts: Record<Unservable, number>): string[] {
+  const parts: string[] = [];
+  if (counts.unavailable > 0) parts.push(`${counts.unavailable} file(s) not yet available (extraction may be in progress)`);
+  if (counts.undecodable > 0) parts.push(`${counts.undecodable} file(s) Serve cannot decode`);
+  return parts;
+}
+
 export async function downloadFile(
   url: string,
   dest: string,
