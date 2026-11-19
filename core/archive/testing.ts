@@ -1,13 +1,7 @@
-/**
- * Store-only zip writer for tests whose archives are too large to commit
- * (Zip64 entry counts, a central directory past the memory limit). The small
- * committed fixtures come from scripts/fixtures/zip/generate.go instead.
- */
 export interface SyntheticEntry {
   name: string;
   data: Uint8Array;
-  /** Padding that makes each central directory record large without adding entries. */
-  comment?: number;
+  commentPadding?: number;
 }
 
 const encoder = new TextEncoder();
@@ -32,7 +26,7 @@ export function writeZip(entries: SyntheticEntry[]): Uint8Array {
     local.set(entry.data, 30 + name.byteLength);
     locals.push(local);
 
-    const comment = entry.comment ?? 0;
+    const comment = entry.commentPadding ?? 0;
     const central = new Uint8Array(46 + name.byteLength + comment);
     const cv = new DataView(central.buffer);
     cv.setUint32(0, 0x02014b50, true);

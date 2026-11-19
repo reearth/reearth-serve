@@ -5,7 +5,6 @@ import { buildTable, createSurvey, type TableEntry } from "./table";
 import { memoryView, scanView, type TableView } from "./views";
 import { chunks, createDirectoryParser, locateDirectory, readAll, type Directory, type DirectoryRefusal } from "./zip/directory";
 
-/** Central directories above this are streamed per query instead of held (PLATEAU max is 41.9 MB, p99 13.2 MB). */
 const MEMORY_DIRECTORY_LIMIT = 32 * 1024 * 1024;
 const DEFAULT_LIMIT = 1000;
 const MAX_LIMIT = 10_000;
@@ -26,7 +25,6 @@ export function toArchivePath(raw: string): ArchivePath | null {
   return segments.every((s) => s !== "" && s !== "." && s !== "..") ? (raw as ArchivePath) : null;
 }
 
-/** One original, as the row describes it. `size` is needed because storage has no suffix ranges. */
 export interface ArchiveSource {
   key: string;
   size: number;
@@ -107,7 +105,7 @@ export async function buildView(
     return { ok: true, view: scanView(storage, source.key, directory, survey, onStale), bytes: 256 };
   }
 
-  const cd = directory.inline ?? (await readDirectory(storage, source.key, directory));
+  const cd = directory.bytesFromTail ?? (await readDirectory(storage, source.key, directory));
   if (!cd) return { ok: false, reason: "missing" };
   const survey = createSurvey(source.filename);
   const parser = createDirectoryParser(directory, survey.observe);

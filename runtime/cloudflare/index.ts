@@ -19,8 +19,6 @@ declare module "react-router" {
   }
 }
 
-// Module scope outlives the per-invocation Deps, so an isolate keeps parsed
-// central directories across requests (ADR-018 §3).
 const archives = createArchiveCache();
 
 const requestHandler = createRequestHandler(

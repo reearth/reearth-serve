@@ -22,7 +22,6 @@ async function listing(f: Listed, query = "") {
   return (await res.text()).split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
 
-/** The fixture's archive version, with `name` from scripts/fixtures/zip as its original and no extraction yet. */
 async function unextracted(name: string) {
   const f = await siteFixture();
   const bytes = zipBytes(name);

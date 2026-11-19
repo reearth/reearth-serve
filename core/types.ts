@@ -91,11 +91,6 @@ export type ContextDeps = {
    * cookie-authorized file read answers with credentialed CORS (ADR-013 B7).
    */
   credentialedOrigins: readonly string[];
-  /**
-   * Parsed zip central directories (ADR-018 §3). Created once per isolate or
-   * process by the runtime, outside this per-request object, so a warm
-   * listing costs no storage reads.
-   */
   archives: ArchiveCache;
 };
 

@@ -1,8 +1,3 @@
-/**
- * container/archive-extractor/manifest.go DetectContentType: its own table,
- * then Go's built-in mime table (the container image has no mime.types), so an
- * entry read in place gets the type its extracted copy would have.
- */
 const KNOWN: Record<string, string> = {
   ".geojson": "application/geo+json",
   ".topojson": "application/json",

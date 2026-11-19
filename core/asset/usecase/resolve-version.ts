@@ -6,7 +6,6 @@ export interface ResolvedAsset {
   version: AssetVersion | null;
 }
 
-/** The version an asset-ID URL serves: the active one, else the latest, else none (assets from before ADR-005). */
 export async function activeVersion(versions: VersionStore, asset: AssetMetadata): Promise<AssetVersion | null> {
   const active = asset.activeVersionId ? await versions.find(asset.activeVersionId) : null;
   return active ?? (await versions.findLatest(asset.id));

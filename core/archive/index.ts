@@ -1,4 +1,4 @@
-export { createArchiveCache, DEFAULT_ARCHIVE_CACHE_BYTES, type ArchiveCache } from "./cache";
+export { createArchiveCache, type ArchiveCache } from "./cache";
 export {
   openArchive,
   toArchivePath,

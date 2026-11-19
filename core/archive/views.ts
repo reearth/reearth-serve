@@ -1,8 +1,7 @@
 import type { FileStorage } from "../asset/repository";
 import { chunks, createDirectoryParser, type CdRecord, type Directory } from "./zip/directory";
-import { compare, entryAt, lowerBound, listedPath, nameAt, toEntry, type EntryTable, type NameRules, type TableEntry } from "./table";
+import { compare, entryAt, lowerBound, upperBound, listedPath, nameAt, toEntry, type EntryTable, type NameRules, type TableEntry } from "./table";
 
-/** A query with defaults applied. An empty string means "none". */
 export interface ListQuery {
   prefix: string;
   delimiter: string;
@@ -46,7 +45,7 @@ export function memoryView(table: EntryTable, entryCount: number, rootPrefix: st
       const delimiter = encoder.encode(query.delimiter);
       const result: ListResult = { entries: [], commonPrefixes: [] };
       let i = lowerBound(table, prefix);
-      if (query.after) i = Math.max(i, lowerBound(table, encoder.encode(query.after), true));
+      if (query.after) i = Math.max(i, upperBound(table, encoder.encode(query.after)));
       let last = "";
       while (i < table.count) {
         const name = nameAt(table, i);
@@ -72,11 +71,6 @@ export function memoryView(table: EntryTable, entryCount: number, rootPrefix: st
   };
 }
 
-/**
- * For a central directory too large to hold: every query streams it again,
- * holding O(limit) items. Exact, only slower; a container index (P3) is what
- * makes such an archive fast.
- */
 export function scanView(
   storage: FileStorage,
   key: string,

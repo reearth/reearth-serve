@@ -16,20 +16,17 @@ const TAIL_BYTES = 1 << 20;
 export type DirectoryRefusal = "missing" | "not-zip" | "multi-disk" | "encoded-original" | "corrupt";
 
 export interface Directory {
-  /** Absolute offset of the first central directory record, prepended data included. */
   offset: number;
   size: number;
   entryCount: number;
   /** Bytes in front of the archive proper; added to every recorded offset. */
   baseOffset: number;
   etag: string | undefined;
-  /** The central directory itself when the tail read already covered it. */
-  inline: Uint8Array | null;
+  bytesFromTail: Uint8Array | null;
 }
 
 export interface CdRecord {
   index: number;
-  /** Valid only during the callback: it views the parser's buffer. */
   rawName: Uint8Array;
   /** The Info-ZIP Unicode Path name, present only when its CRC matches `rawName`. */
   unicodePath: Uint8Array | null;
@@ -81,8 +78,8 @@ export async function locateDirectory(storage: FileStorage, key: string, size: n
   const baseOffset = end - cdSize - cdOffset;
   if (baseOffset < 0) return { ok: false, reason: "corrupt" };
   const offset = baseOffset + cdOffset;
-  const inline = offset >= tailStart ? tail.subarray(offset - tailStart, offset - tailStart + cdSize) : null;
-  return { ok: true, directory: { offset, size: cdSize, entryCount, baseOffset, etag, inline } };
+  const bytesFromTail = offset >= tailStart ? tail.subarray(offset - tailStart, offset - tailStart + cdSize) : null;
+  return { ok: true, directory: { offset, size: cdSize, entryCount, baseOffset, etag, bytesFromTail } };
 }
 
 function findEocd(view: DataView): number {
@@ -164,11 +161,6 @@ function getUint64(view: DataView, at: number): number {
   return view.getUint32(at, true) + view.getUint32(at + 4, true) * 0x1_0000_0000;
 }
 
-/**
- * Streaming central directory parser. It holds one chunk plus one partial
- * record, so a directory larger than memory can still be walked. `push`
- * returns false once the bytes stop looking like a central directory.
- */
 export function createDirectoryParser(directory: Directory, onRecord: (record: CdRecord) => void) {
   let carry = new Uint8Array(0);
   let consumed = 0;
@@ -207,7 +199,6 @@ export function createDirectoryParser(directory: Directory, onRecord: (record: C
       carry = buffer.slice(parse(buffer));
       return !corrupt;
     },
-    /** The record count, or null when the directory ended early or carried trailing bytes. */
     end(): number | null {
       return corrupt || consumed !== directory.size || carry.byteLength > 0 ? null : index;
     },

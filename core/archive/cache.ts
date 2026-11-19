@@ -4,17 +4,15 @@ import type { DirectoryRefusal } from "./zip/directory";
 export type Built = { ok: true; view: TableView; bytes: number } | { ok: false; reason: DirectoryRefusal };
 
 /**
- * Parsed central directories kept for the life of an isolate or process.
- * Runtimes create one at module scope and pass it through `Deps`, because
- * `Deps` is rebuilt per request. Concurrent cold requests for one archive
- * share a single build; a build that fails or refuses is not kept.
+ * Concurrent cold requests for one archive share a single build; a build that
+ * fails or refuses is not kept.
  */
 export interface ArchiveCache {
   load(key: string, build: () => Promise<Built>): Promise<Built>;
   evict(key: string): void;
 }
 
-export const DEFAULT_ARCHIVE_CACHE_BYTES = 48 * 1024 * 1024;
+const DEFAULT_ARCHIVE_CACHE_BYTES = 48 * 1024 * 1024;
 
 export function createArchiveCache(maxBytes = DEFAULT_ARCHIVE_CACHE_BYTES): ArchiveCache {
   const entries = new Map<string, { view: TableView; bytes: number }>();

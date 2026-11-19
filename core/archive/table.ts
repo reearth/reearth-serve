@@ -1,7 +1,6 @@
 import { createDirectoryParser, type CdRecord, type Directory } from "./zip/directory";
 import { classifyName, decodeLegacy, decodeShiftJis, entryPath, normalize, RootDetector, type LegacyEncoding } from "./names";
 
-/** How every name of one archive becomes a path. Decided once per archive, from the central directory alone. */
 export interface NameRules {
   legacy: LegacyEncoding;
   rootPrefix: string;
@@ -19,13 +18,6 @@ export interface TableEntry {
   cdExtraLength: number;
 }
 
-/**
- * Names that are neither flagged UTF-8, valid UTF-8, nor carried by a valid
- * Unicode Path extra all decode one way: Shift_JIS when every one of them is
- * strict Shift_JIS, CP437 otherwise. Deciding per archive keeps a heuristic
- * from flipping between entries. Root detection runs for both candidates in
- * the same pass, so the survey never needs a second read.
- */
 export function createSurvey(filename: string) {
   let allShiftJis = true;
   const roots: Record<LegacyEncoding, RootDetector> = { shift_jis: new RootDetector(), cp437: new RootDetector() };
@@ -70,17 +62,6 @@ export function toEntry(path: string, record: CdRecord): TableEntry {
   };
 }
 
-/**
- * Fixed 48-byte little-endian records sorted by the UTF-8 bytes of the path,
- * with one name heap. UTF-8 byte order is ListObjectsV2 order, so one sort
- * serves lookup, prefix and delimiter listing, and continuation. The layout is
- * what a container index page stores byte for byte (ADR-018 §4).
- *
- *   0 u32 nameOffset    4 u16 nameLength    6 u16 method    8 u16 flags
- *  10 u16 cdNameLength 12 u32 crc32        16 f64 compressedSize
- *  24 f64 size         32 f64 localHeaderOffset (prepended data included)
- *  40 u32 cdIndex      44 u16 cdExtraLength 46 u16 reserved
- */
 export interface EntryTable {
   count: number;
   records: DataView;
@@ -88,6 +69,17 @@ export interface EntryTable {
 }
 
 const RECORD = 48;
+const NAME_OFFSET = 0;
+const NAME_LENGTH = 4;
+const METHOD = 6;
+const FLAGS = 8;
+const CD_NAME_LENGTH = 10;
+const CRC32 = 12;
+const COMPRESSED_SIZE = 16;
+const SIZE = 24;
+const LOCAL_HEADER_OFFSET = 32;
+const CD_INDEX = 40;
+const CD_EXTRA_LENGTH = 44;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -114,8 +106,8 @@ export function buildTable(cd: Uint8Array, directory: Directory, rules: NameRule
   const offsets = new Uint32Array(count);
   const lengths = new Uint16Array(count);
   for (let i = 0; i < count; i++) {
-    offsets[i] = records.getUint32(i * RECORD, true);
-    lengths[i] = records.getUint16(i * RECORD + 4, true);
+    offsets[i] = records.getUint32(i * RECORD + NAME_OFFSET, true);
+    lengths[i] = records.getUint16(i * RECORD + NAME_LENGTH, true);
   }
   const order = new Uint32Array(count).map((_, i) => i);
   order.sort((a, b) => compareBytes(names, offsets[a], lengths[a], names, offsets[b], lengths[b]) || a - b);
@@ -137,17 +129,17 @@ export function buildTable(cd: Uint8Array, directory: Directory, rules: NameRule
 
 function writeRecord(records: DataView, i: number, nameOffset: number, nameLength: number, record: CdRecord): void {
   const at = i * RECORD;
-  records.setUint32(at, nameOffset, true);
-  records.setUint16(at + 4, nameLength, true);
-  records.setUint16(at + 6, record.method, true);
-  records.setUint16(at + 8, record.flags, true);
-  records.setUint16(at + 10, record.rawName.byteLength, true);
-  records.setUint32(at + 12, record.crc32, true);
-  records.setFloat64(at + 16, record.compressedSize, true);
-  records.setFloat64(at + 24, record.size, true);
-  records.setFloat64(at + 32, record.localHeaderOffset, true);
-  records.setUint32(at + 40, record.index, true);
-  records.setUint16(at + 44, record.extraLength, true);
+  records.setUint32(at + NAME_OFFSET, nameOffset, true);
+  records.setUint16(at + NAME_LENGTH, nameLength, true);
+  records.setUint16(at + METHOD, record.method, true);
+  records.setUint16(at + FLAGS, record.flags, true);
+  records.setUint16(at + CD_NAME_LENGTH, record.rawName.byteLength, true);
+  records.setUint32(at + CRC32, record.crc32, true);
+  records.setFloat64(at + COMPRESSED_SIZE, record.compressedSize, true);
+  records.setFloat64(at + SIZE, record.size, true);
+  records.setFloat64(at + LOCAL_HEADER_OFFSET, record.localHeaderOffset, true);
+  records.setUint32(at + CD_INDEX, record.index, true);
+  records.setUint16(at + CD_EXTRA_LENGTH, record.extraLength, true);
 }
 
 function grow(view: DataView<ArrayBuffer>): DataView<ArrayBuffer> {
@@ -163,8 +155,9 @@ function growBytes(bytes: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
 }
 
 export function nameAt(table: EntryTable, i: number): Uint8Array {
-  const offset = table.records.getUint32(i * RECORD, true);
-  return table.names.subarray(offset, offset + table.records.getUint16(i * RECORD + 4, true));
+  const at = i * RECORD;
+  const offset = table.records.getUint32(at + NAME_OFFSET, true);
+  return table.names.subarray(offset, offset + table.records.getUint16(at + NAME_LENGTH, true));
 }
 
 export function entryAt(table: EntryTable, i: number): TableEntry {
@@ -172,26 +165,32 @@ export function entryAt(table: EntryTable, i: number): TableEntry {
   const r = table.records;
   return {
     path: decoder.decode(nameAt(table, i)),
-    method: r.getUint16(at + 6, true),
-    flags: r.getUint16(at + 8, true),
-    cdNameLength: r.getUint16(at + 10, true),
-    crc32: r.getUint32(at + 12, true),
-    compressedSize: r.getFloat64(at + 16, true),
-    size: r.getFloat64(at + 24, true),
-    localHeaderOffset: r.getFloat64(at + 32, true),
-    cdExtraLength: r.getUint16(at + 44, true),
+    method: r.getUint16(at + METHOD, true),
+    flags: r.getUint16(at + FLAGS, true),
+    cdNameLength: r.getUint16(at + CD_NAME_LENGTH, true),
+    crc32: r.getUint32(at + CRC32, true),
+    compressedSize: r.getFloat64(at + COMPRESSED_SIZE, true),
+    size: r.getFloat64(at + SIZE, true),
+    localHeaderOffset: r.getFloat64(at + LOCAL_HEADER_OFFSET, true),
+    cdExtraLength: r.getUint16(at + CD_EXTRA_LENGTH, true),
   };
 }
 
-/** First index whose name is >= key (or > key when `strict`). */
-export function lowerBound(table: EntryTable, key: Uint8Array, strict = false): number {
+export function lowerBound(table: EntryTable, key: Uint8Array): number {
+  return firstIndex(table, (name) => compare(name, key) >= 0);
+}
+
+export function upperBound(table: EntryTable, key: Uint8Array): number {
+  return firstIndex(table, (name) => compare(name, key) > 0);
+}
+
+function firstIndex(table: EntryTable, reached: (name: Uint8Array) => boolean): number {
   let lo = 0;
   let hi = table.count;
   while (lo < hi) {
     const mid = (lo + hi) >>> 1;
-    const c = compare(nameAt(table, mid), key);
-    if (c < 0 || (strict && c === 0)) lo = mid + 1;
-    else hi = mid;
+    if (reached(nameAt(table, mid))) hi = mid;
+    else lo = mid + 1;
   }
   return lo;
 }

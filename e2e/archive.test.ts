@@ -283,8 +283,6 @@ describe("Archive & Job", () => {
     });
   });
 
-  // --- In-place listing (ADR-018 §3) ---
-
   describe("In-place listing", () => {
     test.each(["deflate.zip", "store.zip", "descriptor.zip", "prepended.zip", "shift_jis.zip", "cp437.zip", "unicode-extra.zip", "site.zip"])(
       "%s lists its golden entries the moment the upload completes",

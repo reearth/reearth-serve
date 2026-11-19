@@ -273,11 +273,6 @@ export async function downloadFile(
   return true; // downloaded
 }
 
-/**
- * The local file's hash in the scheme of a listing's `hash` (`md5:` from an
- * extraction manifest, `crc32:` from a zip read in place), or null for a
- * scheme this CLI cannot compute.
- */
 export function localHash(filePath: string, remote: string): string | null {
   const scheme = remote.slice(0, remote.indexOf(":"));
   if (scheme === "md5") return `md5:${createHash("md5").update(readFileSync(filePath)).digest("hex")}`;

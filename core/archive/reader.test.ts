@@ -153,7 +153,7 @@ describe("storage reads", () => {
   });
 
   test("a central directory above 32 MiB is streamed per query instead of held, and still lists exactly", async () => {
-    const entries = many(520).map((e) => ({ ...e, comment: 0xffff }));
+    const entries = many(520).map((e) => ({ ...e, commentPadding: 0xffff }));
     const deps = await stored(writeZip(entries));
     const reader = await open(deps, deps.source);
     deps.reads.length = 0;
@@ -175,8 +175,8 @@ describe("staleness", () => {
   });
 
   test("a streamed central directory that changed under the same size evicts the cache, and the next open sees the new entries", async () => {
-    const before = many(520, (i) => `old/${String(i).padStart(6, "0")}`).map((e) => ({ ...e, comment: 0xffff }));
-    const after = many(520, (i) => `new/${String(i).padStart(6, "0")}`).map((e) => ({ ...e, comment: 0xffff }));
+    const before = many(520, (i) => `old/${String(i).padStart(6, "0")}`).map((e) => ({ ...e, commentPadding: 0xffff }));
+    const after = many(520, (i) => `new/${String(i).padStart(6, "0")}`).map((e) => ({ ...e, commentPadding: 0xffff }));
     const deps = await stored(writeZip(before));
     const reader = await open(deps, deps.source);
 

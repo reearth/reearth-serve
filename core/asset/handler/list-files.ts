@@ -50,9 +50,6 @@ export function registerListFilesRoute(app: Hono<AppEnv>) {
       return ndjson(JSON.stringify(entry) + "\n");
     }
 
-    // An extracted archive's manifest answers first, so its listing stays
-    // byte for byte what it was. Otherwise a zip is listed from its own
-    // central directory the moment the upload completes (ADR-018 §3).
     for (const layout of layouts.filter((l) => l.archive)) {
       const manifest = await storage.get(`${layout.root}/_archive/_manifest.jsonl`);
       if (manifest) {
@@ -80,7 +77,6 @@ interface ListingLayout {
   archiveFormat?: string;
 }
 
-/** The same layouts, in the same order, that `/files/:id/…` serves from (core/file/handler.ts). */
 function listingLayouts(asset: AssetMetadata, version: AssetVersion | null): ListingLayout[] {
   const layout = (root: string, row: AssetMetadata | AssetVersion): ListingLayout => ({
     root,

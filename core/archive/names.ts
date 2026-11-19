@@ -7,7 +7,6 @@ const strictShiftJis = new TextDecoder("shift_jis", { fatal: true });
 
 export type LegacyEncoding = "shift_jis" | "cp437";
 
-/** A central directory name as the reader sees it before the archive-wide encoding decision. */
 export type RecordName =
   | { kind: "utf8"; name: string }
   | { kind: "legacy"; raw: Uint8Array };
@@ -52,7 +51,6 @@ function isAscii(raw: Uint8Array): boolean {
   return true;
 }
 
-/** container/archive-extractor/path.go NormalizeSeparators: backslashes to slashes, one leading slash off, then path.Clean. */
 export function normalize(name: string): string {
   return clean(name.replaceAll("\\", "/").replace(/^\//, ""));
 }
@@ -72,7 +70,6 @@ function clean(path: string): string {
   return joined || ".";
 }
 
-/** path.go RootPrefixDetector, fed every normalized entry name, directories included. */
 export class RootDetector {
   private root: string | null = null;
   private conflict = false;
@@ -93,7 +90,6 @@ export class RootDetector {
   }
 }
 
-/** The listed path for a normalized name, or null when no file of the archive may carry it. */
 export function entryPath(normalized: string, rootPrefix: string): string | null {
   const path = rootPrefix && normalized.startsWith(rootPrefix) ? normalized.slice(rootPrefix.length) : normalized;
   if (path === "." || path === ".." || path.startsWith("../") || path.startsWith("/")) return null;
