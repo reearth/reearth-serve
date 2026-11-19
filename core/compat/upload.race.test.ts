@@ -216,14 +216,16 @@ describe("one commit at a time", () => {
     const id = await begin(c, "s.bin");
     await c.uploads.append(id, BUCKET, { start: 0, size: 10, total: null }, stream(fill(10, "s")), NO_HASH);
     const hang = gate();
+    const reached = gate();
     const object = target(deps) as Record<string, (...a: unknown[]) => Promise<unknown>>;
     const original = object[method].bind(object);
     vi.spyOn(object, method).mockImplementationOnce(async (...a: unknown[]) => {
+      reached.open();
       await hang.opened;
       return original(...a);
     });
     const stalled = c.uploads.append(id, BUCKET, { start: null, size: 0, total: 10 }, null, NO_HASH);
-    await tick();
+    await reached.opened;
     expect(await c.uploads.append(id, BUCKET, { start: null, size: 0, total: 10 }, null, NO_HASH)).toEqual({ ok: false, error: { code: "busy" } });
     c.clock.now += HOLD_STALE_MS + 1;
     const taken = await c.uploads.append(id, BUCKET, { start: null, size: 0, total: 10 }, null, NO_HASH);

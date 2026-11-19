@@ -37,6 +37,8 @@ function ownedAt(phase: UploadPhase, at: number): boolean {
   return phase.state === "committing" && phase.owner !== null && phase.owner.since >= at - HOLD_STALE_MS;
 }
 
+const GONE: UploadPhase = { state: "failed", error: { code: "no_such_upload" } };
+
 const invalid = (message: string): ChunkDecision => ({ kind: "reject", error: { code: "invalid", message } });
 
 export function applyChunk(session: UploadSession, chunk: Chunk, now: number): ChunkDecision {
@@ -108,7 +110,7 @@ function stagedStream(storage: FileStorage, parts: StagedPart[]): ReadableStream
     async cancel(reason) {
       await reader?.cancel(reason);
     },
-  });
+  }, { highWaterMark: 0 });
 }
 
 function declaredMismatch(declared: DeclaredHashes, actual: ExactHashes): string | null {
@@ -305,9 +307,9 @@ export function resumableUploads(
       const found = await sessionFor(id, bucket);
       if (!found.ok) return found;
       const { phase, revision } = found.value;
-      if (ownedAt(phase, now())) return fail({ code: "busy" });
-      if (!(await compat.deleteUpload(id as UploadId, revision))) return fail({ code: "busy" });
+      if (ownedAt(phase, now()) || !(await compat.updateUpload(id as UploadId, revision, GONE))) return fail({ code: "busy" });
       await dropStaging(id as UploadId);
+      await compat.deleteUpload(id as UploadId, revision + 1);
       return { ok: true, value: undefined };
     },
   };
@@ -317,8 +319,9 @@ export async function sweepUploads(deps: Pick<Deps, "compat" | "pendingCleanup">
   const expired = await deps.compat.listExpiredUploads(now, SWEEP_SESSIONS_PER_TICK);
   let sessions = 0;
   for (const session of expired) {
-    if (ownedAt(session.phase, now) || !(await deps.compat.deleteUpload(session.id, session.revision))) continue;
+    if (ownedAt(session.phase, now) || !(await deps.compat.updateUpload(session.id, session.revision, GONE))) continue;
     await deps.pendingCleanup.add(stagingPrefix(session.id));
+    await deps.compat.deleteUpload(session.id, session.revision + 1);
     sessions++;
   }
   const holds = await deps.compat.sweepStaleHolds(now - HOLD_STALE_MS);

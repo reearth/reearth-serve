@@ -87,8 +87,20 @@ export class MemoryCompatStore implements CompatStore {
   }
   async lease(bucket: BucketName, key: BindingKey, token: LeaseToken, now: number, staleBefore: number): Promise<boolean> {
     const row = this.bindings.get(rowKey(bucket, key));
-    if (!row || row.assetId === null || (row.lease !== null && row.lease.token !== token && row.lease.at >= staleBefore)) return false;
+    if (!row || row.assetId === null || (row.lease !== null && row.lease.at >= staleBefore)) return false;
     row.lease = { token, at: now };
+    return true;
+  }
+  async renewLease(bucket: BucketName, key: BindingKey, token: LeaseToken, now: number): Promise<boolean> {
+    const row = this.bindings.get(rowKey(bucket, key));
+    if (row?.lease?.token !== token) return false;
+    row.lease = { token, at: now };
+    return true;
+  }
+  async renewClaim(bucket: BucketName, key: BindingKey, token: ClaimToken, now: number): Promise<boolean> {
+    const row = this.bindings.get(rowKey(bucket, key));
+    if (!row || row.assetId !== null || row.claimToken !== token) return false;
+    row.claimedAt = now;
     return true;
   }
   async releaseLease(bucket: BucketName, key: BindingKey, token: LeaseToken): Promise<void> {
@@ -185,7 +197,8 @@ export class MemoryCompatStore implements CompatStore {
   holds(guard: WriteGuard): boolean {
     if (this.uploads.get(guard.upload.id)?.revision !== guard.upload.revision) return false;
     if (!guard.lease) return true;
-    return this.bindings.get(rowKey(guard.lease.bucket, guard.lease.key))?.lease?.token === guard.lease.token;
+    const row = this.bindings.get(rowKey(guard.lease.bucket, guard.lease.key));
+    return row?.lease?.token === guard.lease.token && row.assetId === guard.lease.assetId;
   }
 
   dropAsset(assetId: string): void {

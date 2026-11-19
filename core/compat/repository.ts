@@ -72,9 +72,13 @@ export interface CompatStore {
   /**
    * Lease the bound `key` at `now` for one overwrite or delete. False while
    * another fresh lease (not older than `staleBefore`) holds it, or when the
-   * key is not bound. Leasing again with the held `token` renews the lease.
+   * key is not bound.
    */
   lease(bucket: BucketName, key: BindingKey, token: LeaseToken, now: number, staleBefore: number): Promise<boolean>;
+  /** Refresh the lease `token` at `now`. False once it was released, taken over or swept. */
+  renewLease(bucket: BucketName, key: BindingKey, token: LeaseToken, now: number): Promise<boolean>;
+  /** Refresh the unfilled claim `token` at `now`. False once it was released, taken over or swept. */
+  renewClaim(bucket: BucketName, key: BindingKey, token: ClaimToken, now: number): Promise<boolean>;
   /** Drop the lease `token`. No-op once it was taken over or the row is gone. */
   releaseLease(bucket: BucketName, key: BindingKey, token: LeaseToken): Promise<void>;
   /** Bound rows with key in [from, until), ascending by key, at most `limit`. */
