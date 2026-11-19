@@ -20,7 +20,7 @@ const MAGIC = new TextEncoder().encode("SRVCIDX1");
 const VERSION = 1;
 const FORMAT_ZIP = 1;
 const HEADER = 128;
-const FENCE_RECORD = 18;
+const FENCE_RECORD = 20;
 const ETAG_AT = 80;
 const MAX_ETAG = 44;
 const HEADER_CRC = 124;
@@ -49,13 +49,14 @@ export interface IndexInputs {
   table: EntryTable;
   rules: NameRules;
   directory: Directory;
+  directoryRecordCount: number;
   sourceSize: number;
 }
 
 export interface IndexHeader {
   legacy: LegacyEncoding;
   count: number;
-  cdEntryCount: number;
+  directoryRecordCount: number;
   pageEntries: number;
   pageCount: number;
   sourceSize: number;
@@ -84,7 +85,7 @@ export interface IndexFence {
 export type IndexRejection = "truncated" | "magic" | "version" | "format" | "header-crc" | "fence-crc" | "size" | "etag";
 
 /** Null when the source etag or the root prefix does not fit its field; a truncated etag would match the wrong object. */
-export function encodeIndex({ table, rules, directory, sourceSize }: IndexInputs): Uint8Array | null {
+export function encodeIndex({ table, rules, directory, directoryRecordCount, sourceSize }: IndexInputs): Uint8Array | null {
   const etag = encoder.encode(directory.etag ?? "");
   const root = encoder.encode(rules.rootPrefix);
   if (etag.byteLength > MAX_ETAG || root.byteLength > 0xffff) return null;
@@ -114,7 +115,7 @@ export function encodeIndex({ table, rules, directory, sourceSize }: IndexInputs
     view.setFloat64(at, pageAt, true);
     view.setUint32(at + 8, page.byteLength, true);
     view.setUint32(at + 12, crc32(page), true);
-    view.setUint16(at + 16, firsts[p].byteLength, true);
+    view.setUint32(at + 16, firsts[p].byteLength, true);
     out.set(page, pageAt);
     out.set(firsts[p], nameAtFence);
     pageAt += page.byteLength;
@@ -129,7 +130,7 @@ export function encodeIndex({ table, rules, directory, sourceSize }: IndexInputs
   view.setUint16(H_ROOT_LENGTH, root.byteLength, true);
   view.setUint32(H_COUNT, table.count, true);
   view.setUint32(H_PAGE_COUNT, pages.length, true);
-  view.setFloat64(H_CD_ENTRIES, directory.entryCount, true);
+  view.setFloat64(H_CD_ENTRIES, directoryRecordCount, true);
   view.setFloat64(H_SOURCE_SIZE, sourceSize, true);
   view.setFloat64(H_CD_OFFSET, directory.offset, true);
   view.setFloat64(H_CD_SIZE, directory.size, true);
@@ -157,7 +158,7 @@ export function readHeader(bytes: Uint8Array, expect: { size: number; etag?: str
   const header: IndexHeader = {
     legacy,
     count: view.getUint32(H_COUNT, true),
-    cdEntryCount: view.getFloat64(H_CD_ENTRIES, true),
+    directoryRecordCount: view.getFloat64(H_CD_ENTRIES, true),
     pageEntries,
     pageCount: view.getUint32(H_PAGE_COUNT, true),
     sourceSize: view.getFloat64(H_SOURCE_SIZE, true),
@@ -187,7 +188,7 @@ export function readFence(bytes: Uint8Array, header: IndexHeader): { ok: true; f
   const pages: PageRef[] = [];
   for (let p = 0; p < header.pageCount; p++) {
     const at = fenceStart + p * FENCE_RECORD;
-    const firstLength = view.getUint16(at + 16, true);
+    const firstLength = view.getUint32(at + 16, true);
     if (nameCursor + firstLength > header.fenceEnd) return { ok: false, reason: "format" };
     pages.push({
       offset: view.getFloat64(at, true),

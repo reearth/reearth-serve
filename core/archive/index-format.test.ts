@@ -14,7 +14,7 @@ async function inputs(names: string[], filename = "a.zip"): Promise<IndexInputs>
   if (!located.ok) throw new Error(located.reason);
   const read = await directoryTable(storage, { key: filename, size: bytes.byteLength, filename }, located.directory);
   if (!read.ok) throw new Error(read.reason);
-  return { table: read.table, rules: read.rules, directory: located.directory, sourceSize: bytes.byteLength };
+  return { table: read.table, rules: read.rules, directory: located.directory, directoryRecordCount: read.directoryRecordCount, sourceSize: bytes.byteLength };
 }
 
 function encode(input: IndexInputs): Uint8Array {
@@ -62,7 +62,7 @@ describe("container index encoding", () => {
     expect(decoded.header).toMatchObject({
       legacy: input.rules.legacy,
       count: input.table.count,
-      cdEntryCount: input.directory.entryCount,
+      directoryRecordCount: input.directoryRecordCount,
       sourceSize: input.sourceSize,
       sourceEtag: input.directory.etag,
       directory: { offset: input.directory.offset, size: input.directory.size },
