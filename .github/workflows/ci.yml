@@ -58,6 +58,11 @@ jobs:
         with:
           node-version: 22
           cache: npm
+      # The GCS compatibility suite drives the Go storage client (e2e/compat-gcs).
+      - uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5.6.0
+        with:
+          go-version-file: e2e/compat-gcs/go.mod
+          cache-dependency-path: e2e/compat-gcs/go.sum
       - run: npm ci
       - run: npm run test:e2e:node
 

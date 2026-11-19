@@ -58,12 +58,12 @@ export function servicePrincipalOf(credential: CompatCredential): ServicePrincip
   return { kind: "service", id, grant: { projectId, bucket, role }, revokedAt };
 }
 
-export function parseCompatApiHost(value: string | undefined): string | undefined {
+export function parseCompatHost(value: string | undefined, setting = "COMPAT_GCS_HOST"): string | undefined {
   if (!value) return undefined;
   const label = "[a-z0-9](?:[a-z0-9-]*[a-z0-9])?";
   const match = new RegExp(`^${label}(?:\\.${label})*(?::(\\d{1,5}))?$`).exec(value);
   if (!match || Number(match[1] ?? 1) > 65535) {
-    throw new Error(`COMPAT_GCS_HOST "${value}" is not a bare host[:port] (lowercase, no scheme or path)`);
+    throw new Error(`${setting} "${value}" is not a bare host[:port] (lowercase, no scheme or path)`);
   }
   return value;
 }

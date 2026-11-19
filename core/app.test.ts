@@ -119,6 +119,8 @@ function fakeDeps(overrides: Partial<Deps> = {}): Deps {
     extractionStuckThresholdMs: 1000,
     limits: { subrequestBudget: 700 },
     deliveryTokens: null,
+    compatObjectsHost: undefined,
+    serviceAuthorizer: strictFake("serviceAuthorizer"),
     ...overrides,
   };
 }

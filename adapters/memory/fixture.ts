@@ -456,6 +456,8 @@ export async function fixture(overrides?: Partial<Deps>) {
     extractionStuckThresholdMs: 1000,
     limits: { subrequestBudget: 700 },
     deliveryTokens: null,
+    compatObjectsHost: undefined,
+    serviceAuthorizer: new SimpleAuthorizer(),
     ...overrides,
   };
   return {

@@ -17,6 +17,7 @@ import type { ExtractionMessage } from "./extraction/handler";
 import type { ThumbnailMessage } from "./thumbnail/queue";
 import type { DeliveryTokenCodec } from "./access/token";
 import type { CompatStore } from "./compat/repository";
+import type { Authorizer } from "./auth/authorizer";
 
 /**
  * Dependencies that route handlers read off the request context.
@@ -93,7 +94,6 @@ export type ContextDeps = {
   credentialedOrigins: readonly string[];
   /** Buckets, bindings and credentials of the storage compatibility layer (ADR-019). */
   compat: CompatStore;
-  /** `COMPAT_GCS_HOST`. Undefined ⇒ issuing a credential answers 503. */
   compatApiHost: string | undefined;
 };
 
@@ -126,6 +126,8 @@ export type Deps = ContextDeps & {
   extractionStuckThresholdMs: number;
   limits: Limits;
   deliveryTokens: DeliveryTokenCodec | null;
+  compatObjectsHost: string | undefined;
+  serviceAuthorizer: Authorizer;
 };
 
 export type AppEnv = {

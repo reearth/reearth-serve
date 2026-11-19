@@ -1,7 +1,7 @@
 import type { KeyValue } from "../core/kv/port";
 import type { SqlClient } from "../core/sql/port";
 import type { Tenancy } from "../core/tenancy/port";
-import { CerbosAuthorizer } from "../core/auth/authorizer";
+import { CerbosAuthorizer, type Authorizer } from "../core/auth/authorizer";
 import { SimpleAuthorizer } from "../core/auth/permissions";
 import { LocalTenancy } from "./sql/tenancy";
 
@@ -56,6 +56,10 @@ export function buildTenancy(config: TenancyConfig, deps: { sql: SqlClient; kv: 
   }
 }
 
+export function serviceAuthorizer(config: TenancyConfig): Authorizer {
+  return config.kind === "cerbos" ? new CerbosAuthorizer(config.endpoint) : new SimpleAuthorizer();
+}
+
 function lazyAccountsTenancy(baseUrl: string, kv: KeyValue): Tenancy {
   let loaded: Promise<Tenancy> | null = null;
   return {
@@ -70,4 +74,16 @@ function lazyAccountsTenancy(baseUrl: string, kv: KeyValue): Tenancy {
       return (await loaded).enter(caller);
     },
   };
+}
+
+if (import.meta.vitest) {
+  const { test, expect } = import.meta.vitest;
+
+  test.each<[TenancyConfig, string]>([
+    [{ kind: "local" }, "SimpleAuthorizer"],
+    [{ kind: "accounts", baseUrl: "https://accounts.example.test" }, "SimpleAuthorizer"],
+    [{ kind: "cerbos", endpoint: "http://pdp" }, "CerbosAuthorizer"],
+  ])("service principals in %o mode are decided by %s", (config, name) => {
+    expect(serviceAuthorizer(config).constructor.name).toBe(name);
+  });
 }
