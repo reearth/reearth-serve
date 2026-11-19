@@ -85,7 +85,8 @@ describe("finaliseArchive", () => {
     const firstBytes = await objectBytes(storage, containerIndexKey(ROOT));
     const second = await finaliseArchive({ storage }, input(size));
     expect(second).toEqual(first);
-    expect(await objectBytes(storage, containerIndexKey(ROOT))).toEqual(firstBytes);
+    const secondBytes = await objectBytes(storage, containerIndexKey(ROOT));
+    expect(Buffer.compare(Buffer.from(secondBytes!), Buffer.from(firstBytes!))).toBe(0);
   });
 
   test("parses _redirects in place into hosting", async () => {
