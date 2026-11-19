@@ -1,10 +1,10 @@
 import type {
   Binding, BindingKind, BucketName, CompatBucket, CompatCredential, CredentialId,
-  UploadId, UploadSession,
+  UploadId, UploadPhase, UploadSession,
 } from "../../core/compat/model";
 import {
   newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatStore, type DeleteBucketResult,
-  type LeaseToken, type VersionRecord,
+  type LeaseToken, type UploadTransition, type VersionRecord,
 } from "../../core/compat/repository";
 import { isServiceRole } from "../../core/auth/types";
 
@@ -58,23 +58,21 @@ export class MemoryCompatStore implements CompatStore {
     const row = this.bindings.get(rowKey(bucket, key));
     return row ? toBinding(row) : null;
   }
-  async claim(
-    bucket: BucketName, key: BindingKey, kind: BindingKind, now: number, staleBefore: number, token: ClaimToken = newClaimToken(),
-  ): Promise<ClaimResult> {
+  async claim(bucket: BucketName, key: BindingKey, kind: BindingKind, now: number, staleBefore: number): Promise<ClaimResult> {
     const id = rowKey(bucket, key);
     const row = this.bindings.get(id);
-    if (!row || (row.assetId === null && (row.claimedAt < staleBefore || row.claimToken === token))) {
+    if (!row || (row.assetId === null && row.claimedAt < staleBefore)) {
+      const token = newClaimToken();
       this.bindings.set(id, { bucket, key, kind, assetId: null, claimedAt: now, claimToken: token, lease: null });
       return { kind: "claimed", token };
     }
     const binding = toBinding(row);
     return binding ? { kind: "bound", binding } : { kind: "busy" };
   }
-  async bind(bucket: BucketName, key: BindingKey, token: ClaimToken, assetId: string): Promise<boolean> {
+  async bind(bucket: BucketName, key: BindingKey, token: ClaimToken, assetId: string, upload?: UploadTransition): Promise<boolean> {
     const row = this.bindings.get(rowKey(bucket, key));
-    if (!row) return false;
-    if (row.assetId === assetId) return true;
-    if (row.assetId !== null || row.claimToken !== token) return false;
+    if (!row || (row.assetId !== assetId && (row.assetId !== null || row.claimToken !== token))) return false;
+    if (upload && !(await this.updateUpload(upload.id, upload.revision, upload.phase))) return false;
     row.assetId = assetId;
     return true;
   }
@@ -88,8 +86,7 @@ export class MemoryCompatStore implements CompatStore {
   }
   async lease(bucket: BucketName, key: BindingKey, token: LeaseToken, now: number, staleBefore: number): Promise<boolean> {
     const row = this.bindings.get(rowKey(bucket, key));
-    if (!row || row.assetId === null) return false;
-    if (row.lease !== null && row.lease.token !== token && row.lease.at >= staleBefore) return false;
+    if (!row || row.assetId === null || (row.lease !== null && row.lease.at >= staleBefore)) return false;
     row.lease = { token, at: now };
     return true;
   }
@@ -152,14 +149,10 @@ export class MemoryCompatStore implements CompatStore {
     const u = this.uploads.get(id);
     return u ? structuredClone(u) : null;
   }
-  async advanceUpload(
-    id: UploadId,
-    expect: Pick<UploadSession, "received" | "state">,
-    next: Pick<UploadSession, "received" | "hashState" | "state" | "result">,
-  ): Promise<boolean> {
+  async updateUpload(id: UploadId, revision: number, phase: UploadPhase): Promise<boolean> {
     const u = this.uploads.get(id);
-    if (!u || u.received !== expect.received || u.state !== expect.state) return false;
-    this.uploads.set(id, { ...u, ...next });
+    if (!u || u.revision !== revision) return false;
+    this.uploads.set(id, { ...u, revision: revision + 1, phase: structuredClone(phase) });
     return true;
   }
   async listExpiredUploads(now: number, limit: number): Promise<UploadSession[]> {
@@ -168,8 +161,10 @@ export class MemoryCompatStore implements CompatStore {
       .sort((a, b) => a.expiresAt - b.expiresAt)
       .slice(0, limit);
   }
-  async deleteUpload(id: UploadId): Promise<void> {
-    this.uploads.delete(id);
+  async deleteUpload(id: UploadId, revision?: number): Promise<boolean> {
+    const u = this.uploads.get(id);
+    if (!u || (revision !== undefined && u.revision !== revision)) return false;
+    return this.uploads.delete(id);
   }
   async sweepStaleHolds(staleBefore: number): Promise<{ claims: number; leases: number }> {
     let claims = 0;

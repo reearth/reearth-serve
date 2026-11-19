@@ -6,7 +6,7 @@ import { SqlAtomicWrites } from "./writes";
 import { SqlMetadataStore } from "./stores";
 import type { BindingKey, ClaimToken, CompatStore, LeaseToken } from "../../core/compat/repository";
 import type {
-  BucketName, CompatBucket, CompatCredential, CredentialId, FolderKey, ObjectKey, UploadId, UploadSession,
+  BucketName, CompatBucket, CompatCredential, CredentialId, FolderKey, ObjectKey, UploadId, UploadPhase, UploadSession,
 } from "../../core/compat/model";
 import type { AssetMetadata } from "../../core/asset/model";
 import { createHasher, initialHashState } from "../../core/compat/hash";
@@ -48,11 +48,9 @@ function upload(over: Partial<UploadSession> = {}): UploadSession {
     key,
     credentialId: "c1" as CredentialId,
     meta: { contentType: "image/jpeg", contentEncoding: null, userMeta: { a: "b" }, ifGenerationMatch: 0 },
-    received: 0,
-    hashState: initialHashState,
-    state: "open",
-    result: null,
     expiresAt: 5000,
+    revision: 0,
+    phase: { state: "open", received: 0, total: null, hashState: initialHashState, parts: [] },
     ...over,
   };
 }
@@ -238,20 +236,6 @@ describe.each([
   });
 
   describe("holds", () => {
-    test("a claim or lease taken with a known token is taken again by the same token while fresh", async () => {
-      const s = make();
-      const k = "k" as ObjectKey;
-      const mine = "upload:u1" as ClaimToken;
-      expect(await s.claim(media, k, "object", 1000, 0, mine)).toEqual({ kind: "claimed", token: mine });
-      expect(await s.claim(media, k, "object", 1100, 0)).toEqual({ kind: "busy" });
-      expect(await s.claim(media, k, "object", 1100, 0, mine)).toEqual({ kind: "claimed", token: mine });
-      await s.bind(media, k, mine, "asset-1");
-      const lease = "upload:u1" as LeaseToken;
-      expect(await s.lease(media, k, lease, 1000, 0)).toBe(true);
-      expect(await s.lease(media, k, "other" as LeaseToken, 1100, 0)).toBe(false);
-      expect(await s.lease(media, k, lease, 1100, 0)).toBe(true);
-    });
-
     test("the sweep drops stale claims and clears stale leases, and leaves fresh ones and bound keys", async () => {
       const s = make();
       await claimed(s, "stale" as ObjectKey, 1000);
@@ -317,40 +301,57 @@ describe.each([
   });
 
   describe("upload sessions", () => {
-    test("advanceUpload moves the session only from the expected state", async () => {
+    test("updateUpload moves the session only from the revision it read", async () => {
       const s = make();
       await s.createUpload(upload());
       expect(await s.findUpload("up1" as UploadId)).toEqual(upload());
       const hasher = createHasher();
       hasher.update(new Uint8Array(300).fill(7));
-      const next = { received: 300, hashState: hasher.state(), state: "open" as const, result: null };
-      expect(await s.advanceUpload("up1" as UploadId, { received: 0, state: "open" }, next)).toBe(true);
-      expect(await s.advanceUpload("up1" as UploadId, { received: 0, state: "open" }, next)).toBe(false);
-      expect(await s.advanceUpload("up1" as UploadId, { received: 300, state: "committing" }, next)).toBe(false);
-      expect(await s.findUpload("up1" as UploadId)).toEqual(upload(next));
+      const phase: UploadPhase = {
+        state: "open", received: 300, total: 900, hashState: hasher.state(), parts: [{ key: "compat-staging/up1/0-a", size: 300 }],
+      };
+      expect(await s.updateUpload("up1" as UploadId, 0, phase)).toBe(true);
+      expect(await s.updateUpload("up1" as UploadId, 0, phase)).toBe(false);
+      expect(await s.updateUpload("gone" as UploadId, 1, phase)).toBe(false);
+      expect(await s.findUpload("up1" as UploadId)).toEqual(upload({ revision: 1, phase }));
     });
 
     test("a committed session keeps the object it became, hashes and dates intact", async () => {
       const s = make();
       await s.createUpload(upload());
-      const info = {
+      const result = {
         bucket: media, key, size: 300, contentType: "image/jpeg", contentEncoding: null, generation: 1_700_000_000_000_001,
         metageneration: 1, etag: "e1", created: new Date(1000), updated: new Date(2000),
         hashes: { md5: new Uint8Array(16).fill(9), crc32c: 0xdeadbeef }, userMeta: { a: "b" },
       };
-      const done = { received: 300, hashState: initialHashState, state: "committed" as const, result: info };
-      expect(await s.advanceUpload("up1" as UploadId, { received: 0, state: "open" }, done)).toBe(true);
-      expect(await s.findUpload("up1" as UploadId)).toEqual(upload(done));
+      expect(await s.updateUpload("up1" as UploadId, 0, { state: "committed", result })).toBe(true);
+      expect(await s.findUpload("up1" as UploadId)).toEqual(upload({ revision: 1, phase: { state: "committed", result } }));
     });
 
-    test("expired sessions are listed oldest first, and delete removes one", async () => {
+    test("a bind that carries an upload's move happens with it or not at all", async () => {
+      const s = make();
+      await s.createUpload(upload());
+      const failed: UploadPhase = { state: "failed", error: { code: "busy" } };
+      const token = await claimed(s, key, 1000);
+      expect(await s.bind(media, key, token, "asset-1", { id: "up1" as UploadId, revision: 7, phase: failed })).toBe(false);
+      expect(await s.findBinding(media, key)).toBeNull();
+      expect(await s.bind(media, key, "other" as ClaimToken, "asset-1", { id: "up1" as UploadId, revision: 0, phase: failed })).toBe(false);
+      expect((await s.findUpload("up1" as UploadId))?.revision).toBe(0);
+      expect(await s.bind(media, key, token, "asset-1", { id: "up1" as UploadId, revision: 0, phase: failed })).toBe(true);
+      expect(await s.findBinding(media, key)).toMatchObject({ assetId: "asset-1" });
+      expect(await s.findUpload("up1" as UploadId)).toEqual(upload({ revision: 1, phase: failed }));
+    });
+
+    test("expired sessions are listed oldest first, and delete removes one, from its revision when given", async () => {
       const s = make();
       await s.createUpload(upload({ id: "late" as UploadId, expiresAt: 3000 }));
       await s.createUpload(upload({ id: "early" as UploadId, expiresAt: 2000 }));
       await s.createUpload(upload({ id: "live" as UploadId, expiresAt: 9000 }));
       expect((await s.listExpiredUploads(5000, 10)).map((u) => u.id)).toEqual(["early", "late"]);
-      await s.deleteUpload("early" as UploadId);
+      expect(await s.deleteUpload("early" as UploadId)).toBe(true);
+      expect(await s.deleteUpload("late" as UploadId, 3)).toBe(false);
       expect((await s.listExpiredUploads(5000, 10)).map((u) => u.id)).toEqual(["late"]);
+      expect(await s.deleteUpload("late" as UploadId, 0)).toBe(true);
     });
   });
 });

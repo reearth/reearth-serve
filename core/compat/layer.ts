@@ -12,7 +12,7 @@ import { updateAsset } from "../asset/usecase/update-asset";
 import { siteHostDepsFrom } from "../site/handler";
 import { hashingStream, type HashingStream } from "./hash";
 import { listPage, type ListQuery } from "./list";
-import { newLeaseToken, type ClaimToken, type LeaseToken, type VersionRecord } from "./repository";
+import { newLeaseToken, type ClaimToken, type UploadTransition, type VersionRecord } from "./repository";
 import {
   parseBucketName,
   type Binding, type CompatBucket, type CompatError, type ExactHashes, type ObjectInfo, type ObjectKey,
@@ -28,12 +28,19 @@ export type ObjectLayerDeps = Pick<
 
 export type ListPage = { objects: ObjectInfo[]; prefixes: string[]; nextPageToken: string | null };
 
-export type ReplayableCommit = { assetId: string; versionId: string; token: ClaimToken & LeaseToken };
+export type CommitIds = { assetId: string; versionId: string };
+
+export type UploadCommit = CommitIds & {
+  earlier: CommitIds[];
+  overwritingAssetId: string | null;
+  overwrite(assetId: string): Promise<boolean>;
+  committedTransition(result: ObjectInfo): UploadTransition;
+};
 
 export interface ObjectLayer {
   head(bucket: string, key: ObjectKey): Promise<Result<ObjectInfo>>;
   list(bucket: string, query: ListQuery): Promise<Result<ListPage>>;
-  put(bucket: string, key: ObjectKey, meta: PutMeta, body: SizedBody, commit?: ReplayableCommit): Promise<Result<ObjectInfo>>;
+  put(bucket: string, key: ObjectKey, meta: PutMeta, body: SizedBody, commit?: UploadCommit): Promise<Result<ObjectInfo>>;
   delete(bucket: string, key: ObjectKey): Promise<Result<void>>;
 }
 
@@ -127,17 +134,15 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
   }
 
   async function writeAsset(
-    bucket: CompatBucket, key: ObjectKey, scopes: string[], meta: PutMeta, body: SizedBody, token: ClaimToken, commit?: ReplayableCommit,
+    bucket: CompatBucket, key: ObjectKey, scopes: string[], meta: PutMeta, body: SizedBody, token: ClaimToken, commit?: UploadCommit,
   ): Promise<Result<ObjectInfo>> {
-    const written = commit ? await deps.metadata.find(commit.assetId) : null;
-    if (written && body.hashes) {
-      await body.stream.cancel();
-      return bindAsset(bucket, key, scopes, token, written, body.hashes);
+    for (const earlier of commit?.earlier ?? []) {
+      const left = await deps.metadata.find(earlier.assetId);
+      if (left) await removeAsset(left, scopes);
     }
     const checked = lengthCheckedBody(body);
-    let asset: AssetMetadata;
     try {
-      ({ asset } = await uploadAsset(deps.writes, deps.storage, fileOf(key, meta, body, checked.stream), deps.ttlSeconds, deps.baseUrl, {
+      const { asset } = await uploadAsset(deps.writes, deps.storage, fileOf(key, meta, body, checked.stream), deps.ttlSeconds, deps.baseUrl, {
         projectId: bucket.projectId,
         extractionQueue: deps.extractionQueue,
         thumbnailQueue: deps.thumbnailQueue,
@@ -145,49 +150,70 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
         siteHostSuffix: deps.siteHostSuffix,
         userMeta: meta.userMeta,
         ...(commit && { id: commit.assetId }),
-      }));
+      });
+      return await bindAsset(bucket, key, scopes, token, asset, await checked.digest(), commit);
     } catch (e) {
       await compat.releaseClaim(bucket.name, key, token);
       if (checked.lengthMismatched()) return fail(LENGTH_MISMATCH);
       throw e;
     }
-    return bindAsset(bucket, key, scopes, token, asset, await checked.digest());
   }
 
   async function bindAsset(
     bucket: CompatBucket, key: ObjectKey, scopes: string[], token: ClaimToken, asset: AssetMetadata, hashes: ExactHashes,
+    commit?: UploadCommit,
   ): Promise<Result<ObjectInfo>> {
     const stored = (await compat.findRecord(asset.id)) ?? await recordVersion(bucket, asset.id, asset.id, asset.createdAt, hashes);
-    if (!(await compat.bind(bucket.name, key, token, asset.id))) {
-      await removeAsset(asset, scopes);
-      return fail({ code: "busy" });
-    }
-    return { ok: true, value: infoOf(bucket, key, asset, null, stored) };
+    const info = infoOf(bucket, key, asset, null, stored);
+    if (await compat.bind(bucket.name, key, token, asset.id, commit?.committedTransition(info))) return { ok: true, value: info };
+    await removeAsset(asset, scopes);
+    return fail({ code: "busy" });
   }
 
   async function overwrite(
-    raw: string, bucket: CompatBucket, key: ObjectKey, scopes: string[], meta: PutMeta, body: SizedBody, commit?: ReplayableCommit,
+    raw: string, bucket: CompatBucket, key: ObjectKey, scopes: string[], meta: PutMeta, body: SizedBody, commit?: UploadCommit,
   ): Promise<Result<ObjectInfo>> {
     const update = await authorized(raw, "update_asset");
     if (!update.ok) return update;
     return leased(bucket, key, async () => {
       const live = await resolve(bucket, key);
       if (!live) return fail({ code: "busy" });
-      const written = commit ? await deps.versions.find(commit.versionId) : null;
+      if (!commit) return preconditioned(bucket, meta, live, () => writeVersion(bucket, key, scopes, meta, body, live.asset));
+      const result = await commitVersion(bucket, key, scopes, meta, body, live, commit);
+      if (!result.ok) return result;
+      const done = commit.committedTransition(result.value);
+      return (await compat.updateUpload(done.id, done.revision, done.phase)) ? result : fail({ code: "busy" });
+    });
+  }
+
+  async function preconditioned(
+    bucket: CompatBucket, meta: PutMeta, live: Resolved, write: () => Promise<Result<ObjectInfo>>,
+  ): Promise<Result<ObjectInfo>> {
+    if (meta.ifGenerationMatch !== null && meta.ifGenerationMatch !== (await describe(bucket, live)).generation) {
+      return fail({ code: "precondition_failed" });
+    }
+    return write();
+  }
+
+  async function commitVersion(
+    bucket: CompatBucket, key: ObjectKey, scopes: string[], meta: PutMeta, body: SizedBody, live: Resolved, commit: UploadCommit,
+  ): Promise<Result<ObjectInfo>> {
+    if (commit.overwritingAssetId !== null && commit.overwritingAssetId !== live.asset.id) return fail({ code: "precondition_failed" });
+    for (const earlier of commit.earlier) {
+      const written = await deps.versions.find(earlier.versionId);
       if (written?.assetId === live.asset.id && body.hashes) {
         await body.stream.cancel();
         return activate(bucket, key, live.asset, written, body.hashes);
       }
-      if (meta.ifGenerationMatch !== null && meta.ifGenerationMatch !== (await describe(bucket, live)).generation) {
-        return fail({ code: "precondition_failed" });
-      }
-      return writeVersion(bucket, key, scopes, meta, body, live.asset, commit?.versionId);
-    }, commit?.token);
+    }
+    return preconditioned(bucket, meta, live, async () => {
+      if (commit.overwritingAssetId === null && !(await commit.overwrite(live.asset.id))) return fail({ code: "busy" });
+      return writeVersion(bucket, key, scopes, meta, body, live.asset, commit.versionId);
+    });
   }
 
-  async function leased<T>(
-    bucket: CompatBucket, key: ObjectKey, work: () => Promise<Result<T>>, token: LeaseToken = newLeaseToken(),
-  ): Promise<Result<T>> {
+  async function leased<T>(bucket: CompatBucket, key: ObjectKey, work: () => Promise<Result<T>>): Promise<Result<T>> {
+    const token = newLeaseToken();
     const at = now();
     if (!(await compat.lease(bucket.name, key, token, at, at - HOLD_STALE_MS))) return fail({ code: "busy" });
     try {
@@ -240,14 +266,11 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
       const scopes = scopesOf(project);
       for (let attempt = 0; attempt < 2; attempt++) {
         const live = await resolve(bucket, key);
-        if (live && live.asset.id === commit?.assetId && body.hashes) {
-          await body.stream.cancel();
-          return { ok: true, value: await describe(bucket, live) };
-        }
+        if (commit?.overwritingAssetId && live?.asset.id !== commit.overwritingAssetId) return fail({ code: "precondition_failed" });
         if (live) return overwrite(raw, bucket, key, scopes, meta, body, commit);
         if (meta.ifGenerationMatch !== null && meta.ifGenerationMatch !== 0) return fail({ code: "precondition_failed" });
         const at = now();
-        const claim = await compat.claim(bucket.name, key, "object", at, at - HOLD_STALE_MS, commit?.token);
+        const claim = await compat.claim(bucket.name, key, "object", at, at - HOLD_STALE_MS);
         if (claim.kind === "busy") return fail({ code: "busy" });
         if (claim.kind === "claimed") return writeAsset(bucket, key, scopes, meta, body, claim.token, commit);
         if (claim.binding.kind === "object" && !(await load(bucket, claim.binding))) {

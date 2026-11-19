@@ -77,7 +77,23 @@ export type PutMeta = {
   ifGenerationMatch: number | null;
 };
 
-export type UploadState = "open" | "committing" | "committed";
+export type StagedPart = { key: string; size: number };
+
+export type CommitOwner = { token: string; since: number };
+
+export type UploadPhase =
+  | { state: "open"; received: number; total: number | null; hashState: HashState; parts: StagedPart[] }
+  | {
+    state: "committing";
+    size: number;
+    hashState: HashState;
+    parts: StagedPart[];
+    owner: CommitOwner | null;
+    ownerTokens: string[];
+    overwritingAssetId: string | null;
+  }
+  | { state: "committed"; result: ObjectInfo }
+  | { state: "failed"; error: CompatError };
 
 export type UploadSession = {
   id: UploadId;
@@ -85,11 +101,9 @@ export type UploadSession = {
   key: ObjectKey;
   credentialId: CredentialId;
   meta: PutMeta;
-  received: number;
-  hashState: HashState;
-  state: UploadState;
-  result: ObjectInfo | null;
   expiresAt: number;
+  revision: number;
+  phase: UploadPhase;
 };
 
 export type ObjectInfo = {

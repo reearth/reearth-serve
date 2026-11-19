@@ -4,11 +4,11 @@ import type { ServicePrincipal } from "../auth/types";
 import { deleteAllR2Objects, SubrequestBudget } from "../cleanup/usecase";
 import { createHasher, hashingStream, initialHashState, type HashState } from "./hash";
 import {
-  authorizeBucket, HOLD_STALE_MS, lengthChecked, type ReplayableCommit, type ObjectLayer, type ObjectLayerDeps,
+  authorizeBucket, HOLD_STALE_MS, lengthChecked, type CommitIds, type ObjectLayer, type ObjectLayerDeps, type UploadCommit,
 } from "./layer";
-import type { ClaimToken, LeaseToken } from "./repository";
 import type {
-  CompatError, CredentialId, ExactHashes, ObjectInfo, ObjectKey, PutMeta, Result, UploadId, UploadSession,
+  CommitOwner, CompatError, CredentialId, ExactHashes, ObjectInfo, ObjectKey, PutMeta, Result, StagedPart, UploadId,
+  UploadPhase, UploadSession,
 } from "./model";
 
 /** As long as GCS keeps a resumable session URI. */
@@ -21,7 +21,7 @@ const STAGING_DELETE_BUDGET = 20;
 export type Chunk = { start: number | null; size: number; total: number | null };
 
 export type ChunkDecision =
-  | { kind: "stage"; final: boolean }
+  | { kind: "stage"; final: boolean; total: number | null }
   | { kind: "commit" }
   | { kind: "ack" }
   | { kind: "reject"; error: CompatError };
@@ -30,20 +30,36 @@ export type UploadStatus = { kind: "incomplete"; received: number } | { kind: "c
 
 export type DeclaredHashes = { crc32c: number | null; md5: Uint8Array | null };
 
+type Open = Extract<UploadPhase, { state: "open" }>;
+type Committing = Extract<UploadPhase, { state: "committing" }>;
+
 const invalid = (message: string): ChunkDecision => ({ kind: "reject", error: { code: "invalid", message } });
 
 export function applyChunk(session: UploadSession, chunk: Chunk, now: number): ChunkDecision {
-  const { received } = session;
-  if (session.state === "committed") return { kind: "ack" };
+  const { phase } = session;
+  if (phase.state === "committed") return { kind: "ack" };
+  if (phase.state === "failed") return { kind: "reject", error: phase.error };
   if (now >= session.expiresAt) return { kind: "reject", error: { code: "no_such_upload" } };
-  if (session.state === "committing" || chunk.start === null) {
-    if (chunk.total === received) return { kind: "commit" };
-    return invalid(`The upload holds ${received} bytes, not ${chunk.total ?? "an unknown number of"}.`);
+  if (phase.state === "committing") return finalizing(phase.size, chunk.total);
+  if (chunk.total !== null && phase.total !== null && chunk.total !== phase.total) {
+    return invalid(`The upload's total is ${phase.total} bytes, not ${chunk.total}.`);
   }
+  const total = chunk.total ?? phase.total;
+  if (chunk.start === null) return finalizing(phase.received, total);
   const end = chunk.start + chunk.size;
-  if (chunk.start < received && end <= received) return { kind: "ack" };
-  if (chunk.start !== received) return invalid(`The chunk starts at byte ${chunk.start}, but the upload holds ${received} bytes.`);
-  return { kind: "stage", final: end === chunk.total };
+  if (total !== null && end > total) return invalid(`The chunk ends at byte ${end}, past the total of ${total} bytes.`);
+  if (chunk.start < phase.received && end <= phase.received) return { kind: "ack" };
+  if (chunk.start !== phase.received) {
+    return invalid(`The chunk starts at byte ${chunk.start}, but the upload holds ${phase.received} bytes.`);
+  }
+  return { kind: "stage", final: end === total, total };
+}
+
+function finalizing(received: number, total: number | null): ChunkDecision {
+  if (total === received) return { kind: "commit" };
+  return invalid(total === null
+    ? `The upload holds ${received} bytes, but the request declares no total.`
+    : `The upload holds ${received} bytes, not ${total}.`);
 }
 
 export function stagingPrefix(id: UploadId): string {
@@ -51,28 +67,29 @@ export function stagingPrefix(id: UploadId): string {
 }
 
 function stagingKey(id: UploadId, start: number): string {
-  return `${stagingPrefix(id)}${String(start).padStart(16, "0")}`;
+  return `${stagingPrefix(id)}${String(start).padStart(16, "0")}-${crypto.randomUUID()}`;
 }
 
-async function opaqueReplayableCommitOf(id: UploadId): Promise<ReplayableCommit> {
-  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`compat-upload:${id}`)));
+async function commitIdsOf(id: UploadId, token: string): Promise<CommitIds> {
+  const digest = new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(`compat-upload:${id}:${token}`)));
   const hex = Array.from(digest, (b) => b.toString(16).padStart(2, "0")).join("");
-  return { assetId: hex.slice(0, 16), versionId: hex.slice(16, 32), token: `upload:${id}` as ClaimToken & LeaseToken };
+  return { assetId: hex.slice(0, 16), versionId: hex.slice(16, 32) };
 }
 
-function stagedStream(storage: FileStorage, id: UploadId, total: number): ReadableStream<Uint8Array> {
-  let offset = 0;
+function stagedStream(storage: FileStorage, parts: StagedPart[]): ReadableStream<Uint8Array> {
+  let next = 0;
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
   return new ReadableStream<Uint8Array>({
     async pull(controller) {
       for (;;) {
         if (!reader) {
-          if (offset >= total) {
+          if (next >= parts.length) {
             controller.close();
             return;
           }
-          const staged = await storage.get(stagingKey(id, offset));
-          if (!staged) throw new Error(`upload ${id} has no staged chunk at byte ${offset}`);
+          const part = parts[next++];
+          const staged = await storage.get(part.key);
+          if (!staged) throw new Error(`staged chunk ${part.key} is missing`);
           reader = (staged.body as ReadableStream<Uint8Array>).getReader();
         }
         const { done, value } = await reader.read();
@@ -80,7 +97,6 @@ function stagedStream(storage: FileStorage, id: UploadId, total: number): Readab
           reader = null;
           continue;
         }
-        offset += value.length;
         controller.enqueue(value);
         return;
       }
@@ -99,16 +115,20 @@ function declaredMismatch(declared: DeclaredHashes, actual: ExactHashes): string
 
 const fail = (error: CompatError): { ok: false; error: CompatError } => ({ ok: false, error });
 
-function statusOf(session: UploadSession): UploadStatus {
-  return session.state === "committed" && session.result
-    ? { kind: "committed", info: session.result }
-    : { kind: "incomplete", received: session.received };
+function answerOf(phase: UploadPhase): Result<UploadStatus> {
+  switch (phase.state) {
+    case "open": return { ok: true, value: { kind: "incomplete", received: phase.received } };
+    case "committing": return { ok: true, value: { kind: "incomplete", received: phase.size } };
+    case "committed": return { ok: true, value: { kind: "committed", info: phase.result } };
+    case "failed": return fail(phase.error);
+  }
 }
 
 export interface ResumableUploads {
   begin(bucket: string, key: ObjectKey, meta: PutMeta): Promise<Result<UploadId>>;
   append(id: string, bucket: string, chunk: Chunk, body: ReadableStream<Uint8Array> | null, declared: DeclaredHashes): Promise<Result<UploadStatus>>;
   status(id: string, bucket: string): Promise<Result<UploadStatus>>;
+  cancel(id: string, bucket: string): Promise<Result<void>>;
 }
 
 export function resumableUploads(
@@ -126,15 +146,24 @@ export function resumableUploads(
   async function settled(id: UploadId): Promise<Result<UploadStatus>> {
     const session = await compat.findUpload(id);
     if (!session) return fail({ code: "no_such_upload" });
-    if (session.state === "committing") return fail({ code: "busy" });
-    return { ok: true, value: statusOf(session) };
+    if (session.phase.state === "committing") return fail({ code: "busy" });
+    return answerOf(session.phase);
   }
 
-  async function stage(session: UploadSession, size: number, body: ReadableStream<Uint8Array> | null, final: boolean, declared: DeclaredHashes) {
-    const start = session.received;
+  const heldBy = (token: string): CommitOwner => ({ token, since: now() });
+
+  function sealed(received: number, hashState: HashState, parts: StagedPart[]): Committing {
+    const token = crypto.randomUUID();
+    return { state: "committing", size: received, hashState, parts, owner: heldBy(token), ownerTokens: [token], overwritingAssetId: null };
+  }
+
+  async function stage(
+    session: UploadSession, open: Open, start: number, size: number, body: ReadableStream<Uint8Array> | null,
+    decision: Extract<ChunkDecision, { kind: "stage" }>, declared: DeclaredHashes,
+  ): Promise<Result<UploadStatus>> {
     const key = stagingKey(session.id, start);
     const counted = lengthChecked(body ?? new Blob([]).stream(), size);
-    const hashed = hashingStream(counted.stream, session.hashState);
+    const hashed = hashingStream(counted.stream, open.hashState);
     try {
       await storage.put(key, hashed.stream, "application/octet-stream", size);
     } catch (e) {
@@ -142,33 +171,72 @@ export function resumableUploads(
       throw e;
     }
     const hashState = await hashed.state();
-    if (final) return finish(session, start + size, hashState, declared, key);
-    const next = { received: start + size, hashState, state: "open" as const, result: null };
-    if (!(await compat.advanceUpload(session.id, { received: start, state: "open" }, next))) return settled(session.id);
-    return { ok: true as const, value: { kind: "incomplete" as const, received: next.received } };
-  }
-
-  async function finish(
-    session: UploadSession, total: number, hashState: HashState, declared: DeclaredHashes, stagedKey: string | null,
-  ): Promise<Result<UploadStatus>> {
-    const mismatch = declaredMismatch(declared, createHasher(hashState).digest());
-    if (mismatch) {
-      if (stagedKey) await storage.delete(stagedKey);
-      return fail({ code: "invalid", message: mismatch });
+    const received = start + size;
+    const parts = [...open.parts, { key, size }];
+    const mismatch = decision.final ? declaredMismatch(declared, createHasher(hashState).digest()) : null;
+    const next: UploadPhase = decision.final
+      ? sealed(received, hashState, parts)
+      : { state: "open", received, total: decision.total, hashState, parts };
+    if (mismatch || !(await compat.updateUpload(session.id, session.revision, next))) {
+      await storage.delete(key);
+      return mismatch ? fail({ code: "invalid", message: mismatch }) : settled(session.id);
     }
-    const next = { received: total, hashState, state: "committing" as const, result: null };
-    if (!(await compat.advanceUpload(session.id, { received: session.received, state: "open" }, next))) return settled(session.id);
-    return commit({ ...session, ...next });
+    if (next.state === "committing") return commit({ ...session, revision: session.revision + 1 }, next);
+    return { ok: true, value: { kind: "incomplete", received } };
   }
 
-  async function commit(session: UploadSession): Promise<Result<UploadStatus>> {
-    const body = { stream: stagedStream(storage, session.id, session.received), size: session.received, hashes: createHasher(session.hashState).digest() };
-    const put = await layer.put(session.bucket, session.key, session.meta, body, await opaqueReplayableCommitOf(session.id));
-    if (!put.ok) return put;
-    const done = { received: session.received, hashState: session.hashState, state: "committed" as const, result: put.value };
-    await compat.advanceUpload(session.id, { received: session.received, state: "committing" }, done);
-    await dropStaging(session.id);
-    return { ok: true, value: { kind: "committed", info: put.value } };
+  async function seal(session: UploadSession, open: Open, declared: DeclaredHashes): Promise<Result<UploadStatus>> {
+    const mismatch = declaredMismatch(declared, createHasher(open.hashState).digest());
+    if (mismatch) return fail({ code: "invalid", message: mismatch });
+    const next = sealed(open.received, open.hashState, open.parts);
+    if (!(await compat.updateUpload(session.id, session.revision, next))) return settled(session.id);
+    return commit({ ...session, revision: session.revision + 1 }, next);
+  }
+
+  async function takeOver(session: UploadSession, phase: Committing): Promise<Result<UploadStatus>> {
+    if (phase.owner && phase.owner.since >= now() - HOLD_STALE_MS) return fail({ code: "busy" });
+    const token = crypto.randomUUID();
+    const next: Committing = { ...phase, owner: heldBy(token), ownerTokens: [...phase.ownerTokens, token] };
+    if (!(await compat.updateUpload(session.id, session.revision, next))) return settled(session.id);
+    return commit({ ...session, revision: session.revision + 1 }, next);
+  }
+
+  async function commit(session: UploadSession, held: Committing): Promise<Result<UploadStatus>> {
+    let revision = session.revision;
+    let current = held;
+    const [own, ...earlier] = await Promise.all([...held.ownerTokens].reverse().map((token) => commitIdsOf(session.id, token)));
+    const handle: UploadCommit = {
+      ...own,
+      earlier,
+      overwritingAssetId: held.overwritingAssetId,
+      async overwrite(assetId) {
+        const next = { ...current, overwritingAssetId: assetId };
+        if (!(await compat.updateUpload(session.id, revision, next))) return false;
+        revision++;
+        current = next;
+        return true;
+      },
+      committedTransition: (result) => ({ id: session.id, revision, phase: { state: "committed", result } }),
+    };
+    const release = () => compat.updateUpload(session.id, revision, { ...current, owner: null });
+    const body = { stream: stagedStream(storage, held.parts), size: held.size, hashes: createHasher(held.hashState).digest() };
+    let put: Result<ObjectInfo>;
+    try {
+      put = await layer.put(session.bucket, session.key, session.meta, body, handle);
+    } catch (e) {
+      await release().catch(() => false);
+      throw e;
+    }
+    if (put.ok) {
+      await dropStaging(session.id);
+      return { ok: true, value: { kind: "committed", info: put.value } };
+    }
+    if (put.error.code === "busy") {
+      await release();
+      return put;
+    }
+    if (await compat.updateUpload(session.id, revision, { state: "failed", error: put.error })) await dropStaging(session.id);
+    return put;
   }
 
   async function dropStaging(id: UploadId): Promise<void> {
@@ -190,11 +258,9 @@ export function resumableUploads(
         key,
         credentialId: service.id as CredentialId,
         meta,
-        received: 0,
-        hashState: initialHashState,
-        state: "open",
-        result: null,
         expiresAt: now() + UPLOAD_TTL_MS,
+        revision: 0,
+        phase: { state: "open", received: 0, total: null, hashState: initialHashState, parts: [] },
       };
       await compat.createUpload(session);
       return { ok: true, value: session.id };
@@ -207,20 +273,35 @@ export function resumableUploads(
         return found;
       }
       const session = found.value;
+      const { phase } = session;
       const decision = applyChunk(session, chunk, now());
-      if (decision.kind === "stage") return stage(session, chunk.size, body, decision.final, declared);
+      if (decision.kind === "stage" && phase.state === "open" && chunk.start !== null) {
+        return stage(session, phase, chunk.start, chunk.size, body, decision, declared);
+      }
       await body?.cancel();
       switch (decision.kind) {
-        case "ack": return { ok: true, value: statusOf(session) };
         case "reject": return fail(decision.error);
         case "commit":
-          return session.state === "open" ? finish(session, session.received, session.hashState, declared, null) : commit(session);
+          if (phase.state === "open") return seal(session, phase, declared);
+          if (phase.state === "committing") return takeOver(session, phase);
+          return answerOf(phase);
+        default: return answerOf(phase);
       }
     },
 
     async status(id, bucket) {
       const found = await sessionFor(id, bucket);
-      return found.ok ? { ok: true, value: statusOf(found.value) } : found;
+      return found.ok ? answerOf(found.value.phase) : found;
+    },
+
+    async cancel(id, bucket) {
+      const found = await sessionFor(id, bucket);
+      if (!found.ok) return found;
+      const { phase, revision } = found.value;
+      if (phase.state === "committing" && phase.owner && phase.owner.since >= now() - HOLD_STALE_MS) return fail({ code: "busy" });
+      if (!(await compat.deleteUpload(id as UploadId, revision))) return fail({ code: "busy" });
+      await dropStaging(id as UploadId);
+      return { ok: true, value: undefined };
     },
   };
 }

@@ -136,6 +136,14 @@ export function gcsApp(deps: GcsDeps, apiOrigin: string) {
     return uploadStatusResponse(c, result.value, apiOrigin);
   }
 
+  app.delete("/upload/storage/v1/b/:bucket/o", async (c) => {
+    const id = queryOf(c, "upload_id");
+    if (queryOf(c, "uploadType") !== "resumable" || id === null) return gcsError("json", "not_implemented");
+    const result = await uploadsOf(c).cancel(id, c.req.param("bucket"));
+    if (!result.ok) return compatErrorResponse("json", result.error);
+    return new Response(null, { status: CLIENT_CLOSED_REQUEST });
+  });
+
   app.put("/upload/storage/v1/b/:bucket/o", async (c) => {
     const id = queryOf(c, "upload_id");
     if (queryOf(c, "uploadType") !== "resumable" || id === null) return gcsError("json", "not_implemented");
@@ -180,6 +188,9 @@ type Upload = { name: string | null; meta: Omit<PutMeta, "ifGenerationMatch">; b
 
 const RESUMABLE_METADATA_MAX_BYTES = 64 * 1024;
 
+/** GCS answers a cancelled resumable upload with 499. */
+const CLIENT_CLOSED_REQUEST = 499;
+
 async function beginUpload(c: Context<GcsEnv>): Promise<Omit<Upload, "body"> | Response> {
   const raw = await readCapped(c.req.raw.body, RESUMABLE_METADATA_MAX_BYTES);
   if (!raw) return gcsError("json", "too_large");
@@ -202,9 +213,10 @@ async function beginUpload(c: Context<GcsEnv>): Promise<Omit<Upload, "body"> | R
 }
 
 export function contentRangeOf(header: string | undefined): Chunk | "query" | null {
-  const match = /^bytes (?:(\d+)-(\d+)|\*)\/(\d+|\*)$/.exec(header?.trim() ?? "");
+  const match = /^bytes (?:(\d+)-(\d+)|\*)\/(\d+|\*)$/i.exec(header?.trim() ?? "");
   if (!match) return null;
   const total = match[3] === "*" ? null : Number(match[3]);
+  if (total !== null && !Number.isSafeInteger(total)) return null;
   if (match[1] === undefined) return total === null ? "query" : { start: null, size: 0, total };
   const start = Number(match[1]);
   const end = Number(match[2]);
