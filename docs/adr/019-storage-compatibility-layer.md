@@ -252,8 +252,9 @@ token:
    through the REST API under `/api/v1/projects/{id}/compat/` by a
    project `admin`, not set in configuration. The new
    `project.manage_compat` action goes through ADR-016's procedure for
-   a policy action (`POLICY`, the README table, the Cerbos example, and
-   the paired accounts policy). Rotation is issue a new credential,
+   a policy action (`POLICY`, the Cerbos example, the paired
+   reearth-accounts PR, the pinned accounts commit bump, and the README
+   table). Rotation is issue a new credential,
    deploy it, then revoke the old one.
 
 **Signed URLs and rewritten hosts.** A V4 signature covers the `host`
@@ -321,7 +322,8 @@ attempt it.
 application's own records, not by a bucket listing. For CMS, each asset
 document (`uuid`, `fileName`) becomes one step:
 
-1. create the Serve asset and its `compat_objects` / mount row;
+1. create the Serve asset and its `compat_bindings` row
+   (`binding = 'folder'`);
 2. stream the original from GCS into Serve, server-side in a container
    (the extractor's S3 client already reads GCS through HMAC interop,
    ADR-012), with the source's MD5 checked on arrival;
