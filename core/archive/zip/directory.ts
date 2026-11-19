@@ -8,7 +8,7 @@ const EOCD_SIZE = 22;
 const ZIP64_LOCATOR_SIZE = 20;
 const ZIP64_EOCD_SIZE = 56;
 const CD_RECORD_SIZE = 46;
-const MAX_COMMENT = 0xffff;
+const EOCD_SEARCH = 65 * 1024;
 const ZIP64_EXTRA = 0x0001;
 const UNICODE_PATH_EXTRA = 0x7075;
 const TAIL_BYTES = 1 << 20;
@@ -18,7 +18,8 @@ export type DirectoryRefusal = "missing" | "not-zip" | "multi-disk" | "encoded-o
 export interface Directory {
   offset: number;
   size: number;
-  entryCount: number;
+  /** The low 16 bits of the entry count the end record claims, all Go's archive/zip checks. */
+  recordedCount16: number;
   /** Bytes in front of the archive proper; added to every recorded offset. */
   baseOffset: number;
   etag: string | undefined;
@@ -54,7 +55,7 @@ export async function locateDirectory(storage: FileStorage, key: string, size: n
   if (eocd < 0) return { ok: false, reason: "not-zip" };
   let disk = view.getUint16(eocd + 4, true);
   let cdDisk = view.getUint16(eocd + 6, true);
-  let entryCount = view.getUint16(eocd + 10, true);
+  let recordedCount16 = view.getUint16(eocd + 10, true);
   let cdSize = view.getUint32(eocd + 12, true);
   let cdOffset = view.getUint32(eocd + 16, true);
   let end = tailStart + eocd;
@@ -68,7 +69,7 @@ export async function locateDirectory(storage: FileStorage, key: string, size: n
     const record = z64.view;
     disk = record.getUint32(16, true);
     cdDisk = record.getUint32(20, true);
-    entryCount = getUint64(record, 32);
+    recordedCount16 = record.getUint16(32, true);
     cdSize = getUint64(record, 40);
     cdOffset = getUint64(record, 48);
     end = z64.position;
@@ -79,14 +80,19 @@ export async function locateDirectory(storage: FileStorage, key: string, size: n
   if (baseOffset < 0) return { ok: false, reason: "corrupt" };
   const offset = baseOffset + cdOffset;
   const bytesFromTail = offset >= tailStart ? tail.subarray(offset - tailStart, offset - tailStart + cdSize) : null;
-  return { ok: true, directory: { offset, size: cdSize, entryCount, baseOffset, etag, bytesFromTail } };
+  return { ok: true, directory: { offset, size: cdSize, recordedCount16, baseOffset, etag, bytesFromTail } };
 }
 
+/**
+ * Go's archive/zip rule, so the listing and the extractor agree on which end
+ * record counts: the last signature in the final 65 KiB, and none at all when
+ * that one's comment runs past the end of the file.
+ */
 function findEocd(view: DataView): number {
-  const lowest = Math.max(0, view.byteLength - EOCD_SIZE - MAX_COMMENT);
+  const lowest = Math.max(0, view.byteLength - EOCD_SEARCH);
   for (let i = view.byteLength - EOCD_SIZE; i >= lowest; i--) {
     if (view.getUint32(i, true) !== EOCD_SIGNATURE) continue;
-    if (i + EOCD_SIZE + view.getUint16(i + 20, true) <= view.byteLength) return i;
+    return i + EOCD_SIZE + view.getUint16(i + 20, true) <= view.byteLength ? i : -1;
   }
   return -1;
 }
@@ -200,7 +206,8 @@ export function createDirectoryParser(directory: Directory, onRecord: (record: C
       return !corrupt;
     },
     end(): number | null {
-      return corrupt || consumed !== directory.size || carry.byteLength > 0 ? null : index;
+      if (corrupt || consumed !== directory.size || carry.byteLength > 0) return null;
+      return index % 0x10000 === directory.recordedCount16 ? index : null;
     },
   };
 }
