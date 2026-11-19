@@ -18,10 +18,9 @@ export interface Located {
   rangeRead?: (range: Span) => Promise<StoredFile | null>;
 }
 
-export interface Refused {
-  refused: 501 | 502;
-  error: string;
-}
+export type Refused =
+  | { refused: 501 | 502; error: string }
+  | { refused: 416; error: string; size: number };
 
 export type Lookup = Located | Refused | null;
 
@@ -33,7 +32,7 @@ export interface FileSource {
   storage: FileStorage;
   archives: ArchiveCache;
   layouts: Layout[];
-  tryExtracted: boolean;
+  /** The zip original, read in place only while no finished extraction can answer for it. */
   inPlace: ArchiveSource | null;
 }
 
@@ -43,13 +42,9 @@ export function fileSource(
   version: AssetVersion | null,
 ): FileSource {
   const layouts = assetLayouts(asset, version);
-  const inPlace = layouts[0].archive ? archiveSource(layouts[0]) : null;
-  return {
-    ...deps,
-    layouts,
-    tryExtracted: (version ?? asset).status === "ready" || !inPlace,
-    inPlace,
-  };
+  const extracted = (version ?? asset).status === "ready";
+  const inPlace = layouts[0].archive && !extracted ? archiveSource(layouts[0]) : null;
+  return { ...deps, layouts, inPlace };
 }
 
 /**
@@ -58,8 +53,9 @@ export function fileSource(
  * - Empty path or trailing slash → the directory's `index.html` (archives) or
  *   the uploaded file itself (single-file assets).
  * - The archive's own filename → the archive.
- * - Anything else on an archive → the extracted entry at that path, then the
- *   same entry read in place from the original (ADR-018).
+ * - Anything else on an archive → the extracted entry at that path once
+ *   extraction finished, and before that the same entry read in place from
+ *   the original (ADR-018).
  * - Anything else on a single-file asset → the uploaded file. The path after
  *   the ID has never been checked for single-file assets, and links in the
  *   wild depend on that.
@@ -75,7 +71,7 @@ export async function locate(src: FileSource, filePath: string, range: Span | nu
       continue;
     }
     wantsEntry = true;
-    const found = src.tryExtracted ? await locateExtracted(src.storage, layout, entryPath) : null;
+    const found = src.inPlace ? null : await locateExtracted(src.storage, layout, entryPath);
     if (found) return found;
   }
   return wantsEntry ? locateInPlace(src, entryPath, range) : null;
@@ -111,7 +107,7 @@ async function locateExtracted(storage: FileStorage, layout: Layout, entryPath: 
 const REFUSALS: Record<Exclude<ArchiveOpenFailure, "not-found" | "changed">, Refused> = {
   "unsupported-method": { refused: 501, error: "This archive entry uses a compression method Serve cannot decode" },
   encrypted: { refused: 501, error: "This archive entry is encrypted" },
-  corrupt: { refused: 502, error: "The archive's local header contradicts its central directory" },
+  corrupt: { refused: 502, error: "The archive's entry does not match its central directory" },
 };
 
 async function locateInPlace(src: FileSource, entryPath: string, range: Span | null): Promise<Lookup> {
@@ -135,6 +131,7 @@ async function locateInPlace(src: FileSource, entryPath: string, range: Span | n
       };
     }
     if (read.reason === "not-found") return null;
+    if (read.reason === "unsatisfiable") return { refused: 416, error: "The requested range is not satisfiable", size: read.size };
     if (read.reason !== "changed") return REFUSALS[read.reason];
   }
   return { refused: 502, error: "The archive changed while it was being read" };
@@ -146,13 +143,14 @@ function displayName(path: string): string {
 
 export async function hasIndex(src: FileSource, path: string): Promise<boolean> {
   const name = `${path}/${INDEX_FILE}`;
-  if (src.tryExtracted) {
+  if (!src.inPlace) {
     for (const layout of src.layouts) {
       if (layout.archive && (await src.storage.head(entryKey(layout, name)))) return true;
     }
+    return false;
   }
   const archivePath = toArchivePath(name);
-  if (!src.inPlace || !archivePath) return false;
+  if (!archivePath) return false;
   const opened = await openArchive(src, src.inPlace);
   return opened.ok && (await opened.reader.stat(archivePath)) !== null;
 }
