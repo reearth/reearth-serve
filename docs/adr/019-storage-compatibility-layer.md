@@ -150,7 +150,7 @@ normalization.
 |-----------|-----|----|-------|
 | Write | `uploadType=media/multipart/resumable` | `PutObject`, multipart upload | New asset, or new version of the asset the key resolves to (ADR-005) |
 | Read | XML path `/{bucket}/{object}`, JSON `alt=media`; `Range`; `Accept-Encoding: gzip` | `GetObject`, `HeadObject` | Existing `/files` delivery, including gzip passthrough, after the front end authorizes `read_asset` for its service principal |
-| Metadata | `objects.get` | `HeadObject` | Version row; generation = version number |
+| Metadata | `objects.get` | `HeadObject` | Version row; generation as below |
 | List | `objects.list` (`prefix`, `delimiter=/`, `pageToken`, `startOffset`, `endOffset`) | `ListObjectsV2` | Range scan on `(bucket, key)`, merged with each mounted folder's entry table |
 | Delete | `objects.delete` | `DeleteObject`, `DeleteObjects` | See below |
 | Copy | `objects.copy`, `rewrite` | `CopyObject` | Metadata-only when the source has a blob key (ADR-017 §3) |
@@ -178,10 +178,28 @@ encoding equals the stored encoding, never a `206`. An entry read in
 place carries its central-directory CRC-32 only where the protocol has
 a field for it, and nothing otherwise.
 
-**Writes to one key are separated by a claim.** A writer inserts the
-binding row with no asset before it writes any byte, so two writers to
-a new key cannot each create an asset. The second one gets a retryable
-`503` and comes back as a new version. A claim whose writer crashed is
+**A generation is never reused for a key.** It is not the version
+number: Serve numbers versions from the highest remaining one, so a
+deleted version or a deleted and recreated asset would hand its number
+to different bytes, and a version pinned over the REST API would make
+the generation go backwards. A write through the layer stores its
+version, then takes
+`max(created_at in microseconds, bucket's last generation + 1)` in one
+statement that also raises the bucket's high mark, and keeps it next to
+the version's hashes. The high mark is per bucket, so it survives the
+deletion of every object in it. An object written outside the layer
+reads its creation time in microseconds. A write through the layer also
+makes its version the live one, clearing a pin set over the REST API, so
+`objects.get` always answers the generation the write returned.
+
+**Writes to one key are serialized.** A writer to a new key inserts the
+binding row with no asset (a claim) before it writes any byte, so two
+writers cannot each create an asset. An overwrite or a delete of a bound
+key first takes a lease on its binding row in one conditional update,
+and checks `ifGenerationMatch` only while it holds the lease. A second
+writer, or a delete during a write, gets a retryable `503`, so two
+writers with the same precondition cannot both succeed and a write never
+completes onto a deleted asset. A claim or lease whose holder crashed is
 taken over after a fixed age, and a sweep removes old claims.
 
 **Resumable uploads are staged, then committed once.** The Go client
