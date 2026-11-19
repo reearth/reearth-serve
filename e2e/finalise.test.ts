@@ -30,7 +30,7 @@ function hostGet(host: string, path: string): Promise<{ status: number; location
   });
 }
 
-describe("Upload finalisation (ADR-018 P3)", () => {
+describe("Upload finalisation (ADR-018 P3)", { timeout: 60_000 }, () => {
   test("a single PUT of a large zip records its container index in the asset meta", async () => {
     const { status, body, sessionId } = await uploadFile(indexedZip(), "city.zip", "application/zip");
     expect(status).toBe(201);

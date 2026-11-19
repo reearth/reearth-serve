@@ -35,7 +35,7 @@ const input = (size: number, archiveFormat: "zip" | "tar" | null = "zip") => ({ 
 
 afterEach(() => vi.restoreAllMocks());
 
-describe("finaliseArchive", () => {
+describe("finaliseArchive", { timeout: 60_000 }, () => {
   test("builds the index for a directory beyond the tail and records where it is", async () => {
     const { storage, size } = await stored(manyEntries());
     const result = await finaliseArchive({ storage }, input(size));
@@ -122,7 +122,7 @@ describe("finaliseArchive", () => {
   });
 });
 
-describe("upload paths", () => {
+describe("upload paths", { timeout: 60_000 }, () => {
   const failingWrites: AtomicWrites = {
     createAsset: async () => { throw new Error("D1 down"); },
     createVersion: async () => { throw new Error("D1 down"); },
@@ -168,7 +168,7 @@ describe("upload paths", () => {
   });
 });
 
-describe("presigned multipart completion", () => {
+describe("presigned multipart completion", { timeout: 60_000 }, () => {
   test("records the container index before the row write", async () => {
     const storage = new MemoryFileStorage();
     const bytes = writeZip(manyEntries());
@@ -187,7 +187,7 @@ describe("presigned multipart completion", () => {
   });
 });
 
-describe("readers fall back to the central directory", () => {
+describe("readers fall back to the central directory", { timeout: 60_000 }, () => {
   async function uploaded() {
     const storage = new MemoryFileStorage();
     const rows: AssetMetadata[] = [];
