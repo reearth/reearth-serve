@@ -6,6 +6,12 @@ export interface ResolvedAsset {
   version: AssetVersion | null;
 }
 
+/** The version an asset-ID URL serves: the active one, else the latest, else none (assets from before ADR-005). */
+export async function activeVersion(versions: VersionStore, asset: AssetMetadata): Promise<AssetVersion | null> {
+  const active = asset.activeVersionId ? await versions.find(asset.activeVersionId) : null;
+  return active ?? (await versions.findLatest(asset.id));
+}
+
 /**
  * Resolve an ID (asset or version) to an asset + its active/latest version.
  * Returns null if not found.
@@ -17,16 +23,7 @@ export async function resolveAssetVersion(
 ): Promise<ResolvedAsset | null> {
   // 1. Try as asset ID
   const asset = await metadata.find(id);
-  if (asset) {
-    let version: AssetVersion | null = null;
-    if (asset.activeVersionId) {
-      version = await versions.find(asset.activeVersionId);
-    }
-    if (!version) {
-      version = await versions.findLatest(id);
-    }
-    return { asset, version };
-  }
+  if (asset) return { asset, version: await activeVersion(versions, asset) };
 
   // 2. Try as version ID
   const version = await versions.find(id);
@@ -55,14 +52,7 @@ export async function enrichAssetWithVersion(
 
   if (versionCount === 0) return { ...asset, versionCount: 0 };
 
-  let currentVersion: AssetVersion | null = null;
-  if (asset.activeVersionId) {
-    currentVersion = await versions.find(asset.activeVersionId);
-  }
-  if (!currentVersion) {
-    currentVersion = await versions.findLatest(id);
-  }
-
+  const currentVersion = await activeVersion(versions, asset);
   return {
     ...asset,
     ...(currentVersion && { currentVersion }),
