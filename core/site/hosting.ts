@@ -15,7 +15,9 @@
  * row). Existing rows have no `hosting` and behave exactly as before.
  */
 
+import { openArchive, toArchivePath, type ArchiveDeps, type ArchiveReader, type ArchiveSource } from "../archive";
 import { decompressStream } from "../asset/compression";
+import type { StoredFile } from "../asset/model";
 import type { FileStorage } from "../asset/repository";
 import {
   boundHosting,
@@ -58,18 +60,20 @@ async function readControlFile(
 ): Promise<ControlFile> {
   for (const key of keys) {
     const file = await storage.get(key);
-    if (!file) continue;
-    // The stored size bounds the read before a byte is decoded: a 2 GB file
-    // named `_headers` must not be pulled into the Worker to be rejected.
-    if (file.size > MAX_CONTROL_FILE_BYTES) {
-      await file.body.cancel().catch(() => {});
-      return { kind: "tooLarge" };
-    }
-    const body = file.contentEncoding === "gzip" ? decompressStream(file.body) : file.body;
-    const text = await new Response(body).text();
-    return { kind: "text", text };
+    if (file) return controlFileText(file);
   }
   return { kind: "missing" };
+}
+
+async function controlFileText(file: StoredFile): Promise<ControlFile> {
+  // The stored size bounds the read before a byte is decoded: a 2 GB file
+  // named `_headers` must not be pulled into the Worker to be rejected.
+  if (file.size > MAX_CONTROL_FILE_BYTES) {
+    await file.body.cancel().catch(() => {});
+    return { kind: "tooLarge" };
+  }
+  const body = file.contentEncoding === "gzip" ? decompressStream(file.body) : file.body;
+  return { kind: "text", text: await new Response(body).text() };
 }
 
 /**
@@ -82,10 +86,34 @@ export async function readSiteHosting(
   storage: FileStorage,
   opts: { assetId: string; versionId?: string },
 ): Promise<SiteHosting | null> {
-  const [headersFile, redirectsFile] = await Promise.all([
-    readControlFile(storage, candidateKeys(opts.assetId, opts.versionId, HEADERS_FILE)),
-    readControlFile(storage, candidateKeys(opts.assetId, opts.versionId, REDIRECTS_FILE)),
-  ]);
+  return parseControlFiles(
+    (name) => readControlFile(storage, candidateKeys(opts.assetId, opts.versionId, name)),
+  );
+}
+
+/**
+ * The same rules read from the original, for an archive whose extraction has
+ * not finished and so has no parsed rules on its row yet (ADR-018). The
+ * entries' sizes come from the central directory, so an absent or oversized
+ * file costs no read once the directory is cached.
+ */
+export async function readSiteHostingInPlace(deps: ArchiveDeps, source: ArchiveSource): Promise<SiteHosting | null> {
+  const opened = await openArchive(deps, source);
+  if (!opened.ok) return null;
+  return parseControlFiles((name) => readInPlace(opened.reader, name));
+}
+
+async function readInPlace(reader: ArchiveReader, name: string): Promise<ControlFile> {
+  const path = toArchivePath(name);
+  const entry = path && (await reader.stat(path));
+  if (!path || !entry) return { kind: "missing" };
+  if (entry.size > MAX_CONTROL_FILE_BYTES) return { kind: "tooLarge" };
+  const read = await reader.open(path);
+  return read.ok ? controlFileText(read.file) : { kind: "missing" };
+}
+
+async function parseControlFiles(read: (name: string) => Promise<ControlFile>): Promise<SiteHosting | null> {
+  const [headersFile, redirectsFile] = await Promise.all([read(HEADERS_FILE), read(REDIRECTS_FILE)]);
 
   if (headersFile.kind === "missing" && redirectsFile.kind === "missing") return null;
 

@@ -2,7 +2,6 @@ import { Hono, type Context } from "hono";
 import { describeRoute, resolver } from "hono-openapi";
 import type { AppEnv } from "../types";
 import { decompressStream } from "../asset/compression";
-import type { AssetMetadata, AssetVersion, StoredFile } from "../asset/model";
 import type { FileStorage } from "../asset/repository";
 import { resolveAssetVersion } from "../asset/usecase";
 import { legacyThumbKey, versionThumbKey } from "../asset/usecase/shared";
@@ -12,12 +11,13 @@ import { dispositionHeaders } from "./disposition";
 import { handleAuthSubmit } from "../access/form";
 import { AUTH_PATH_SEGMENT, resolveAccess, type AccessDeps } from "../access/resolve";
 import { SITE_PREVIEW_HEADER, type SitePreview } from "../site/middleware";
-import { hostingFor, isControlFile } from "../site/hosting";
+import { hostingFor, isControlFile, readSiteHostingInPlace } from "../site/hosting";
 import {
   applySiteHeaders, siteRedirect, siteRedirectResponse, targetFilePath,
 } from "./site-routing";
 import { errorResponseSchema } from "../../shared";
 import { parseRange, sliceStream } from "./stream";
+import { archiveFallback, fileSource, hasIndex, isRefused, locate, type Located } from "./locate";
 import {
   THUMBNAIL_SIZES,
   isThumbnailSize,
@@ -25,27 +25,6 @@ import {
   THUMBNAIL_CONTENT_TYPE,
   type ThumbnailSize,
 } from "../thumbnail/sizes";
-
-const INDEX_FILE = "index.html";
-const NOT_FOUND_FILE = "404.html";
-
-/**
- * Does this missing path name a file rather than a client-side route?
- *
- * A 200 HTML body in place of a missing `.js` chunk, `.json` manifest or
- * `.b3dm` tile is worse than the 404 it replaces: a bundler's dynamic import
- * fails with a syntax error and a 3D Tiles viewer tries to parse HTML as a tile.
- * SPA routes, by contrast, are extensionless (`/about`, `/map/harbor`) or end
- * in a slash. So the fallback is withheld from anything whose last segment ends
- * in a short, file-like extension.
- *
- * This is a refinement of ADR-013 C1, which described the fallback without it.
- * The `404.html` branch is unaffected — it answers *with* status 404, so it
- * cannot mislead a loader the way a 200 can.
- */
-export function looksLikeAssetPath(filePath: string): boolean {
-  return /\.[a-z0-9]{1,8}$/.test(filePath.toLowerCase());
-}
 
 /** Read the site middleware's preview marker; anything else is not one. */
 function sitePreview(value: string | undefined): SitePreview | null {
@@ -67,162 +46,6 @@ function detectThumbRequest(
   const match = filePath.match(/^_thumbs\/([^/]+)\.webp$/);
   if (!match) return null;
   return isThumbnailSize(match[1]) ? match[1] : "invalid";
-}
-
-/**
- * One storage layout an asset's bytes may live under. Versioned assets use
- * `assets/{asset}/v/{version}/…`; assets that predate ADR-005 use
- * `assets/{asset}/…`. The two differ only in prefix and in where the main
- * file's HTTP metadata comes from, so the delivery code works against this
- * shape and never against the raw asset/version rows.
- */
-interface Layout {
-  archive: boolean;
-  /** Filename of the uploaded object (the archive itself for archive assets). */
-  filename: string;
-  mainKey: string;
-  /** Storage key of an extracted entry. Only meaningful when `archive`. */
-  entryKey(path: string): string;
-  contentType: string;
-  contentEncoding?: string;
-  originalSize?: number;
-}
-
-function versionedLayout(asset: AssetMetadata, version: AssetVersion): Layout {
-  const prefix = `assets/${asset.id}/v/${version.id}`;
-  return {
-    archive: version.type === "archive",
-    filename: version.filename,
-    mainKey: `${prefix}/${version.filename}`,
-    entryKey: (path) => `${prefix}/files/${path}`,
-    contentType: version.contentType,
-    contentEncoding: version.contentEncoding,
-    originalSize: version.originalSize,
-  };
-}
-
-function legacyLayout(asset: AssetMetadata): Layout {
-  const prefix = `assets/${asset.id}`;
-  return {
-    archive: asset.type === "archive",
-    filename: asset.filename,
-    mainKey: `${prefix}/${asset.filename}`,
-    entryKey: (path) => `${prefix}/files/${path}`,
-    contentType: asset.contentType,
-    contentEncoding: asset.contentEncoding,
-    originalSize: asset.originalSize,
-  };
-}
-
-interface Located {
-  key: string;
-  file: StoredFile;
-  contentType: string;
-  contentEncoding?: string;
-  displayName: string;
-  originalSize?: number;
-}
-
-/**
- * Map a request path onto an object in one layout.
- *
- * - Empty path or trailing slash → the directory's `index.html` (archives) or
- *   the uploaded file itself (single-file assets).
- * - The archive's own filename → the archive.
- * - Anything else on an archive → the extracted entry at that path.
- * - Anything else on a single-file asset → the uploaded file. The path after
- *   the ID has never been checked for single-file assets, and links in the
- *   wild depend on that.
- */
-async function locate(storage: FileStorage, layout: Layout, filePath: string): Promise<Located | null> {
-  const wantsDirectory = filePath === "" || filePath.endsWith("/");
-
-  if (!layout.archive) {
-    const file = await storage.get(layout.mainKey);
-    if (!file) return null;
-    return {
-      key: layout.mainKey,
-      file,
-      contentType: layout.contentType,
-      contentEncoding: layout.contentEncoding,
-      displayName: layout.filename,
-      originalSize: layout.originalSize,
-    };
-  }
-
-  if (!wantsDirectory && filePath === layout.filename) {
-    const file = await storage.get(layout.mainKey);
-    if (!file) return null;
-    return {
-      key: layout.mainKey,
-      file,
-      contentType: layout.contentType,
-      contentEncoding: layout.contentEncoding,
-      displayName: layout.filename,
-      originalSize: layout.originalSize,
-    };
-  }
-
-  const entryPath = wantsDirectory ? `${filePath}${INDEX_FILE}` : filePath;
-  const key = layout.entryKey(entryPath);
-  const file = await storage.get(key);
-  if (!file) return null;
-  return {
-    key,
-    file,
-    contentType: file.contentType,
-    contentEncoding: file.contentEncoding,
-    displayName: entryPath.split("/").pop() || entryPath,
-  };
-}
-
-/** True when `path` names a directory that has an index file, in any layout. */
-async function hasIndex(storage: FileStorage, layouts: Layout[], path: string): Promise<boolean> {
-  for (const layout of layouts) {
-    if (!layout.archive) continue;
-    if (await storage.head(layout.entryKey(`${path}/${INDEX_FILE}`))) return true;
-  }
-  return false;
-}
-
-/** Locate a file at the archive root, in whichever layout holds it. */
-async function locateRootFile(
-  storage: FileStorage,
-  layouts: Layout[],
-  name: string,
-): Promise<Located | null> {
-  for (const layout of layouts) {
-    if (!layout.archive) continue;
-    const found = await locate(storage, layout, name);
-    if (found) return found;
-  }
-  return null;
-}
-
-/**
- * What an archive miss falls back to (ADR-013 C1), after the A1 lookup and the
- * directory-redirect probe have both missed.
- *
- * At most **one** extra storage read: `spa` is checked first and, when it is on
- * and the path is not file-shaped, `404.html` is never looked for. A hit costs
- * nothing new — this runs only on a miss.
- */
-async function archiveFallback(
-  storage: FileStorage,
-  layouts: Layout[],
-  filePath: string,
-  spa: boolean,
-): Promise<{ kind: "spa" | "notFound"; located: Located } | null> {
-  if (!layouts.some((l) => l.archive)) return null;
-
-  if (spa && !looksLikeAssetPath(filePath)) {
-    const index = await locateRootFile(storage, layouts, INDEX_FILE);
-    if (index) return { kind: "spa", located: index };
-    return null;
-  }
-
-  const page = await locateRootFile(storage, layouts, NOT_FOUND_FILE);
-  return page ? { kind: "notFound", located: page } : null;
 }
 
 /**
@@ -394,12 +217,16 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
   // Versioned layout first; assets from before ADR-005 have no version row and
   // live under the legacy prefix, which is also the fallback when the
   // versioned key is missing.
-  const layouts = version ? [versionedLayout(asset, version), legacyLayout(asset)] : [legacyLayout(asset)];
-  const isArchive = layouts.some((l) => l.archive);
+  const src = fileSource({ storage, archives: c.get("archives") }, asset, version);
+  const isArchive = src.layouts.some((l) => l.archive);
 
   // `_headers` / `_redirects` (ADR-013 C3). The rules were parsed once, at
-  // extraction time; this is all the request pays for them.
-  const hosting = isArchive ? hostingFor(asset, version) : null;
+  // extraction time; this is all the request pays for them. Until extraction
+  // has finished they are read from the original, so a site's rules hold from
+  // its first request (ADR-018).
+  const hosting = isArchive
+    ? hostingFor(asset, version) ?? (src.inPlace && !src.extracted ? await readSiteHostingInPlace(src, src.inPlace) : null)
+    : null;
 
   // The control files are the site's configuration, not its content. They are
   // answered as a miss so an archive cannot publish its own rule set — and
@@ -427,16 +254,12 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     }
   }
 
-  let located: Located | null = null;
-  for (const layout of layouts) {
-    located = await locate(storage, layout, servePath);
-    if (located) break;
-  }
+  let found = await locate(src, servePath, range);
 
   // Plain rules apply only to a path that is not a file — Netlify's shadowing
   // semantics — so they are consulted here, after the lookup missed and before
   // the directory probe and C1's fallbacks.
-  if (!located && hosting) {
+  if (!found && hosting) {
     const fallbackRule = siteRedirect(hosting, servePath, "fallback");
     if (fallbackRule && fallbackRule.status !== 200) {
       return decorate(siteRedirectResponse(fallbackRule, {
@@ -448,17 +271,17 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     if (fallbackRule && !rewritten) {
       servePath = targetFilePath(fallbackRule.to);
       rewritten = true;
-      for (const layout of layouts) {
-        located = await locate(storage, layout, servePath);
-        if (located) break;
-      }
+      found = await locate(src, servePath, range);
     }
   }
 
+  if (isRefused(found)) return decorate(c.json({ error: found.error }, found.refused));
+
+  let located = found;
   if (!located) {
     // `/files/:id/docs` where `docs/index.html` exists: redirect to the slash
     // form so relative links inside the page resolve against the directory.
-    if (servePath !== "" && !servePath.endsWith("/") && (await hasIndex(storage, layouts, servePath))) {
+    if (servePath !== "" && !servePath.endsWith("/") && (await hasIndex(src, servePath))) {
       const url = new URL(c.req.url);
       url.pathname = `${url.pathname}/`;
       return decorate(c.redirect(url.toString(), 301));
@@ -468,7 +291,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     // check, after the A1 lookup and after the directory-redirect probe, so a
     // protected asset is challenged before anything is served and a real
     // directory still redirects rather than rendering the app shell.
-    const fallback = await archiveFallback(storage, layouts, servePath, asset.spa === true);
+    const fallback = await archiveFallback(src, servePath, asset.spa === true);
     if (!fallback) return decorate(c.json({ error: "File not found" }, 404));
     if (fallback.kind === "notFound") {
       return decorate(applySiteHeaders(
@@ -492,7 +315,6 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
       contentType: located.contentType,
       protected: isProtected,
     }),
-    storage,
     siteHost: c.get("siteHost"),
   });
 
@@ -660,13 +482,12 @@ interface ServeOptions {
   clientAcceptsGzip: boolean;
   ifNoneMatch: string | undefined;
   cacheControl: string;
-  storage: FileStorage;
   siteHost: boolean;
 }
 
 async function serveFile(located: Located, opts: ServeOptions): Promise<Response> {
-  const { file, key, contentType, contentEncoding, displayName, originalSize } = located;
-  const { range, rangeHeader, clientAcceptsGzip, storage } = opts;
+  const { file, rangeRead, contentType, contentEncoding, displayName, originalSize } = located;
+  const { range, rangeHeader, clientAcceptsGzip } = opts;
   const isGzipStored = contentEncoding === "gzip";
   // Pass the stored gzip bytes through untouched when the client can take
   // them and asked for the whole file; every other path decodes.
@@ -692,15 +513,19 @@ async function serveFile(located: Located, opts: ServeOptions): Promise<Response
   if (!isGzipStored) {
     const headers: Record<string, string> = { ...common, "Accept-Ranges": "bytes" };
     if (range) {
-      // The first read fetched the whole object to learn its metadata; the
-      // range itself is a second, bounded read.
-      await file.body.cancel().catch(() => {});
-      const rangedFile = await storage.get(key, range);
-      if (!rangedFile) {
-        return new Response(JSON.stringify({ error: "File not found" }), {
-          status: 404,
-          headers: { "Content-Type": "application/json" },
-        });
+      // A read that did not apply the range fetched the whole object to learn
+      // its metadata; the range itself is then a second, bounded read.
+      let rangedFile = file;
+      if (!file.range && rangeRead) {
+        await file.body.cancel().catch(() => {});
+        const reread = await rangeRead(range);
+        if (!reread) {
+          return new Response(JSON.stringify({ error: "File not found" }), {
+            status: 404,
+            headers: { "Content-Type": "application/json" },
+          });
+        }
+        rangedFile = reread;
       }
       if (rangedFile.range) {
         const { offset, length, totalSize } = rangedFile.range;
