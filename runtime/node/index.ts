@@ -12,6 +12,7 @@
 import { serve, type HttpBindings } from "@hono/node-server";
 import { createApp } from "../../core/app";
 import { isSiteHost } from "../../core/site/middleware";
+import { classifyCompatHost } from "../../core/compat/hosts";
 import { PUBLIC_SUFFIX_OVERRIDE_NOTICE } from "../../core/site/isolation";
 import { buildNodeRuntime, type NodeRuntime } from "./deps";
 import { runCron } from "./cron";
@@ -47,10 +48,11 @@ export function createNodeHandler(
     // goes to the app and the app's middleware does the `site_hosts` lookup. A
     // host with no row gets the middleware's plain-text 404; the health check,
     // the docs and the API stay reachable on the apex alone.
-    if (isSiteHost(request.headers.get("Host") ?? url.host, {
-      baseUrl: runtime.deps.baseUrl,
-      suffix: runtime.deps.siteHostSuffix,
-    })) {
+    const host = request.headers.get("Host") ?? url.host;
+    if (
+      classifyCompatHost(host, { api: runtime.deps.compatApiHost, objects: runtime.deps.compatObjectsHost }) ||
+      isSiteHost(host, { baseUrl: runtime.deps.baseUrl, suffix: runtime.deps.siteHostSuffix })
+    ) {
       return app.fetch(request);
     }
 

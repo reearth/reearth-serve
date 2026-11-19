@@ -66,6 +66,7 @@ interface Env {
   // Host the GCS-compatible API answers on (ADR-019). Unset ⇒ compat
   // credentials cannot be issued.
   COMPAT_GCS_HOST?: string;
+  COMPAT_OBJECTS_HOST?: string;
   // Cloudflare Containers
   ARCHIVE_EXTRACTOR?: DurableObjectNamespace;
   THUMBNAIL_GENERATOR?: DurableObjectNamespace;

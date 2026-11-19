@@ -6,7 +6,7 @@ import {
   SqlCleanupPendingStore,
 } from "../sql/stores";
 import { R2PresignedUrlGenerator } from "./presigned";
-import { buildTenancy, parseTenancyConfig } from "../tenancy";
+import { buildTenancy, parseTenancyConfig, serviceAuthorizer } from "../tenancy";
 import { CloudflareContainerLauncher, type ObjectStoreCredentials } from "./container";
 import { CloudflareKeyValue } from "./kv";
 import { KeyValueUploadSessionStore, KeyValueSessionStore } from "../../core/kv/stores";
@@ -51,6 +51,7 @@ export function buildDeps(env: Env): Deps {
     console.warn(PUBLIC_SUFFIX_OVERRIDE_NOTICE);
   }
   const objectStore = r2Credentials(env);
+  const tenancyConfig = parseTenancyConfig(env);
   // One KeyValue per invocation, shared by every store that only needs
   // "JSON blob under a key with a TTL" (ADR-012 §2).
   const kv = new CloudflareKeyValue(env.KV);
@@ -102,6 +103,7 @@ export function buildDeps(env: Env): Deps {
     credentialedOrigins: parseCredentialedOrigins(env.CREDENTIALED_ORIGINS),
     compat: new SqlCompatStore(sql),
     compatApiHost: env.COMPAT_GCS_HOST || undefined,
+    compatObjectsHost: env.COMPAT_OBJECTS_HOST || undefined,
 
     sessions: new KeyValueSessionStore(kv),
     sessionTtlSeconds: SESSION_TTL_SECONDS,
@@ -114,7 +116,8 @@ export function buildDeps(env: Env): Deps {
         ? parseInt(env.JWKS_CACHE_TTL_SECONDS, 10)
         : undefined,
     },
-    tenancy: buildTenancy(parseTenancyConfig(env), { sql, kv }),
+    tenancy: buildTenancy(tenancyConfig, { sql, kv }),
+    serviceAuthorizer: serviceAuthorizer(tenancyConfig),
     containers: new CloudflareContainerLauncher({
       archiveExtractor: env.ARCHIVE_EXTRACTOR ?? null,
       thumbnailGenerator: env.THUMBNAIL_GENERATOR ?? null,
