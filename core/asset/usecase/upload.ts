@@ -8,6 +8,7 @@ import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
 import type { JobQueue } from "../../queue/port";
 import type { ExtractionMessage } from "../../extraction/handler";
+import { failureClassOf } from "../../job/failure-class";
 
 export async function uploadAsset(
   writes: AtomicWrites,
@@ -61,6 +62,7 @@ export async function uploadAsset(
       assetId: id,
       type: "archive-extraction",
       status: "pending",
+      failureClass: failureClassOf("archive-extraction", archiveFormat),
       createdAt: now,
       updatedAt: now,
       ...(options?.sessionId && { sessionId: options.sessionId }),

@@ -7,6 +7,7 @@ import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { denyAnonymousUpload } from "./shared";
 import { jobResponseSchema, idParamSchema } from "../../../shared/openapi";
 import { jsonError, jsonResponse } from "../../openapi";
+import { failureClassOf } from "../../job/failure-class";
 
 export function registerExtractRoute(app: Hono<AppEnv>) {
   app.post("/:id/extract",
@@ -58,6 +59,7 @@ export function registerExtractRoute(app: Hono<AppEnv>) {
       assetId: id,
       type: "archive-extraction" as const,
       status: "pending" as const,
+      failureClass: failureClassOf("archive-extraction", asset.archiveFormat),
       createdAt: now,
       updatedAt: now,
       ...(sessionId && { sessionId }),
