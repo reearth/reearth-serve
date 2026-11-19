@@ -564,7 +564,7 @@ async function serveFile(located: Located, opts: ServeOptions): Promise<Response
   const headers: Record<string, string> = { ...common, "Accept-Ranges": "bytes" };
 
   if (!range) {
-    if (originalSize) headers["Content-Length"] = String(originalSize);
+    if (originalSize !== undefined) headers["Content-Length"] = String(originalSize);
     return new Response(decompressed, { status: 200, headers });
   }
 
