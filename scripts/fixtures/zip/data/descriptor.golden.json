@@ -1,6 +1,5 @@
 {
   "archive": "descriptor.zip",
-  "extractorParity": true,
   "entries": [
     {
       "path": "a/1.txt",
