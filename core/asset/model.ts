@@ -31,16 +31,16 @@ export function detectArchiveFormat(filename: string): ArchiveFormat | null {
   return null;
 }
 
-// Worker-only types (not in shared — use runtime-specific APIs)
-
 /**
- * Did this row's extraction complete? Readiness alone does not say: a zip
- * whose extraction failed for good is also ready (ADR-018 §6). Only a
- * completed job mirrors `fileCount` onto the row.
+ * Readiness alone does not mean extraction completed, since a zip whose
+ * extraction failed for good is also ready (ADR-018 §6). Only a completed
+ * job mirrors `fileCount` onto the row.
  */
 export function extractionCompleted(row: Pick<AssetMetadata | AssetVersion, "status" | "fileCount">): boolean {
   return row.status === "ready" && row.fileCount !== undefined;
 }
+
+// Worker-only types (not in shared — use runtime-specific APIs)
 
 export interface StoredFile {
   body: ReadableStream;
