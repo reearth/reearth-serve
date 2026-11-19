@@ -2,7 +2,7 @@ import type { StoredFile } from "../asset/model";
 import type { FileStorage } from "../asset/repository";
 import type { ArchiveCache, Built } from "./cache";
 import { contentTypeOf } from "./content-type";
-import { buildTable, createSurvey, type TableEntry } from "./table";
+import { buildTable, createSurvey, type EntryTable, type NameRules, type TableEntry } from "./table";
 import { gzipMember, GZIP_HEADER_BYTES, GZIP_TRAILER_BYTES } from "./transmux";
 import { memoryView, scanView, type TableView } from "./views";
 import { chunks, createDirectoryParser, locateDirectory, readAll, type Directory, type DirectoryRefusal } from "./zip/directory";
@@ -121,14 +121,9 @@ export async function buildView(
     return { ok: true, view: scanView(storage, source.key, directory, survey, onStale), bytes: 256 };
   }
 
-  const cd = directory.bytesFromTail ?? (await readDirectory(storage, source.key, directory));
-  if (!cd) return { ok: false, reason: "missing" };
-  const survey = createSurvey(source.filename);
-  const parser = createDirectoryParser(directory, survey.observe);
-  if (!parser.push(cd) || parser.end() === null) return { ok: false, reason: "corrupt" };
-  const rules = survey.result();
-  const table = buildTable(cd, directory, rules);
-  if (!table) return { ok: false, reason: "corrupt" };
+  const read = await directoryTable(storage, source, directory);
+  if (!read.ok) return read;
+  const { table, rules } = read;
   return {
     ok: true,
     view: memoryView(table, directory.entryCount, rules.rootPrefix, directory.etag),
@@ -136,12 +131,30 @@ export async function buildView(
   };
 }
 
+export async function directoryTable(
+  storage: FileStorage,
+  source: ArchiveSource,
+  directory: Directory,
+): Promise<{ ok: true; table: EntryTable; rules: NameRules } | { ok: false; reason: DirectoryRefusal }> {
+  const cd = directory.bytesFromTail ?? (await readDirectory(storage, source.key, directory));
+  if (!cd) return { ok: false, reason: "missing" };
+  const rules = surveyBytes(cd, directory, source.filename);
+  const table = rules && buildTable(cd, directory, rules);
+  return table && rules ? { ok: true, table, rules } : { ok: false, reason: "corrupt" };
+}
+
+export function surveyBytes(cd: Uint8Array, directory: Directory, filename: string): NameRules | null {
+  const survey = createSurvey(filename);
+  const parser = createDirectoryParser(directory, survey.observe);
+  return parser.push(cd) && parser.end() !== null ? survey.result() : null;
+}
+
 async function readDirectory(storage: FileStorage, key: string, directory: Directory): Promise<Uint8Array | null> {
   const file = await storage.get(key, { offset: directory.offset, length: directory.size });
   return file && readAll(file.body, directory.size);
 }
 
-async function surveyStream(storage: FileStorage, source: ArchiveSource, directory: Directory) {
+export async function surveyStream(storage: FileStorage, source: ArchiveSource, directory: Directory) {
   const file = await storage.get(source.key, { offset: directory.offset, length: directory.size });
   if (!file) return null;
   const survey = createSurvey(source.filename);
