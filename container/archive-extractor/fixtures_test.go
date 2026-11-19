@@ -18,8 +18,6 @@ type fixtureGolden struct {
 	} `json:"entries"`
 }
 
-// The in-place reader in core/archive and this extractor must name every
-// entry identically, or links into an archive change when extraction ends.
 func TestExtractedPathsMatchSharedGoldenLists(t *testing.T) {
 	goldens, err := filepath.Glob("../../scripts/fixtures/zip/data/*.golden.json")
 	if err != nil || len(goldens) == 0 {
@@ -66,5 +64,24 @@ func TestExtractedPathsMatchSharedGoldenLists(t *testing.T) {
 				t.Fatalf("extracted paths differ from the golden list\n got: %q\nwant: %q", got, want)
 			}
 		})
+	}
+}
+
+func TestContentTypesMatchSharedVectors(t *testing.T) {
+	raw, err := os.ReadFile("../../scripts/fixtures/zip/data/content-types.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var vectors []struct {
+		Path        string `json:"path"`
+		ContentType string `json:"contentType"`
+	}
+	if err := json.Unmarshal(raw, &vectors); err != nil {
+		t.Fatal(err)
+	}
+	for _, v := range vectors {
+		if got := DetectContentType(v.Path); got != v.ContentType {
+			t.Errorf("DetectContentType(%q) = %q, want %q", v.Path, got, v.ContentType)
+		}
 	}
 }
