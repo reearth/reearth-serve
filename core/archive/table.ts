@@ -157,7 +157,6 @@ function growBytes(bytes: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
   return next;
 }
 
-/** Records `start` to `end` with their names copied into a heap of their own, offsets rebased to it. */
 export function sliceTable(table: EntryTable, start: number, end: number): EntryTable {
   const count = end - start;
   const records = new DataView(table.records.buffer.slice(table.records.byteOffset + start * RECORD, table.records.byteOffset + end * RECORD));

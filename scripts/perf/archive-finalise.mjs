@@ -13,8 +13,7 @@
 // finalisation, and the first entry request after upload. Part 2 runs head's
 // code in this process over the memory adapters, because wrangler dev logs no
 // R2 operations: it times finaliseArchive alone and counts the storage reads
-// and CPU of a cold first-entry read with and without the index. Local only;
-// never point it at a deployed endpoint.
+// and CPU of a cold first-entry read with and without the index.
 import { parseArgs } from "node:util";
 import { register } from "tsx/esm/api";
 
@@ -49,7 +48,6 @@ function crc32(bytes) {
 const entryName = (i) => `udx/bldg/53394611_bldg_6697_op/${String(i).padStart(6, "0")}_bldg_6697_appearance.json`;
 const entryBody = (i) => `{"building":${i}}`;
 
-// Stored entries with PLATEAU-length paths: 1k entries fit the 1 MiB tail, 50k and 100k need the index.
 function buildZip(count) {
   const enc = new TextEncoder();
   const locals = [];

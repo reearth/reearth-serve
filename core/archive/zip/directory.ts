@@ -282,7 +282,7 @@ function isDirectory(rawName: Uint8Array, madeBy: number, externalAttrs: number)
   return false;
 }
 
-const CRC_TABLES = (() => {
+const CRC32_SLICE8_TABLES = (() => {
   const tables = new Uint32Array(8 * 256);
   for (let n = 0; n < 256; n++) {
     let c = n;
@@ -295,9 +295,8 @@ const CRC_TABLES = (() => {
   return tables;
 })();
 
-/** Slicing-by-8: finalisation checksums every index page, about 10 MB at 100,000 entries. */
 export function crc32(bytes: Uint8Array): number {
-  const t = CRC_TABLES;
+  const t = CRC32_SLICE8_TABLES;
   let c = 0xffffffff;
   let i = 0;
   const n = bytes.length;

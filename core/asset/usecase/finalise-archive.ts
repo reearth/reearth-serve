@@ -17,37 +17,27 @@ export interface FinaliseArchiveDeps {
 }
 
 export interface FinaliseArchiveInput {
-  /** The layout root the original was written under: `assets/{id}` or `assets/{id}/v/{vid}`. */
   root: string;
   filename: string;
   size: number;
   archiveFormat: ArchiveFormat | null;
 }
 
-/** Fields merged into the row input, so the row is written once, after every object it names. */
 export interface ArchiveFinalisation {
   container?: ContainerMeta;
   hosting?: SiteHosting;
 }
 
-/** The one writer of the index key. Readers take it from `container.index` and never call this. */
 export function containerIndexKey(root: string): string {
   return `${root}/_archive/container.v1`;
 }
 
-/** Objects finalisation wrote, for a caller that compensates a failed row write. */
 export function writtenKeys(finalised: ArchiveFinalisation): string[] {
   return finalised.container && "index" in finalised.container ? [finalised.container.index] : [];
 }
 
 const QUIET_REFUSALS = new Set(["missing", "not-zip", "encoded-original"]);
 
-/**
- * Run between the original's put and the row write. Never throws: the original
- * is already stored, and the upload must succeed without an index or rules.
- * A rerun over the same original writes the same index bytes and returns the
- * same fields.
- */
 export async function finaliseArchive(deps: FinaliseArchiveDeps, input: FinaliseArchiveInput): Promise<ArchiveFinalisation> {
   if (input.archiveFormat !== "zip") return {};
   const archives = deps.archives ?? createArchiveCache();

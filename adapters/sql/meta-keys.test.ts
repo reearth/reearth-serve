@@ -16,9 +16,8 @@ function droppedKeys(keys: string[], args: SqlValue[]): string[] {
 
 describe("every schema field reaches a column or the meta JSON", () => {
   test("asset upsert", () => {
-    // Not written by the upsert: derived on read, or set by their own statements.
-    const elsewhere = new Set(["currentVersion", "versionCount", "access", "spa"]);
-    const keys = Object.keys(assetMetadataSchema.shape).filter((k) => !elsewhere.has(k));
+    const notUpserted = new Set(["currentVersion", "versionCount", "access", "spa"]);
+    const keys = Object.keys(assetMetadataSchema.shape).filter((k) => !notUpserted.has(k));
     const args = assetUpsertArgs(sentinelModel(keys) as never);
     expect(droppedKeys(keys, args)).toEqual([]);
   });

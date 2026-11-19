@@ -15,7 +15,6 @@ const text = (s: string) => new TextEncoder().encode(s);
 const ROOT = "assets/a1";
 const FILENAME = "site.zip";
 
-// About 1.3 MB of central directory, so it cannot be answered from the 1 MiB tail.
 function manyEntries(count = 10_000): SyntheticEntry[] {
   return Array.from({ length: count }, (_, i) => ({ name: `tiles/${String(i).padStart(8, "0")}/${"n".repeat(64)}.json`, data: text(`{"i":${i}}`) }));
 }

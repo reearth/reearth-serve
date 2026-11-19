@@ -17,7 +17,6 @@ export interface Layout {
   originalSize?: number;
   archive: boolean;
   archiveFormat?: string;
-  /** What upload finalisation recorded; absent when it did not run. */
   container?: ContainerMeta;
 }
 

@@ -84,7 +84,6 @@ export interface IndexFence {
 
 export type IndexRejection = "truncated" | "magic" | "version" | "format" | "header-crc" | "fence-crc" | "size" | "etag";
 
-/** Null when the source etag or the root prefix does not fit its field; a truncated etag would match the wrong object. */
 export function encodeIndex({ table, rules, directory, directoryRecordCount, sourceSize }: IndexInputs): Uint8Array | null {
   const etag = encoder.encode(directory.etag ?? "");
   const root = encoder.encode(rules.rootPrefix);
@@ -143,7 +142,6 @@ export function encodeIndex({ table, rules, directory, directoryRecordCount, sou
   return out;
 }
 
-/** `expect.etag` is the source's etag when the caller knows it. */
 export function readHeader(bytes: Uint8Array, expect: { size: number; etag?: string }): { ok: true; header: IndexHeader } | { ok: false; reason: IndexRejection } {
   if (bytes.byteLength < HEADER) return { ok: false, reason: "truncated" };
   if (MAGIC.some((b, i) => bytes[i] !== b)) return { ok: false, reason: "magic" };
@@ -178,7 +176,6 @@ export function readHeader(bytes: Uint8Array, expect: { size: number; etag?: str
   return { ok: true, header };
 }
 
-/** `bytes` holds the index from offset 0 through at least `header.fenceEnd`. */
 export function readFence(bytes: Uint8Array, header: IndexHeader): { ok: true; fence: IndexFence } | { ok: false; reason: IndexRejection } {
   if (bytes.byteLength < header.fenceEnd) return { ok: false, reason: "truncated" };
   if (crc32(bytes.subarray(HEADER, header.fenceEnd)) !== header.fenceCrc) return { ok: false, reason: "fence-crc" };
@@ -204,7 +201,6 @@ export function readFence(bytes: Uint8Array, header: IndexHeader): { ok: true; f
   return { ok: true, fence: { header, rootPrefix, pages } };
 }
 
-/** Null when the bytes fail the page's CRC-32. */
 export function readPage(bytes: Uint8Array, page: PageRef): EntryTable | null {
   const records = page.count * RECORD;
   if (bytes.byteLength !== page.length || records > bytes.byteLength || crc32(bytes) !== page.crc32) return null;

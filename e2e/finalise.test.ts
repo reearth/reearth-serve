@@ -6,7 +6,6 @@ import { BASE, buildMiniZip, rawGet, uploadFile } from "./helpers";
 const SUFFIX = process.env.E2E_SITE_HOST_SUFFIX;
 const encoder = new TextEncoder();
 
-// A central directory of about 1.3 MB, beyond the 1 MiB tail read, so finalisation builds an index.
 function indexedZip(extra: Record<string, string> = {}): Uint8Array {
   const entries = Array.from({ length: 10_000 }, (_, i) => ({
     name: `tiles/${String(i).padStart(8, "0")}/${"n".repeat(64)}.json`,

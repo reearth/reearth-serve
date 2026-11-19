@@ -159,14 +159,12 @@ export const siteHostingSchema = z.object({
   warnings: z.array(z.string()),
 });
 
-/**
- * What upload finalisation recorded about a zip's central directory (ADR-018 P3).
- * `index` names the container index object; readers take the key from here and
- * never derive it. `skipped` says why no index was built: the directory fits
- * the 1 MiB tail read (`small`), or it is above the build threshold
- * (`too-large`). An absent `container` means finalisation did not run or failed.
- */
 const directorySpanSchema = z.object({ offset: z.number(), size: z.number() });
+/**
+ * `skipped` says why no index was built: the central directory fits the 1 MiB
+ * tail read (`small`), or it is above the build threshold (`too-large`). An
+ * absent `container` means finalisation did not run or failed.
+ */
 export const containerSchema = component("Container", z.union([
   z.object({ index: z.string(), directory: directorySpanSchema, rootPrefix: z.string() }),
   z.object({ skipped: z.enum(["small", "too-large"]), directory: directorySpanSchema, rootPrefix: z.string() }),

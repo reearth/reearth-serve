@@ -10,7 +10,6 @@ export type Built = { ok: true; view: TableView; bytes: number } | { ok: false; 
 export interface ArchiveCache {
   load(key: string, build: () => Promise<Built>): Promise<Built>;
   evict(key: string): void;
-  /** Stop answering `key` from its container index: drops the cached view and any build in flight, and keeps the mark in a bounded set. */
   distrust(key: string): void;
   distrusted(key: string): boolean;
 }

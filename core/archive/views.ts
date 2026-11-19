@@ -27,7 +27,6 @@ export interface TableView {
   readonly etag: string | undefined;
   readonly dataEnd: number;
   readonly rootPrefix: string;
-  /** "index" when answers come from a container index, which may be distrusted and replaced by the central directory. */
   readonly from: "directory" | "index";
   find(path: string): Promise<TableEntry | null>;
   list(query: ListQuery): Promise<ListResult>;
@@ -36,15 +35,9 @@ export interface TableView {
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-/**
- * A byte-sorted run of unique entry names, reached one table at a time:
- * MemoryView holds one table, IndexedView one page per table. Both views
- * find and list through it, so they cannot answer differently.
- */
 interface SortedEntries {
   readonly count: number;
-  /** The table holding position `i`, and the position of that table's first record. */
-  chunk(i: number): Promise<{ table: EntryTable; start: number }>;
+  tableAt(i: number): Promise<{ table: EntryTable; start: number }>;
   lowerBound(key: Uint8Array): Promise<number>;
   upperBound(key: Uint8Array): Promise<number>;
 }
@@ -57,7 +50,7 @@ async function findIn(sorted: SortedEntries, path: string): Promise<TableEntry |
   const key = encoder.encode(path);
   const i = await sorted.lowerBound(key);
   if (i >= sorted.count) return null;
-  const { table, start } = await sorted.chunk(i);
+  const { table, start } = await sorted.tableAt(i);
   return compare(nameAt(table, i - start), key) === 0 ? entryAt(table, i - start) : null;
 }
 
@@ -69,7 +62,7 @@ async function listIn(sorted: SortedEntries, query: ListQuery): Promise<ListResu
   if (query.after) i = Math.max(i, await sorted.upperBound(encoder.encode(query.after)));
   let last = "";
   while (i < sorted.count) {
-    const { table, start } = await sorted.chunk(i);
+    const { table, start } = await sorted.tableAt(i);
     const name = nameAt(table, i - start);
     if (!startsWith(name, prefix)) break;
     const split = delimiter.byteLength > 0 ? indexOf(name, delimiter, prefix.byteLength) : -1;
@@ -96,7 +89,7 @@ export function memoryView(table: EntryTable, entryCount: number, rootPrefix: st
   return sortedView(
     {
       count: table.count,
-      chunk: async () => whole,
+      tableAt: async () => whole,
       lowerBound: async (key) => lowerBound(table, key),
       upperBound: async (key) => upperBound(table, key),
     },
@@ -106,12 +99,10 @@ export function memoryView(table: EntryTable, entryCount: number, rootPrefix: st
 
 const PAGE_BUDGET = 2 * 1024 * 1024;
 
-/** An IndexedView page that cannot be read or fails its CRC-32. The reader distrusts the index and answers from the central directory. */
 export class IndexUnusable extends Error {}
 
 export type IndexedOpen = { ok: true; view: TableView; bytes: number } | { ok: false; reason: IndexRejection | "missing" | "unreadable" };
 
-/** One read of the index head, and a second only when the fence runs past it. Pages are read on demand and held up to `pageBudget` bytes. */
 export async function openIndexedView(storage: FileStorage, key: string, sourceSize: number, pageBudget = PAGE_BUDGET): Promise<IndexedOpen> {
   let opened: Awaited<ReturnType<typeof readIndexHead>>;
   try {
@@ -202,7 +193,7 @@ function indexedView(storage: FileStorage, key: string, fence: IndexFence, pageB
   return sortedView(
     {
       count: header.count,
-      chunk: async (i) => {
+      tableAt: async (i) => {
         const p = Math.floor(i / header.pageEntries);
         return { table: await page(p), start: p * header.pageEntries };
       },
