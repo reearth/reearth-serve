@@ -1,9 +1,10 @@
 import type {
   Binding, BindingKind, BucketName, CompatBucket, CompatCredential, CredentialId,
-  ExactHashes, UploadId, UploadSession,
+  UploadId, UploadSession,
 } from "../../core/compat/model";
 import {
   newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatStore, type DeleteBucketResult,
+  type LeaseToken, type VersionRecord,
 } from "../../core/compat/repository";
 import type { Row, SqlClient, SqlStatement } from "../../core/sql/port";
 import { queryAll, queryFirst } from "./helpers";
@@ -117,6 +118,22 @@ export class SqlCompatStore implements CompatStore {
     await this.db.execute("DELETE FROM compat_bindings WHERE bucket = ?1 AND key = ?2", [bucket, key]);
   }
 
+  async lease(bucket: BucketName, key: BindingKey, token: LeaseToken, now: number, staleBefore: number): Promise<boolean> {
+    const result = await this.db.execute(
+      `UPDATE compat_bindings SET lease_token = ?3, leased_at = ?4
+         WHERE bucket = ?1 AND key = ?2 AND asset_id IS NOT NULL AND (lease_token IS NULL OR leased_at < ?5)`,
+      [bucket, key, token, now, staleBefore],
+    );
+    return result.rowsAffected > 0;
+  }
+
+  async releaseLease(bucket: BucketName, key: BindingKey, token: LeaseToken): Promise<void> {
+    await this.db.execute(
+      "UPDATE compat_bindings SET lease_token = NULL, leased_at = NULL WHERE bucket = ?1 AND key = ?2 AND lease_token = ?3",
+      [bucket, key, token],
+    );
+  }
+
   async scanBindings(bucket: BucketName, from: string, until: string | null, limit: number): Promise<Binding[]> {
     const rows = await queryAll(
       this.db,
@@ -128,15 +145,28 @@ export class SqlCompatStore implements CompatStore {
     return rows.map(parseBinding);
   }
 
-  async findHashes(objectRef: string): Promise<ExactHashes | null> {
-    const row = await queryFirst(this.db, "SELECT md5, crc32c FROM compat_hashes WHERE object_ref = ?1", [objectRef]);
-    return row ? { md5: toBytes(row.md5), crc32c: Number(row.crc32c) } : null;
+  async nextGeneration(bucket: BucketName, atLeast: number): Promise<number> {
+    const row = await queryFirst(
+      this.db,
+      "UPDATE compat_buckets SET last_generation = MAX(last_generation + 1, ?2) WHERE name = ?1 RETURNING last_generation",
+      [bucket, atLeast],
+    );
+    return row ? Number(row.last_generation) : atLeast;
   }
 
-  async putHashes(objectRef: string, assetId: string, hashes: ExactHashes): Promise<void> {
+  async findRecord(objectRef: string): Promise<VersionRecord | null> {
+    const row = await queryFirst(
+      this.db,
+      "SELECT generation, md5, crc32c FROM compat_hashes WHERE object_ref = ?1",
+      [objectRef],
+    );
+    return row ? { generation: Number(row.generation), hashes: { md5: toBytes(row.md5), crc32c: Number(row.crc32c) } } : null;
+  }
+
+  async putRecord(objectRef: string, assetId: string, { generation, hashes }: VersionRecord): Promise<void> {
     await this.db.execute(
-      "INSERT OR REPLACE INTO compat_hashes (object_ref, asset_id, md5, crc32c) VALUES (?1, ?2, ?3, ?4)",
-      [objectRef, assetId, hashes.md5, hashes.crc32c],
+      "INSERT OR REPLACE INTO compat_hashes (object_ref, asset_id, generation, md5, crc32c) VALUES (?1, ?2, ?3, ?4, ?5)",
+      [objectRef, assetId, generation, hashes.md5, hashes.crc32c],
     );
   }
 

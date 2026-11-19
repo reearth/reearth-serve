@@ -209,7 +209,7 @@ func writeAttrsListDelete(ctx context.Context, client *storage.Client, cfg confi
 	if attrs.ContentType != "text/plain" || attrs.Metadata["k"] != "v" || attrs.Size != int64(len(first)) {
 		return fmt.Errorf("attrs: got ContentType %q, Metadata %v, Size %d", attrs.ContentType, attrs.Metadata, attrs.Size)
 	}
-	fmt.Println("generation:", attrs.Generation)
+	firstGeneration := attrs.Generation
 
 	second := []byte("second, longer body")
 	if _, err := write(ctx, obj, "text/plain", nil, second); err != nil {
@@ -222,7 +222,11 @@ func writeAttrsListDelete(ctx context.Context, client *storage.Client, cfg confi
 	if err := checkHashes(attrs, second); err != nil {
 		return fmt.Errorf("after overwrite: %w", err)
 	}
-	fmt.Println("generation:", attrs.Generation)
+	if attrs.Generation <= firstGeneration {
+		return fmt.Errorf("overwrite: generation %d is not above %d", attrs.Generation, firstGeneration)
+	}
+	fmt.Println("overwrite: generation increased")
+	lastGeneration := attrs.Generation
 
 	if _, err := write(ctx, bucket.Object("assets/ab/cdef/sub/b.txt"), "text/plain", nil, []byte("b")); err != nil {
 		return fmt.Errorf("write sub/b.txt: %w", err)
@@ -256,6 +260,18 @@ func writeAttrsListDelete(ctx context.Context, client *storage.Client, cfg confi
 	}
 	if _, err := obj.Attrs(ctx); !errors.Is(err, storage.ErrObjectNotExist) {
 		return fmt.Errorf("attrs after delete: want ErrObjectNotExist, got %v", err)
+	}
+
+	recreated, err := write(ctx, obj, "text/plain", nil, first)
+	if err != nil {
+		return fmt.Errorf("recreate: %w", err)
+	}
+	if recreated.Generation <= lastGeneration {
+		return fmt.Errorf("recreate: generation %d is not above %d", recreated.Generation, lastGeneration)
+	}
+	fmt.Println("recreate: generation increased")
+	if err := obj.Delete(ctx); err != nil {
+		return fmt.Errorf("delete recreated: %w", err)
 	}
 	return nil
 }
@@ -318,13 +334,14 @@ func race(ctx context.Context, client *storage.Client, cfg config) error {
 	obj := client.Bucket(cfg.bucket).Object("race/new.txt").Retryer(storage.WithPolicy(storage.RetryAlways))
 	start := make(chan struct{})
 	errs := make([]error, 2)
+	written := make([]*storage.ObjectAttrs, 2)
 	var wg sync.WaitGroup
 	for i := range 2 {
 		wg.Add(1)
 		go func() {
 			defer wg.Done()
 			<-start
-			_, errs[i] = write(ctx, obj, "text/plain", nil, []byte(fmt.Sprintf("writer %d", i)))
+			written[i], errs[i] = write(ctx, obj, "text/plain", nil, []byte(fmt.Sprintf("writer %d", i)))
 		}()
 	}
 	close(start)
@@ -336,6 +353,13 @@ func race(ctx context.Context, client *storage.Client, cfg config) error {
 	if err != nil {
 		return fmt.Errorf("attrs: %w", err)
 	}
-	fmt.Println("generation:", attrs.Generation)
+	low, high := written[0].Generation, written[1].Generation
+	if low > high {
+		low, high = high, low
+	}
+	if low == high || attrs.Generation != high {
+		return fmt.Errorf("race: writers got generations %d and %d, the object has %d", low, high, attrs.Generation)
+	}
+	fmt.Println("generation: the later of two distinct writes")
 	return nil
 }

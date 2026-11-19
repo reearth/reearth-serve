@@ -178,9 +178,10 @@ describe("objects", () => {
     expect(written.status).toBe(200);
     const resource = await written.json();
     expect(resource).toMatchObject({
-      kind: "storage#object", name: "assets/ab/a.txt", bucket: "media", generation: "1", metageneration: "1",
+      kind: "storage#object", name: "assets/ab/a.txt", bucket: "media", metageneration: "1",
       contentType: "text/plain", size: "10", crc32c: "Yk9x6g==", md5Hash: "KJ2vAHjAOf4oawDFYf2glw==", metadata: { k: "v" },
     });
+    expect((resource as { generation: string }).generation).toMatch(/^\d{16}$/);
 
     const got = await onApi(f, "/storage/v1/b/media/o/assets%2Fab%2Fa.txt?alt=json&prettyPrint=false&projection=full", { headers });
     expect(await got.json()).toEqual(resource);
@@ -215,6 +216,22 @@ describe("objects", () => {
       method: "POST", headers: { ...headers, "Content-Type": "text/plain", "Content-Length": "3" }, body: "abc",
     });
     expect(await sized.json()).toMatchObject({ name: "k", size: "3", md5Hash: "kAFQmDzST7DWlj99KOF/cg==" });
+  });
+
+  test.each([["10"], ["2"], ["0"]])("a media upload whose Content-Length is %s for a 3-byte body is 400 and stores nothing", async (length) => {
+    const { f, headers } = await editor();
+    const res = await onApi(f, "/upload/storage/v1/b/media/o?uploadType=media&name=k", {
+      method: "POST", headers: { ...headers, "Content-Type": "text/plain", "Content-Length": length }, body: "abc",
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: { code: 400, errors: [{ reason: "invalid" }] } });
+    expect(f.compat.bindings.size).toBe(0);
+    expect([...f.metadata.assets.values()].filter((a) => a.projectId === "p1")).toHaveLength(0);
+  });
+
+  test.each([["0x2"], ["1e0"], ["1.0"], ["-1"], ["0"], ["abc"]])("maxResults=%s is 400", async (value) => {
+    const { f, headers } = await editor();
+    expect((await onApi(f, `/storage/v1/b/media/o?maxResults=${value}`, { headers })).status).toBe(400);
   });
 
   test.each([

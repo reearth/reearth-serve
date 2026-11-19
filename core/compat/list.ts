@@ -70,6 +70,7 @@ export async function listPage<T extends { key: string }>(
   batch = MAX_LIST_RESULTS,
 ): Promise<ListedPage<T> | null> {
   const { prefix, delimiter, startOffset, endOffset, maxResults } = query;
+  if (!Number.isInteger(maxResults) || maxResults < 1) throw new RangeError(`maxResults ${maxResults} is not a positive integer`);
   const resume = query.pageToken === null ? { from: "", skip: null } : decodeToken(query.pageToken);
   if (!resume) return null;
   const until = minKey(prefixEnd(prefix), endOffset);
@@ -83,7 +84,9 @@ export async function listPage<T extends { key: string }>(
   let more = false;
 
   scanning: while (until === null || compareKeys(from, until) < 0) {
-    const rows = await scan(from, until, batch);
+    const skipRow = skip === null ? 0 : 1;
+    const scanLimit = batch + skipRow;
+    const rows = await scan(from, until, scanLimit);
     for (const row of rows) {
       const key = row.key;
       if (key === skip || !key.startsWith(prefix)) continue;
@@ -102,7 +105,7 @@ export async function listPage<T extends { key: string }>(
       }
       last = { name, isPrefix: cut >= 0 };
     }
-    if (rows.length < batch) break;
+    if (rows.length < scanLimit) break;
     const lastRow = rows[rows.length - 1].key;
     if (lastPrefix !== null && lastRow.startsWith(lastPrefix)) {
       from = prefixEnd(lastPrefix)!;

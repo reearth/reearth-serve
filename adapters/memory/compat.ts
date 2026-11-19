@@ -1,20 +1,23 @@
 import type {
   Binding, BindingKind, BucketName, CompatBucket, CompatCredential, CredentialId,
-  ExactHashes, UploadId, UploadSession,
+  UploadId, UploadSession,
 } from "../../core/compat/model";
 import {
   newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatStore, type DeleteBucketResult,
+  type LeaseToken, type VersionRecord,
 } from "../../core/compat/repository";
 import { isServiceRole } from "../../core/auth/types";
 
 type Row = {
   bucket: BucketName; key: string; kind: BindingKind; assetId: string | null; claimedAt: number; claimToken: ClaimToken;
+  lease: { token: LeaseToken; at: number } | null;
 };
 
 export class MemoryCompatStore implements CompatStore {
   readonly buckets = new Map<string, CompatBucket>();
   readonly bindings = new Map<string, Row>();
-  readonly hashes = new Map<string, { assetId: string; hashes: ExactHashes }>();
+  readonly hashes = new Map<string, { assetId: string; record: VersionRecord }>();
+  readonly generations = new Map<string, number>();
   readonly credentials = new Map<string, CompatCredential>();
   readonly uploads = new Map<string, UploadSession>();
 
@@ -37,6 +40,7 @@ export class MemoryCompatStore implements CompatStore {
     }
     for (const u of this.uploads.values()) if (u.bucket === name) this.uploads.delete(u.id);
     this.buckets.delete(name);
+    this.generations.delete(name);
     return "deleted";
   }
   async deleteProject(projectId: string): Promise<void> {
@@ -44,7 +48,10 @@ export class MemoryCompatStore implements CompatStore {
     for (const [id, row] of this.bindings) if (names.has(row.bucket)) this.bindings.delete(id);
     for (const [id, u] of this.uploads) if (names.has(u.bucket)) this.uploads.delete(id);
     for (const [id, c] of this.credentials) if (c.projectId === projectId) this.credentials.delete(id);
-    for (const name of names) this.buckets.delete(name);
+    for (const name of names) {
+      this.buckets.delete(name);
+      this.generations.delete(name);
+    }
   }
 
   async findBinding(bucket: BucketName, key: BindingKey): Promise<Binding | null> {
@@ -56,7 +63,7 @@ export class MemoryCompatStore implements CompatStore {
     const row = this.bindings.get(id);
     if (!row || (row.assetId === null && row.claimedAt < staleBefore)) {
       const token = newClaimToken();
-      this.bindings.set(id, { bucket, key, kind, assetId: null, claimedAt: now, claimToken: token });
+      this.bindings.set(id, { bucket, key, kind, assetId: null, claimedAt: now, claimToken: token, lease: null });
       return { kind: "claimed", token };
     }
     const binding = toBinding(row);
@@ -78,6 +85,16 @@ export class MemoryCompatStore implements CompatStore {
   async deleteBinding(bucket: BucketName, key: BindingKey): Promise<void> {
     this.bindings.delete(rowKey(bucket, key));
   }
+  async lease(bucket: BucketName, key: BindingKey, token: LeaseToken, now: number, staleBefore: number): Promise<boolean> {
+    const row = this.bindings.get(rowKey(bucket, key));
+    if (!row || row.assetId === null || (row.lease !== null && row.lease.at >= staleBefore)) return false;
+    row.lease = { token, at: now };
+    return true;
+  }
+  async releaseLease(bucket: BucketName, key: BindingKey, token: LeaseToken): Promise<void> {
+    const row = this.bindings.get(rowKey(bucket, key));
+    if (row?.lease?.token === token) row.lease = null;
+  }
   async scanBindings(bucket: BucketName, from: string, until: string | null, limit: number): Promise<Binding[]> {
     return [...this.bindings.values()]
       .filter((r) => r.bucket === bucket && cmp(r.key, from) >= 0 && (until === null || cmp(r.key, until) < 0))
@@ -86,11 +103,17 @@ export class MemoryCompatStore implements CompatStore {
       .slice(0, limit);
   }
 
-  async findHashes(objectRef: string): Promise<ExactHashes | null> {
-    return this.hashes.get(objectRef)?.hashes ?? null;
+  async nextGeneration(bucket: BucketName, atLeast: number): Promise<number> {
+    if (!this.buckets.has(bucket)) return atLeast;
+    const next = Math.max((this.generations.get(bucket) ?? 0) + 1, atLeast);
+    this.generations.set(bucket, next);
+    return next;
   }
-  async putHashes(objectRef: string, assetId: string, hashes: ExactHashes): Promise<void> {
-    this.hashes.set(objectRef, { assetId, hashes });
+  async findRecord(objectRef: string): Promise<VersionRecord | null> {
+    return this.hashes.get(objectRef)?.record ?? null;
+  }
+  async putRecord(objectRef: string, assetId: string, record: VersionRecord): Promise<void> {
+    this.hashes.set(objectRef, { assetId, record });
   }
 
   async findCredential(id: CredentialId): Promise<CompatCredential | null> {

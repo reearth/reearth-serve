@@ -118,16 +118,16 @@ describe.runIf(COMPAT_HOST && GO)("Go storage client v1.69 (e2e/compat-gcs)", ()
     return (await res.json() as { assets: { filename: string }[] }).assets;
   }
 
-  test("write-attrs-list-delete: hashes, generations, a delimited listing and idempotent deletes", async () => {
+  test("write-attrs-list-delete: hashes, rising generations, a delimited listing, idempotent deletes and a recreate", async () => {
     const { admin, bucket, path, projectId } = await keyFileOnDisk();
     const { stdout } = await scenario("write-attrs-list-delete", { E2E_GCS_KEY_FILE: path, E2E_GCS_BUCKET: bucket });
     expect(stdout.trim().split("\n")).toEqual([
-      "generation: 1",
-      "generation: 2",
+      "overwrite: generation increased",
       "listed: [assets/ab/cdef/a.txt] [assets/ab/cdef/sub/]",
       "deleted: assets/ab/cdef/a.txt",
       "deleted: assets/ab/cdef/a.txt",
       "deleted: never/written.txt",
+      "recreate: generation increased",
     ]);
     expect((await assetsOf(admin, projectId)).map((a) => a.filename)).toEqual(["b.txt"]);
   }, 120_000);
@@ -141,7 +141,7 @@ describe.runIf(COMPAT_HOST && GO)("Go storage client v1.69 (e2e/compat-gcs)", ()
   test("race: two writers on one new key make one asset and both succeed", async () => {
     const { admin, bucket, path, projectId } = await keyFileOnDisk();
     const { stdout } = await scenario("race", { E2E_GCS_KEY_FILE: path, E2E_GCS_BUCKET: bucket });
-    expect(stdout.trim()).toBe("generation: 2");
+    expect(stdout.trim()).toBe("generation: the later of two distinct writes");
     expect((await assetsOf(admin, projectId)).map((a) => a.filename)).toEqual(["new.txt"]);
   }, 120_000);
 });

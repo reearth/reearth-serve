@@ -5,16 +5,17 @@ import { authorizeService } from "../auth/access";
 import type { ProjectAction } from "../auth/permissions";
 import type { ServicePrincipal } from "../auth/types";
 import { uploadAsset } from "../asset/usecase/upload";
-import { uploadVersion } from "../asset/usecase/upload-version";
+import { uploadVersion, type UploadVersionResult } from "../asset/usecase/upload-version";
 import { deleteAsset } from "../asset/usecase/delete";
 import { resolveAssetVersion } from "../asset/usecase/resolve-version";
+import { updateAsset } from "../asset/usecase/update-asset";
 import { siteHostDepsFrom } from "../site/handler";
 import { hashingStream, type HashingStream } from "./hash";
 import { listPage, type ListQuery } from "./list";
-import type { ClaimToken } from "./repository";
+import { newLeaseToken, type ClaimToken, type VersionRecord } from "./repository";
 import {
   parseBucketName,
-  type Binding, type CompatBucket, type CompatError, type ExactHashes, type ObjectInfo, type ObjectKey,
+  type Binding, type CompatBucket, type CompatError, type ObjectInfo, type ObjectKey,
   type PutMeta, type Result, type SizedBody,
 } from "./model";
 
@@ -34,7 +35,7 @@ export interface ObjectLayer {
   delete(bucket: string, key: ObjectKey): Promise<Result<void>>;
 }
 
-export const CLAIM_STALE_MS = 10 * 60 * 1000;
+export const HOLD_STALE_MS = 10 * 60 * 1000;
 
 /**
  * Each listed object costs a few point reads, and a Worker invocation may run
@@ -46,6 +47,8 @@ export const LIST_PAGE_CAP = 200;
 type Resolved = { binding: Extract<Binding, { kind: "object" }>; asset: AssetMetadata; version: AssetVersion | null };
 
 const fail = (error: CompatError): { ok: false; error: CompatError } => ({ ok: false, error });
+
+const LENGTH_MISMATCH: CompatError = { code: "invalid", message: "The request body does not match its Content-Length." };
 
 export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, now: () => number = Date.now): ObjectLayer {
   const { compat } = deps;
@@ -76,32 +79,46 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
   }
 
   async function describe(bucket: CompatBucket, r: Resolved): Promise<ObjectInfo> {
-    const hashes = await compat.findHashes(r.version?.id ?? r.asset.id);
-    return infoOf(bucket, r.binding.key, r.asset, r.version, hashes);
+    const record = await compat.findRecord(r.version?.id ?? r.asset.id);
+    return infoOf(bucket, r.binding.key, r.asset, r.version, record);
+  }
+
+  async function recordVersion(bucket: CompatBucket, objectRef: string, assetId: string, createdAt: number, body: LengthCheckedBody): Promise<VersionRecord> {
+    const hashes = await body.digest();
+    const generation = await compat.nextGeneration(bucket.name, generationFromCreatedAt(createdAt));
+    const stored = { generation, hashes };
+    await compat.putRecord(objectRef, assetId, stored);
+    return stored;
   }
 
   async function writeVersion(
     bucket: CompatBucket, key: ObjectKey, scopes: string[], meta: PutMeta, body: SizedBody, asset: AssetMetadata,
   ): Promise<Result<ObjectInfo>> {
-    const hashed = hashedBody(body);
-    const result = await uploadVersion(deps.metadata, deps.writes, deps.storage, asset.id, fileOf(key, meta, body, hashed.stream), deps.baseUrl, {
-      extractionQueue: deps.extractionQueue,
-      thumbnailQueue: deps.thumbnailQueue,
-      usageScopes: scopes,
-      siteHostSuffix: deps.siteHostSuffix,
-      userMeta: meta.userMeta,
-    });
+    const checked = lengthCheckedBody(body);
+    let result: UploadVersionResult | null;
+    try {
+      result = await uploadVersion(deps.metadata, deps.writes, deps.storage, asset.id, fileOf(key, meta, body, checked.stream), deps.baseUrl, {
+        extractionQueue: deps.extractionQueue,
+        thumbnailQueue: deps.thumbnailQueue,
+        usageScopes: scopes,
+        siteHostSuffix: deps.siteHostSuffix,
+        userMeta: meta.userMeta,
+      });
+    } catch (e) {
+      if (checked.lengthMismatched()) return fail(LENGTH_MISMATCH);
+      throw e;
+    }
     if (!result) return fail({ code: "busy" });
-    const hashes = await hashed.digest();
-    await compat.putHashes(result.version.id, asset.id, hashes);
-    return { ok: true, value: infoOf(bucket, key, asset, result.version, hashes) };
+    if (asset.activeVersionId) await updateAsset(deps.metadata, deps.versions, asset.id, { activeVersionId: null });
+    const stored = await recordVersion(bucket, result.version.id, asset.id, result.version.createdAt, checked);
+    return { ok: true, value: infoOf(bucket, key, asset, result.version, stored) };
   }
 
   async function writeAsset(bucket: CompatBucket, key: ObjectKey, scopes: string[], meta: PutMeta, body: SizedBody, token: ClaimToken): Promise<Result<ObjectInfo>> {
-    const hashed = hashedBody(body);
+    const checked = lengthCheckedBody(body);
     let asset: AssetMetadata;
     try {
-      ({ asset } = await uploadAsset(deps.writes, deps.storage, fileOf(key, meta, body, hashed.stream), deps.ttlSeconds, deps.baseUrl, {
+      ({ asset } = await uploadAsset(deps.writes, deps.storage, fileOf(key, meta, body, checked.stream), deps.ttlSeconds, deps.baseUrl, {
         projectId: bucket.projectId,
         extractionQueue: deps.extractionQueue,
         thumbnailQueue: deps.thumbnailQueue,
@@ -111,15 +128,41 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
       }));
     } catch (e) {
       await compat.releaseClaim(bucket.name, key, token);
+      if (checked.lengthMismatched()) return fail(LENGTH_MISMATCH);
       throw e;
     }
-    const hashes = await hashed.digest();
-    await compat.putHashes(asset.id, asset.id, hashes);
+    const stored = await recordVersion(bucket, asset.id, asset.id, asset.createdAt, checked);
     if (!(await compat.bind(bucket.name, key, token, asset.id))) {
       await removeAsset(asset, scopes);
       return fail({ code: "busy" });
     }
-    return { ok: true, value: infoOf(bucket, key, asset, null, hashes) };
+    return { ok: true, value: infoOf(bucket, key, asset, null, stored) };
+  }
+
+  async function overwrite(
+    raw: string, bucket: CompatBucket, key: ObjectKey, scopes: string[], meta: PutMeta, body: SizedBody,
+  ): Promise<Result<ObjectInfo>> {
+    const update = await authorized(raw, "update_asset");
+    if (!update.ok) return update;
+    return leased(bucket, key, async () => {
+      const live = await resolve(bucket, key);
+      if (!live) return fail({ code: "busy" });
+      if (meta.ifGenerationMatch !== null && meta.ifGenerationMatch !== (await describe(bucket, live)).generation) {
+        return fail({ code: "precondition_failed" });
+      }
+      return writeVersion(bucket, key, scopes, meta, body, live.asset);
+    });
+  }
+
+  async function leased<T>(bucket: CompatBucket, key: ObjectKey, work: () => Promise<Result<T>>): Promise<Result<T>> {
+    const token = newLeaseToken();
+    const at = now();
+    if (!(await compat.lease(bucket.name, key, token, at, at - HOLD_STALE_MS))) return fail({ code: "busy" });
+    try {
+      return await work();
+    } finally {
+      await compat.releaseLease(bucket.name, key, token);
+    }
   }
 
   async function removeAsset(asset: AssetMetadata, scopes: string[]): Promise<void> {
@@ -164,18 +207,10 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
       const { bucket, project } = auth.value;
       const scopes = scopesOf(project);
       for (let attempt = 0; attempt < 2; attempt++) {
-        const existing = await resolve(bucket, key);
-        if (existing) {
-          if (meta.ifGenerationMatch !== null && meta.ifGenerationMatch !== generationOf(existing.version)) {
-            return fail({ code: "precondition_failed" });
-          }
-          const update = await authorized(raw, "update_asset");
-          if (!update.ok) return update;
-          return writeVersion(bucket, key, scopes, meta, body, existing.asset);
-        }
+        if (await resolve(bucket, key)) return overwrite(raw, bucket, key, scopes, meta, body);
         if (meta.ifGenerationMatch !== null && meta.ifGenerationMatch !== 0) return fail({ code: "precondition_failed" });
         const at = now();
-        const claim = await compat.claim(bucket.name, key, "object", at, at - CLAIM_STALE_MS);
+        const claim = await compat.claim(bucket.name, key, "object", at, at - HOLD_STALE_MS);
         if (claim.kind === "busy") return fail({ code: "busy" });
         if (claim.kind === "claimed") return writeAsset(bucket, key, scopes, meta, body, claim.token);
         if (claim.binding.kind === "object" && !(await load(bucket, claim.binding))) {
@@ -189,30 +224,50 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
       const auth = await authorized(raw, "delete_asset");
       if (!auth.ok) return auth;
       const { bucket, project } = auth.value;
-      const binding = await compat.findBinding(bucket.name, key);
-      if (binding?.kind !== "object") return { ok: true, value: undefined };
-      const asset = await deps.metadata.find(binding.assetId);
-      if (!asset || asset.projectId !== bucket.projectId) {
-        await compat.deleteBinding(bucket.name, key);
+      if ((await compat.findBinding(bucket.name, key))?.kind !== "object") return { ok: true, value: undefined };
+      return leased(bucket, key, async () => {
+        const binding = await compat.findBinding(bucket.name, key);
+        if (binding?.kind !== "object") return { ok: true, value: undefined };
+        const asset = await deps.metadata.find(binding.assetId);
+        if (!asset || asset.projectId !== bucket.projectId) {
+          await compat.deleteBinding(bucket.name, key);
+          return { ok: true, value: undefined };
+        }
+        await removeAsset(asset, scopesOf(project));
         return { ok: true, value: undefined };
-      }
-      await removeAsset(asset, scopesOf(project));
-      return { ok: true, value: undefined };
+      });
     },
   };
 }
 
-function hashedBody(body: SizedBody): Pick<HashingStream, "stream" | "digest"> {
+const MICROS_PER_MS = 1000;
+
+type LengthCheckedBody = Pick<HashingStream, "stream" | "digest"> & { lengthMismatched(): boolean };
+
+function lengthCheckedBody(body: SizedBody): LengthCheckedBody {
+  let seen = 0;
+  let mismatch = false;
+  const mismatchError = () => {
+    mismatch = true;
+    return new Error(`body length differs from the declared ${body.size} bytes`);
+  };
+  const counted = body.stream.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      seen += chunk.length;
+      if (seen > body.size) throw mismatchError();
+      controller.enqueue(chunk);
+    },
+    flush() {
+      if (seen !== body.size) throw mismatchError();
+    },
+  }));
   const known = body.hashes;
-  return known ? { stream: body.stream, digest: async () => known } : hashingStream(body.stream);
+  const hashed = known ? { stream: counted, digest: async () => known } : hashingStream(counted);
+  return { ...hashed, lengthMismatched: () => mismatch };
 }
 
 function scopesOf(project: Project): string[] {
   return project.workspaceId ? [`project:${project.id}`, `workspace:${project.workspaceId}`] : [`project:${project.id}`];
-}
-
-function generationOf(version: AssetVersion | null): number {
-  return (version?.version ?? 0) + 1;
 }
 
 function filenameOf(key: ObjectKey): string {
@@ -235,8 +290,12 @@ function stringMeta(meta: Record<string, unknown> | undefined): Record<string, s
   return out;
 }
 
+function generationFromCreatedAt(createdAt: number): number {
+  return createdAt * MICROS_PER_MS;
+}
+
 function infoOf(
-  bucket: CompatBucket, key: ObjectKey, asset: AssetMetadata, version: AssetVersion | null, hashes: ExactHashes | null,
+  bucket: CompatBucket, key: ObjectKey, asset: AssetMetadata, version: AssetVersion | null, record: VersionRecord | null,
 ): ObjectInfo {
   const current = version ?? asset;
   return {
@@ -245,12 +304,12 @@ function infoOf(
     size: current.size,
     contentType: current.contentType,
     contentEncoding: current.contentEncoding ?? null,
-    generation: generationOf(version),
+    generation: record?.generation ?? generationFromCreatedAt(current.createdAt),
     metageneration: 1,
     etag: version?.id ?? asset.id,
     created: new Date(current.createdAt),
     updated: new Date(current.createdAt),
-    hashes,
+    hashes: record?.hashes ?? null,
     userMeta: stringMeta(current.userMeta),
   };
 }

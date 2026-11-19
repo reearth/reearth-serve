@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { compareKeys, listPage, prefixEnd, type KeyScan, type ListedPage, type ListQuery } from "./list";
 
 function store(keys: string[]) {
-  const rows = [...keys].sort(compareKeys).map((key) => ({ key }));
+  const rows = [...new Set(keys)].sort(compareKeys).map((key) => ({ key }));
   const calls: string[] = [];
   const scan: KeyScan<{ key: string }> = async (from, until, limit) => {
     calls.push(from);
@@ -113,5 +113,77 @@ describe("key order", () => {
   test("prefixEnd bounds every key under the prefix", () => {
     expect(prefixEnd("assets/")).toBe("assets0");
     expect(prefixEnd("")).toBeNull();
+  });
+});
+
+describe("paging against a reference listing", () => {
+  function reference(keys: string[], q: Partial<ListQuery>): string[] {
+    const { prefix = "", delimiter = null, startOffset = null, endOffset = null } = q;
+    const out: string[] = [];
+    for (const k of [...new Set(keys)].sort(compareKeys)) {
+      if (!k.startsWith(prefix)) continue;
+      if (startOffset !== null && compareKeys(k, startOffset) < 0) continue;
+      if (endOffset !== null && compareKeys(k, endOffset) >= 0) continue;
+      const cut = delimiter ? k.indexOf(delimiter, prefix.length) : -1;
+      const name = cut >= 0 ? k.slice(0, cut + 1) : k;
+      if (out[out.length - 1] !== name) out.push(name);
+    }
+    return out;
+  }
+
+  async function pagedWithin(keys: string[], q: Partial<ListQuery>, maxResults: number, batch: number) {
+    const seen: string[] = [];
+    let pageToken: string | null = null;
+    for (let pages = 0; pages <= keys.length + 1; pages++) {
+      const page: ListedPage<{ key: string }> | null = await listPage(query({ ...q, maxResults, pageToken }), store(keys).scan, batch);
+      expect(page!.objects.length + page!.prefixes.length).toBeLessThanOrEqual(maxResults);
+      seen.push(...page!.objects.map((o) => o.key), ...page!.prefixes);
+      pageToken = page!.nextPageToken;
+      if (pageToken === null) return seen.sort(compareKeys);
+    }
+    throw new Error("pages never ended");
+  }
+
+  const cases: [string[], Partial<ListQuery>][] = [
+    [["a", "b", "c"], {}],
+    [["a/x", "a/y", "b", "a/z"], { delimiter: "/" }],
+    [["a/x", "a/y", "b"], { prefix: "a/", delimiter: "/" }],
+    [["a", "a/", "a/x"], { delimiter: "/" }],
+    [["\u{1F600}", "é", "z"], {}],
+  ];
+
+  test.each(cases)("%j %j comes back whole at every page and batch size, batch 1 included", async (keys, q) => {
+    for (const maxResults of [1, 2, 3]) {
+      for (const batch of [1, 2, 3, 1000]) {
+        expect(await pagedWithin(keys, q, maxResults, batch)).toEqual(reference(keys, q).sort(compareKeys));
+      }
+    }
+  });
+
+  test("seeded random buckets come back whole", async () => {
+    let seed = 0x2f6b;
+    const rnd = (n: number) => {
+      seed = (seed * 1103515245 + 12345) & 0x7fffffff;
+      return seed % n;
+    };
+    const alphabet = ["a", "b", "/", "é", "\u{1F600}", "~", "\u007f", "�", "퟿", "z"];
+    const randomKey = () => Array.from({ length: 1 + rnd(5) }, () => alphabet[rnd(alphabet.length)]).join("");
+    for (let trial = 0; trial < 150; trial++) {
+      const keys = Array.from({ length: rnd(25) }, randomKey);
+      const q: Partial<ListQuery> = {
+        prefix: rnd(2) ? "" : randomKey().slice(0, rnd(3)),
+        delimiter: rnd(2) ? "/" : null,
+        startOffset: rnd(4) === 0 ? randomKey() : null,
+        endOffset: rnd(4) === 0 ? randomKey() : null,
+      };
+      const want = reference(keys, q).sort(compareKeys);
+      for (const [maxResults, batch] of [[1, 1], [2, 3], [5, 2], [3, 1000]]) {
+        expect(await pagedWithin(keys, q, maxResults, batch), JSON.stringify({ keys, q, maxResults, batch })).toEqual(want);
+      }
+    }
+  });
+
+  test("a page size below one is refused rather than answered with a null token over data", async () => {
+    await expect(listPage(query({ maxResults: 0 }), store(["a"]).scan)).rejects.toThrow(RangeError);
   });
 });

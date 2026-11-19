@@ -1,9 +1,9 @@
 /**
  * The compat_* tables behind one port (ADR-019).
  *
- * `claim`, `bind`, `releaseClaim` and `advanceUpload` are each one statement
- * with compare-and-set semantics, so two writers racing on one key or one
- * upload session cannot both win.
+ * `claim`, `bind`, `releaseClaim`, `lease`, `nextGeneration` and
+ * `advanceUpload` are each one statement with compare-and-set semantics, so
+ * two writers racing on one key or one upload session cannot both win.
  */
 import type {
   Binding, BindingKind, BucketName, CompatBucket, CompatCredential, CredentialId,
@@ -17,6 +17,14 @@ export type ClaimToken = string & { readonly __brand: "ClaimToken" };
 export function newClaimToken(): ClaimToken {
   return crypto.randomUUID() as ClaimToken;
 }
+
+export type LeaseToken = string & { readonly __brand: "LeaseToken" };
+
+export function newLeaseToken(): LeaseToken {
+  return crypto.randomUUID() as LeaseToken;
+}
+
+export type VersionRecord = { generation: number; hashes: ExactHashes };
 
 export type ClaimResult =
   /** This call inserted the claim or took over a stale one. `token` guards bind and release. */
@@ -58,11 +66,26 @@ export interface CompatStore {
   /** Drop the claim `token` this writer failed to fill. No-op once bound or taken over. */
   releaseClaim(bucket: BucketName, key: BindingKey, token: ClaimToken): Promise<void>;
   deleteBinding(bucket: BucketName, key: BindingKey): Promise<void>;
+  /**
+   * Lease the bound `key` at `now` for one overwrite or delete. False while
+   * another fresh lease (not older than `staleBefore`) holds it, or when the
+   * key is not bound.
+   */
+  lease(bucket: BucketName, key: BindingKey, token: LeaseToken, now: number, staleBefore: number): Promise<boolean>;
+  /** Drop the lease `token`. No-op once it was taken over or the row is gone. */
+  releaseLease(bucket: BucketName, key: BindingKey, token: LeaseToken): Promise<void>;
   /** Bound rows with key in [from, until), ascending by key, at most `limit`. */
   scanBindings(bucket: BucketName, from: string, until: string | null, limit: number): Promise<Binding[]>;
 
-  findHashes(objectRef: string): Promise<ExactHashes | null>;
-  putHashes(objectRef: string, assetId: string, hashes: ExactHashes): Promise<void>;
+  /**
+   * A generation for a write to `bucket`: `atLeast`, or one more than the
+   * highest generation the bucket issued before when that is larger. The
+   * bucket keeps its high mark across object deletes, so no key sees a
+   * generation twice.
+   */
+  nextGeneration(bucket: BucketName, atLeast: number): Promise<number>;
+  findRecord(objectRef: string): Promise<VersionRecord | null>;
+  putRecord(objectRef: string, assetId: string, record: VersionRecord): Promise<void>;
 
   findCredential(id: CredentialId): Promise<CompatCredential | null>;
   findCredentialByEmail(clientEmail: string): Promise<CompatCredential | null>;

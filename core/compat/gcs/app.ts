@@ -30,8 +30,9 @@ function unsupportedListing(c: Context<GcsEnv>): string | null {
 
 function listQueryOf(c: Context<GcsEnv>): ListQuery | null {
   const raw = queryOf(c, "maxResults");
+  if (raw !== null && !/^\d+$/.test(raw)) return null;
   const maxResults = raw === null ? MAX_LIST_RESULTS : Number(raw);
-  if (!Number.isInteger(maxResults) || maxResults < 1) return null;
+  if (maxResults < 1) return null;
   return {
     prefix: queryOf(c, "prefix") ?? "",
     delimiter: queryOf(c, "delimiter") === "/" ? "/" : null,
