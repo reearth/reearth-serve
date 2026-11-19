@@ -132,8 +132,8 @@ async function httpRun(endpoint, count) {
   const entry = await fetch(`${endpoint}/files/${asset.id}/${entryName(i)}`);
   const text = await entry.text();
   const entryMs = performance.now() - entryStarted;
-  if (entry.status !== 200 || text !== entryBody(i)) throw new Error(`entry of ${count} from ${endpoint}: ${entry.status}`);
-  return { uploadMs, entryMs, container: asset.container?.index ? "index" : asset.container?.skipped ?? "none" };
+  if (entry.status === 200 && text !== entryBody(i)) throw new Error(`entry of ${count} from ${endpoint}: wrong body`);
+  return { uploadMs, entryMs, entryStatus: entry.status, container: asset.container?.index ? "index" : asset.container?.skipped ?? "none" };
 }
 
 async function inProcess() {
@@ -204,12 +204,13 @@ if (!values["skip-http"]) {
     }
   }
   console.log("\nHTTP, local dev servers (median of %d runs)", runs);
-  console.log("entries | trunk upload ms | head upload ms | added ms | trunk 1st entry ms | head 1st entry ms | head container");
+  console.log("entries | trunk upload ms | head upload ms | added ms | trunk 1st entry ms (status) | head 1st entry ms (status) | head container");
   for (const count of sizes) {
     const pick = (target, key) => median(rows.filter((r) => r.count === count && r.target === target).map((r) => r[key]));
     const container = rows.find((r) => r.count === count && r.target === "head").container;
+    const statuses = (target) => [...new Set(rows.filter((r) => r.count === count && r.target === target).map((r) => r.entryStatus))].join("/");
     console.log(
-      `${count} | ${fmt(pick("trunk", "uploadMs"))} | ${fmt(pick("head", "uploadMs"))} | ${fmt(pick("head", "uploadMs") - pick("trunk", "uploadMs"))} | ${fmt(pick("trunk", "entryMs"))} | ${fmt(pick("head", "entryMs"))} | ${container}`,
+      `${count} | ${fmt(pick("trunk", "uploadMs"))} | ${fmt(pick("head", "uploadMs"))} | ${fmt(pick("head", "uploadMs") - pick("trunk", "uploadMs"))} | ${fmt(pick("trunk", "entryMs"))} (${statuses("trunk")}) | ${fmt(pick("head", "entryMs"))} (${statuses("head")}) | ${container}`,
     );
   }
 }
