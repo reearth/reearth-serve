@@ -131,6 +131,25 @@ describe("SqlAtomicWrites.saveJob", () => {
     expect(await f.assets.find("a1")).toMatchObject({ status: "ready", fileCount: 12 });
   });
 
+  test("a job status update keeps the container record on the asset and the version", async () => {
+    const f = fixture();
+    const container = { index: "assets/a1/_archive/container.v1", directory: { offset: 10, size: 20 }, rootPrefix: "" };
+    const versionContainer = { ...container, index: "assets/a1/v/v1/_archive/container.v1" };
+    await f.writes.createAsset({ asset: { ...asset, container } });
+    await f.writes.createVersion({ version: { ...version, container: versionContainer } });
+
+    const storedAsset = (await f.assets.find("a1"))!;
+    const storedVersion = (await f.versions.find("v1"))!;
+    await f.writes.saveJob({
+      job: { ...job, status: "completed", fileCount: 3 },
+      asset: { ...storedAsset, status: "ready", fileCount: 3 },
+      version: { ...storedVersion, status: "ready", fileCount: 3 },
+    });
+
+    expect((await f.assets.find("a1"))?.container).toEqual(container);
+    expect((await f.versions.find("v1"))?.container).toEqual(versionContainer);
+  });
+
   test("writes the job alone when the asset is gone", async () => {
     const f = fixture();
     await f.writes.saveJob({ job: { ...job, status: "failed" } });
