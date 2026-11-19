@@ -40,7 +40,7 @@ GCS-only, so its usage sets the first scope. From the CMS source:
 |-----------|-------|
 | Object key `assets/{uuid[:2]}/{uuid[2:]}/{fileName}` | `getGCSObjectPath`, `file.go` |
 | Public URL `{publicBase}/assets/{uuid[:2]}/{uuid[2:]}/{fileName}`, with `publicBase` configurable | `getURL`, `GetAccessInfoResolver` |
-| `.zip` and `.7z` are unpacked by gcs-unzip v0.1.10 on Cloud Build, with `-skip-top -old-windows`, into a folder named after the archive (its name without the extension) **inside the asset folder** | `interactor/asset.go`, `taskrunner.go:135`; gcs-unzip `main.go:318` |
+| `.zip` and `.7z` are unpacked by gcs-unzip v0.1.10 on Cloud Build, with `-skip-top -old-windows`, into a folder named after the archive (its name without the extension) **inside the asset folder** | `interactor/asset.go`, `taskrunner.go:135`, `worker/decompressor.Dockerfile`; gcs-unzip `main.go:318` |
 | Completion is reported on a Pub/Sub topic and stored as `archiveExtractionStatus` | `taskrunner.go`, `pkg/asset/status.go` |
 | The file list of an asset is a prefix listing of its folder | `GetAssetFiles` |
 | Uploads use `Writer` after deleting any existing object; reads use `NewReader` / `NewRangeReader` with `ReadCompressed(true)` | `Upload`, `Read` |
@@ -116,7 +116,8 @@ upstream fallback covers it during a migration.
 
 **Entry names must match the source byte for byte.** gcs-unzip writes
 an entry to `{folder}/{archive name}/{path}`, where the archive name is
-the object name without its last extension (gcs-unzip `main.go:312-318`).
+the object name without its last extension (gcs-unzip `main.go:219` and
+`488-490` for the name, `312-318` for the strip and the join).
 Its `-skip-top` removes a top folder only when every file's first path
 segment equals that archive name. Serve's own root stripping
 (`RootPrefixDetector`) decides differently in 9 of 21 cases tested
@@ -148,7 +149,7 @@ normalization.
 | Operation | GCS | S3 | Serve |
 |-----------|-----|----|-------|
 | Write | `uploadType=media/multipart/resumable` | `PutObject`, multipart upload | New asset, or new version of the asset the key resolves to (ADR-005) |
-| Read | XML path `/{bucket}/{object}`, JSON `alt=media`; `Range`; `Accept-Encoding: gzip` | `GetObject`, `HeadObject` | Existing `/files` delivery, including gzip passthrough |
+| Read | XML path `/{bucket}/{object}`, JSON `alt=media`; `Range`; `Accept-Encoding: gzip` | `GetObject`, `HeadObject` | Existing `/files` delivery, including gzip passthrough, after the front end authorizes `read_asset` for its service principal |
 | Metadata | `objects.get` | `HeadObject` | Version row; generation = version number |
 | List | `objects.list` (`prefix`, `delimiter=/`, `pageToken`, `startOffset`, `endOffset`) | `ListObjectsV2` | Range scan on `(bucket, key)`, merged with each mounted folder's entry table |
 | Delete | `objects.delete` | `DeleteObject`, `DeleteObjects` | See below |
@@ -186,7 +187,11 @@ taken over after a fixed age, and a sweep removes old claims.
 **Resumable uploads are staged, then committed once.** The Go client
 uploads anything at or above its 16 MiB chunk size as a resumable
 session: one `POST ...?uploadType=resumable`, then one request per chunk
-with `Content-Range: bytes a-b/*` and a final `bytes a-b/total`. Each
+with `Content-Range: bytes a-b/*` and a final `bytes a-b/total`, or
+`bytes */total` with an empty body when the size is a multiple of the
+chunk size (16 MiB exactly, for one). The final chunk also carries
+`X-Goog-Hash: crc32c=` for the whole object, which the layer checks
+against the CRC32C it computed and refuses on a mismatch. Each
 chunk request carries `X-GUploader-No-308: yes`, so an incomplete chunk
 answers `200` with `X-Http-Status-Code-Override: 308` and
 `Range: bytes=0-N`. A bare `308` fails the client. Chunks are staged
@@ -227,20 +232,29 @@ shared-secret scheme, so the secret is stored encrypted, not hashed.
 (`STREAMING-UNSIGNED-PAYLOAD-TRAILER`), which current AWS SDKs send by
 default, are decoded.
 
-**Both** credentials become a service principal with the ADR-016
-decision 11 shape: principal `service:<credentialId>` with a role on one
-project, decided by the existing `POLICY` table through
-`core/auth/access.ts`. A credential is also bound to one bucket, and its
-role is at most `editor`, so a leaked key file reaches one bucket and
-can never delete a project. The layer adds a credential type, not an
-authorization model. This is the one exception to decision 11's "no
-credential of its own": the application cannot obtain an OIDC
-client-credentials token from a Google client library, so the
-credential has to be one the library already speaks. Credentials are
-issued, listed and revoked through the REST API under
-`/api/v1/projects/{id}/compat/`, by a project `admin`
-(`project.manage_compat`). Rotation is issue a new credential, deploy
-it, then revoke the old one.
+**Both** credentials become a service principal: principal
+`service:<credentialId>` with a role, decided by the existing `POLICY`
+table through `core/auth/access.ts`, the only caller of the authorizer.
+The role is at most `editor`, so a leaked key file can never delete a
+project. This departs from ADR-016 decision 11 in three ways, because a
+Google or AWS client library cannot obtain an OIDC client-credentials
+token:
+
+1. **The credential.** It is one the client library already speaks
+   (an RSA key file or a SigV4 pair), not a token from the deployment's
+   OIDC issuer.
+2. **The scope.** A credential holds a role on one project and one
+   bucket, not on the workspaces listed in `SERVICE_CLIENTS`. This is
+   new authorization code in `access.ts`: an `authorizeService` that
+   checks the project and bucket, then shares the final policy decision
+   with `authorizeProject`.
+3. **The lifecycle.** Credentials are issued, listed and revoked
+   through the REST API under `/api/v1/projects/{id}/compat/` by a
+   project `admin`, not set in configuration. The new
+   `project.manage_compat` action goes through ADR-016's procedure for
+   a policy action (`POLICY`, the README table, the Cerbos example, and
+   the paired accounts policy). Rotation is issue a new credential,
+   deploy it, then revoke the old one.
 
 **Signed URLs and rewritten hosts.** A V4 signature covers the `host`
 header and the path. With the endpoint option of §5, the Go client signs
@@ -251,14 +265,16 @@ prefix `publicBase`'s path (`toPublicUrl`). The GCS front end therefore
 verifies against the configured compat API hostname and the received
 path with a configured prefix removed, never against the host it
 received. With Serve as the endpoint the signed host is already Serve,
-so CMS can also turn `replaceUploadURL` off.
+so CMS must turn `replaceUploadURL` off: its `publicBase` becomes the
+read-only host of §6, and a rewritten URL would send the `PUT` there.
 
 ### 5. How an application connects
 
 CMS creates its client with `storage.NewClient(ctx)` and no options. It
 passes `option.WithEndpoint(conf)` instead, with the Serve-issued key
-file in `GOOGLE_APPLICATION_CREDENTIALS`. That is the only CMS code
-change.
+file in `GOOGLE_APPLICATION_CREDENTIALS`. That is the only change to
+CMS's storage client; archive completion needs CMS changes of its own
+(§7).
 
 Spike 1 tested both ways CMS could reach Serve:
 
@@ -286,7 +302,12 @@ A read-only host serves `/{key}` for a bucket
 (`https://{bucket}.objects.<domain>/{key}`, with a path-style form for
 deployments without a wildcard certificate). It resolves keys through
 §2 and hands off to `/files` delivery, so ETags, `Range`, caching
-(ADR-013 A2) and ADR-014 access modes apply unchanged. An application
+(ADR-013 A2) and ADR-014 access modes apply unchanged to its anonymous
+visitors. A read through the GCS API is different: its service
+principal is authorized for `read_asset` first, and delivery then skips
+the visitor checks, so the application reads its own `restricted` and
+password assets. This is a third proof of access beside ADR-014's
+delivery token and OIDC bearer, scoped to one bucket. An application
 whose public URL is `publicBase + key` moves by changing `publicBase`.
 
 URLs already stored with a host the application does not own
@@ -339,8 +360,11 @@ the CMS asset id is not part of the object key. Serve sends the notify
 once the entry table is built, and the remaining choice is how CMS
 accepts it: a small CMS change that accepts a shared-secret variant of
 the endpoint, or CMS pointing its M2M issuer at a JWKS Serve publishes,
-which replaces Google as the only issuer. The CMS asset id travels as
-custom metadata on the upload. Leaving `REEARTH_CMS_TASK_GCPPROJECT`
+which replaces Google as the only issuer. CMS creates its asset id only
+after the upload returns (`interactor/asset.go`, upload at line 425,
+`NewID` at 469), so Serve needs it from a CMS change as well: metadata
+patched onto the object after the asset is created, or a lookup from
+the folder's UUID to the asset id. Leaving `REEARTH_CMS_TASK_GCPPROJECT`
 unset is the only CMS setting that stops the Cloud Build job today, and
 it also stops CMS's import and copy tasks, so a decompression-only
 switch is a CMS change too.
@@ -349,7 +373,7 @@ switch is a CMS change too.
 
 CMS accepts `.7z`, and 7-Zip creates solid archives by default. Under
 ADR-018 a solid 7z is L3. Reading its N-th entry before repacking means
-decoding entries 1..N−1 with an LZMA dictionary of 64 MB to 1.5 GB. The
+decoding entries 1 to N-1 with an LZMA dictionary of 64 MB to 1.5 GB. The
 Worker has 128 MB. In practice an L3 entry cannot be read by the Worker
 before repacking, and even an L1 (non-solid) 7z entry has to be LZMA
 decoded to be delivered.
@@ -481,6 +505,7 @@ Copying them multiplies object count and GCS egress for no gain.
 ## Open Questions
 
 - How CMS accepts the archive-completion notify (§7): a shared-secret
-  variant of `/api/notify`, or Serve as its M2M issuer.
+  variant of `/api/notify`, or Serve as its M2M issuer. How Serve learns
+  the CMS asset id, which CMS creates after the upload.
 - Spike 3, on a sample of CMS's 7z originals.
 - The §2 rule against a real CMS bucket listing.
