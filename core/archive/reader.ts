@@ -1,9 +1,12 @@
+import type { StoredFile } from "../asset/model";
 import type { FileStorage } from "../asset/repository";
 import type { ArchiveCache, Built } from "./cache";
 import { contentTypeOf } from "./content-type";
 import { buildTable, createSurvey, type TableEntry } from "./table";
+import { gzipMember, GZIP_HEADER_BYTES, GZIP_TRAILER_BYTES } from "./transmux";
 import { memoryView, scanView, type TableView } from "./views";
 import { chunks, createDirectoryParser, locateDirectory, readAll, type Directory, type DirectoryRefusal } from "./zip/directory";
+import { readEntryBytes, type ArchiveObject, type Span } from "./zip/entry";
 
 const MEMORY_DIRECTORY_LIMIT = 32 * 1024 * 1024;
 const DEFAULT_LIMIT = 1000;
@@ -65,6 +68,13 @@ export interface ArchiveListPage {
   next?: string;
 }
 
+export type ArchiveOpenFailure = "not-found" | "unsupported-method" | "encrypted" | "corrupt" | "changed";
+
+export type ArchiveOpenResult =
+  | { ok: true; file: StoredFile; originalSize: number }
+  | { ok: false; reason: ArchiveOpenFailure }
+  | { ok: false; reason: "unsatisfiable"; size: number };
+
 export interface ArchiveReader {
   /** The lone root folder stripped from every path, "" when none. */
   readonly rootPrefix: string;
@@ -72,6 +82,7 @@ export interface ArchiveReader {
   readonly entryCount: number;
   stat(path: ArchivePath): Promise<ArchiveEntryInfo | null>;
   list(query: ArchiveListQuery): Promise<ArchiveListPage>;
+  open(path: ArchivePath, options?: { range?: Span | null }): Promise<ArchiveOpenResult>;
 }
 
 /**
@@ -82,11 +93,15 @@ export interface ArchiveReader {
  */
 export async function openArchive(deps: ArchiveDeps, source: ArchiveSource): Promise<OpenResult> {
   const cacheKey = `${source.key}#${source.size}`;
-  const built = await deps.archives.load(cacheKey, () =>
-    buildView(deps.storage, source, () => deps.archives.evict(cacheKey)),
-  );
+  const evict = () => deps.archives.evict(cacheKey);
+  let builtThisRequest = false;
+  const built = await deps.archives.load(cacheKey, () => {
+    builtThisRequest = true;
+    return buildView(deps.storage, source, evict);
+  });
   if (!built.ok) return built;
-  return { ok: true, reader: readerOver(built.view) };
+  const archive: ArchiveObject = { storage: deps.storage, key: source.key, dataEnd: built.view.dataEnd, etag: built.view.etag };
+  return { ok: true, reader: readerOver(built.view, archive, { builtThisRequest, evict }) };
 }
 
 export async function buildView(
@@ -116,7 +131,7 @@ export async function buildView(
   const { table, directoryRecordCount } = built;
   return {
     ok: true,
-    view: memoryView(table, directoryRecordCount, rules.rootPrefix),
+    view: memoryView(table, directoryRecordCount, rules.rootPrefix, directory),
     bytes: table.records.byteLength + table.names.byteLength,
   };
 }
@@ -138,7 +153,11 @@ async function surveyStream(storage: FileStorage, source: ArchiveSource, directo
   return directoryRecordCount === null ? null : { rules: survey.result(), directoryRecordCount };
 }
 
-function readerOver(view: TableView): ArchiveReader {
+function readerOver(view: TableView, archive: ArchiveObject, cached: { builtThisRequest: boolean; evict: () => void }): ArchiveReader {
+  const stale = (): ArchiveOpenResult => {
+    cached.evict();
+    return { ok: false, reason: "changed" };
+  };
   return {
     rootPrefix: view.rootPrefix,
     entryCount: view.entryCount,
@@ -155,7 +174,55 @@ function readerOver(view: TableView): ArchiveReader {
       });
       return { entries: page.entries.map(toInfo), commonPrefixes: page.commonPrefixes, ...(page.next !== undefined && { next: page.next }) };
     },
+    async open(path, options) {
+      const entry = await view.find(path);
+      if (!entry) return { ok: false, reason: "not-found" };
+      const info = toInfo(entry);
+      if (!info.readable) return { ok: false, reason: info.unreadableReason === "encrypted" ? "encrypted" : "unsupported-method" };
+      if (!sizesAgree(entry)) return { ok: false, reason: "corrupt" };
+      const requested = options?.range;
+      if (requested && (requested.offset >= entry.size || requested.length <= 0)) return { ok: false, reason: "unsatisfiable", size: entry.size };
+      if (entry.size === 0) {
+        return { ok: true, file: { body: new Blob([]).stream(), size: 0, contentType: info.contentType, etag: entryEtag(view.etag, entry) }, originalSize: 0 };
+      }
+
+      const range = entry.method === STORED && requested ? clamp(requested, entry.size) : null;
+      const read = await readEntryBytes(archive, entry, range ?? undefined);
+      if (!read.ok) {
+        if (read.reason === "corrupt" || (read.reason === "mismatch" && cached.builtThisRequest)) return { ok: false, reason: "corrupt" };
+        return stale();
+      }
+
+      const etag = entryEtag(view.etag, entry);
+      const file: StoredFile = entry.method === STORED
+        ? { body: read.body, size: entry.size, contentType: info.contentType, etag, ...(range && { range: { ...range, totalSize: entry.size } }) }
+        : {
+            body: gzipMember(read.body, entry.crc32, entry.size),
+            size: GZIP_HEADER_BYTES + entry.compressedSize + GZIP_TRAILER_BYTES,
+            contentType: info.contentType,
+            contentEncoding: "gzip",
+            etag,
+          };
+      return { ok: true, file, originalSize: entry.size };
+    },
   };
+}
+
+/** A stored entry's bytes are its data, and deflate never encodes a non-empty entry in zero bytes. */
+function sizesAgree(entry: TableEntry): boolean {
+  if (entry.method === STORED) return entry.compressedSize === entry.size;
+  return entry.compressedSize > 0 || entry.size === 0;
+}
+
+function clamp(range: Span, size: number): Span {
+  const offset = Math.min(range.offset, size);
+  return { offset, length: Math.min(range.length, size - offset) };
+}
+
+function entryEtag(archiveEtag: string | undefined, entry: TableEntry): string {
+  const crc = entry.crc32.toString(16).padStart(8, "0");
+  const original = archiveEtag?.replace(/^W\//, "").replace(/"/g, "");
+  return original ? `"${original}-${crc}"` : `"${crc}-${entry.size.toString(16)}"`;
 }
 
 function toInfo(entry: TableEntry): ArchiveEntryInfo {

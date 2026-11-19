@@ -2,6 +2,10 @@ export interface SyntheticEntry {
   name: string;
   data: Uint8Array;
   commentPadding?: number;
+  method?: number;
+  flags?: number;
+  compressed?: Uint8Array;
+  localExtra?: Uint8Array;
 }
 
 const encoder = new TextEncoder();
@@ -14,16 +18,22 @@ export function writeZip(entries: SyntheticEntry[]): Uint8Array {
   for (const entry of entries) {
     const name = encoder.encode(entry.name);
     const crc = crc32(entry.data);
-    const local = new Uint8Array(30 + name.byteLength + entry.data.byteLength);
+    const payload = entry.compressed ?? entry.data;
+    const extra = entry.localExtra ?? new Uint8Array(0);
+    const local = new Uint8Array(30 + name.byteLength + extra.byteLength + payload.byteLength);
     const lv = new DataView(local.buffer);
     lv.setUint32(0, 0x04034b50, true);
     lv.setUint16(4, 20, true);
+    lv.setUint16(6, entry.flags ?? 0, true);
+    lv.setUint16(8, entry.method ?? 0, true);
     lv.setUint32(14, crc, true);
-    lv.setUint32(18, entry.data.byteLength, true);
+    lv.setUint32(18, payload.byteLength, true);
     lv.setUint32(22, entry.data.byteLength, true);
     lv.setUint16(26, name.byteLength, true);
+    lv.setUint16(28, extra.byteLength, true);
     local.set(name, 30);
-    local.set(entry.data, 30 + name.byteLength);
+    local.set(extra, 30 + name.byteLength);
+    local.set(payload, 30 + name.byteLength + extra.byteLength);
     locals.push(local);
 
     const comment = entry.commentPadding ?? 0;
@@ -32,8 +42,10 @@ export function writeZip(entries: SyntheticEntry[]): Uint8Array {
     cv.setUint32(0, 0x02014b50, true);
     cv.setUint16(4, 20, true);
     cv.setUint16(6, 20, true);
+    cv.setUint16(8, entry.flags ?? 0, true);
+    cv.setUint16(10, entry.method ?? 0, true);
     cv.setUint32(16, crc, true);
-    cv.setUint32(20, entry.data.byteLength, true);
+    cv.setUint32(20, payload.byteLength, true);
     cv.setUint32(24, entry.data.byteLength, true);
     cv.setUint16(28, name.byteLength, true);
     cv.setUint16(32, comment, true);

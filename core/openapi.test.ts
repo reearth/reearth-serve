@@ -266,6 +266,6 @@ describe("OpenAPI document", () => {
     expect(paramsOf(spec, op).map((p) => `${p.in}:${p.name}`)).toEqual(
       expect.arrayContaining(["path:id", "path:path", "query:thumb", "header:Range", "header:Accept-Encoding", "header:If-None-Match"]),
     );
-    expect(Object.keys(op.responses).sort()).toEqual(["200", "206", "301", "304", "400", "401", "404", "429", "503"]);
+    expect(Object.keys(op.responses).sort()).toEqual(["200", "206", "301", "304", "400", "401", "404", "416", "429", "501", "502", "503"]);
   });
 });

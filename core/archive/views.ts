@@ -23,6 +23,8 @@ export interface ListResult {
  */
 export interface TableView {
   readonly entryCount: number;
+  readonly etag: string | undefined;
+  readonly dataEnd: number;
   readonly rootPrefix: string;
   find(path: string): Promise<TableEntry | null>;
   list(query: ListQuery): Promise<ListResult>;
@@ -31,9 +33,11 @@ export interface TableView {
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-export function memoryView(table: EntryTable, entryCount: number, rootPrefix: string): TableView {
+export function memoryView(table: EntryTable, entryCount: number, rootPrefix: string, directory: Pick<Directory, "offset" | "etag">): TableView {
   return {
     entryCount,
+    etag: directory.etag,
+    dataEnd: directory.offset,
     rootPrefix,
     async find(path) {
       const key = encoder.encode(path);
@@ -101,6 +105,8 @@ export function scanView(
 
   return {
     entryCount,
+    etag: directory.etag,
+    dataEnd: directory.offset,
     rootPrefix: rules.rootPrefix,
     async find(path) {
       let found: TableEntry | null = null;

@@ -3,7 +3,7 @@ import { describeRoute } from "hono-openapi";
 import { resolver, validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { activeVersion, getAssetMetadata } from "../usecase";
-import type { AssetMetadata, AssetVersion } from "../model";
+import { archiveSource, assetLayouts, mainKey, manifestKey } from "../layout";
 import { openArchive, type ArchiveReader } from "../../archive";
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { fileListExamples } from "../../openapi-examples";
@@ -32,7 +32,7 @@ export function registerListFilesRoute(app: Hono<AppEnv>) {
     const access = await authorizeAsset(accessCtx(c), await getAssetMetadata(metadata, id), "read_asset");
     if (!access.ok) return deniedResponse(c, access, { notFound: "Asset not found" });
     const asset = access.value;
-    const layouts = listingLayouts(asset, await activeVersion(c.get("versions"), asset));
+    const layouts = assetLayouts(asset, await activeVersion(c.get("versions"), asset));
 
     // Body framing is the runtime's business, not ours: an explicit
     // `Transfer-Encoding: chunked` next to the empty-string bodies below makes
@@ -44,53 +44,28 @@ export function registerListFilesRoute(app: Hono<AppEnv>) {
     if (!layouts[0].archive) {
       const layout = layouts[0];
       if (prefix && !layout.filename.startsWith(prefix)) return ndjson("");
-      const head = await storage.head(`${layout.root}/${layout.filename}`);
+      const head = await storage.head(mainKey(layout));
       const hash = head?.etag ? `md5:${head.etag.replace(/"/g, "")}` : undefined;
       const entry = { path: layout.filename, size: layout.size, contentType: layout.contentType, ...(hash && { hash }) };
       return ndjson(JSON.stringify(entry) + "\n");
     }
 
     for (const layout of layouts.filter((l) => l.archive)) {
-      const manifest = await storage.get(`${layout.root}/_archive/_manifest.jsonl`);
+      const manifest = await storage.get(manifestKey(layout));
       if (manifest) {
         return ndjson(manifest.body
           .pipeThrough(new TextDecoderStream())
           .pipeThrough(filterNdjsonByPrefix(prefix))
           .pipeThrough(new TextEncoderStream()));
       }
-      if (!layout.readInPlace || layout.archiveFormat !== "zip") continue;
-      const source = { key: `${layout.root}/${layout.filename}`, size: layout.size, filename: layout.filename };
+      const source = layout === layouts[0] ? archiveSource(layout) : null;
+      if (!source) continue;
       const opened = await openArchive({ storage, archives: c.get("archives") }, source);
       if (opened.ok) return ndjson(entryLines(opened.reader, prefix));
       console.warn(`list-files: ${source.key} is not listable in place (${opened.reason})`);
     }
     return ndjson("");
   });
-}
-
-interface ListingLayout {
-  root: string;
-  filename: string;
-  size: number;
-  contentType: string;
-  archive: boolean;
-  archiveFormat?: string;
-  /** False for the legacy prefix behind a version: its original is the first upload, not the active one. */
-  readInPlace: boolean;
-}
-
-function listingLayouts(asset: AssetMetadata, version: AssetVersion | null): ListingLayout[] {
-  const layout = (root: string, row: AssetMetadata | AssetVersion, readInPlace: boolean): ListingLayout => ({
-    root,
-    filename: row.filename,
-    size: row.size,
-    contentType: row.contentType,
-    archive: row.type === "archive",
-    archiveFormat: row.archiveFormat,
-    readInPlace,
-  });
-  const legacy = layout(`assets/${asset.id}`, asset, !version);
-  return version ? [layout(`assets/${asset.id}/v/${version.id}`, version, true), legacy] : [legacy];
 }
 
 const PAGE = 10_000;

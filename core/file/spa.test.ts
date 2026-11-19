@@ -14,7 +14,7 @@ import {
 import { siteFixture, SUFFIX } from "../../adapters/memory/site-fixture";
 import { checkSpaChange } from "../asset/usecase";
 import type { AssetMetadata } from "../asset/model";
-import { looksLikeAssetPath } from "./handler";
+import { looksLikeAssetPath } from "./locate";
 import { ENTRY_CACHE_CONTROL, PINNED_CACHE_CONTROL } from "./caching";
 
 /** The seeded archive asset, in a project, with the fallback turned on. */

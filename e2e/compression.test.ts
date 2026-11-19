@@ -1,6 +1,7 @@
 import { describe, test, expect, beforeAll } from "vitest";
-import { gzipSync } from "node:zlib";
-import { BASE, rewriteUrl, uploadFile } from "./helpers";
+import { readFileSync } from "node:fs";
+import { gzipSync, inflateRawSync } from "node:zlib";
+import { BASE, rawGet, rewriteUrl, uploadFile } from "./helpers";
 
 describe("Compression", () => {
   beforeAll(async () => {
@@ -155,5 +156,26 @@ describe("Compression", () => {
     expect(res.status).toBe(201);
     const body = await res.json() as any;
     expect(body.contentEncoding).toBeUndefined();
+  });
+
+  // Node only: under the Vite dev server undici decodes the body before the
+  // test sees it (see e2e/archive.test.ts).
+  test.skipIf(process.env.E2E_NODE_RUNTIME !== "true")("a deflate entry of a just-uploaded zip is one gzip member: header, the entry's raw deflate, trailer", async () => {
+    const zip = new Uint8Array(readFileSync(new URL("../scripts/fixtures/zip/data/deflate.zip", import.meta.url)));
+    const { status, body } = await uploadFile(zip, "deflate.zip", "application/zip");
+    expect(status).toBe(201);
+    const url = `${BASE}/files/${body.asset.id}/a.txt`;
+    const plain = await rawGet(url);
+    expect(plain.headers["content-encoding"]).toBeUndefined();
+    expect(plain.headers["content-length"]).toBe("6600");
+
+    const res = await rawGet(url, { "Accept-Encoding": "gzip" });
+    expect(res.status).toBe(200);
+    expect(res.headers["content-encoding"]).toBe("gzip");
+    expect(res.headers["content-length"]).toBe(String(res.body.byteLength));
+    expect([...res.body.subarray(0, 3)]).toEqual([0x1f, 0x8b, 8]);
+    expect(new Uint8Array(inflateRawSync(res.body.subarray(10, res.body.byteLength - 8)))).toEqual(plain.body);
+    const decoded = await new Response(new Blob([res.body as BlobPart]).stream().pipeThrough(new DecompressionStream("gzip"))).arrayBuffer();
+    expect(new Uint8Array(decoded)).toEqual(plain.body);
   });
 });
