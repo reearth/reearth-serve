@@ -1,5 +1,3 @@
-// A final extraction failure by failure class (ADR-018 §6), through the real
-// internal status route, cron and SQLite stores.
 import { beforeEach, describe, expect, test } from "vitest";
 import { createApp } from "../../core/app";
 import { handleScheduled } from "../../core/cleanup/handler";

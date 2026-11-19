@@ -357,8 +357,6 @@ export const jobSchema = component("Job", z.object({
   assetId: z.string(),
   type: jobTypeSchema,
   status: jobStatusSchema,
-  // Optional only because job rows written before ADR-018 §6 lack it; the
-  // next status write stamps it.
   failureClass: failureClassSchema.optional(),
   createdAt: z.number(),
   updatedAt: z.number(),

@@ -141,8 +141,7 @@ async function retriggerPendingJobs(
         updatedAt: Date.now(),
         completedAt: Date.now(),
       };
-      // Job and its mirror in one atomic write (ADR-012 §3). A version's job
-      // touches only that version; the asset and its other versions stay usable.
+      // Job and its mirror in one atomic write (ADR-012 §3).
       if (job.versionId) {
         const version = await versions.find(job.versionId);
         failMirror(updatedJob, version, "max retries exceeded");

@@ -9,8 +9,6 @@ const FAILURE_CLASS: Record<Job["type"], Record<ArchiveFormat, FailureClass>> = 
   },
 };
 
-// A zip is read in place from the original, so its version stays `ready`:
-// locate tries extracted objects first and falls back to the original per entry.
 const MIRROR_STATUS_ON_FAILURE: Record<FailureClass, AssetStatus> = {
   "missing-feature": "failed",
   "slower-reads": "ready",
