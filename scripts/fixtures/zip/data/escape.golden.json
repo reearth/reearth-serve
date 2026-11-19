@@ -1,0 +1,26 @@
+{
+  "archive": "escape.zip",
+  "extractorParity": false,
+  "entries": [
+    {
+      "path": "abs.txt",
+      "size": 3,
+      "crc32": "289351a6"
+    },
+    {
+      "path": "dot.txt",
+      "size": 3,
+      "crc32": "059278a3"
+    },
+    {
+      "path": "ok.txt",
+      "size": 2,
+      "crc32": "79dcdd47"
+    },
+    {
+      "path": "win/path.txt",
+      "size": 3,
+      "crc32": "b0ca3b76"
+    }
+  ]
+}

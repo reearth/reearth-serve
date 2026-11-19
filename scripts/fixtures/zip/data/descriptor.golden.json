@@ -1,0 +1,21 @@
+{
+  "archive": "descriptor.zip",
+  "extractorParity": true,
+  "entries": [
+    {
+      "path": "a/1.txt",
+      "size": 6600,
+      "crc32": "ba2f1212"
+    },
+    {
+      "path": "a/2.txt",
+      "size": 3,
+      "crc32": "11ca8a66"
+    },
+    {
+      "path": "b.txt",
+      "size": 5,
+      "crc32": "192062cf"
+    }
+  ]
+}

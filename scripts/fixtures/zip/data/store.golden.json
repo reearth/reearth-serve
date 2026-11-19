@@ -1,0 +1,16 @@
+{
+  "archive": "store.zip",
+  "extractorParity": true,
+  "entries": [
+    {
+      "path": "img/tile.png",
+      "size": 8,
+      "crc32": "7a0709a4"
+    },
+    {
+      "path": "index.html",
+      "size": 31,
+      "crc32": "834b1c45"
+    }
+  ]
+}

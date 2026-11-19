@@ -1,0 +1,26 @@
+{
+  "archive": "shift_jis.zip",
+  "extractorParity": false,
+  "entries": [
+    {
+      "path": "readme.txt",
+      "size": 17,
+      "crc32": "86ccd28e"
+    },
+    {
+      "path": "日本語/データ.txt",
+      "size": 4,
+      "crc32": "adf3f363"
+    },
+    {
+      "path": "日本語/地図/東京.geojson",
+      "size": 2,
+      "crc32": "a3a6bf43"
+    },
+    {
+      "path": "資料.csv",
+      "size": 8,
+      "crc32": "0a97077b"
+    }
+  ]
+}

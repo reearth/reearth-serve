@@ -1,0 +1,16 @@
+{
+  "archive": "site.zip",
+  "extractorParity": true,
+  "entries": [
+    {
+      "path": "assets/app.js",
+      "size": 14,
+      "crc32": "4301fe68"
+    },
+    {
+      "path": "index.html",
+      "size": 15,
+      "crc32": "87b9ec48"
+    }
+  ]
+}
