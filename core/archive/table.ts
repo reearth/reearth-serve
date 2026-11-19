@@ -1,4 +1,4 @@
-import { createDirectoryParser, type CdRecord, type Directory } from "./zip/directory";
+import { crc32, createDirectoryParser, type CdRecord, type Directory } from "./zip/directory";
 import { classifyName, decodeLegacy, decodeShiftJis, entryPath, normalize, RootDetector, type LegacyEncoding } from "./names";
 
 export interface NameRules {
@@ -16,6 +16,8 @@ export interface TableEntry {
   localHeaderOffset: number;
   cdNameLength: number;
   cdExtraLength: number;
+  /** CRC-32 of the raw central directory name, which a local header must repeat. */
+  cdNameCrc: number;
 }
 
 export function createSurvey(filename: string) {
@@ -59,6 +61,7 @@ export function toEntry(path: string, record: CdRecord): TableEntry {
     localHeaderOffset: record.localHeaderOffset,
     cdNameLength: record.rawName.byteLength,
     cdExtraLength: record.extraLength,
+    cdNameCrc: crc32(record.rawName),
   };
 }
 
@@ -68,7 +71,7 @@ export interface EntryTable {
   names: Uint8Array;
 }
 
-const RECORD = 48;
+const RECORD = 52;
 const NAME_OFFSET = 0;
 const NAME_LENGTH = 4;
 const METHOD = 6;
@@ -80,6 +83,7 @@ const SIZE = 24;
 const LOCAL_HEADER_OFFSET = 32;
 const CD_INDEX = 40;
 const CD_EXTRA_LENGTH = 44;
+const CD_NAME_CRC = 48;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
@@ -140,6 +144,7 @@ function writeRecord(records: DataView, i: number, nameOffset: number, nameLengt
   records.setFloat64(at + LOCAL_HEADER_OFFSET, record.localHeaderOffset, true);
   records.setUint32(at + CD_INDEX, record.index, true);
   records.setUint16(at + CD_EXTRA_LENGTH, record.extraLength, true);
+  records.setUint32(at + CD_NAME_CRC, crc32(record.rawName), true);
 }
 
 function grow(view: DataView<ArrayBuffer>): DataView<ArrayBuffer> {
@@ -173,6 +178,7 @@ export function entryAt(table: EntryTable, i: number): TableEntry {
     size: r.getFloat64(at + SIZE, true),
     localHeaderOffset: r.getFloat64(at + LOCAL_HEADER_OFFSET, true),
     cdExtraLength: r.getUint16(at + CD_EXTRA_LENGTH, true),
+    cdNameCrc: r.getUint32(at + CD_NAME_CRC, true),
   };
 }
 

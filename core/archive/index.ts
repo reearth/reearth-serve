@@ -6,6 +6,8 @@ export {
   type ArchiveEntryInfo,
   type ArchiveListPage,
   type ArchiveListQuery,
+  type ArchiveOpenFailure,
+  type ArchiveOpenResult,
   type ArchivePath,
   type ArchiveReader,
   type ArchiveSource,
