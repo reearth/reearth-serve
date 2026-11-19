@@ -286,10 +286,6 @@ export function localHash(filePath: string, remote: string): string | null {
   return null;
 }
 
-/**
- * Whether the local copy already matches a listing entry. A CRC-32 is too weak
- * to stand alone, so a `crc32:` hash counts only together with the size.
- */
 export function matchesListing(filePath: string, entry: FileEntry): boolean {
   const sameSize = statSync(filePath).size === entry.size;
   if (!entry.hash) return sameSize;

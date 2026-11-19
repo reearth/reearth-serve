@@ -205,7 +205,6 @@ export function createDirectoryParser(directory: Directory, onRecord: (record: C
       carry = buffer.slice(parse(buffer));
       return !corrupt;
     },
-    /** The number of records parsed, or null when the directory is corrupt or its count disagrees with the end record. */
     end(): number | null {
       if (corrupt || consumed !== directory.size || carry.byteLength > 0) return null;
       return index % 0x10000 === directory.recordedCount16 ? index : null;

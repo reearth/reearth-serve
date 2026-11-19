@@ -23,7 +23,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** A server whose listing is `entries` and whose /files answers from `bodies`, 404 for anything else. */
 async function serve(entries: FileEntry[], bodies: Record<string, string>): Promise<string> {
   server = createServer((req, res) => {
     if (req.url === `/api/v1/assets/${ASSET}/files`) {

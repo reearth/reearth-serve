@@ -26,9 +26,6 @@ type fixtureGolden struct {
 	Entries []goldenEntry `json:"entries"`
 }
 
-// The in-place listing (core/archive) answers each golden list from the
-// archive's central directory; this runs the extraction worker over the same
-// archives so the manifest, and every key under files/, has to agree with it.
 func TestExtractionMatchesSharedGoldenLists(t *testing.T) {
 	goldens, err := filepath.Glob("../../scripts/fixtures/zip/data/*.golden.json")
 	if err != nil || len(goldens) == 0 {

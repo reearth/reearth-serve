@@ -275,8 +275,6 @@ export function registerFileCommands(program: Command, file: Command) {
             await downloadFile(url, localPath, true, auth);
             downloaded++;
           } catch (err) {
-            // A zip is listed from its original before extraction finishes, so
-            // a listed entry may not be servable yet.
             if (!(err instanceof DownloadFailed && err.status === 404)) throw err;
             unavailable++;
           }

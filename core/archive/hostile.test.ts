@@ -10,7 +10,6 @@ interface RawEntry {
   data?: Uint8Array;
 }
 
-/** A stored zip from raw name bytes, with an optional archive comment and a recorded entry count that may lie. */
 function zipRaw(entries: RawEntry[], options: { comment?: Uint8Array; recordedCount?: number } = {}): Uint8Array {
   const comment = options.comment ?? new Uint8Array(0);
   const locals: Uint8Array[] = [];
@@ -55,7 +54,6 @@ function zipRaw(entries: RawEntry[], options: { comment?: Uint8Array; recordedCo
   return concat([...locals, ...centrals, eocd]);
 }
 
-/** Rewrite a plain zip as zip64 whose record claims `recordedCount` entries. */
 function asZip64(base: Uint8Array, recordedCount: bigint): Uint8Array {
   const eocdAt = base.byteLength - 22;
   const bv = new DataView(base.buffer, base.byteOffset, base.byteLength);

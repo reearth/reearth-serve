@@ -11,10 +11,6 @@ import (
 	"golang.org/x/text/encoding/japanese"
 )
 
-// Name decoding shared with the in-place listing (core/archive/names.ts).
-// Both must give every zip entry the same path, or a listed path would not be
-// the key the extractor writes.
-
 const (
 	utf8Flag         = 0x0800
 	unicodePathExtra = 0x7075
@@ -24,10 +20,6 @@ var cp437High = []rune("ÇüéâäàåçêëèïîìÄÅÉæÆôöòûùÿÖÜ¢
 
 var utf8BOM = []byte{0xef, 0xbb, 0xbf}
 
-// zipNames decodes every central directory name with one rule per archive:
-// a name flagged UTF-8, all ASCII, or valid UTF-8 is UTF-8; otherwise a
-// matching Info-ZIP Unicode Path extra; otherwise the remaining names are
-// Shift_JIS when every one of them decodes strictly, and CP437 when not.
 func zipNames(files []*zip.File) []string {
 	names := make([]string, len(files))
 	var legacy []int
@@ -72,8 +64,6 @@ func unicodeName(f *zip.File) (string, bool) {
 	return "", false
 }
 
-// unicodePath returns the last version-1 Unicode Path extra whose CRC-32
-// matches the raw name, or nil.
 func unicodePath(raw, extra []byte) []byte {
 	var found []byte
 	for len(extra) >= 4 {
@@ -139,8 +129,6 @@ func isASCII(raw []byte) bool {
 	return true
 }
 
-// ServedPath is where an entry is served under files/, or false when its
-// normalized path escapes the archive root.
 func ServedPath(name, rootPrefix string) (string, bool) {
 	p := StripPrefix(NormalizeSeparators(name), rootPrefix)
 	if p == "." || p == ".." || strings.HasPrefix(p, "../") || strings.HasPrefix(p, "/") {

@@ -64,9 +64,7 @@ func NewZipExtractor(ctx context.Context, storage ObjectStorage, key string) (*Z
 	return &ZipExtractor{reader: zr, storage: storage, key: key, names: zipNames(zr.File)}, nil
 }
 
-// ListEntries streams entries from the ZIP Central Directory one at a time,
-// with decoded names. When names collide the last entry in directory order
-// wins and the earlier ones are marked superseded.
+// ListEntries streams entries from the ZIP Central Directory one at a time.
 func (z *ZipExtractor) ListEntries(ctx context.Context, yield func(entry ArchiveEntry) error) error {
 	winner := make(map[string]int, len(z.names))
 	for i, f := range z.reader.File {

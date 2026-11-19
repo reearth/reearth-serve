@@ -50,8 +50,7 @@ export function registerListFilesRoute(app: Hono<AppEnv>) {
       return ndjson(JSON.stringify(entry) + "\n");
     }
 
-    for (const [i, layout] of layouts.entries()) {
-      if (!layout.archive) continue;
+    for (const layout of layouts.filter((l) => l.archive)) {
       const manifest = await storage.get(`${layout.root}/_archive/_manifest.jsonl`);
       if (manifest) {
         return ndjson(manifest.body
@@ -59,11 +58,7 @@ export function registerListFilesRoute(app: Hono<AppEnv>) {
           .pipeThrough(filterNdjsonByPrefix(prefix))
           .pipeThrough(new TextEncoderStream()));
       }
-      // Only the active layout's own original may be read in place. The legacy
-      // prefix holds the first upload, so behind a version it is another
-      // version's bytes; it can answer only with a manifest, which the
-      // Cloudflare launcher still writes there for every version.
-      if (i > 0 || layout.archiveFormat !== "zip") continue;
+      if (!layout.readInPlace || layout.archiveFormat !== "zip") continue;
       const source = { key: `${layout.root}/${layout.filename}`, size: layout.size, filename: layout.filename };
       const opened = await openArchive({ storage, archives: c.get("archives") }, source);
       if (opened.ok) return ndjson(entryLines(opened.reader, prefix));
@@ -80,19 +75,22 @@ interface ListingLayout {
   contentType: string;
   archive: boolean;
   archiveFormat?: string;
+  /** False for the legacy prefix behind a version: its original is the first upload, not the active one. */
+  readInPlace: boolean;
 }
 
 function listingLayouts(asset: AssetMetadata, version: AssetVersion | null): ListingLayout[] {
-  const layout = (root: string, row: AssetMetadata | AssetVersion): ListingLayout => ({
+  const layout = (root: string, row: AssetMetadata | AssetVersion, readInPlace: boolean): ListingLayout => ({
     root,
     filename: row.filename,
     size: row.size,
     contentType: row.contentType,
     archive: row.type === "archive",
     archiveFormat: row.archiveFormat,
+    readInPlace,
   });
-  const legacy = layout(`assets/${asset.id}`, asset);
-  return version ? [layout(`assets/${asset.id}/v/${version.id}`, version), legacy] : [legacy];
+  const legacy = layout(`assets/${asset.id}`, asset, !version);
+  return version ? [layout(`assets/${asset.id}/v/${version.id}`, version, true), legacy] : [legacy];
 }
 
 const PAGE = 10_000;

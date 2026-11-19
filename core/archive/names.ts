@@ -24,7 +24,7 @@ export function classifyName(raw: Uint8Array, flags: number, unicodePath: Uint8A
  * ICU (Node, workerd), WHATWG and the extractor's x/text agree on the JIS X 0208
  * and IBM extension pairs but not on 0x80, the user-defined area, or ICU's swap
  * of 0x1A, 0x1C and 0x7F, so a name that decodes to any of those is not
- * Shift_JIS. container/archive-extractor/zipnames.go applies the same rule.
+ * Shift_JIS.
  */
 const AMBIGUOUS_SHIFT_JIS = /[\u001a\u001c\u007f\u0080\ue000-\uf8ff]/u;
 

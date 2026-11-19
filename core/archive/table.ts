@@ -86,8 +86,7 @@ const decoder = new TextDecoder();
 
 export interface BuiltTable {
   table: EntryTable;
-  /** Records in the central directory, directories and duplicates included. */
-  recordCount: number;
+  directoryRecordCount: number;
 }
 
 export function buildTable(cd: Uint8Array, directory: Directory, rules: NameRules): BuiltTable | null {
@@ -106,8 +105,8 @@ export function buildTable(cd: Uint8Array, directory: Directory, rules: NameRule
     heap += bytes.byteLength;
     count++;
   });
-  const recordCount = parser.push(cd) ? parser.end() : null;
-  if (recordCount === null) return null;
+  const directoryRecordCount = parser.push(cd) ? parser.end() : null;
+  if (directoryRecordCount === null) return null;
 
   const offsets = new Uint32Array(count);
   const lengths = new Uint32Array(count);
@@ -130,7 +129,7 @@ export function buildTable(cd: Uint8Array, directory: Directory, rules: NameRule
   const from = new Uint8Array(records.buffer);
   const to = new Uint8Array(sorted.buffer);
   kept.forEach((i, k) => to.set(from.subarray(i * RECORD, (i + 1) * RECORD), k * RECORD));
-  return { table: { count: kept.length, records: sorted, names: names.slice(0, heap) }, recordCount };
+  return { table: { count: kept.length, records: sorted, names: names.slice(0, heap) }, directoryRecordCount };
 }
 
 function writeRecord(records: DataView, i: number, nameOffset: number, nameLength: number, record: CdRecord): void {
