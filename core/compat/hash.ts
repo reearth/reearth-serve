@@ -77,7 +77,7 @@ export function base64Of(bytes: Uint8Array): string {
   return btoa(s);
 }
 
-function fromBase64(text: string): Uint8Array {
+export function fromBase64(text: string): Uint8Array {
   return Uint8Array.from(atob(text), (ch) => ch.charCodeAt(0));
 }
 

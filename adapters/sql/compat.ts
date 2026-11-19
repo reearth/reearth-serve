@@ -1,7 +1,8 @@
 import type {
-  Binding, BindingKind, BucketName, CompatBucket, CompatCredential, CredentialId,
+  Binding, BindingKind, BucketName, CompatBucket, CompatCredential, CredentialId, ObjectInfo,
   UploadId, UploadSession,
 } from "../../core/compat/model";
+import { base64Of, fromBase64 } from "../../core/compat/hash";
 import {
   newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatStore, type DeleteBucketResult,
   type LeaseToken, type VersionRecord,
@@ -82,14 +83,15 @@ export class SqlCompatStore implements CompatStore {
     return row ? parseBinding(row) : null;
   }
 
-  async claim(bucket: BucketName, key: BindingKey, kind: BindingKind, now: number, staleBefore: number): Promise<ClaimResult> {
-    const token = newClaimToken();
+  async claim(
+    bucket: BucketName, key: BindingKey, kind: BindingKind, now: number, staleBefore: number, token: ClaimToken = newClaimToken(),
+  ): Promise<ClaimResult> {
     const claimed = await queryFirst(
       this.db,
       `INSERT INTO compat_bindings (bucket, key, binding, asset_id, claimed_at, claim_token) VALUES (?1, ?2, ?3, NULL, ?4, ?6)
          ON CONFLICT (bucket, key) DO UPDATE
            SET binding = excluded.binding, claimed_at = excluded.claimed_at, claim_token = excluded.claim_token
-           WHERE compat_bindings.asset_id IS NULL AND compat_bindings.claimed_at < ?5
+           WHERE compat_bindings.asset_id IS NULL AND (compat_bindings.claimed_at < ?5 OR compat_bindings.claim_token = ?6)
          RETURNING claim_token`,
       [bucket, key, kind, now, staleBefore, token],
     );
@@ -121,7 +123,7 @@ export class SqlCompatStore implements CompatStore {
   async lease(bucket: BucketName, key: BindingKey, token: LeaseToken, now: number, staleBefore: number): Promise<boolean> {
     const result = await this.db.execute(
       `UPDATE compat_bindings SET lease_token = ?3, leased_at = ?4
-         WHERE bucket = ?1 AND key = ?2 AND asset_id IS NOT NULL AND (lease_token IS NULL OR leased_at < ?5)`,
+         WHERE bucket = ?1 AND key = ?2 AND asset_id IS NOT NULL AND (lease_token IS NULL OR lease_token = ?3 OR leased_at < ?5)`,
       [bucket, key, token, now, staleBefore],
     );
     return result.rowsAffected > 0;
@@ -216,7 +218,10 @@ export class SqlCompatStore implements CompatStore {
   async createUpload(u: UploadSession): Promise<void> {
     await this.db.execute(
       `INSERT INTO compat_uploads (${UPLOAD_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
-      [u.id, u.bucket, u.key, u.credentialId, JSON.stringify(u.meta), u.received, u.hashState, u.state, u.result, u.expiresAt],
+      [
+        u.id, u.bucket, u.key, u.credentialId, JSON.stringify(u.meta), u.received, JSON.stringify(u.hashState), u.state,
+        encodeResult(u.result), u.expiresAt,
+      ],
     );
   }
 
@@ -233,7 +238,7 @@ export class SqlCompatStore implements CompatStore {
     const result = await this.db.execute(
       `UPDATE compat_uploads SET received = ?4, hash_state = ?5, state = ?6, result = ?7
          WHERE id = ?1 AND received = ?2 AND state = ?3`,
-      [id, expect.received, expect.state, next.received, next.hashState, next.state, next.result],
+      [id, expect.received, expect.state, next.received, JSON.stringify(next.hashState), next.state, encodeResult(next.result)],
     );
     return result.rowsAffected > 0;
   }
@@ -249,6 +254,17 @@ export class SqlCompatStore implements CompatStore {
 
   async deleteUpload(id: UploadId): Promise<void> {
     await this.db.execute("DELETE FROM compat_uploads WHERE id = ?1", [id]);
+  }
+
+  async sweepStaleHolds(staleBefore: number): Promise<{ claims: number; leases: number }> {
+    const [claims, leases] = await this.db.batch([
+      { sql: "DELETE FROM compat_bindings WHERE asset_id IS NULL AND claimed_at < ?1", args: [staleBefore] },
+      {
+        sql: "UPDATE compat_bindings SET lease_token = NULL, leased_at = NULL WHERE lease_token IS NOT NULL AND leased_at < ?1",
+        args: [staleBefore],
+      },
+    ]);
+    return { claims: claims.rowsAffected, leases: leases.rowsAffected };
   }
 }
 
@@ -301,10 +317,38 @@ function parseUpload(row: Row): UploadSession {
     credentialId: row.credential_id as CredentialId,
     meta: JSON.parse(row.meta as string),
     received: row.received as number,
-    hashState: row.hash_state as string,
+    hashState: JSON.parse(row.hash_state as string),
     state: row.state as UploadSession["state"],
-    result: (row.result as string | null) ?? null,
+    result: row.result ? decodeResult(row.result as string) : null,
     expiresAt: row.expires_at as number,
+  };
+}
+
+type StoredInfo = Omit<ObjectInfo, "created" | "updated" | "hashes"> & {
+  created: number; updated: number; hashes: { md5: string; crc32c: number } | null;
+};
+
+function encodeResult(info: ObjectInfo | null): string | null {
+  if (!info) return null;
+  const stored: StoredInfo = {
+    ...info,
+    created: info.created.getTime(),
+    updated: info.updated.getTime(),
+    hashes: info.hashes && { md5: base64Of(info.hashes.md5), crc32c: info.hashes.crc32c },
+  };
+  return JSON.stringify(stored);
+}
+
+function decodeResult(text: string): ObjectInfo {
+  const stored = JSON.parse(text) as StoredInfo;
+  return {
+    ...stored,
+    created: new Date(stored.created),
+    updated: new Date(stored.updated),
+    hashes: stored.hashes && {
+      md5: fromBase64(stored.hashes.md5),
+      crc32c: stored.hashes.crc32c,
+    },
   };
 }
 

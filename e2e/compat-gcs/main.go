@@ -54,11 +54,13 @@ var scenarios = map[string]func(context.Context, *storage.Client, config) error{
 	"write-attrs-list-delete": writeAttrsListDelete,
 	"paging":                  paging,
 	"race":                    race,
+	"resumable-40m":           resumable40M,
+	"resumable-16m":           resumable16M,
 }
 
 func main() {
 	if len(os.Args) != 2 || scenarios[os.Args[1]] == nil {
-		fmt.Fprintln(os.Stderr, "usage: compat-gcs <attrs-missing|revoked|write-attrs-list-delete|paging|race>")
+		fmt.Fprintln(os.Stderr, "usage: compat-gcs <attrs-missing|revoked|write-attrs-list-delete|paging|race|resumable-40m|resumable-16m>")
 		os.Exit(2)
 	}
 	cfg, err := loadConfig()
@@ -362,4 +364,68 @@ func race(ctx context.Context, client *storage.Client, cfg config) error {
 	}
 	fmt.Println("generation: the later of two distinct writes")
 	return nil
+}
+
+const mib = 1 << 20
+
+func pattern(size int, seed byte) []byte {
+	data := make([]byte, size)
+	for i := range data {
+		data[i] = byte(i*31) ^ seed ^ byte(i>>16)
+	}
+	return data
+}
+
+func writeResumable(ctx context.Context, obj *storage.ObjectHandle, data []byte) (*storage.ObjectAttrs, error) {
+	w := obj.NewWriter(ctx)
+	w.ContentType = "application/octet-stream"
+	w.ProgressFunc = func(n int64) { fmt.Println("chunk acknowledged:", n) }
+	started := time.Now()
+	if _, err := w.Write(data); err != nil {
+		_ = w.Close()
+		return nil, err
+	}
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
+	fmt.Fprintf(os.Stderr, "wrote %d bytes in %s\n", len(data), time.Since(started))
+	attrs, err := obj.Attrs(ctx)
+	if err != nil {
+		return nil, fmt.Errorf("attrs: %w", err)
+	}
+	if attrs.Size != int64(len(data)) {
+		return nil, fmt.Errorf("size: want %d, got %d", len(data), attrs.Size)
+	}
+	if err := checkHashes(attrs, data); err != nil {
+		return nil, err
+	}
+	if attrs.Generation != w.Attrs().Generation {
+		return nil, fmt.Errorf("generation: the write returned %d, Attrs reads %d", w.Attrs().Generation, attrs.Generation)
+	}
+	fmt.Println("committed:", attrs.Size, "bytes")
+	return attrs, nil
+}
+
+func resumable40M(ctx context.Context, client *storage.Client, cfg config) error {
+	obj := client.Bucket(cfg.bucket).Object("resumable/40m.bin")
+	first, err := writeResumable(ctx, obj, pattern(40*mib, 1))
+	if err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+	second, err := writeResumable(ctx, obj, pattern(40*mib, 2))
+	if err != nil {
+		return fmt.Errorf("overwrite: %w", err)
+	}
+	if second.Generation <= first.Generation {
+		return fmt.Errorf("overwrite: generation %d is not above %d", second.Generation, first.Generation)
+	}
+	fmt.Println("overwrite: generation increased")
+	return nil
+}
+
+// resumable16M ends on a chunk boundary, so the client finishes with an empty
+// request whose Content-Range is bytes */16777216.
+func resumable16M(ctx context.Context, client *storage.Client, cfg config) error {
+	_, err := writeResumable(ctx, client.Bucket(cfg.bucket).Object("resumable/16m.bin"), pattern(16*mib, 3))
+	return err
 }

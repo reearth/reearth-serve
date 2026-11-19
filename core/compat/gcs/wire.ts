@@ -61,6 +61,7 @@ export function compatErrorResponse(surface: GcsSurface, error: CompatError, obj
   switch (error.code) {
     case "no_such_bucket": return gcsError(surface, "bucket_not_found");
     case "no_such_key": return gcsError(surface, "object_not_found", objectName ? `No such object: ${objectName}` : undefined);
+    case "no_such_upload": return gcsError(surface, "object_not_found", "No such upload session.");
     case "forbidden": return gcsError(surface, "forbidden");
     case "precondition_failed": return gcsError(surface, "precondition_failed");
     case "busy": return gcsError(surface, "busy");

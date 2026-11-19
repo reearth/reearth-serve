@@ -1,9 +1,10 @@
 import { Hono, type Context } from "hono";
 import type { Deps } from "../../types";
-import { createHasher, base64Of, crc32cBase64 } from "../hash";
+import { createHasher, base64Of, crc32cBase64, fromBase64 } from "../hash";
 import { objectLayer, type ObjectLayerDeps } from "../layer";
 import { MAX_LIST_RESULTS, type ListQuery } from "../list";
 import { parseObjectKey, type ExactHashes, type PutMeta, type SizedBody } from "../model";
+import { resumableUploads, type Chunk, type DeclaredHashes, type UploadStatus } from "../upload";
 import { exchangeAssertion, gcsAuth, type GcsEnv, type TokenError } from "./auth";
 import { boundaryOf, MULTIPART_MAX_BYTES, parseRelated, readCapped } from "./multipart";
 import { compatErrorResponse, gcsError, listResource, objectResource, surfaceOf } from "./wire";
@@ -68,6 +69,7 @@ export function gcsApp(deps: GcsDeps, apiOrigin: string) {
   const app = new Hono<GcsEnv>();
   const tokenConfig = { apiOrigin, secret: deps.signingSecret };
   const layerOf = (c: Context<GcsEnv>) => objectLayer(deps, c.get("service"));
+  const uploadsOf = (c: Context<GcsEnv>) => resumableUploads(deps, c.get("service"), layerOf(c));
 
   app.onError((err, c) => {
     console.error(err);
@@ -120,14 +122,47 @@ export function gcsApp(deps: GcsDeps, apiOrigin: string) {
     return c.body(null, 204);
   });
 
+  async function continueUpload(c: Context<GcsEnv>, id: string): Promise<Response> {
+    const range = contentRangeOf(c.req.header("Content-Range"));
+    if (!range) return gcsError("json", "invalid", "Invalid Content-Range.");
+    const declared = declaredHashesOf(c.req.header("X-Goog-Hash"));
+    if (!declared) return gcsError("json", "invalid", "Invalid X-Goog-Hash.");
+    const uploads = uploadsOf(c);
+    const bucket = c.req.param("bucket")!;
+    const result = range === "query"
+      ? await uploads.status(id, bucket)
+      : await uploads.append(id, bucket, range, c.req.raw.body, declared);
+    if (!result.ok) return compatErrorResponse("json", result.error);
+    return uploadStatusResponse(c, result.value, apiOrigin);
+  }
+
+  app.put("/upload/storage/v1/b/:bucket/o", async (c) => {
+    const id = queryOf(c, "upload_id");
+    if (queryOf(c, "uploadType") !== "resumable" || id === null) return gcsError("json", "not_implemented");
+    return continueUpload(c, id);
+  });
+
   app.post("/upload/storage/v1/b/:bucket/o", async (c) => {
     const uploadType = queryOf(c, "uploadType");
-    if (uploadType !== "media" && uploadType !== "multipart") return gcsError("json", "not_implemented");
+    const uploadId = queryOf(c, "upload_id");
+    if (uploadType === "resumable" && uploadId !== null) return continueUpload(c, uploadId);
+    if (uploadType !== "media" && uploadType !== "multipart" && uploadType !== "resumable") return gcsError("json", "not_implemented");
     if (UNSUPPORTED_PRECONDITIONS.some((name) => queryOf(c, name) !== null)) {
       return compatErrorResponse("json", { code: "not_implemented", what: "metageneration and not-match preconditions" });
     }
     const generationMatch = generationMatchOf(c);
     if (!generationMatch.ok) return gcsError("json", "invalid", "Invalid ifGenerationMatch.");
+    if (uploadType === "resumable") {
+      const begun = await beginUpload(c);
+      if (begun instanceof Response) return begun;
+      const key = parseObjectKey(begun.name ?? "");
+      if (!key) return gcsError("json", "invalid", "Invalid object name.");
+      const bucket = c.req.param("bucket");
+      const result = await uploadsOf(c).begin(bucket, key, { ...begun.meta, ifGenerationMatch: generationMatch.value });
+      if (!result.ok) return compatErrorResponse("json", result.error);
+      const location = `${apiOrigin}/upload/storage/v1/b/${encodeURIComponent(bucket)}/o?uploadType=resumable&upload_id=${result.value}`;
+      return c.body(null, 200, { Location: location, "X-GUploader-UploadID": result.value });
+    }
     const upload = uploadType === "media" ? mediaUpload(c) : await multipartUpload(c);
     if (upload instanceof Response) return upload;
     const key = parseObjectKey(upload.name ?? "");
@@ -142,6 +177,78 @@ export function gcsApp(deps: GcsDeps, apiOrigin: string) {
 }
 
 type Upload = { name: string | null; meta: Omit<PutMeta, "ifGenerationMatch">; body: SizedBody };
+
+const RESUMABLE_METADATA_MAX_BYTES = 64 * 1024;
+
+async function beginUpload(c: Context<GcsEnv>): Promise<Omit<Upload, "body"> | Response> {
+  const raw = await readCapped(c.req.raw.body, RESUMABLE_METADATA_MAX_BYTES);
+  if (!raw) return gcsError("json", "too_large");
+  let resource: ObjectResource = {};
+  try {
+    if (raw.length > 0) resource = JSON.parse(new TextDecoder().decode(raw)) as ObjectResource;
+  } catch {
+    return gcsError("json", "invalid", "The object metadata is not JSON.");
+  }
+  const userMeta = resource && typeof resource === "object" ? stringRecord(resource.metadata) : null;
+  if (!userMeta) return gcsError("json", "invalid", "Invalid object metadata.");
+  return {
+    name: queryOf(c, "name") ?? optionalString(resource.name),
+    meta: {
+      contentType: optionalString(resource.contentType) ?? c.req.header("X-Upload-Content-Type") ?? "application/octet-stream",
+      contentEncoding: optionalString(resource.contentEncoding),
+      userMeta,
+    },
+  };
+}
+
+export function contentRangeOf(header: string | undefined): Chunk | "query" | null {
+  const match = /^bytes (?:(\d+)-(\d+)|\*)\/(\d+|\*)$/.exec(header?.trim() ?? "");
+  if (!match) return null;
+  const total = match[3] === "*" ? null : Number(match[3]);
+  if (match[1] === undefined) return total === null ? "query" : { start: null, size: 0, total };
+  const start = Number(match[1]);
+  const end = Number(match[2]);
+  if (!Number.isSafeInteger(end) || end < start || (total !== null && end >= total)) return null;
+  return { start, size: end - start + 1, total };
+}
+
+export function declaredHashesOf(header: string | undefined): DeclaredHashes | null {
+  const declared: DeclaredHashes = { crc32c: null, md5: null };
+  for (const part of (header ?? "").split(",")) {
+    const eq = part.indexOf("=");
+    if (eq === -1) continue;
+    let bytes: Uint8Array;
+    try {
+      bytes = fromBase64(part.slice(eq + 1).trim());
+    } catch {
+      return null;
+    }
+    const name = part.slice(0, eq).trim();
+    if (name === "crc32c") {
+      if (bytes.length !== 4) return null;
+      declared.crc32c = new DataView(bytes.buffer).getUint32(0, false);
+    } else if (name === "md5") {
+      if (bytes.length !== 16) return null;
+      declared.md5 = bytes;
+    }
+  }
+  return declared;
+}
+
+/**
+ * GCS signals "resume incomplete" with a 308. A client that sends
+ * `X-GUploader-No-308: yes` (the Go client does) fails on a 308, and reads
+ * the same answer from a 200 with `X-Http-Status-Code-Override: 308`.
+ */
+function uploadStatusResponse(c: Context<GcsEnv>, status: UploadStatus, apiOrigin: string): Response {
+  if (status.kind === "committed") return c.json(objectResource(status.info, apiOrigin));
+  const headers: Record<string, string> = {};
+  if (status.received > 0) headers.Range = `bytes=0-${status.received - 1}`;
+  if (c.req.header("X-GUploader-No-308") === "yes") {
+    return c.body(null, 200, { ...headers, "X-Http-Status-Code-Override": "308" });
+  }
+  return c.body(null, 308, headers);
+}
 
 function mediaUpload(c: Context<GcsEnv>): Upload | Response {
   const length = c.req.header("Content-Length");

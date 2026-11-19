@@ -41,33 +41,61 @@ async function issuedKeyFile() {
   return { admin, bucket, keyFile, revokeUrl, projectId: project.id };
 }
 
-function onCompatHost(path: string, headers: Record<string, string>): Promise<{ status: number; body: string }> {
+type CompatResponse = { status: number; headers: Record<string, string | string[] | undefined>; body: string };
+
+function onCompatHost(path: string, headers: Record<string, string>, method = "GET", body?: string): Promise<CompatResponse> {
   const base = new URL(BASE);
   return new Promise((resolve, reject) => {
-    const req = httpRequest({ hostname: base.hostname, port: base.port, path, headers: { Host: COMPAT_HOST!, ...headers } }, (res) => {
-      let body = "";
+    const req = httpRequest({ hostname: base.hostname, port: base.port, path, method, headers: { Host: COMPAT_HOST!, ...headers } }, (res) => {
+      let text = "";
       res.setEncoding("utf8");
-      res.on("data", (chunk) => { body += chunk; });
-      res.on("end", () => resolve({ status: res.statusCode ?? 0, body }));
+      res.on("data", (chunk) => { text += chunk; });
+      res.on("end", () => resolve({ status: res.statusCode ?? 0, headers: res.headers, body: text }));
     });
     req.on("error", reject);
-    req.end();
+    req.end(body);
   });
+}
+
+async function selfSignedBearer(keyFile: KeyFile): Promise<string> {
+  const jwt = await new SignJWT({})
+    .setProtectedHeader({ alg: "RS256", kid: keyFile.private_key_id })
+    .setIssuer(keyFile.client_email)
+    .setAudience(new URL(keyFile.token_uri).origin)
+    .setIssuedAt()
+    .setExpirationTime("1h")
+    .sign(await importPKCS8(keyFile.private_key, "RS256"));
+  return `Bearer ${jwt}`;
 }
 
 describe.runIf(COMPAT_HOST)("GCS API bearer auth", () => {
   test("a self-signed JWT built from the key file reaches the missing-object 404", async () => {
     const { bucket, keyFile } = await issuedKeyFile();
-    const jwt = await new SignJWT({})
-      .setProtectedHeader({ alg: "RS256", kid: keyFile.private_key_id })
-      .setIssuer(keyFile.client_email)
-      .setAudience(new URL(keyFile.token_uri).origin)
-      .setIssuedAt()
-      .setExpirationTime("1h")
-      .sign(await importPKCS8(keyFile.private_key, "RS256"));
-    const res = await onCompatHost(`/storage/v1/b/${bucket}/o/missing.txt`, { Authorization: `Bearer ${jwt}` });
+    const res = await onCompatHost(`/storage/v1/b/${bucket}/o/missing.txt`, { Authorization: await selfSignedBearer(keyFile) });
     expect(res.status).toBe(404);
     expect(JSON.parse(res.body)).toMatchObject({ error: { code: 404, errors: [{ reason: "notFound" }] } });
+  });
+
+  test("a resumable session refuses another credential of the same bucket, and its own finishes it", async () => {
+    const { admin, bucket, keyFile, projectId } = await issuedKeyFile();
+    const second = await api(admin, "POST", `/projects/${projectId}/compat/credentials`, { bucket, role: "editor" });
+    expect(second.status).toBe(201);
+    const owner = { Authorization: await selfSignedBearer(keyFile) };
+    const other = { Authorization: await selfSignedBearer(await second.json() as KeyFile) };
+
+    const begun = await onCompatHost(`/upload/storage/v1/b/${bucket}/o?uploadType=resumable&name=hijack.txt`, {
+      ...owner, "Content-Type": "application/json",
+    }, "POST", JSON.stringify({ name: "hijack.txt", contentType: "text/plain" }));
+    expect(begun.status).toBe(200);
+    const location = new URL(String(begun.headers.location));
+    const session = `${location.pathname}${location.search}`;
+    const chunk = { "Content-Range": "bytes 0-2/3", "Content-Length": "3" };
+
+    const hijack = await onCompatHost(session, { ...other, ...chunk }, "PUT", "abc");
+    expect(hijack.status).toBe(403);
+    const finished = await onCompatHost(session, { ...owner, ...chunk }, "PUT", "abc");
+    expect(finished.status).toBe(200);
+    expect(JSON.parse(finished.body)).toMatchObject({ name: "hijack.txt", size: "3", md5Hash: "kAFQmDzST7DWlj99KOF/cg==" });
   });
 });
 
@@ -136,6 +164,22 @@ describe.runIf(COMPAT_HOST && GO)("Go storage client v1.69 (e2e/compat-gcs)", ()
     const { bucket, path } = await keyFileOnDisk();
     const { stdout } = await scenario("paging", { E2E_GCS_KEY_FILE: path, E2E_GCS_BUCKET: bucket });
     expect(stdout.trim()).toBe("listed: 1050");
+  }, 300_000);
+
+  test("resumable-40m: three 16 MiB-sized chunk requests, hashes that match, and a higher generation on overwrite", async () => {
+    const { admin, bucket, path, projectId } = await keyFileOnDisk();
+    const { stdout, stderr } = await scenario("resumable-40m", { E2E_GCS_KEY_FILE: path, E2E_GCS_BUCKET: bucket });
+    console.log(`resumable-40m: ${stderr.trim()}`);
+    const write = ["chunk acknowledged: 16777216", "chunk acknowledged: 33554432", "chunk acknowledged: 41943040", "committed: 41943040 bytes"];
+    expect(stdout.trim().split("\n")).toEqual([...write, ...write, "overwrite: generation increased"]);
+    expect((await assetsOf(admin, projectId)).map((a) => a.filename)).toEqual(["40m.bin"]);
+  }, 300_000);
+
+  test("resumable-16m: an object of exactly one chunk ends with the empty final request", async () => {
+    const { admin, bucket, path, projectId } = await keyFileOnDisk();
+    const { stdout } = await scenario("resumable-16m", { E2E_GCS_KEY_FILE: path, E2E_GCS_BUCKET: bucket });
+    expect(stdout.trim().split("\n")).toEqual(["chunk acknowledged: 16777216", "committed: 16777216 bytes"]);
+    expect((await assetsOf(admin, projectId)).map((a) => a.filename)).toEqual(["16m.bin"]);
   }, 300_000);
 
   test("race: two writers on one new key make one asset and both succeed", async () => {

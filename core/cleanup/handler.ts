@@ -6,6 +6,7 @@ import type { AtomicWrites, MetadataStore, VersionStore } from "../asset/reposit
 import type { Deps } from "../types";
 import { extractionMessageForJob, type ExtractionMessage } from "../extraction/handler";
 import type { JobQueue } from "../queue/port";
+import { sweepUploads } from "../compat/upload";
 
 const MAX_RETRIES = 5;
 // Cap per-tick re-enqueue work so a backlog of failed jobs cannot blow the
@@ -33,6 +34,11 @@ export async function handleScheduled(deps: Deps): Promise<void> {
     console.log(
       `Cleanup: deleted ${result.deletedAssets.length} expired assets, ${result.deletedJobs.length} jobs${suffix}`,
     );
+  }
+
+  const swept = await sweepUploads(deps, Date.now());
+  if (swept.sessions + swept.claims + swept.leases > 0) {
+    console.log(`Cleanup: swept ${swept.sessions} expired compat uploads, ${swept.claims} stale claims, ${swept.leases} stale leases`);
   }
 
   // Drain R2 prefixes that earlier DELETE requests couldn't finish inline.

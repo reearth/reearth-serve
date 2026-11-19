@@ -55,8 +55,14 @@ export interface CompatStore {
 
   /** Bound rows only; a claim with no asset yet reads as absent. */
   findBinding(bucket: BucketName, key: BindingKey): Promise<Binding | null>;
-  /** Claim `key` at `now`. A claim older than `staleBefore` is abandoned and may be taken over. */
-  claim(bucket: BucketName, key: BindingKey, kind: BindingKind, now: number, staleBefore: number): Promise<ClaimResult>;
+  /**
+   * Claim `key` at `now`. A claim older than `staleBefore` is abandoned and may
+   * be taken over. With `token`, a claim that already holds that token is
+   * taken again, so a writer that crashed can resume its own claim at once.
+   */
+  claim(
+    bucket: BucketName, key: BindingKey, kind: BindingKind, now: number, staleBefore: number, token?: ClaimToken,
+  ): Promise<ClaimResult>;
   /**
    * Fill the claim `token` with `assetId`. True when the row now names
    * `assetId`, including a repeat of the same bind; false when the claim was
@@ -68,8 +74,8 @@ export interface CompatStore {
   deleteBinding(bucket: BucketName, key: BindingKey): Promise<void>;
   /**
    * Lease the bound `key` at `now` for one overwrite or delete. False while
-   * another fresh lease (not older than `staleBefore`) holds it, or when the
-   * key is not bound.
+   * a fresh lease (not older than `staleBefore`) with another token holds it,
+   * or when the key is not bound.
    */
   lease(bucket: BucketName, key: BindingKey, token: LeaseToken, now: number, staleBefore: number): Promise<boolean>;
   /** Drop the lease `token`. No-op once it was taken over or the row is gone. */
@@ -108,4 +114,6 @@ export interface CompatStore {
   ): Promise<boolean>;
   listExpiredUploads(now: number, limit: number): Promise<UploadSession[]>;
   deleteUpload(id: UploadId): Promise<void>;
+  /** Drop claims that never named an asset and clear leases, each held since before `staleBefore`. */
+  sweepStaleHolds(staleBefore: number): Promise<{ claims: number; leases: number }>;
 }

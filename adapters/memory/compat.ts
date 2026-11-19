@@ -58,11 +58,12 @@ export class MemoryCompatStore implements CompatStore {
     const row = this.bindings.get(rowKey(bucket, key));
     return row ? toBinding(row) : null;
   }
-  async claim(bucket: BucketName, key: BindingKey, kind: BindingKind, now: number, staleBefore: number): Promise<ClaimResult> {
+  async claim(
+    bucket: BucketName, key: BindingKey, kind: BindingKind, now: number, staleBefore: number, token: ClaimToken = newClaimToken(),
+  ): Promise<ClaimResult> {
     const id = rowKey(bucket, key);
     const row = this.bindings.get(id);
-    if (!row || (row.assetId === null && row.claimedAt < staleBefore)) {
-      const token = newClaimToken();
+    if (!row || (row.assetId === null && (row.claimedAt < staleBefore || row.claimToken === token))) {
       this.bindings.set(id, { bucket, key, kind, assetId: null, claimedAt: now, claimToken: token, lease: null });
       return { kind: "claimed", token };
     }
@@ -87,7 +88,8 @@ export class MemoryCompatStore implements CompatStore {
   }
   async lease(bucket: BucketName, key: BindingKey, token: LeaseToken, now: number, staleBefore: number): Promise<boolean> {
     const row = this.bindings.get(rowKey(bucket, key));
-    if (!row || row.assetId === null || (row.lease !== null && row.lease.at >= staleBefore)) return false;
+    if (!row || row.assetId === null) return false;
+    if (row.lease !== null && row.lease.token !== token && row.lease.at >= staleBefore) return false;
     row.lease = { token, at: now };
     return true;
   }
@@ -144,10 +146,11 @@ export class MemoryCompatStore implements CompatStore {
 
   async createUpload(session: UploadSession): Promise<void> {
     if (this.uploads.has(session.id)) throw new Error(`upload ${session.id} already exists`);
-    this.uploads.set(session.id, { ...session });
+    this.uploads.set(session.id, structuredClone(session));
   }
   async findUpload(id: UploadId): Promise<UploadSession | null> {
-    return this.uploads.get(id) ?? null;
+    const u = this.uploads.get(id);
+    return u ? structuredClone(u) : null;
   }
   async advanceUpload(
     id: UploadId,
@@ -167,6 +170,20 @@ export class MemoryCompatStore implements CompatStore {
   }
   async deleteUpload(id: UploadId): Promise<void> {
     this.uploads.delete(id);
+  }
+  async sweepStaleHolds(staleBefore: number): Promise<{ claims: number; leases: number }> {
+    let claims = 0;
+    let leases = 0;
+    for (const [id, row] of this.bindings) {
+      if (row.assetId === null && row.claimedAt < staleBefore) {
+        this.bindings.delete(id);
+        claims++;
+      } else if (row.lease !== null && row.lease.at < staleBefore) {
+        row.lease = null;
+        leases++;
+      }
+    }
+    return { claims, leases };
   }
 
   dropAsset(assetId: string): void {

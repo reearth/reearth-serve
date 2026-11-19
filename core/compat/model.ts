@@ -1,6 +1,7 @@
 import type { z } from "zod";
 import type { ServicePrincipal, ServiceRole } from "../auth/types";
 import type { compatMountRuleSchema } from "../../shared/compat";
+import type { HashState } from "./hash";
 
 export type BucketName = string & { readonly __brand: "BucketName" };
 /** A decoded object key. May contain '/' and end with it. */
@@ -85,9 +86,9 @@ export type UploadSession = {
   credentialId: CredentialId;
   meta: PutMeta;
   received: number;
-  hashState: string;
+  hashState: HashState;
   state: UploadState;
-  result: string | null;
+  result: ObjectInfo | null;
   expiresAt: number;
 };
 
@@ -115,6 +116,7 @@ export type SizedBody = {
 export type CompatError =
   | { code: "no_such_bucket" }
   | { code: "no_such_key" }
+  | { code: "no_such_upload" }
   | { code: "forbidden" }
   | { code: "precondition_failed" }
   | { code: "busy" }
