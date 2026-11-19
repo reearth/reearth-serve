@@ -1,6 +1,6 @@
 import { readFileSync } from "node:fs";
 import { describe, test, expect, beforeAll } from "vitest";
-import { BASE, internalHeaders, rewriteUrl, uploadFile } from "./helpers";
+import { BASE, buildMiniZip, crc32, internalHeaders, rawGet, rewriteUrl, uploadFile } from "./helpers";
 
 const containerAvailable = process.env.E2E_CONTAINER === "true";
 
@@ -319,6 +319,55 @@ describe("Archive & Job", () => {
     });
   });
 
+  describe("In-place serving", () => {
+    test.each(["deflate.zip", "store.zip", "descriptor.zip", "prepended.zip", "shift_jis.zip", "cp437.zip", "unicode-extra.zip", "site.zip"])(
+      "every entry of %s is served from the original the moment the upload completes",
+      async (name) => {
+        const { assetId } = await uploadFixture(name);
+        for (const entry of golden(name)) {
+          const res = await rawGet(entryUrl(assetId, entry.path));
+          expect({ path: entry.path, status: res.status }).toEqual({ path: entry.path, status: 200 });
+          expect(res.headers["content-length"]).toBe(String(entry.size));
+          expect(`crc32:${crc32(res.body).toString(16).padStart(8, "0")}`).toBe(entry.hash);
+        }
+      },
+    );
+
+    test.each([["store.zip", "index.html", "bytes=5-14"], ["deflate.zip", "a.txt", "bytes=1000-1999"]])(
+      "a Range on %s's %s is 206 with exactly those bytes",
+      async (name, path, range) => {
+        const { assetId } = await uploadFixture(name);
+        const whole = (await rawGet(entryUrl(assetId, path))).body;
+        const res = await rawGet(entryUrl(assetId, path), { Range: range, "Accept-Encoding": "gzip" });
+        const [start, end] = range.slice(6).split("-").map(Number);
+        expect(res.status).toBe(206);
+        expect(res.headers["content-range"]).toBe(`bytes ${start}-${end}/${whole.byteLength}`);
+        expect(res.body).toEqual(whole.subarray(start, end + 1));
+      },
+    );
+
+    test("If-None-Match with the entry's ETag is 304", async () => {
+      const { assetId } = await uploadFixture("store.zip");
+      const etag = (await rawGet(entryUrl(assetId, "index.html"))).headers.etag as string;
+      expect(etag).toBeTruthy();
+      const res = await rawGet(entryUrl(assetId, "index.html"), { "If-None-Match": etag });
+      expect(res.status).toBe(304);
+      expect(res.body.byteLength).toBe(0);
+    });
+
+    test.each([["an encrypted entry", { flags: 1 }], ["a bzip2 entry", { method: 12 }]])(
+      "%s is listed and answers 501",
+      async (_, patch) => {
+        const zip = patchFirstEntry(buildMiniZip({ "locked.txt": "secret" }), patch);
+        const { status, body, sessionId } = await uploadFile(zip, "locked.zip", "application/zip");
+        expect(status).toBe(201);
+        const headers = sessionId ? { "X-Session-Id": sessionId } : ({} as Record<string, string>);
+        expect((await listFiles(body.asset.id, headers)).map((e) => e.path)).toEqual(["locked.txt"]);
+        expect((await rawGet(entryUrl(body.asset.id, "locked.txt"))).status).toBe(501);
+      },
+    );
+  });
+
   // --- File subpath routing ---
 
   describe("File subpath routing", () => {
@@ -355,91 +404,6 @@ describe("Archive & Job", () => {
 
 // --- helpers ---
 
-/**
- * Build a minimal valid ZIP file with the given entries.
- * Uses a simple implementation of the ZIP format (no compression — store only).
- */
-function buildMiniZip(files: Record<string, string>): Uint8Array {
-  const entries = Object.entries(files);
-  const localHeaders: Uint8Array[] = [];
-  const centralHeaders: Uint8Array[] = [];
-  let offset = 0;
-
-  for (const [name, content] of entries) {
-    const nameBytes = new TextEncoder().encode(name);
-    const contentBytes = new TextEncoder().encode(content);
-    const crc = crc32(contentBytes);
-
-    // Local file header
-    const local = new ArrayBuffer(30 + nameBytes.length + contentBytes.length);
-    const lv = new DataView(local);
-    lv.setUint32(0, 0x04034b50, true); // signature
-    lv.setUint16(4, 20, true); // version needed
-    lv.setUint16(6, 0, true); // flags
-    lv.setUint16(8, 0, true); // compression: store
-    lv.setUint16(10, 0, true); // mod time
-    lv.setUint16(12, 0, true); // mod date
-    lv.setUint32(14, crc, true); // crc32
-    lv.setUint32(18, contentBytes.length, true); // compressed size
-    lv.setUint32(22, contentBytes.length, true); // uncompressed size
-    lv.setUint16(26, nameBytes.length, true); // name length
-    lv.setUint16(28, 0, true); // extra length
-    new Uint8Array(local).set(nameBytes, 30);
-    new Uint8Array(local).set(contentBytes, 30 + nameBytes.length);
-    localHeaders.push(new Uint8Array(local));
-
-    // Central directory header
-    const central = new ArrayBuffer(46 + nameBytes.length);
-    const cv = new DataView(central);
-    cv.setUint32(0, 0x02014b50, true); // signature
-    cv.setUint16(4, 20, true); // version made by
-    cv.setUint16(6, 20, true); // version needed
-    cv.setUint16(8, 0, true); // flags
-    cv.setUint16(10, 0, true); // compression
-    cv.setUint16(12, 0, true); // mod time
-    cv.setUint16(14, 0, true); // mod date
-    cv.setUint32(16, crc, true); // crc32
-    cv.setUint32(20, contentBytes.length, true); // compressed
-    cv.setUint32(24, contentBytes.length, true); // uncompressed
-    cv.setUint16(28, nameBytes.length, true); // name length
-    cv.setUint16(30, 0, true); // extra length
-    cv.setUint16(32, 0, true); // comment length
-    cv.setUint16(34, 0, true); // disk number
-    cv.setUint16(36, 0, true); // internal attrs
-    cv.setUint32(38, 0, true); // external attrs
-    cv.setUint32(42, offset, true); // local header offset
-    new Uint8Array(central).set(nameBytes, 46);
-    centralHeaders.push(new Uint8Array(central));
-
-    offset += 30 + nameBytes.length + contentBytes.length;
-  }
-
-  const centralOffset = offset;
-  let centralSize = 0;
-  for (const ch of centralHeaders) centralSize += ch.length;
-
-  // End of central directory
-  const eocd = new ArrayBuffer(22);
-  const ev = new DataView(eocd);
-  ev.setUint32(0, 0x06054b50, true); // signature
-  ev.setUint16(4, 0, true); // disk number
-  ev.setUint16(6, 0, true); // disk with central dir
-  ev.setUint16(8, entries.length, true); // entries on disk
-  ev.setUint16(10, entries.length, true); // total entries
-  ev.setUint32(12, centralSize, true); // central dir size
-  ev.setUint32(16, centralOffset, true); // central dir offset
-  ev.setUint16(20, 0, true); // comment length
-
-  const totalSize = offset + centralSize + 22;
-  const result = new Uint8Array(totalSize);
-  let pos = 0;
-  for (const lh of localHeaders) { result.set(lh, pos); pos += lh.length; }
-  for (const ch of centralHeaders) { result.set(ch, pos); pos += ch.length; }
-  result.set(new Uint8Array(eocd), pos);
-
-  return result;
-}
-
 const FIXTURES = new URL("../scripts/fixtures/zip/data/", import.meta.url);
 
 function fixtureBytes(name: string): Uint8Array {
@@ -470,14 +434,23 @@ function parseNdjson(text: string): any[] {
   return text.trim().split("\n").filter(Boolean).map((line) => JSON.parse(line));
 }
 
-/** Simple CRC-32 implementation for ZIP. */
-function crc32(data: Uint8Array): number {
-  let crc = 0xffffffff;
-  for (let i = 0; i < data.length; i++) {
-    crc ^= data[i];
-    for (let j = 0; j < 8; j++) {
-      crc = (crc >>> 1) ^ (crc & 1 ? 0xedb88320 : 0);
-    }
+function entryUrl(assetId: string, path: string): string {
+  return `${BASE}/files/${assetId}/${path.split("/").map(encodeURIComponent).join("/")}`;
+}
+
+/** Set flags or the method on the first entry's local and central headers. */
+function patchFirstEntry(zip: Uint8Array, patch: { flags?: number; method?: number }): Uint8Array {
+  const out = zip.slice();
+  const view = new DataView(out.buffer);
+  const eocd = out.byteLength - 22;
+  const cd = view.getUint32(eocd + 16, true);
+  if (patch.flags !== undefined) {
+    view.setUint16(6, patch.flags, true);
+    view.setUint16(cd + 8, patch.flags, true);
   }
-  return (crc ^ 0xffffffff) >>> 0;
+  if (patch.method !== undefined) {
+    view.setUint16(8, patch.method, true);
+    view.setUint16(cd + 10, patch.method, true);
+  }
+  return out;
 }

@@ -4,7 +4,7 @@ import { request as httpRequest, type IncomingHttpHeaders } from "node:http";
 import { mkdtempSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { BASE, createProjectForAuth, signToken, uploadFile } from "./helpers";
+import { BASE, buildMiniZip, createProjectForAuth, signToken, uploadFile } from "./helpers";
 
 // Per-asset site hosts (ADR-013 B1). Only the launch script that starts the
 // server with SITE_HOST_SUFFIX exports this, so the suite is skipped wherever
@@ -111,6 +111,38 @@ describe.skipIf(!SUFFIX)("site hosts", () => {
     const apex = await get(new URL(BASE).host, "/api/v1/health");
     expect(apex.status).toBe(200);
     expect(JSON.parse(apex.body).ok).toBe(true);
+  });
+
+  test("a just-uploaded site zip is served in place, with its 404 page and its rules", async () => {
+    const zip = buildMiniZip({
+      "index.html": "<!doctype html><title>arrived</title>",
+      "404.html": "<!doctype html><title>missing</title>",
+      "docs/index.html": "<!doctype html><title>docs</title>",
+      "_headers": "/index.html\n  X-Site-Rule: in-place\n",
+      "_redirects": "/old /docs/ 301\n",
+    });
+    const { status, body } = await uploadFile(zip, "site.zip", "application/zip");
+    expect(status).toBe(201);
+    expect(body.asset.status).toBe("pending");
+    const host = `${body.asset.id}${suffix}`;
+
+    const root = await get(host, "/");
+    expect(root.status).toBe(200);
+    expect(root.body).toBe("<!doctype html><title>arrived</title>");
+    expect((await get(host, "/index.html")).headers["x-site-rule"]).toBe("in-place");
+
+    const docs = await get(host, "/docs");
+    expect(docs.status).toBe(301);
+    expect((await get(host, "/docs/")).body).toBe("<!doctype html><title>docs</title>");
+
+    const missing = await get(host, "/nope.png");
+    expect(missing.status).toBe(404);
+    expect(missing.body).toBe("<!doctype html><title>missing</title>");
+
+    const moved = await get(host, "/old");
+    expect(moved.status).toBe(301);
+    expect(moved.headers.location).toContain("/docs/");
+    expect((await get(host, "/_redirects")).status).toBe(404);
   });
 
   test("a label that is not an ID is a plain-text 404", async () => {
