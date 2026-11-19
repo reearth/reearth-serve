@@ -169,10 +169,12 @@ describe("storage reads with an index", () => {
   });
 
   test("a fence past the first 64 KiB costs one more read, once", async () => {
-    const long = (i: number) => `${"d".repeat(400)}/${String(i).padStart(6, "0")}`;
-    const h = await harness(writeZip(Array.from({ length: 50_000 }, (_, i) => ({ name: long(i), data: new Uint8Array(0) }))));
+    const page = (k: number, j: number) => `${String(k).padStart(4, "0")}/${j === 0 ? "0".repeat(4000) : `${String(j).padStart(3, "0")}x`}`;
+    const names = Array.from({ length: 20 * 256 }, (_, i) => page(Math.floor(i / 256), i % 256));
+    const h = await harness(writeZip(names.map((name) => ({ name, data: new Uint8Array(0) }))));
     const reader = await h.open();
-    expect((await reader.stat(toArchivePath(long(49_999))!))?.path).toBe(long(49_999));
+    const last = names[names.length - 1];
+    expect((await reader.stat(toArchivePath(last)!))?.path).toBe(last);
     expect(h.indexReads()).toBe(3);
   });
 });
