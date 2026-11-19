@@ -2,7 +2,11 @@ import { afterEach, describe, expect, test, vi } from "vitest";
 import { MemoryFileStorage } from "../../../adapters/memory/storage";
 import { writeZip, type SyntheticEntry } from "../../../adapters/memory/zip";
 import type { FileStorage } from "../repository";
-import type { AtomicWrites, MetadataStore } from "../repository";
+import type { AtomicWrites, MetadataStore, PresignedUrlGenerator, UploadSessionStore } from "../repository";
+import { createArchiveCache, openArchive, toArchivePath } from "../../archive";
+import { archiveSource, assetLayouts } from "../layout";
+import type { AssetMetadata } from "../model";
+import { completeUploadSession } from "./complete-upload-session";
 import { containerIndexKey, finaliseArchive } from "./finalise-archive";
 import { uploadAsset } from "./upload";
 import { uploadVersion } from "./upload-version";
@@ -160,5 +164,65 @@ describe("upload paths", () => {
     const second = zipBody();
     await expect(uploadVersion(metadata, failingWrites, empty, "a1", { name: FILENAME, type: "application/zip", ...second }, "https://x")).rejects.toThrow("D1 down");
     expect((await empty.list("assets/")).keys).toEqual([]);
+  });
+});
+
+describe("presigned multipart completion", () => {
+  test("records the container index before the row write", async () => {
+    const storage = new MemoryFileStorage();
+    const bytes = writeZip(manyEntries());
+    const session = { id: "mp1", filename: FILENAME, contentType: "application/zip", size: bytes.byteLength, createdAt: 1, expiresAt: 2, s3UploadId: "u1" };
+    const sessions = { find: async () => session, save: async () => {}, delete: async () => {} } as unknown as UploadSessionStore;
+    const presigned = {
+      completeMultipartUpload: async (key: string) => storage.put(key, new Blob([bytes as BlobPart]).stream(), "application/zip", bytes.byteLength),
+    } as unknown as PresignedUrlGenerator;
+    const metadata = { find: async () => null } as unknown as MetadataStore;
+    const rows: AssetMetadata[] = [];
+    const writes = { createAsset: async (i: { asset: AssetMetadata }) => { rows.push(i.asset); } } as unknown as AtomicWrites;
+
+    const result = await completeUploadSession(sessions, writes, metadata, storage, presigned, "mp1", 60, "https://x", [{ partNumber: 1, etag: "e" }]);
+    expect(result?.asset.container).toMatchObject({ index: containerIndexKey("assets/mp1") });
+    expect(rows[0].container).toEqual(result?.asset.container);
+  });
+});
+
+describe("readers fall back to the central directory", () => {
+  async function uploaded() {
+    const storage = new MemoryFileStorage();
+    const rows: AssetMetadata[] = [];
+    const writes = { createAsset: async (i: { asset: AssetMetadata }) => { rows.push(i.asset); } } as unknown as AtomicWrites;
+    const bytes = writeZip(manyEntries());
+    await uploadAsset(writes, storage, { name: FILENAME, type: "application/zip", body: new Blob([bytes as BlobPart]).stream(), size: bytes.byteLength }, 60, "https://x");
+    return { storage, asset: rows[0] };
+  }
+
+  async function readEntry(storage: FileStorage, asset: AssetMetadata, path: string): Promise<string> {
+    const source = archiveSource(assetLayouts(asset, null)[0])!;
+    const opened = await openArchive({ storage, archives: createArchiveCache() }, source);
+    if (!opened.ok) throw new Error(opened.reason);
+    const read = await opened.reader.open(toArchivePath(path)!);
+    if (!read.ok) throw new Error(read.reason);
+    return new Response(read.file.body).text();
+  }
+
+  const entry = `tiles/00004321/${"n".repeat(64)}.json`;
+
+  test("the layout hands readers the index key from meta", async () => {
+    const { asset } = await uploaded();
+    expect(archiveSource(assetLayouts(asset, null)[0])?.index).toBe(containerIndexKey(`assets/${asset.id}`));
+  });
+
+  test("a missing index object still serves the entry", async () => {
+    const { storage, asset } = await uploaded();
+    await storage.delete(containerIndexKey(`assets/${asset.id}`));
+    expect(await readEntry(storage, asset, entry)).toBe('{"i":4321}');
+  });
+
+  test("a garbage index object still serves the entry", async () => {
+    const { storage, asset } = await uploaded();
+    const garbage = text("SRVCIDX1 but not really an index at all");
+    await storage.put(containerIndexKey(`assets/${asset.id}`), new Blob([garbage as BlobPart]).stream(), "application/octet-stream", garbage.byteLength);
+    vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await readEntry(storage, asset, entry)).toBe('{"i":4321}');
   });
 });
