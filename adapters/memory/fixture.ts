@@ -13,7 +13,7 @@ import { createApp } from "../../core/app";
 import type { Deps } from "../../core/types";
 import type { AssetMetadata, AssetVersion } from "../../core/asset/model";
 import type { SiteHosting } from "../../shared/api";
-import type { AssetProtection, ListResult, MetadataStore, VersionStore } from "../../core/asset/repository";
+import { HoldLost, type AssetProtection, type ListResult, type MetadataStore, type VersionStore } from "../../core/asset/repository";
 import { hashPassword } from "../../core/access/password";
 import type { Session, SessionStore } from "../../core/session/repository";
 import { CERTIFICATE_RELEASED, type SiteHost, type SiteHostPatch, type SiteHostStore } from "../../core/site/repository";
@@ -415,10 +415,12 @@ export async function fixture(overrides?: Partial<Deps>) {
     versions,
     storage,
     writes: {
-      async createAsset({ asset }) {
+      async createAsset({ asset, guard }) {
+        if (guard && !compat.holds(guard)) throw new HoldLost();
         await metadata.save(asset);
       },
-      async createVersion({ version }) {
+      async createVersion({ version, guard }) {
+        if (guard && !compat.holds(guard)) throw new HoldLost();
         const numbers = [...versions.versions.values()].filter((v) => v.assetId === version.assetId).map((v) => v.version);
         return versions.save({ ...version, version: Math.max(0, ...numbers) + 1 });
       },

@@ -93,6 +93,24 @@ export interface VersionStore {
 }
 
 /**
+ * The hold a resumable upload's commit must still own when its asset or
+ * version row lands (ADR-019 §3): the upload session at `revision`, and the
+ * key's overwrite lease `token` when given. The adapter checks it in the same
+ * atomic write; when it no longer holds, nothing is written and the write
+ * throws `HoldLost`.
+ */
+export type WriteGuard = {
+  upload: { id: string; revision: number };
+  lease?: { bucket: string; key: string; token: string };
+};
+
+export class HoldLost extends Error {
+  constructor() {
+    super("the upload commit no longer holds its session or lease");
+  }
+}
+
+/**
  * Writes that must land together or not at all (ADR-012 §3).
  *
  * The individual stores above each issue one statement; an upload or a job
@@ -106,12 +124,12 @@ export interface VersionStore {
  */
 export interface AtomicWrites {
   /** A new asset, its optional extraction job, and storage-usage increments. */
-  createAsset(input: { asset: AssetMetadata; job?: Job; usageScopes?: string[] }): Promise<void>;
+  createAsset(input: { asset: AssetMetadata; job?: Job; usageScopes?: string[]; guard?: WriteGuard }): Promise<void>;
   /**
    * A new version, its optional extraction job, and storage-usage increments.
    * Returns the version with the number the store assigned (see `VersionStore.save`).
    */
-  createVersion(input: { version: AssetVersion; job?: Job; usageScopes?: string[] }): Promise<AssetVersion>;
+  createVersion(input: { version: AssetVersion; job?: Job; usageScopes?: string[]; guard?: WriteGuard }): Promise<AssetVersion>;
   /**
    * A job row plus the row that mirrors its status: the version for a
    * version's job, the asset otherwise. A version's job may still pass the

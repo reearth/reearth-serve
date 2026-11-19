@@ -1,4 +1,4 @@
-import type { AtomicWrites } from "../../core/asset/repository";
+import { HoldLost, type AtomicWrites, type WriteGuard } from "../../core/asset/repository";
 import type { SqlClient, SqlStatement } from "../../core/sql/port";
 import {
   ASSET_UPSERT_SQL, assetUpsertArgs,
@@ -9,7 +9,7 @@ import {
   CLEANUP_PENDING_ADD_SQL,
 } from "./stores";
 import { parseSiteHost, SITE_HOSTS_RELEASE_BY_ASSET_SQL } from "./site-hosts";
-import { compatDeleteByAsset } from "./compat";
+import { compatDeleteByAsset, compatHolds } from "./compat";
 
 // Runs before the version and asset rows are deleted in the same batch: it
 // reads their sizes, and the EXISTS guard skips it once the asset is gone.
@@ -31,23 +31,26 @@ const USAGE_DECREMENT_FOR_ASSET_SQL =
 export class SqlAtomicWrites implements AtomicWrites {
   constructor(private db: SqlClient) {}
 
-  async createAsset({ asset, job, usageScopes }: Parameters<AtomicWrites["createAsset"]>[0]): Promise<void> {
+  async createAsset({ asset, job, usageScopes, guard }: Parameters<AtomicWrites["createAsset"]>[0]): Promise<void> {
     const statements: SqlStatement[] = [];
     // The job row first: the asset's `jobId` points at it.
     if (job) statements.push({ sql: JOB_UPSERT_SQL, args: jobUpsertArgs(job) });
+    const assetIndex = statements.length;
     statements.push({ sql: ASSET_UPSERT_SQL, args: assetUpsertArgs(asset) });
     statements.push(...usageStatements(usageScopes, asset.size));
-    await this.db.batch(statements);
+    const results = await this.db.batch(guarded(statements, guard));
+    if (results[assetIndex].rowsAffected === 0) throw new HoldLost();
   }
 
-  async createVersion({ version, job, usageScopes }: Parameters<AtomicWrites["createVersion"]>[0]) {
+  async createVersion({ version, job, usageScopes, guard }: Parameters<AtomicWrites["createVersion"]>[0]) {
     const statements: SqlStatement[] = [];
     if (job) statements.push({ sql: JOB_UPSERT_SQL, args: jobUpsertArgs(job) });
     const versionIndex = statements.length;
     statements.push({ sql: VERSION_INSERT_SQL, args: versionInsertArgs(version) });
     statements.push(...usageStatements(usageScopes, version.size));
 
-    const results = await this.db.batch(statements);
+    const results = await this.db.batch(guarded(statements, guard));
+    if (results[versionIndex].rows.length === 0) throw new HoldLost();
     return { ...version, version: assignedVersion(results[versionIndex].rows) };
   }
 
@@ -75,6 +78,24 @@ export class SqlAtomicWrites implements AtomicWrites {
     if (version) statements.push({ sql: VERSION_EXTRACTION_UPDATE_SQL, args: versionExtractionUpdateArgs(version) });
     await this.db.batch(statements);
   }
+}
+
+function guarded(statements: SqlStatement[], guard: WriteGuard | undefined): SqlStatement[] {
+  if (!guard) return statements;
+  return statements.map(({ sql, args = [] }) => {
+    const open = sql.indexOf("VALUES (");
+    if (open < 0) throw new Error(`cannot guard a statement without VALUES: ${sql}`);
+    let close = open + "VALUES ".length;
+    for (let depth = 0; ; close++) {
+      if (sql[close] === "(") depth++;
+      else if (sql[close] === ")" && --depth === 0) break;
+    }
+    const holds = compatHolds(guard, args.length + 1);
+    return {
+      sql: `${sql.slice(0, open)}SELECT ${sql.slice(open + "VALUES (".length, close)} WHERE ${holds.sql}${sql.slice(close + 1)}`,
+      args: [...args, ...holds.args],
+    };
+  });
 }
 
 function usageStatements(scopes: string[] | undefined, sizeBytes: number): SqlStatement[] {

@@ -7,7 +7,8 @@ import {
   newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatStore, type DeleteBucketResult,
   type LeaseToken, type UploadTransition, type VersionRecord,
 } from "../../core/compat/repository";
-import type { Row, SqlClient, SqlStatement } from "../../core/sql/port";
+import type { WriteGuard } from "../../core/asset/repository";
+import type { Row, SqlClient, SqlStatement, SqlValue } from "../../core/sql/port";
 import { queryAll, queryFirst } from "./helpers";
 import { isServiceRole } from "../../core/auth/types";
 
@@ -130,7 +131,7 @@ export class SqlCompatStore implements CompatStore {
   async lease(bucket: BucketName, key: BindingKey, token: LeaseToken, now: number, staleBefore: number): Promise<boolean> {
     const result = await this.db.execute(
       `UPDATE compat_bindings SET lease_token = ?3, leased_at = ?4
-         WHERE bucket = ?1 AND key = ?2 AND asset_id IS NOT NULL AND (lease_token IS NULL OR leased_at < ?5)`,
+         WHERE bucket = ?1 AND key = ?2 AND asset_id IS NOT NULL AND (lease_token IS NULL OR lease_token = ?3 OR leased_at < ?5)`,
       [bucket, key, token, now, staleBefore],
     );
     return result.rowsAffected > 0;
@@ -268,6 +269,14 @@ export class SqlCompatStore implements CompatStore {
     ]);
     return { claims: claims.rowsAffected, leases: leases.rowsAffected };
   }
+}
+
+export function compatHolds(guard: WriteGuard, firstParam: number): { sql: string; args: SqlValue[] } {
+  const upload = `EXISTS (SELECT 1 FROM compat_uploads WHERE id = ?${firstParam} AND revision = ?${firstParam + 1})`;
+  const args: SqlValue[] = [guard.upload.id, guard.upload.revision];
+  if (!guard.lease) return { sql: upload, args };
+  const lease = `EXISTS (SELECT 1 FROM compat_bindings WHERE bucket = ?${firstParam + 2} AND key = ?${firstParam + 3} AND lease_token = ?${firstParam + 4})`;
+  return { sql: `${upload} AND ${lease}`, args: [...args, guard.lease.bucket, guard.lease.key, guard.lease.token] };
 }
 
 /** Runs inside `SqlAtomicWrites.deleteAsset`'s batch, so the rows go only if the asset row goes too. */
