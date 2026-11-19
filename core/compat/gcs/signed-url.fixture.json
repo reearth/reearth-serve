@@ -1,0 +1,14 @@
+{
+  "url": "https://storage.example.test:8443/media/assets/ab/cdef0123/my%20file%20%281%29%2B%E3%83%87%E3%83%BC%E3%82%BF.geojson?X-Goog-Algorithm=GOOG4-RSA-SHA256&X-Goog-Credential=fixture0000000001%40storage.example.test%2F20261119%2Fauto%2Fstorage%2Fgoog4_request&X-Goog-Date=20261119T150011Z&X-Goog-Expires=899&X-Goog-Signature=8a7295c9abf13e357f6adb04342abfcc5a5e494b9374e172bf9c10901c9c00560364af3187d0966b4350601122b415cde1bc7e56aaba77107a29bdd68b24f434b9ac334d58593955af8dbb414c3b352159081aa7500a4f4a96f68ef5d303c5b1aa983813af17cee17c94f9c54b8aea3443f614871a5164871a9df650112a286fe2a7c72a5004d38a5028cc21af996b828631853a1db634c830658871bafb19f9074f525d0a7621e358eb918fd9f8bd734f6cee205db0ef38a373a9ca8bc2b15f248781005c4b6e172bc1a3192487f084da261d1dc5c1c367cffe35b12f171dc0f17edb56da2c805ca43c234215ff05cd2ee7a0d0a9be6166e88fd3f64ce0e206&X-Goog-SignedHeaders=content-encoding%3Bcontent-type%3Bhost&x-app-project=p1&x-app-public=true&x-app-workspace=ws+1",
+  "apiHost": "storage.example.test:8443",
+  "clientEmail": "fixture0000000001@storage.example.test",
+  "publicJwk": {
+    "e": "AQAB",
+    "kty": "RSA",
+    "n": "0wPaM38UZJkpzpjHqnjiQRslvC14AK8j1-3Sv0ubwr4r-SVLFfMJ58ZN5J6DBku9YRDuj9XDjvJT_i0YJBhLwU4_m9mO33_AccFOlWVQEUKfSfsBgM_ZmkIeyutK6RkNAB5bClB9fmleyCiQF5RC6ziny6qzZFvoB0XpdR77gfDbaej0sD7n2I4aXADrMlDnECuxl12AgarRai8OeRvE7WZVOoSvou21yZH0XJ9gj3gaNV9eFErKkg-R86ODMRRwe9Hs5ZFpGdQPughELVkeKv7_61sTJXQedFJZCQqJMZzniUQTDlxEIcb87lcEEN4ZxVXEia-_5swRtnz8qbtvHQ"
+  },
+  "bucket": "media",
+  "key": "assets/ab/cdef0123/my file (1)+データ.geojson",
+  "contentType": "application/geo+json",
+  "contentEncoding": "gzip"
+}

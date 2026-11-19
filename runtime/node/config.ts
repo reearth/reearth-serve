@@ -8,6 +8,7 @@ import { parseTenancyConfig, type TenancyConfig } from "../../adapters/tenancy";
 
 import { parseCredentialedOrigins } from "../../core/file/cors";
 import { parseCompatHosts } from "../../core/compat/hosts";
+import { parseSignedPathPrefix } from "../../core/compat/gcs/signed-url";
 import { checkSiteIsolation } from "../../core/site/isolation";
 
 export type ContainerLauncherKind = "none";
@@ -78,6 +79,7 @@ export type NodeConfig = {
   deliveryTokenKeys: DeliveryKeyRing | null;
   compatApiHost: string | undefined;
   compatObjectsHost: string | undefined;
+  compatSignedPathPrefix: string | null;
 };
 
 const DEFAULT_PORT = 8788;
@@ -116,6 +118,7 @@ export function loadConfig(env: Env): NodeConfig {
     deliveryTokenKeys: env.DELIVERY_TOKEN_KEYS ? parseDeliveryTokenKeys(env.DELIVERY_TOKEN_KEYS) : null,
     compatApiHost: compatHosts.api,
     compatObjectsHost: compatHosts.objects,
+    compatSignedPathPrefix: parseSignedPathPrefix(env.COMPAT_SIGNED_PATH_PREFIX),
   };
 }
 

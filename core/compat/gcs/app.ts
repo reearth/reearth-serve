@@ -1,15 +1,16 @@
-import { Hono, type Context } from "hono";
+import { Hono, type Context, type MiddlewareHandler } from "hono";
 import type { Deps } from "../../types";
 import { createHasher, base64Of, crc32cBase64, fromBase64 } from "../hash";
 import { objectLayer, type ObjectLayerDeps } from "../layer";
 import { MAX_LIST_RESULTS, type ListQuery } from "../list";
-import { parseObjectKey, type ExactHashes, type PutMeta, type SizedBody } from "../model";
+import { parseObjectKey, type ExactHashes, type ObjectKey, type PutMeta, type SizedBody } from "../model";
 import { resumableUploads, type Chunk, type DeclaredHashes, type UploadStatus } from "../upload";
 import { exchangeAssertion, gcsAuth, type GcsEnv, type TokenError } from "./auth";
 import { boundaryOf, MULTIPART_MAX_BYTES, parseRelated, readCapped } from "./multipart";
-import { compatErrorResponse, gcsError, listResource, objectResource, surfaceOf } from "./wire";
+import { objectPathOf } from "./signed-url";
+import { compatErrorResponse, gcsError, listResource, objectResource, surfaceOf, xmlObjectHeaders } from "./wire";
 
-export type GcsDeps = ObjectLayerDeps & Pick<Deps, "signingSecret">;
+export type GcsDeps = ObjectLayerDeps & Pick<Deps, "signingSecret" | "credentialedOrigins" | "compatSignedPathPrefix">;
 
 /** The Go client sends every list parameter, so an empty value means the parameter is absent. */
 function queryOf(c: Context<GcsEnv>, name: string): string | null {
@@ -92,7 +93,9 @@ export function gcsApp(deps: GcsDeps, apiOrigin: string) {
     return result.ok ? c.json(result.value) : c.json(result.value, result.status);
   });
 
-  app.use("*", gcsAuth(deps.compat, tokenConfig));
+  app.use("*", browserCors(deps.credentialedOrigins));
+  app.options("*", (c) => c.body(null, 204));
+  app.use("*", gcsAuth(deps.compat, { ...tokenConfig, signedPathPrefix: deps.compatSignedPathPrefix }));
 
   app.get("/storage/v1/b/:bucket/o", async (c) => {
     const unsupported = unsupportedListing(c);
@@ -172,8 +175,53 @@ export function gcsApp(deps: GcsDeps, apiOrigin: string) {
     return c.json(objectResource(result.value, apiOrigin));
   });
 
+  app.put("*", async (c) => {
+    if (surfaceOf(c.req.path) === "json") return gcsError("json", "not_implemented");
+    const target = xmlObjectOf(new URL(c.req.url).pathname, deps.compatSignedPathPrefix);
+    if (!target) return gcsError("xml", "invalid", "Invalid object name.");
+    const length = c.req.header("Content-Length");
+    if (length === undefined || !/^\d+$/.test(length)) return gcsError("xml", "length_required");
+    const meta: PutMeta = {
+      contentType: c.req.header("Content-Type") ?? "application/octet-stream",
+      contentEncoding: c.req.header("Content-Encoding") ?? null,
+      userMeta: {},
+      ifGenerationMatch: null,
+    };
+    const body = { stream: c.req.raw.body ?? streamOf(new Uint8Array(0)), size: Number(length) };
+    const result = await layerOf(c).put(target.bucket, target.key, meta, body);
+    if (!result.ok) return compatErrorResponse("xml", result.error, `${target.bucket}/${target.key}`);
+    return c.body(null, 200, xmlObjectHeaders(result.value));
+  });
+
   app.all("*", (c) => gcsError(surfaceOf(c.req.path), "not_implemented"));
   return app;
+}
+
+function xmlObjectOf(rawPath: string, prefix: string | null): { bucket: string; key: ObjectKey } | null {
+  const path = objectPathOf(rawPath, prefix);
+  const slash = path?.indexOf("/") ?? -1;
+  if (!path || slash < 1) return null;
+  const key = parseObjectKey(path.slice(slash + 1));
+  return key ? { bucket: path.slice(0, slash), key } : null;
+}
+
+function browserCors(origins: readonly string[]): MiddlewareHandler<GcsEnv> {
+  return async (c, next) => {
+    const origin = c.req.header("Origin");
+    await next();
+    if (!origin || !origins.includes(origin)) return;
+    const headers = c.res.headers;
+    headers.set("Access-Control-Allow-Origin", origin);
+    headers.append("Vary", "Origin");
+    if (c.req.method === "OPTIONS") {
+      headers.set("Access-Control-Allow-Methods", "GET, HEAD, PUT, POST, DELETE");
+      const requested = c.req.header("Access-Control-Request-Headers");
+      if (requested) headers.set("Access-Control-Allow-Headers", requested);
+      headers.set("Access-Control-Max-Age", "3600");
+    } else {
+      headers.set("Access-Control-Expose-Headers", "ETag, x-goog-generation, x-goog-hash");
+    }
+  };
 }
 
 type Upload = { name: string | null; meta: Omit<PutMeta, "ifGenerationMatch">; body: SizedBody };

@@ -7,6 +7,7 @@ import { issueCredential, type KeyFile } from "../credential";
 import type { BucketName, CredentialId, ObjectKey } from "../model";
 import type { ServiceRole } from "../../auth/types";
 import { contentRangeOf, declaredHashesOf } from "./app";
+import { canonicalRequest, parseSignedUrl } from "./signed-url";
 
 const API_HOST = "storage.example.test";
 const API = `https://${API_HOST}`;
@@ -443,5 +444,158 @@ describe("hosts", () => {
   test("with the layer off, the would-be API host falls through to the app", async () => {
     const f = await compatFixture({ compatApiHost: undefined, compatObjectsHost: undefined });
     expect((await onApi(f, "/api/v1/health")).status).toBe(200);
+  });
+});
+
+describe("V4 signed URLs", () => {
+  type SignOptions = {
+    method?: string; path?: string; contentType?: string; contentEncoding?: string; expires?: number; signedAt?: number;
+  };
+
+  const timestampOf = (ms: number) => new Date(ms).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+
+  async function signedUrl(keyFile: KeyFile, opts: SignOptions = {}): Promise<string> {
+    const timestamp = timestampOf(opts.signedAt ?? Date.now());
+    const signedHeaders = ["content-encoding", "content-type", "host"].filter((h) =>
+      h === "host" || (h === "content-type" ? opts.contentType : opts.contentEncoding) !== undefined);
+    const url = new URL(`${API}${opts.path ?? "/media/assets/ab/signed.txt"}`);
+    const scope = `${timestamp.slice(0, 8)}/auto/storage/goog4_request`;
+    for (const [k, v] of Object.entries({
+      "X-Goog-Algorithm": "GOOG4-RSA-SHA256",
+      "X-Goog-Credential": `${keyFile.client_email}/${scope}`,
+      "X-Goog-Date": timestamp,
+      "X-Goog-Expires": String(opts.expires ?? 900),
+      "X-Goog-SignedHeaders": signedHeaders.join(";"),
+      "x-app-workspace": "ws1",
+      "x-app-project": "p1",
+      "x-app-public": "true",
+    })) url.searchParams.set(k, v);
+    const headers = new Headers();
+    if (opts.contentType) headers.set("Content-Type", opts.contentType);
+    if (opts.contentEncoding) headers.set("Content-Encoding", opts.contentEncoding);
+    const claim = { ...parseSignedUrl(new URL(`${url}&X-Goog-Signature=00`))!, signedHeaders };
+    const canonical = canonicalRequest({ method: opts.method ?? "PUT", url, headers }, claim, { apiHost: API_HOST, pathPrefix: null })!;
+    const digest = Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical))).toString("hex");
+    const key = await crypto.subtle.importKey(
+      "pkcs8", Buffer.from(keyFile.private_key.replace(/-----[^-]+-----|\s/g, ""), "base64"),
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"],
+    );
+    const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(
+      ["GOOG4-RSA-SHA256", timestamp, scope, digest].join("\n"),
+    ));
+    url.searchParams.set("X-Goog-Signature", Buffer.from(signature).toString("hex"));
+    return url.toString();
+  }
+
+  const put = (f: Fixture, url: string, body: string, headers: Record<string, string> = {}) =>
+    f.app.request(url, { method: "PUT", headers: { Host: API_HOST, "Content-Length": String(body.length), ...headers }, body });
+
+  async function editor(overrides: Partial<Deps> = {}) {
+    const f = await compatFixture(overrides);
+    const keyFile = await keyFor(f, "editor");
+    return { f, keyFile, headers: bearer(await accessToken(f, keyFile)) };
+  }
+
+  const cms = { contentType: "application/geo+json", contentEncoding: "gzip" };
+  const cmsHeaders = { "Content-Type": cms.contentType, "Content-Encoding": cms.contentEncoding };
+
+  test("a signed PUT with an application's options (content type, Content-Encoding, extra query parameters) stores the bytes with the signed content type and encoding", async () => {
+    const { f, keyFile, headers } = await editor();
+    const res = await put(f, await signedUrl(keyFile, cms), "small body", cmsHeaders);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-goog-hash")).toBe("crc32c=Yk9x6g==,md5=KJ2vAHjAOf4oawDFYf2glw==");
+    expect(res.headers.get("x-goog-generation")).toMatch(/^\d{16}$/);
+    const got = await onApi(f, "/storage/v1/b/media/o/assets%2Fab%2Fsigned.txt", { headers });
+    expect(await got.json()).toMatchObject({
+      name: "assets/ab/signed.txt", contentType: "application/geo+json", contentEncoding: "gzip", size: "10", md5Hash: "KJ2vAHjAOf4oawDFYf2glw==",
+    });
+  });
+
+  test("a changed content type is SignatureDoesNotMatch in the XML shape", async () => {
+    const { f, keyFile } = await editor();
+    const res = await put(f, await signedUrl(keyFile, cms), "x", { ...cmsHeaders, "Content-Type": "text/plain" });
+    expect(res.status).toBe(403);
+    expect(await res.text()).toContain("<Code>SignatureDoesNotMatch</Code>");
+  });
+
+  test("the URL writes only its own key, and only with its own method", async () => {
+    const { f, keyFile } = await editor();
+    const url = await signedUrl(keyFile, cms);
+    expect((await put(f, url.replace("signed.txt", "other.txt"), "x", cmsHeaders)).status).toBe(403);
+    const get = await f.app.request(url, { headers: { Host: API_HOST, ...cmsHeaders } });
+    expect(get.status).toBe(403);
+    expect(await get.text()).toContain("<Code>SignatureDoesNotMatch</Code>");
+  });
+
+  test("an expired URL is ExpiredToken 400", async () => {
+    const { f, keyFile } = await editor();
+    const res = await put(f, await signedUrl(keyFile, { ...cms, expires: 1, signedAt: Date.now() - 5_000 }), "x", cmsHeaders);
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("<Code>ExpiredToken</Code>");
+  });
+
+  test("a revoked credential's URL is refused", async () => {
+    const { f, keyFile } = await editor();
+    const url = await signedUrl(keyFile, cms);
+    await f.compat.revokeCredential("p1", keyFile.private_key_id as CredentialId, Date.now());
+    const res = await put(f, url, "x", cmsHeaders);
+    expect(res.status).toBe(403);
+    expect(await res.text()).toContain("<Code>AccessDenied</Code>");
+  });
+
+  test("a viewer's signed PUT is refused by the layer", async () => {
+    const f = await compatFixture();
+    const res = await put(f, await signedUrl(await keyFor(f, "viewer"), cms), "x", cmsHeaders);
+    expect(res.status).toBe(403);
+  });
+
+  test("a PUT without Content-Length is 411", async () => {
+    const { f, keyFile } = await editor();
+    const res = await f.app.request(await signedUrl(keyFile), {
+      method: "PUT", headers: { Host: API_HOST }, body: new Blob(["abc"]).stream(), duplex: "half",
+    } as RequestInit);
+    expect(res.status).toBe(411);
+  });
+
+  test("with COMPAT_SIGNED_PATH_PREFIX, a URL rewritten under the prefix still writes the object", async () => {
+    const { f, keyFile, headers } = await editor({ compatSignedPathPrefix: "/uploads" });
+    const rewritten = new URL(await signedUrl(keyFile, cms));
+    rewritten.pathname = `/uploads${rewritten.pathname}`;
+    expect((await put(f, rewritten.toString(), "small body", cmsHeaders)).status).toBe(200);
+    expect((await onApi(f, "/storage/v1/b/media/o/assets%2Fab%2Fsigned.txt", { headers })).status).toBe(200);
+  });
+
+  test("a bearer XML PUT writes the object too", async () => {
+    const { f, headers } = await editor();
+    const res = await put(f, `${API}/media/assets/ab/bearer.txt`, "abc", { ...headers, "Content-Type": "text/plain" });
+    expect(res.status).toBe(200);
+  });
+
+  describe("browser CORS", () => {
+    const ORIGIN = "https://cms.example.test";
+
+    test("a preflight from a configured origin is allowed, and the PUT's response is readable", async () => {
+      const { f, keyFile } = await editor({ credentialedOrigins: [ORIGIN] });
+      const url = await signedUrl(keyFile, cms);
+      const preflight = await f.app.request(url, {
+        method: "OPTIONS",
+        headers: { Host: API_HOST, Origin: ORIGIN, "Access-Control-Request-Method": "PUT", "Access-Control-Request-Headers": "content-type,content-encoding" },
+      });
+      expect(preflight.status).toBe(204);
+      expect(preflight.headers.get("Access-Control-Allow-Origin")).toBe(ORIGIN);
+      expect(preflight.headers.get("Access-Control-Allow-Methods")).toContain("PUT");
+      expect(preflight.headers.get("Access-Control-Allow-Headers")).toBe("content-type,content-encoding");
+      const res = await put(f, url, "abc", { ...cmsHeaders, Origin: ORIGIN });
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Access-Control-Allow-Origin")).toBe(ORIGIN);
+    });
+
+    test("another origin gets no CORS headers", async () => {
+      const { f, keyFile } = await editor({ credentialedOrigins: [ORIGIN] });
+      const preflight = await f.app.request(await signedUrl(keyFile, cms), {
+        method: "OPTIONS", headers: { Host: API_HOST, Origin: "https://evil.example", "Access-Control-Request-Method": "PUT" },
+      });
+      expect(preflight.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    });
   });
 });

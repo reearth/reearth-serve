@@ -3,7 +3,8 @@ import { SignJWT, decodeJwt, decodeProtectedHeader, importJWK, jwtVerify, type J
 import type { ServicePrincipal } from "../../auth/types";
 import type { CompatCredential, CredentialId } from "../model";
 import type { CompatStore } from "../repository";
-import { gcsError, surfaceOf } from "./wire";
+import { isSignedRequest, verifySignedUrl, type SignedUrlFailure } from "./signed-url";
+import { gcsError, surfaceOf, type GcsErrorCode } from "./wire";
 
 export type GcsEnv = { Variables: { service: ServicePrincipal } };
 
@@ -165,8 +166,31 @@ export function servicePrincipal(credential: CompatCredential): ServicePrincipal
   };
 }
 
-export function gcsAuth(store: CredentialLookup, cfg: Omit<TokenConfig, "now">): MiddlewareHandler<GcsEnv> {
+export type GcsAuthConfig = Omit<TokenConfig, "now"> & { signedPathPrefix: string | null };
+
+const SIGNED_URL_ERRORS: Record<SignedUrlFailure, [GcsErrorCode, string?]> = {
+  malformed: ["invalid", "Invalid signed URL."],
+  not_yet_valid: ["invalid", "The signed URL is not yet valid."],
+  expired: ["expired_token"],
+  unknown_credential: ["forbidden"],
+  signature_mismatch: ["signature_mismatch"],
+  unsupported: ["not_implemented", "Not implemented: signed x-goog-content-sha256."],
+};
+
+export function gcsAuth(store: CredentialLookup, cfg: GcsAuthConfig): MiddlewareHandler<GcsEnv> {
+  const apiHost = new URL(cfg.apiOrigin).host;
   return async (c, next) => {
+    const url = new URL(c.req.url);
+    if (isSignedRequest(url)) {
+      const result = await verifySignedUrl(
+        store,
+        { method: c.req.method, url, headers: c.req.raw.headers },
+        { apiHost, pathPrefix: cfg.signedPathPrefix, now: Date.now() },
+      );
+      if (!result.ok) return gcsError(surfaceOf(c.req.path), ...SIGNED_URL_ERRORS[result.failure]);
+      c.set("service", servicePrincipal(result.credential));
+      return next();
+    }
     const bearer = /^Bearer\s+(\S+)$/i.exec(c.req.header("Authorization") ?? "")?.[1];
     const credential = bearer ? await verifyBearer(store, bearer, { ...cfg, now: Date.now() }) : null;
     if (!credential) return gcsError(surfaceOf(c.req.path), "unauthenticated");

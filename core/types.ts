@@ -127,6 +127,7 @@ export type Deps = ContextDeps & {
   limits: Limits;
   deliveryTokens: DeliveryTokenCodec | null;
   compatObjectsHost: string | undefined;
+  compatSignedPathPrefix: string | null;
   serviceAuthorizer: Authorizer;
 };
 

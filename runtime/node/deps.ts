@@ -111,6 +111,7 @@ export function buildNodeRuntime(env: Env = process.env): NodeRuntime {
     compat: new SqlCompatStore(sql),
     compatApiHost: config.compatApiHost,
     compatObjectsHost: config.compatObjectsHost,
+    compatSignedPathPrefix: config.compatSignedPathPrefix,
     serviceAuthorizer: serviceAuthorizer(config.tenancy),
     auth: {
       issuer: config.oidcIssuerUrl,

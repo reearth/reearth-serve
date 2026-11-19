@@ -31,6 +31,7 @@ export function docOnlyDeps(): Deps {
       siteHostSuffix: undefined,
       compatApiHost: undefined,
       compatObjectsHost: undefined,
+      compatSignedPathPrefix: null,
       tenancy: { enter: async () => ({ user: null, scope: unused as TenantScope }) },
     } as Partial<Deps>,
     { get: (target, key: string) => (key in target ? target[key as keyof Deps] : unused) },
