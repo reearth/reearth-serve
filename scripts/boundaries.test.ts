@@ -13,9 +13,10 @@ const RULES = [
   "4: only core/auth/access.ts calls Authorizer.check",
   "5: only adapters/ reveal a bearer credential",
   "6: outside tests, adapters/accounts/ loads only through a dynamic import",
+  "7: core/archive/ is imported only through its index",
 ] as const;
 type Rule = (typeof RULES)[number];
-const [LAYERING, ACCOUNTS_INDEX, NEUTRAL_NAMES, ONE_DECISION_PATH, CREDENTIAL_REVEAL, LAZY_ACCOUNTS] = RULES;
+const [LAYERING, ACCOUNTS_INDEX, NEUTRAL_NAMES, ONE_DECISION_PATH, CREDENTIAL_REVEAL, LAZY_ACCOUNTS, ARCHIVE_INDEX] = RULES;
 
 const SOURCE_ROOTS = ["app", "adapters", "cli", "core", "e2e", "runtime", "shared"];
 const IMPORT_SPECIFIER = /(?:\bfrom\s*|\bimport\s*\(?\s*)["']([^"']+)["']/g;
@@ -55,10 +56,13 @@ function rulesBrokenBy(file: SourceFile): Rule[] {
   if (neutral && !file.path.endsWith(".test.ts") && imports.some((target) => under(target, "adapters", "runtime"))) {
     broken.push(LAYERING);
   }
-  const accountsInternal = (target: string) =>
-    under(target, "adapters/accounts") && !/^adapters\/accounts(\/index(\.ts)?)?$/.test(target);
-  if (!under(file.path, "adapters/accounts") && imports.some(accountsInternal)) {
+  const internalTo = (dir: string) => (target: string) =>
+    under(target, dir) && target !== dir && target !== `${dir}/index` && target !== `${dir}/index.ts`;
+  if (!under(file.path, "adapters/accounts") && imports.some(internalTo("adapters/accounts"))) {
     broken.push(ACCOUNTS_INDEX);
+  }
+  if (!under(file.path, "core/archive") && imports.some(internalTo("core/archive"))) {
+    broken.push(ARCHIVE_INDEX);
   }
   const text = file.source.replace(ALLOWED_NAMES, "");
   if (neutral && FORBIDDEN_NAMES.some((name) => name.test(text))) {
@@ -158,6 +162,16 @@ describe("each rule reports a planted file", () => {
 
   test("rule 4 accepts a check on something that is not the authorizer", () => {
     expect(reported("core/project/handler.ts", 'const { authorizer: a } = c.get("tenancy");\nawait other.check(a);')).toEqual([]);
+  });
+
+  test("rule 7 reports a file outside core/archive/ importing past its index", () => {
+    expect(reported("core/asset/handler/list-files.ts", 'import { buildTable } from "../../archive/table";'))
+      .toEqual([{ rule: ARCHIVE_INDEX, path: "core/asset/handler/list-files.ts" }]);
+    expect(reported("e2e/archive.test.ts", 'import type { CdRecord } from "../core/archive/zip/directory";'))
+      .toEqual([{ rule: ARCHIVE_INDEX, path: "e2e/archive.test.ts" }]);
+    expect(reported("core/asset/handler/list-files.ts", 'import { openArchive } from "../../archive";')).toEqual([]);
+    expect(reported("runtime/node/deps.ts", 'import { createArchiveCache } from "../../core/archive/index";')).toEqual([]);
+    expect(reported("core/archive/reader.ts", 'import { buildTable } from "./table";')).toEqual([]);
   });
 
   test.each([
