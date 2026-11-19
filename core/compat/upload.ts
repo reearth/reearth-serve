@@ -33,6 +33,10 @@ export type DeclaredHashes = { crc32c: number | null; md5: Uint8Array | null };
 type Open = Extract<UploadPhase, { state: "open" }>;
 type Committing = Extract<UploadPhase, { state: "committing" }>;
 
+function ownedAt(phase: UploadPhase, at: number): boolean {
+  return phase.state === "committing" && phase.owner !== null && phase.owner.since >= at - HOLD_STALE_MS;
+}
+
 const invalid = (message: string): ChunkDecision => ({ kind: "reject", error: { code: "invalid", message } });
 
 export function applyChunk(session: UploadSession, chunk: Chunk, now: number): ChunkDecision {
@@ -194,7 +198,7 @@ export function resumableUploads(
   }
 
   async function takeOver(session: UploadSession, phase: Committing): Promise<Result<UploadStatus>> {
-    if (phase.owner && phase.owner.since >= now() - HOLD_STALE_MS) return fail({ code: "busy" });
+    if (ownedAt(phase, now())) return fail({ code: "busy" });
     const token = crypto.randomUUID();
     const next: Committing = { ...phase, owner: heldBy(token), ownerTokens: [...phase.ownerTokens, token] };
     if (!(await compat.updateUpload(session.id, session.revision, next))) return settled(session.id);
@@ -204,18 +208,21 @@ export function resumableUploads(
   async function commit(session: UploadSession, held: Committing): Promise<Result<UploadStatus>> {
     let revision = session.revision;
     let current = held;
-    const [own, ...earlier] = await Promise.all([...held.ownerTokens].reverse().map((token) => commitIdsOf(session.id, token)));
+    const tokens = [...held.ownerTokens].reverse();
+    const [own, ...earlier] = await Promise.all(tokens.map((token) => commitIdsOf(session.id, token)));
+    const advance = async (next: Committing) => {
+      if (!(await compat.updateUpload(session.id, revision, next))) return false;
+      revision++;
+      current = next;
+      return true;
+    };
     const handle: UploadCommit = {
       ...own,
       earlier,
       overwritingAssetId: held.overwritingAssetId,
-      async overwrite(assetId) {
-        const next = { ...current, overwritingAssetId: assetId };
-        if (!(await compat.updateUpload(session.id, revision, next))) return false;
-        revision++;
-        current = next;
-        return true;
-      },
+      overwrite: (assetId) => advance({ ...current, overwritingAssetId: assetId }),
+      heartbeat: () => advance({ ...current, owner: heldBy(tokens[0]) }),
+      hold: () => ({ id: session.id, revision }),
       committedTransition: (result) => ({ id: session.id, revision, phase: { state: "committed", result } }),
     };
     const release = () => compat.updateUpload(session.id, revision, { ...current, owner: null });
@@ -298,7 +305,7 @@ export function resumableUploads(
       const found = await sessionFor(id, bucket);
       if (!found.ok) return found;
       const { phase, revision } = found.value;
-      if (phase.state === "committing" && phase.owner && phase.owner.since >= now() - HOLD_STALE_MS) return fail({ code: "busy" });
+      if (ownedAt(phase, now())) return fail({ code: "busy" });
       if (!(await compat.deleteUpload(id as UploadId, revision))) return fail({ code: "busy" });
       await dropStaging(id as UploadId);
       return { ok: true, value: undefined };
@@ -308,10 +315,12 @@ export function resumableUploads(
 
 export async function sweepUploads(deps: Pick<Deps, "compat" | "pendingCleanup">, now: number) {
   const expired = await deps.compat.listExpiredUploads(now, SWEEP_SESSIONS_PER_TICK);
+  let sessions = 0;
   for (const session of expired) {
+    if (ownedAt(session.phase, now) || !(await deps.compat.deleteUpload(session.id, session.revision))) continue;
     await deps.pendingCleanup.add(stagingPrefix(session.id));
-    await deps.compat.deleteUpload(session.id);
+    sessions++;
   }
   const holds = await deps.compat.sweepStaleHolds(now - HOLD_STALE_MS);
-  return { sessions: expired.length, ...holds };
+  return { sessions, ...holds };
 }

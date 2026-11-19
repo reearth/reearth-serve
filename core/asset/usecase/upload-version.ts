@@ -1,6 +1,6 @@
 import type { AssetVersion } from "../model";
 import { detectArchiveFormat } from "../model";
-import type { AtomicWrites, FileStorage, MetadataStore } from "../repository";
+import type { AtomicWrites, FileStorage, MetadataStore, WriteGuard } from "../repository";
 import type { Job } from "../../job/model";
 import { generateId, versionStorageKey } from "./shared";
 import { siteUrlFor } from "../../site/url";
@@ -30,7 +30,7 @@ export async function uploadVersion(
     originalSize?: number;
   },
   baseUrl: string,
-  options?: { extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string; versionId?: string; userMeta?: Record<string, unknown> },
+  options?: { extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string; versionId?: string; userMeta?: Record<string, unknown>; guard?: () => WriteGuard },
 ): Promise<UploadVersionResult | null> {
   const asset = await metadata.find(assetId);
   if (!asset) return null;
@@ -93,6 +93,7 @@ export async function uploadVersion(
       version: versionInput,
       job,
       usageScopes: asset.projectId ? options?.usageScopes : [],
+      guard: options?.guard?.(),
     });
 
     // Enqueue only after the rows are committed: the consumer reads them.

@@ -7,6 +7,7 @@ import {
   type LeaseToken, type UploadTransition, type VersionRecord,
 } from "../../core/compat/repository";
 import { isServiceRole } from "../../core/auth/types";
+import type { WriteGuard } from "../../core/asset/repository";
 
 type Row = {
   bucket: BucketName; key: string; kind: BindingKind; assetId: string | null; claimedAt: number; claimToken: ClaimToken;
@@ -86,7 +87,7 @@ export class MemoryCompatStore implements CompatStore {
   }
   async lease(bucket: BucketName, key: BindingKey, token: LeaseToken, now: number, staleBefore: number): Promise<boolean> {
     const row = this.bindings.get(rowKey(bucket, key));
-    if (!row || row.assetId === null || (row.lease !== null && row.lease.at >= staleBefore)) return false;
+    if (!row || row.assetId === null || (row.lease !== null && row.lease.token !== token && row.lease.at >= staleBefore)) return false;
     row.lease = { token, at: now };
     return true;
   }
@@ -179,6 +180,12 @@ export class MemoryCompatStore implements CompatStore {
       }
     }
     return { claims, leases };
+  }
+
+  holds(guard: WriteGuard): boolean {
+    if (this.uploads.get(guard.upload.id)?.revision !== guard.upload.revision) return false;
+    if (!guard.lease) return true;
+    return this.bindings.get(rowKey(guard.lease.bucket, guard.lease.key))?.lease?.token === guard.lease.token;
   }
 
   dropAsset(assetId: string): void {

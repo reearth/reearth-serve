@@ -1,5 +1,6 @@
 import type { Deps } from "../types";
 import type { AssetMetadata, AssetVersion } from "../asset/model";
+import { HoldLost, type WriteGuard } from "../asset/repository";
 import type { Project } from "../project/model";
 import { authorizeService } from "../auth/access";
 import type { ProjectAction } from "../auth/permissions";
@@ -12,7 +13,7 @@ import { updateAsset } from "../asset/usecase/update-asset";
 import { siteHostDepsFrom } from "../site/handler";
 import { hashingStream, type HashingStream } from "./hash";
 import { listPage, type ListQuery } from "./list";
-import { newLeaseToken, type ClaimToken, type UploadTransition, type VersionRecord } from "./repository";
+import { newLeaseToken, type ClaimToken, type LeaseToken, type UploadTransition, type VersionRecord } from "./repository";
 import {
   parseBucketName,
   type Binding, type CompatBucket, type CompatError, type ExactHashes, type ObjectInfo, type ObjectKey,
@@ -34,6 +35,8 @@ export type UploadCommit = CommitIds & {
   earlier: CommitIds[];
   overwritingAssetId: string | null;
   overwrite(assetId: string): Promise<boolean>;
+  heartbeat(): Promise<boolean>;
+  hold(): WriteGuard["upload"];
   committedTransition(result: ObjectInfo): UploadTransition;
 };
 
@@ -45,6 +48,8 @@ export interface ObjectLayer {
 }
 
 export const HOLD_STALE_MS = 10 * 60 * 1000;
+
+const HEARTBEAT_MS = HOLD_STALE_MS / 4;
 
 /**
  * Each listed object costs a few point reads, and a Worker invocation may run
@@ -103,7 +108,8 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
   }
 
   async function writeVersion(
-    bucket: CompatBucket, key: ObjectKey, scopes: string[], meta: PutMeta, body: SizedBody, asset: AssetMetadata, versionId?: string,
+    bucket: CompatBucket, key: ObjectKey, scopes: string[], meta: PutMeta, body: SizedBody, asset: AssetMetadata,
+    held?: { versionId: string; guard: () => WriteGuard; lost(): boolean },
   ): Promise<Result<ObjectInfo>> {
     const checked = lengthCheckedBody(body);
     let result: UploadVersionResult | null;
@@ -114,9 +120,10 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
         usageScopes: scopes,
         siteHostSuffix: deps.siteHostSuffix,
         userMeta: meta.userMeta,
-        ...(versionId && { versionId }),
+        ...(held && { versionId: held.versionId, guard: held.guard }),
       });
     } catch (e) {
+      if (e instanceof HoldLost || held?.lost()) return fail({ code: "busy" });
       if (checked.lengthMismatched()) return fail(LENGTH_MISMATCH);
       throw e;
     }
@@ -136,10 +143,9 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
   async function writeAsset(
     bucket: CompatBucket, key: ObjectKey, scopes: string[], meta: PutMeta, body: SizedBody, token: ClaimToken, commit?: UploadCommit,
   ): Promise<Result<ObjectInfo>> {
-    for (const earlier of commit?.earlier ?? []) {
-      const left = await deps.metadata.find(earlier.assetId);
-      if (left) await removeAsset(left, scopes);
-    }
+    if (commit) await dropEarlierAssets(commit, scopes, null);
+    const beat = commit ? beating(body.stream, () => commit.heartbeat()) : null;
+    if (beat) body = { ...body, stream: beat.stream };
     const checked = lengthCheckedBody(body);
     try {
       const { asset } = await uploadAsset(deps.writes, deps.storage, fileOf(key, meta, body, checked.stream), deps.ttlSeconds, deps.baseUrl, {
@@ -149,11 +155,12 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
         usageScopes: scopes,
         siteHostSuffix: deps.siteHostSuffix,
         userMeta: meta.userMeta,
-        ...(commit && { id: commit.assetId }),
+        ...(commit && { id: commit.assetId, guard: () => ({ upload: commit.hold() }) }),
       });
       return await bindAsset(bucket, key, scopes, token, asset, await checked.digest(), commit);
     } catch (e) {
       await compat.releaseClaim(bucket.name, key, token);
+      if (e instanceof HoldLost || beat?.lost()) return fail({ code: "busy" });
       if (checked.lengthMismatched()) return fail(LENGTH_MISMATCH);
       throw e;
     }
@@ -175,11 +182,11 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
   ): Promise<Result<ObjectInfo>> {
     const update = await authorized(raw, "update_asset");
     if (!update.ok) return update;
-    return leased(bucket, key, async () => {
+    return leased(bucket, key, async (lease) => {
       const live = await resolve(bucket, key);
       if (!live) return fail({ code: "busy" });
       if (!commit) return preconditioned(bucket, meta, live, () => writeVersion(bucket, key, scopes, meta, body, live.asset));
-      const result = await commitVersion(bucket, key, scopes, meta, body, live, commit);
+      const result = await commitVersion(bucket, key, scopes, meta, body, live, commit, lease);
       if (!result.ok) return result;
       const done = commit.committedTransition(result.value);
       return (await compat.updateUpload(done.id, done.revision, done.phase)) ? result : fail({ code: "busy" });
@@ -197,8 +204,10 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
 
   async function commitVersion(
     bucket: CompatBucket, key: ObjectKey, scopes: string[], meta: PutMeta, body: SizedBody, live: Resolved, commit: UploadCommit,
+    lease: LeaseToken,
   ): Promise<Result<ObjectInfo>> {
     if (commit.overwritingAssetId !== null && commit.overwritingAssetId !== live.asset.id) return fail({ code: "precondition_failed" });
+    await dropEarlierAssets(commit, scopes, live.asset.id);
     for (const earlier of commit.earlier) {
       const written = await deps.versions.find(earlier.versionId);
       if (written?.assetId === live.asset.id && body.hashes) {
@@ -208,16 +217,53 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
     }
     return preconditioned(bucket, meta, live, async () => {
       if (commit.overwritingAssetId === null && !(await commit.overwrite(live.asset.id))) return fail({ code: "busy" });
-      return writeVersion(bucket, key, scopes, meta, body, live.asset, commit.versionId);
+      const beat = beating(body.stream, async () => (await takeLease(bucket, key, lease)) && commit.heartbeat());
+      return writeVersion(bucket, key, scopes, meta, { ...body, stream: beat.stream }, live.asset, {
+        versionId: commit.versionId,
+        guard: () => ({ upload: commit.hold(), lease: { bucket: bucket.name, key, token: lease } }),
+        lost: beat.lost,
+      });
     });
   }
 
-  async function leased<T>(bucket: CompatBucket, key: ObjectKey, work: () => Promise<Result<T>>): Promise<Result<T>> {
-    const token = newLeaseToken();
+  async function dropEarlierAssets(commit: UploadCommit, scopes: string[], live: string | null): Promise<void> {
+    for (const earlier of commit.earlier) {
+      if (earlier.assetId === live) continue;
+      const left = await deps.metadata.find(earlier.assetId);
+      if (left) await removeAsset(left, scopes);
+    }
+  }
+
+  function takeLease(bucket: CompatBucket, key: ObjectKey, token: LeaseToken): Promise<boolean> {
     const at = now();
-    if (!(await compat.lease(bucket.name, key, token, at, at - HOLD_STALE_MS))) return fail({ code: "busy" });
+    return compat.lease(bucket.name, key, token, at, at - HOLD_STALE_MS);
+  }
+
+  function beating(source: ReadableStream<Uint8Array>, beat: () => Promise<boolean>): { stream: ReadableStream<Uint8Array>; lost(): boolean } {
+    const reader = source.getReader();
+    let last = now();
+    let lost = false;
+    const stream = new ReadableStream<Uint8Array>({
+      async pull(controller) {
+        if (now() - last >= HEARTBEAT_MS) {
+          lost = !(await beat());
+          if (lost) throw new HoldLost();
+          last = now();
+        }
+        const { done, value } = await reader.read();
+        if (done) controller.close();
+        else controller.enqueue(value);
+      },
+      cancel: (reason) => reader.cancel(reason),
+    }, { highWaterMark: 0 });
+    return { stream, lost: () => lost };
+  }
+
+  async function leased<T>(bucket: CompatBucket, key: ObjectKey, work: (token: LeaseToken) => Promise<Result<T>>): Promise<Result<T>> {
+    const token = newLeaseToken();
+    if (!(await takeLease(bucket, key, token))) return fail({ code: "busy" });
     try {
-      return await work();
+      return await work(token);
     } finally {
       await compat.releaseLease(bucket.name, key, token);
     }
