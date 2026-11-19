@@ -4,7 +4,7 @@ import type { ArchiveCache, Built } from "./cache";
 import { contentTypeOf } from "./content-type";
 import { buildTable, createSurvey, type EntryTable, type NameRules, type TableEntry } from "./table";
 import { gzipMember, GZIP_HEADER_BYTES, GZIP_TRAILER_BYTES } from "./transmux";
-import { memoryView, scanView, type TableView } from "./views";
+import { IndexUnusable, memoryView, openIndexedView, scanView, type TableView } from "./views";
 import { chunks, createDirectoryParser, locateDirectory, readAll, type Directory, type DirectoryRefusal } from "./zip/directory";
 import { readEntryBytes, type ArchiveObject, type Span } from "./zip/entry";
 
@@ -88,21 +88,68 @@ export interface ArchiveReader {
 
 /**
  * Open a zip original for in-place reads. A warm open costs no storage reads.
- * A cold one costs one tail read, plus one central directory read when the
- * directory lies outside the last MiB. It never reads extracted objects or
- * the manifest.
+ * A cold one with a container index reads the index head and then a page per
+ * lookup. Without one it costs one tail read, plus one central directory read
+ * when the directory lies outside the last MiB. It never reads extracted
+ * objects or the manifest.
  */
 export async function openArchive(deps: ArchiveDeps, source: ArchiveSource): Promise<OpenResult> {
   const cacheKey = `${source.key}#${source.size}`;
   const evict = () => deps.archives.evict(cacheKey);
+  const trusted = source.index && !deps.archives.distrusted(cacheKey) ? source : { ...source, index: undefined };
   let builtThisRequest = false;
   const built = await deps.archives.load(cacheKey, () => {
     builtThisRequest = true;
-    return buildView(deps.storage, source, evict);
+    return buildView(deps.storage, trusted, evict);
   });
   if (!built.ok) return built;
   const archive: ArchiveObject = { storage: deps.storage, key: source.key, size: source.size, etag: built.view.etag };
-  return { ok: true, reader: readerOver(built.view, archive, { builtThisRequest, evict }) };
+  const reader = readerOver(built.view, archive, { builtThisRequest, evict });
+  if (built.view.from !== "index") return { ok: true, reader };
+  return {
+    ok: true,
+    reader: fallingBack(reader, (reason) => {
+      console.warn(`archive: index ${source.index} for ${source.key} distrusted (${reason})`);
+      deps.archives.distrust(cacheKey);
+      return openArchive(deps, source);
+    }),
+  };
+}
+
+/**
+ * An index answers for speed only. Anything that suggests it is wrong for
+ * this original sends the call to the central directory instead.
+ */
+function fallingBack(indexed: ArchiveReader, reopen: (reason: string) => Promise<OpenResult>): ArchiveReader {
+  const guarded = async <T>(answer: () => Promise<T>, fallback: (reader: ArchiveReader) => Promise<T>): Promise<T> => {
+    try {
+      return await answer();
+    } catch (e) {
+      if (!(e instanceof IndexUnusable)) throw e;
+      const opened = await reopen(e.message);
+      if (!opened.ok) throw new Error(`archive is not readable from its central directory (${opened.reason})`);
+      return fallback(opened.reader);
+    }
+  };
+  return {
+    rootPrefix: indexed.rootPrefix,
+    entryCount: indexed.entryCount,
+    stat: (path) => guarded(() => indexed.stat(path), (reader) => reader.stat(path)),
+    list: (query) => guarded(() => indexed.list(query), (reader) => reader.list(query)),
+    async open(path, options) {
+      let reason: string;
+      try {
+        const read = await indexed.open(path, options);
+        if (read.ok || (read.reason !== "changed" && read.reason !== "corrupt")) return read;
+        reason = `entry read for ${path} was ${read.reason}`;
+      } catch (e) {
+        if (!(e instanceof IndexUnusable)) throw e;
+        reason = e.message;
+      }
+      const reopened = await reopen(reason);
+      return reopened.ok ? reopened.reader.open(path, options) : { ok: false, reason: "changed" };
+    },
+  };
 }
 
 export async function buildView(
@@ -111,6 +158,12 @@ export async function buildView(
   onStale: () => void,
   memoryLimit = MEMORY_DIRECTORY_LIMIT,
 ): Promise<Built> {
+  if (source.index) {
+    const indexed = await openIndexedView(storage, source.index, source.size);
+    if (indexed.ok) return indexed;
+    console.warn(`archive: index ${source.index} for ${source.key} not used (${indexed.reason})`);
+  }
+
   const located = await locateDirectory(storage, source.key, source.size);
   if (!located.ok) return located;
   const directory = located.directory;

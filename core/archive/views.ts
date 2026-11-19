@@ -1,5 +1,6 @@
 import type { FileStorage } from "../asset/repository";
-import { chunks, createDirectoryParser, type CdRecord, type Directory } from "./zip/directory";
+import { INDEX_HEAD_BYTES, readFence, readHeader, readPage, type IndexFence, type IndexRejection } from "./index-format";
+import { chunks, createDirectoryParser, readAll, type CdRecord, type Directory } from "./zip/directory";
 import { compare, entryAt, lowerBound, upperBound, listedPath, nameAt, toEntry, type EntryTable, type NameRules, type TableEntry } from "./table";
 
 export interface ListQuery {
@@ -99,6 +100,115 @@ export function memoryView(table: EntryTable, entryCount: number, rootPrefix: st
       upperBound: async (key) => upperBound(table, key),
     },
     { entryCount, etag, rootPrefix, from: "directory" },
+  );
+}
+
+const PAGE_BUDGET = 2 * 1024 * 1024;
+
+/** An IndexedView page that cannot be read or fails its CRC-32. The reader distrusts the index and answers from the central directory. */
+export class IndexUnusable extends Error {}
+
+export type IndexedOpen = { ok: true; view: TableView; bytes: number } | { ok: false; reason: IndexRejection | "missing" | "unreadable" };
+
+/** One read of the index head, and a second only when the fence runs past it. Pages are read on demand and held up to `pageBudget` bytes. */
+export async function openIndexedView(storage: FileStorage, key: string, sourceSize: number, pageBudget = PAGE_BUDGET): Promise<IndexedOpen> {
+  let opened: Awaited<ReturnType<typeof readIndexHead>>;
+  try {
+    opened = await readIndexHead(storage, key, sourceSize);
+  } catch {
+    return { ok: false, reason: "unreadable" };
+  }
+  if (!opened.ok) return opened;
+  return { ok: true, view: indexedView(storage, key, opened.fence, pageBudget), bytes: opened.fence.header.fenceEnd + pageBudget };
+}
+
+async function readIndexHead(storage: FileStorage, key: string, sourceSize: number): Promise<{ ok: true; fence: IndexFence } | { ok: false; reason: IndexRejection | "missing" }> {
+  const first = await readObject(storage, key, 0, INDEX_HEAD_BYTES);
+  if (!first) return { ok: false, reason: "missing" };
+  const head = readHeader(first, { size: sourceSize });
+  if (!head.ok) return head;
+  const { fenceEnd } = head.header;
+  if (fenceEnd <= first.byteLength) return readFence(first, head.header);
+  if (first.byteLength < INDEX_HEAD_BYTES) return { ok: false, reason: "truncated" };
+  const rest = await readObject(storage, key, first.byteLength, fenceEnd - first.byteLength);
+  if (!rest) return { ok: false, reason: "missing" };
+  const bytes = new Uint8Array(first.byteLength + rest.byteLength);
+  bytes.set(first);
+  bytes.set(rest, first.byteLength);
+  return readFence(bytes, head.header);
+}
+
+async function readObject(storage: FileStorage, key: string, offset: number, length: number): Promise<Uint8Array | null> {
+  const file = await storage.get(key, { offset, length });
+  return file && readAll(file.body, length);
+}
+
+function indexedView(storage: FileStorage, key: string, fence: IndexFence, pageBudget: number): TableView {
+  const { header, pages } = fence;
+  const loaded = new Map<number, Promise<EntryTable>>();
+  let held = 0;
+
+  const forget = (p: number) => {
+    if (loaded.delete(p)) held -= pages[p].length;
+  };
+  const load = async (p: number): Promise<EntryTable> => {
+    let bytes: Uint8Array | null;
+    try {
+      bytes = await readObject(storage, key, pages[p].offset, pages[p].length);
+    } catch (e) {
+      throw new IndexUnusable(`index ${key} page ${p} is unreadable: ${e instanceof Error ? e.message : String(e)}`);
+    }
+    if (!bytes) throw new IndexUnusable(`index ${key} is missing`);
+    const table = readPage(bytes, pages[p]);
+    if (!table) throw new IndexUnusable(`index ${key} page ${p} fails its CRC-32`);
+    return table;
+  };
+  const page = (p: number): Promise<EntryTable> => {
+    const hit = loaded.get(p);
+    if (hit) {
+      loaded.delete(p);
+      loaded.set(p, hit);
+      return hit;
+    }
+    const loading = load(p);
+    loaded.set(p, loading);
+    held += pages[p].length;
+    loading.catch(() => {
+      if (loaded.get(p) === loading) forget(p);
+    });
+    for (const oldest of loaded.keys()) {
+      if (held <= pageBudget || oldest === p) break;
+      forget(oldest);
+    }
+    return loading;
+  };
+  const pageOf = (key: Uint8Array): number => {
+    let lo = 0;
+    let hi = pages.length;
+    while (lo < hi) {
+      const mid = (lo + hi) >>> 1;
+      if (compare(pages[mid].firstName, key) > 0) hi = mid;
+      else lo = mid + 1;
+    }
+    return Math.max(0, lo - 1);
+  };
+  const bound = (search: (table: EntryTable, key: Uint8Array) => number) => async (key: Uint8Array) => {
+    if (pages.length === 0) return 0;
+    const p = pageOf(key);
+    return p * header.pageEntries + search(await page(p), key);
+  };
+
+  return sortedView(
+    {
+      count: header.count,
+      chunk: async (i) => {
+        const p = Math.floor(i / header.pageEntries);
+        return { table: await page(p), start: p * header.pageEntries };
+      },
+      lowerBound: bound(lowerBound),
+      upperBound: bound(upperBound),
+    },
+    { entryCount: header.directoryRecordCount, etag: header.sourceEtag, rootPrefix: fence.rootPrefix, from: "index" },
   );
 }
 
