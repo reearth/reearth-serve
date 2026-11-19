@@ -1,11 +1,11 @@
 import type {
   Binding, BindingKind, BucketName, CompatBucket, CompatCredential, CredentialId, ObjectInfo,
-  UploadId, UploadSession,
+  UploadId, UploadPhase, UploadSession,
 } from "../../core/compat/model";
 import { base64Of, fromBase64 } from "../../core/compat/hash";
 import {
   newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatStore, type DeleteBucketResult,
-  type LeaseToken, type VersionRecord,
+  type LeaseToken, type UploadTransition, type VersionRecord,
 } from "../../core/compat/repository";
 import type { Row, SqlClient, SqlStatement } from "../../core/sql/port";
 import { queryAll, queryFirst } from "./helpers";
@@ -15,8 +15,7 @@ const BUCKET_COLUMNS = "name, project_id, mount_rule, created_at";
 const BINDING_COLUMNS = "bucket, key, binding, asset_id";
 const CREDENTIAL_COLUMNS =
   "id, project_id, bucket, role, client_email, public_jwk, label, created_by, created_at, revoked_at";
-const UPLOAD_COLUMNS =
-  "id, bucket, key, credential_id, meta, received, hash_state, state, result, expires_at";
+const UPLOAD_COLUMNS = "id, bucket, key, credential_id, meta, expires_at, revision, phase";
 
 const BUCKET_IS_EMPTY = "NOT EXISTS (SELECT 1 FROM compat_bindings WHERE bucket = ?2)";
 const BUCKET_IN_PROJECT = "EXISTS (SELECT 1 FROM compat_buckets WHERE name = ?2 AND project_id = ?1)";
@@ -83,15 +82,14 @@ export class SqlCompatStore implements CompatStore {
     return row ? parseBinding(row) : null;
   }
 
-  async claim(
-    bucket: BucketName, key: BindingKey, kind: BindingKind, now: number, staleBefore: number, token: ClaimToken = newClaimToken(),
-  ): Promise<ClaimResult> {
+  async claim(bucket: BucketName, key: BindingKey, kind: BindingKind, now: number, staleBefore: number): Promise<ClaimResult> {
+    const token = newClaimToken();
     const claimed = await queryFirst(
       this.db,
       `INSERT INTO compat_bindings (bucket, key, binding, asset_id, claimed_at, claim_token) VALUES (?1, ?2, ?3, NULL, ?4, ?6)
          ON CONFLICT (bucket, key) DO UPDATE
            SET binding = excluded.binding, claimed_at = excluded.claimed_at, claim_token = excluded.claim_token
-           WHERE compat_bindings.asset_id IS NULL AND (compat_bindings.claimed_at < ?5 OR compat_bindings.claim_token = ?6)
+           WHERE compat_bindings.asset_id IS NULL AND compat_bindings.claimed_at < ?5
          RETURNING claim_token`,
       [bucket, key, kind, now, staleBefore, token],
     );
@@ -100,13 +98,22 @@ export class SqlCompatStore implements CompatStore {
     return binding ? { kind: "bound", binding } : { kind: "busy" };
   }
 
-  async bind(bucket: BucketName, key: BindingKey, token: ClaimToken, assetId: string): Promise<boolean> {
-    const result = await this.db.execute(
-      `UPDATE compat_bindings SET asset_id = ?4
-         WHERE bucket = ?1 AND key = ?2 AND ((asset_id IS NULL AND claim_token = ?3) OR asset_id = ?4)`,
-      [bucket, key, token, assetId],
-    );
-    return result.rowsAffected > 0;
+  async bind(bucket: BucketName, key: BindingKey, token: ClaimToken, assetId: string, upload?: UploadTransition): Promise<boolean> {
+    const fill = `UPDATE compat_bindings SET asset_id = ?4
+      WHERE bucket = ?1 AND key = ?2 AND ((asset_id IS NULL AND claim_token = ?3) OR asset_id = ?4)`;
+    if (!upload) return (await this.db.execute(fill, [bucket, key, token, assetId])).rowsAffected > 0;
+    const [, moved] = await this.db.batch([
+      {
+        sql: `${fill} AND EXISTS (SELECT 1 FROM compat_uploads WHERE id = ?5 AND revision = ?6)`,
+        args: [bucket, key, token, assetId, upload.id, upload.revision],
+      },
+      {
+        sql: `UPDATE compat_uploads SET phase = ?3, revision = ?2 + 1
+          WHERE id = ?1 AND revision = ?2 AND EXISTS (SELECT 1 FROM compat_bindings WHERE bucket = ?4 AND key = ?5 AND asset_id = ?6)`,
+        args: [upload.id, upload.revision, encodePhase(upload.phase), bucket, key, assetId],
+      },
+    ]);
+    return moved.rowsAffected > 0;
   }
 
   async releaseClaim(bucket: BucketName, key: BindingKey, token: ClaimToken): Promise<void> {
@@ -123,7 +130,7 @@ export class SqlCompatStore implements CompatStore {
   async lease(bucket: BucketName, key: BindingKey, token: LeaseToken, now: number, staleBefore: number): Promise<boolean> {
     const result = await this.db.execute(
       `UPDATE compat_bindings SET lease_token = ?3, leased_at = ?4
-         WHERE bucket = ?1 AND key = ?2 AND asset_id IS NOT NULL AND (lease_token IS NULL OR lease_token = ?3 OR leased_at < ?5)`,
+         WHERE bucket = ?1 AND key = ?2 AND asset_id IS NOT NULL AND (lease_token IS NULL OR leased_at < ?5)`,
       [bucket, key, token, now, staleBefore],
     );
     return result.rowsAffected > 0;
@@ -217,11 +224,8 @@ export class SqlCompatStore implements CompatStore {
 
   async createUpload(u: UploadSession): Promise<void> {
     await this.db.execute(
-      `INSERT INTO compat_uploads (${UPLOAD_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
-      [
-        u.id, u.bucket, u.key, u.credentialId, JSON.stringify(u.meta), u.received, JSON.stringify(u.hashState), u.state,
-        encodeResult(u.result), u.expiresAt,
-      ],
+      `INSERT INTO compat_uploads (${UPLOAD_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+      [u.id, u.bucket, u.key, u.credentialId, JSON.stringify(u.meta), u.expiresAt, u.revision, encodePhase(u.phase)],
     );
   }
 
@@ -230,15 +234,10 @@ export class SqlCompatStore implements CompatStore {
     return row ? parseUpload(row) : null;
   }
 
-  async advanceUpload(
-    id: UploadId,
-    expect: Pick<UploadSession, "received" | "state">,
-    next: Pick<UploadSession, "received" | "hashState" | "state" | "result">,
-  ): Promise<boolean> {
+  async updateUpload(id: UploadId, revision: number, phase: UploadPhase): Promise<boolean> {
     const result = await this.db.execute(
-      `UPDATE compat_uploads SET received = ?4, hash_state = ?5, state = ?6, result = ?7
-         WHERE id = ?1 AND received = ?2 AND state = ?3`,
-      [id, expect.received, expect.state, next.received, JSON.stringify(next.hashState), next.state, encodeResult(next.result)],
+      "UPDATE compat_uploads SET phase = ?3, revision = ?2 + 1 WHERE id = ?1 AND revision = ?2",
+      [id, revision, encodePhase(phase)],
     );
     return result.rowsAffected > 0;
   }
@@ -252,8 +251,11 @@ export class SqlCompatStore implements CompatStore {
     return rows.map(parseUpload);
   }
 
-  async deleteUpload(id: UploadId): Promise<void> {
-    await this.db.execute("DELETE FROM compat_uploads WHERE id = ?1", [id]);
+  async deleteUpload(id: UploadId, revision?: number): Promise<boolean> {
+    const result = revision === undefined
+      ? await this.db.execute("DELETE FROM compat_uploads WHERE id = ?1", [id])
+      : await this.db.execute("DELETE FROM compat_uploads WHERE id = ?1 AND revision = ?2", [id, revision]);
+    return result.rowsAffected > 0;
   }
 
   async sweepStaleHolds(staleBefore: number): Promise<{ claims: number; leases: number }> {
@@ -316,11 +318,9 @@ function parseUpload(row: Row): UploadSession {
     key: row.key as UploadSession["key"],
     credentialId: row.credential_id as CredentialId,
     meta: JSON.parse(row.meta as string),
-    received: row.received as number,
-    hashState: JSON.parse(row.hash_state as string),
-    state: row.state as UploadSession["state"],
-    result: row.result ? decodeResult(row.result as string) : null,
     expiresAt: row.expires_at as number,
+    revision: row.revision as number,
+    phase: decodePhase(row.phase as string),
   };
 }
 
@@ -328,26 +328,31 @@ type StoredInfo = Omit<ObjectInfo, "created" | "updated" | "hashes"> & {
   created: number; updated: number; hashes: { md5: string; crc32c: number } | null;
 };
 
-function encodeResult(info: ObjectInfo | null): string | null {
-  if (!info) return null;
-  const stored: StoredInfo = {
+type StoredPhase = Exclude<UploadPhase, { state: "committed" }> | { state: "committed"; result: StoredInfo };
+
+function encodePhase(phase: UploadPhase): string {
+  if (phase.state !== "committed") return JSON.stringify(phase);
+  const info = phase.result;
+  const result: StoredInfo = {
     ...info,
     created: info.created.getTime(),
     updated: info.updated.getTime(),
     hashes: info.hashes && { md5: base64Of(info.hashes.md5), crc32c: info.hashes.crc32c },
   };
-  return JSON.stringify(stored);
+  return JSON.stringify({ state: "committed", result } satisfies StoredPhase);
 }
 
-function decodeResult(text: string): ObjectInfo {
-  const stored = JSON.parse(text) as StoredInfo;
+function decodePhase(text: string): UploadPhase {
+  const stored = JSON.parse(text) as StoredPhase;
+  if (stored.state !== "committed") return stored;
+  const { result } = stored;
   return {
-    ...stored,
-    created: new Date(stored.created),
-    updated: new Date(stored.updated),
-    hashes: stored.hashes && {
-      md5: fromBase64(stored.hashes.md5),
-      crc32c: stored.hashes.crc32c,
+    state: "committed",
+    result: {
+      ...result,
+      created: new Date(result.created),
+      updated: new Date(result.updated),
+      hashes: result.hashes && { md5: fromBase64(result.hashes.md5), crc32c: result.hashes.crc32c },
     },
   };
 }

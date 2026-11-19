@@ -2,12 +2,12 @@
  * The compat_* tables behind one port (ADR-019).
  *
  * `claim`, `bind`, `releaseClaim`, `lease`, `nextGeneration` and
- * `advanceUpload` are each one statement with compare-and-set semantics, so
- * two writers racing on one key or one upload session cannot both win.
+ * `updateUpload` are each one step with compare-and-set semantics, so two
+ * writers racing on one key or one upload session cannot both win.
  */
 import type {
   Binding, BindingKind, BucketName, CompatBucket, CompatCredential, CredentialId,
-  ExactHashes, FolderKey, ObjectKey, UploadId, UploadSession,
+  ExactHashes, FolderKey, ObjectKey, UploadId, UploadPhase, UploadSession,
 } from "./model";
 
 export type BindingKey = ObjectKey | FolderKey;
@@ -36,6 +36,8 @@ export type ClaimResult =
 
 export type DeleteBucketResult = "deleted" | "absent" | "not_empty";
 
+export type UploadTransition = { id: UploadId; revision: number; phase: UploadPhase };
+
 export interface CompatStore {
   findBucket(name: BucketName): Promise<CompatBucket | null>;
   listBuckets(projectId: string): Promise<CompatBucket[]>;
@@ -55,27 +57,22 @@ export interface CompatStore {
 
   /** Bound rows only; a claim with no asset yet reads as absent. */
   findBinding(bucket: BucketName, key: BindingKey): Promise<Binding | null>;
-  /**
-   * Claim `key` at `now`. A claim older than `staleBefore` is abandoned and may
-   * be taken over. With `token`, a claim that already holds that token is
-   * taken again, so a writer that crashed can resume its own claim at once.
-   */
-  claim(
-    bucket: BucketName, key: BindingKey, kind: BindingKind, now: number, staleBefore: number, token?: ClaimToken,
-  ): Promise<ClaimResult>;
+  /** Claim `key` at `now`. A claim older than `staleBefore` is abandoned and may be taken over. */
+  claim(bucket: BucketName, key: BindingKey, kind: BindingKind, now: number, staleBefore: number): Promise<ClaimResult>;
   /**
    * Fill the claim `token` with `assetId`. True when the row now names
    * `assetId`, including a repeat of the same bind; false when the claim was
-   * lost to a takeover or the key names another asset.
+   * lost to a takeover or the key names another asset. With `upload`, the
+   * bind and that transition happen together or not at all.
    */
-  bind(bucket: BucketName, key: BindingKey, token: ClaimToken, assetId: string): Promise<boolean>;
+  bind(bucket: BucketName, key: BindingKey, token: ClaimToken, assetId: string, upload?: UploadTransition): Promise<boolean>;
   /** Drop the claim `token` this writer failed to fill. No-op once bound or taken over. */
   releaseClaim(bucket: BucketName, key: BindingKey, token: ClaimToken): Promise<void>;
   deleteBinding(bucket: BucketName, key: BindingKey): Promise<void>;
   /**
    * Lease the bound `key` at `now` for one overwrite or delete. False while
-   * a fresh lease (not older than `staleBefore`) with another token holds it,
-   * or when the key is not bound.
+   * another fresh lease (not older than `staleBefore`) holds it, or when the
+   * key is not bound.
    */
   lease(bucket: BucketName, key: BindingKey, token: LeaseToken, now: number, staleBefore: number): Promise<boolean>;
   /** Drop the lease `token`. No-op once it was taken over or the row is gone. */
@@ -106,14 +103,11 @@ export interface CompatStore {
 
   createUpload(session: UploadSession): Promise<void>;
   findUpload(id: UploadId): Promise<UploadSession | null>;
-  /** Move the session only if it still has `expect`'s `received` and `state`. False when another request moved it first. */
-  advanceUpload(
-    id: UploadId,
-    expect: Pick<UploadSession, "received" | "state">,
-    next: Pick<UploadSession, "received" | "hashState" | "state" | "result">,
-  ): Promise<boolean>;
+  /** Set the phase and bump the revision, only from `revision`. False when another request moved the session first, or it is gone. */
+  updateUpload(id: UploadId, revision: number, phase: UploadPhase): Promise<boolean>;
   listExpiredUploads(now: number, limit: number): Promise<UploadSession[]>;
-  deleteUpload(id: UploadId): Promise<void>;
+  /** Remove the session, only from `revision` when given. False when it moved first or is gone. */
+  deleteUpload(id: UploadId, revision?: number): Promise<boolean>;
   /** Drop claims that never named an asset and clear leases, each held since before `staleBefore`. */
   sweepStaleHolds(staleBefore: number): Promise<{ claims: number; leases: number }>;
 }

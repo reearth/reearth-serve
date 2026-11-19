@@ -316,6 +316,17 @@ describe("resumable uploads", () => {
     expect(res.status).toBe(403);
   });
 
+  test("DELETE on the session cancels it with 499, and the session is then unknown", async () => {
+    const { f, headers } = await editor();
+    const session = await begin(f, headers);
+    await onApi(f, session, { method: "PUT", headers: { ...headers, "Content-Range": "bytes 0-5/*" }, body: "hello " });
+    const cancel = await onApi(f, session, { method: "DELETE", headers });
+    expect(cancel.status).toBe(499);
+    const status = await onApi(f, session, { method: "PUT", headers: { ...headers, "Content-Range": "bytes */*" } });
+    expect(status.status).toBe(404);
+    expect((await f.deps.storage.list("compat-staging/")).keys).toEqual([]);
+  });
+
   test.each([
     ["bytes 0-9/*", { start: 0, size: 10, total: null }],
     ["bytes 10-19/20", { start: 10, size: 10, total: 20 }],

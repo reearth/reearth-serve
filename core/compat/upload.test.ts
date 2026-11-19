@@ -5,41 +5,58 @@ import { MemoryProjectStore } from "../../adapters/memory/site-fixture";
 import { initialHashState } from "./hash";
 import { objectLayer } from "./layer";
 import { applyChunk, resumableUploads, sweepUploads, UPLOAD_TTL_MS, type Chunk, type DeclaredHashes } from "./upload";
-import type { BucketName, CredentialId, ObjectKey, PutMeta, UploadId, UploadSession } from "./model";
+import type { BucketName, CredentialId, ObjectKey, PutMeta, UploadId, UploadPhase, UploadSession } from "./model";
 
 const BUCKET = "media";
 const NO_HASH: DeclaredHashes = { crc32c: null, md5: null };
 
-function session(over: Partial<UploadSession> = {}): UploadSession {
+const OPEN: UploadPhase = { state: "open", received: 100, total: null, hashState: initialHashState, parts: [] };
+const COMMITTING: UploadPhase = {
+  state: "committing", size: 100, hashState: initialHashState, parts: [], owner: null, ownerTokens: [], overwritingAssetId: null,
+};
+
+function session(phase: UploadPhase = OPEN): UploadSession {
   return {
     id: "u1" as UploadId, bucket: BUCKET as BucketName, key: "k" as ObjectKey, credentialId: "c1" as CredentialId,
     meta: { contentType: "text/plain", contentEncoding: null, userMeta: {}, ifGenerationMatch: null },
-    received: 100, hashState: initialHashState, state: "open", result: null, expiresAt: 1000, ...over,
+    expiresAt: 1000, revision: 0, phase,
   };
 }
 
 describe("applyChunk", () => {
   const chunk = (start: number | null, size: number, total: number | null): Chunk => ({ start, size, total });
 
-  test.each<[string, Partial<UploadSession>, Chunk, number, ReturnType<typeof applyChunk>]>([
-    ["a committed session acks anything", { state: "committed" }, chunk(0, 10, null), 5000, { kind: "ack" }],
-    ["an expired session is gone", {}, chunk(100, 10, null), 1000, { kind: "reject", error: { code: "no_such_upload" } }],
-    ["a committing session commits again on its total", { state: "committing" }, chunk(90, 10, 100), 0, { kind: "commit" }],
-    ["a committing session refuses another total", { state: "committing" }, chunk(100, 10, 110), 0,
+  const committed = { state: "committed", result: {} } as UploadPhase;
+  const failed: UploadPhase = { state: "failed", error: { code: "precondition_failed" } };
+  const known: UploadPhase = { ...OPEN, total: 150 } as UploadPhase;
+
+  test.each<[string, UploadPhase, Chunk, number, ReturnType<typeof applyChunk>]>([
+    ["a committed session acks anything", committed, chunk(0, 10, null), 5000, { kind: "ack" }],
+    ["a failed session answers its error", failed, chunk(100, 10, 110), 0, { kind: "reject", error: { code: "precondition_failed" } }],
+    ["an expired session is gone", OPEN, chunk(100, 10, null), 1000, { kind: "reject", error: { code: "no_such_upload" } }],
+    ["a committing session commits again on its total", COMMITTING, chunk(90, 10, 100), 0, { kind: "commit" }],
+    ["a committing session refuses another total", COMMITTING, chunk(100, 10, 110), 0,
       { kind: "reject", error: { code: "invalid", message: "The upload holds 100 bytes, not 110." } }],
-    ["an empty final request on the received size commits", {}, chunk(null, 0, 100), 0, { kind: "commit" }],
-    ["an empty final request on another size is refused", {}, chunk(null, 0, 120), 0,
+    ["a committing session refuses a chunk with no total", COMMITTING, chunk(90, 10, null), 0,
+      { kind: "reject", error: { code: "invalid", message: "The upload holds 100 bytes, but the request declares no total." } }],
+    ["an empty final request on the received size commits", OPEN, chunk(null, 0, 100), 0, { kind: "commit" }],
+    ["an empty final request on another size is refused", OPEN, chunk(null, 0, 120), 0,
       { kind: "reject", error: { code: "invalid", message: "The upload holds 100 bytes, not 120." } }],
-    ["a resent chunk already staged is acked", {}, chunk(50, 50, null), 0, { kind: "ack" }],
-    ["a chunk past a gap is refused", {}, chunk(110, 10, null), 0,
+    ["a resent chunk already staged is acked", OPEN, chunk(50, 50, null), 0, { kind: "ack" }],
+    ["a chunk past a gap is refused", OPEN, chunk(110, 10, null), 0,
       { kind: "reject", error: { code: "invalid", message: "The chunk starts at byte 110, but the upload holds 100 bytes." } }],
-    ["a chunk overlapping the received end is refused", {}, chunk(90, 20, null), 0,
+    ["a chunk overlapping the received end is refused", OPEN, chunk(90, 20, null), 0,
       { kind: "reject", error: { code: "invalid", message: "The chunk starts at byte 90, but the upload holds 100 bytes." } }],
-    ["the next chunk of unknown total is staged", {}, chunk(100, 10, null), 0, { kind: "stage", final: false }],
-    ["the chunk that reaches the total is staged as final", {}, chunk(100, 10, 110), 0, { kind: "stage", final: true }],
-    ["a chunk short of a known total is staged", {}, chunk(100, 10, 200), 0, { kind: "stage", final: false }],
-  ])("%s", (_, over, c, now, want) => {
-    expect(applyChunk(session(over), c, now)).toEqual(want);
+    ["the next chunk of unknown total is staged", OPEN, chunk(100, 10, null), 0, { kind: "stage", final: false, total: null }],
+    ["the chunk that reaches the total is staged as final", OPEN, chunk(100, 10, 110), 0, { kind: "stage", final: true, total: 110 }],
+    ["a chunk short of a known total is staged", OPEN, chunk(100, 10, 200), 0, { kind: "stage", final: false, total: 200 }],
+    ["a total declared earlier holds for a chunk without one", known, chunk(100, 50, null), 0, { kind: "stage", final: true, total: 150 }],
+    ["a total declared earlier cannot change", known, chunk(100, 10, 200), 0,
+      { kind: "reject", error: { code: "invalid", message: "The upload's total is 150 bytes, not 200." } }],
+    ["a chunk past a total declared earlier is refused", known, chunk(100, 60, null), 0,
+      { kind: "reject", error: { code: "invalid", message: "The chunk ends at byte 160, past the total of 150 bytes." } }],
+  ])("%s", (_, phase, c, now, want) => {
+    expect(applyChunk(session(phase), c, now)).toEqual(want);
   });
 });
 
@@ -140,7 +157,7 @@ describe("resumable uploads on the memory fixture", () => {
     expect(done).toEqual({ ok: false, error: { code: "invalid", message: "Provided CRC32C does not match the uploaded data." } });
     expect(f.assets()).toHaveLength(0);
     expect(f.compat.bindings.size).toBe(0);
-    expect(await f.staged()).toEqual([`compat-staging/${id}/${"0".padStart(16, "0")}`]);
+    expect(await f.staged()).toEqual([expect.stringMatching(new RegExp(`^compat-staging/${id}/0{16}-`))]);
     expect(await f.as("cred-a").uploads.status(id, BUCKET)).toEqual({ ok: true, value: { kind: "incomplete", received: CHUNK } });
   });
 
@@ -210,13 +227,6 @@ describe("a commit replayed after a crash", () => {
 
   test.each<[string, boolean, Crash]>([
     ["after the asset row, before the binding", false, (f) => { vi.spyOn(f.compat, "bind").mockRejectedValueOnce(CRASH); }],
-    ["after the binding, before the session is marked committed", false, (f) => {
-      const advance = f.compat.advanceUpload.bind(f.compat);
-      vi.spyOn(f.compat, "advanceUpload").mockImplementation(async (id, expected, next) => {
-        if (next.state === "committed") throw CRASH;
-        return advance(id, expected, next);
-      });
-    }],
     ["after the new version, before its hashes", true, (f) => { vi.spyOn(f.compat, "putRecord").mockRejectedValueOnce(CRASH); }],
   ])("%s finds one asset and one version at most", async (_, overwrite, crash) => {
     const f = await uploadFixture();
@@ -225,7 +235,7 @@ describe("a commit replayed after a crash", () => {
     const id = await begin(f);
     crash(f);
     await expect(sendAll(f, id, data)).rejects.toThrow(CRASH);
-    expect((await f.compat.findUpload(id as UploadId))?.state).toBe("committing");
+    expect((await f.compat.findUpload(id as UploadId))?.phase).toMatchObject({ state: "committing", owner: null });
     vi.restoreAllMocks();
 
     const { uploads } = f.as("cred-a");

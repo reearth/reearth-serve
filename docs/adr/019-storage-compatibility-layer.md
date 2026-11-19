@@ -212,14 +212,31 @@ chunk size (16 MiB exactly, for one). The final chunk also carries
 against the CRC32C it computed and refuses on a mismatch. Each
 chunk request carries `X-GUploader-No-308: yes`, so an incomplete chunk
 answers `200` with `X-Http-Status-Code-Override: 308` and
-`Range: bytes=0-N`. A bare `308` fails the client. Chunks are staged
-through the existing `FileStorage.put` under a staging prefix, and the
-hash state advances with each chunk. The final chunk commits: the staged
-chunks and the final body stream into the create or new-version use
-case with the declared total as the size. The asset or version id is
-derived from the upload id, so a retried commit finds the same asset
-instead of making a second one. A resent chunk is acknowledged and not
-staged twice. Expired sessions and their staged chunks are swept.
+`Range: bytes=0-N`. A bare `308` fails the client; other clients that do
+not send the header get a real `308`.
+
+Every change to a session is a compare-and-set on its revision. Each
+chunk request stages its bytes through the existing `FileStorage.put`
+under a key of its own, and records that key in the same step that
+advances the received count and the MD5 and CRC32C state, so a slower
+duplicate of a chunk can never replace bytes the session already hashed.
+The first declared total is stored, and a request that declares another
+one is refused. The final chunk is staged too, so the client's
+`X-Goog-Hash` is checked before any asset exists.
+
+A commit has one owner. The move to committing records a random owner
+token; any other request gets a retryable `503` until the owner finishes
+or has been silent for a fixed time, and a takeover is another
+compare-and-set. Each owner writes under asset or version ids derived
+from its own token, so no two owners can collide on one row or delete
+each other's bytes. The bind of a new key and the move to committed land
+in one batch, and an overwrite records its target asset first, so a
+replay after any crash either returns the recorded result or finishes
+the single commit, and never writes an object again after it was
+deleted. A precondition that fails at the commit ends the session with
+that error and drops its staged chunks at once. `DELETE` on the session
+URI cancels it (`499`). Expired sessions and their staged chunks are
+swept.
 
 Operations outside this table (bucket policies, lifecycle, object lock,
 customer-supplied encryption, tagging, compose) answer the protocol's
