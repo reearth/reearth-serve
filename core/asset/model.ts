@@ -31,11 +31,6 @@ export function detectArchiveFormat(filename: string): ArchiveFormat | null {
   return null;
 }
 
-/**
- * Readiness alone does not mean extraction completed, since a zip whose
- * extraction failed for good is also ready (ADR-018 §6). Only a completed
- * job mirrors `fileCount` onto the row.
- */
 export function extractionCompleted(row: Pick<AssetMetadata | AssetVersion, "status" | "fileCount">): boolean {
   return row.status === "ready" && row.fileCount !== undefined;
 }
