@@ -34,7 +34,6 @@ type entry struct {
 type fixture struct {
 	filename string
 	prefix   []byte
-	parity   bool
 	entries  []entry
 }
 
@@ -45,9 +44,8 @@ type goldenEntry struct {
 }
 
 type golden struct {
-	Archive         string        `json:"archive"`
-	ExtractorParity bool          `json:"extractorParity"`
-	Entries         []goldenEntry `json:"entries"`
+	Archive string        `json:"archive"`
+	Entries []goldenEntry `json:"entries"`
 }
 
 func file(name string, data string) entry {
@@ -82,17 +80,17 @@ func smallFixtures() []fixture {
 	text := bytes.Repeat([]byte("PLATEAU building footprint 13101 "), 200)
 	grusseRaw := string([]byte("Gr\x81\xe1e.txt"))
 	return []fixture{
-		{filename: "deflate.zip", parity: true, entries: []entry{
+		{filename: "deflate.zip", entries: []entry{
 			{raw: "a.txt", want: "a.txt", data: text},
 			{raw: "dir/b.geojson", want: "dir/b.geojson", data: []byte(`{"type":"FeatureCollection","features":[]}`)},
 			{raw: "dir/sub/c.bin", want: "dir/sub/c.bin", data: bytes.Repeat([]byte{0, 1, 2, 3}, 1024)},
 			{raw: "empty.txt", want: "empty.txt", data: nil},
 		}},
-		{filename: "store.zip", parity: true, entries: []entry{
+		{filename: "store.zip", entries: []entry{
 			{raw: "index.html", want: "index.html", data: []byte("<!doctype html><title>x</title>"), store: true},
 			{raw: "img/tile.png", want: "img/tile.png", data: []byte("\x89PNG\r\n\x1a\n"), store: true},
 		}},
-		{filename: "descriptor.zip", parity: true, entries: []entry{
+		{filename: "descriptor.zip", entries: []entry{
 			{raw: "a/1.txt", want: "a/1.txt", data: text, descriptor: true},
 			{raw: "a/2.txt", want: "a/2.txt", data: []byte("two"), descriptor: true, store: true},
 			{raw: "b.txt", want: "b.txt", data: []byte("plain")},
@@ -125,17 +123,17 @@ func smallFixtures() []fixture {
 			{raw: "win\\path.txt", want: "win/path.txt", data: []byte("win")},
 			{raw: "./dot.txt", want: "dot.txt", data: []byte("dot")},
 		}},
-		{filename: "site.zip", parity: true, entries: []entry{
+		{filename: "site.zip", entries: []entry{
 			dir("site/"),
 			{raw: "site/index.html", want: "index.html", data: []byte("<!doctype html>")},
 			dir("site/assets/"),
 			{raw: "site/assets/app.js", want: "assets/app.js", data: []byte("console.log(1)")},
 		}},
-		{filename: "root-mismatch.zip", parity: true, entries: []entry{
+		{filename: "root-mismatch.zip", entries: []entry{
 			{raw: "site/index.html", want: "site/index.html", data: []byte("<!doctype html>")},
 			{raw: "site/app.js", want: "site/app.js", data: []byte("1")},
 		}},
-		{filename: "prepended.zip", prefix: bytes.Repeat([]byte("#!/bin/sh\nexit 0\n"), 64), parity: true, entries: []entry{
+		{filename: "prepended.zip", prefix: bytes.Repeat([]byte("#!/bin/sh\nexit 0\n"), 64), entries: []entry{
 			{raw: "a.txt", want: "a.txt", data: text},
 			{raw: "b/c.txt", want: "b/c.txt", data: []byte("c"), store: true},
 		}},
@@ -148,7 +146,7 @@ func manyEntries(filename string, n int) fixture {
 		name := fmt.Sprintf("d%03d/f%06d.txt", i/1000, i)
 		entries[i] = entry{raw: name, want: name, data: []byte(name), store: i%2 == 0}
 	}
-	return fixture{filename: filename, parity: true, entries: entries}
+	return fixture{filename: filename, entries: entries}
 }
 
 func largeFixtures() []fixture {
@@ -225,7 +223,7 @@ func writeFixture(out string, f fixture) error {
 			last[e.want] = e
 		}
 	}
-	g := golden{Archive: f.filename, ExtractorParity: f.parity, Entries: []goldenEntry{}}
+	g := golden{Archive: f.filename, Entries: []goldenEntry{}}
 	for path, e := range last {
 		g.Entries = append(g.Entries, goldenEntry{Path: path, Size: len(e.data), CRC32: fmt.Sprintf("%08x", crc32.ChecksumIEEE(e.data))})
 	}

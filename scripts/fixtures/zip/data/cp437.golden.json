@@ -1,6 +1,5 @@
 {
   "archive": "cp437.zip",
-  "extractorParity": false,
   "entries": [
     {
       "path": "ascii.txt",

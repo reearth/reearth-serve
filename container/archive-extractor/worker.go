@@ -157,7 +157,7 @@ func (w *ExtractionWorker) phaseA(ctx context.Context, cp *JobCheckpoint) error 
 		enc := json.NewEncoder(pw)
 		err := extractor.ListEntries(ctx, func(entry ArchiveEntry) error {
 			detector.Observe(entry.Path)
-			if !entry.IsDirectory {
+			if !entry.IsDirectory && !entry.Superseded {
 				fileCount++
 			}
 			return enc.Encode(entry)
@@ -236,7 +236,8 @@ func (w *ExtractionWorker) phaseB(ctx context.Context, cp *JobCheckpoint) error 
 	}
 
 	err = w.streamEntryList(ctx, func(entry ArchiveEntry) error {
-		if entry.IsDirectory {
+		path, served := ServedPath(entry.Path, rootPrefix)
+		if entry.IsDirectory || entry.Superseded || !served {
 			mu.Lock()
 			settle(entry.Index)
 			mu.Unlock()
@@ -255,7 +256,7 @@ func (w *ExtractionWorker) phaseB(ctx context.Context, cp *JobCheckpoint) error 
 		// Compute the normalized path on the fly so the JSONL can stay
 		// raw (smaller, simpler — see phaseA). The goroutine below uses
 		// e.NormalizedPath for storage keys and manifest entries.
-		entry.NormalizedPath = StripPrefix(NormalizeSeparators(entry.Path), rootPrefix)
+		entry.NormalizedPath = path
 
 		sem <- struct{}{}
 		wg.Add(1)
@@ -384,9 +385,10 @@ func (w *ExtractionWorker) phaseBSequential(ctx context.Context, cp *JobCheckpoi
 		// looking it up in a pre-built map (phaseA no longer buffers the
 		// entry list).
 		e := rawEntry
-		e.NormalizedPath = StripPrefix(NormalizeSeparators(rawEntry.Path), rootPrefix)
+		path, served := ServedPath(rawEntry.Path, rootPrefix)
+		e.NormalizedPath = path
 
-		if e.IsDirectory {
+		if e.IsDirectory || !served {
 			_, _ = io.Copy(io.Discard, r)
 			return nil
 		}

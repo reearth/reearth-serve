@@ -118,15 +118,15 @@ export async function buildView(
   if (directory.size > memoryLimit) {
     const survey = await surveyStream(storage, source, directory);
     if (!survey) return { ok: false, reason: "corrupt" };
-    return { ok: true, view: scanView(storage, source.key, directory, survey, onStale), bytes: 256 };
+    return { ok: true, view: scanView(storage, source.key, directory, survey.rules, survey.directoryRecordCount, onStale), bytes: 256 };
   }
 
   const read = await directoryTable(storage, source, directory);
   if (!read.ok) return read;
-  const { table, rules } = read;
+  const { table, rules, directoryRecordCount } = read;
   return {
     ok: true,
-    view: memoryView(table, directory.entryCount, rules.rootPrefix, directory.etag),
+    view: memoryView(table, directoryRecordCount, rules.rootPrefix, directory.etag),
     bytes: table.records.byteLength + table.names.byteLength,
   };
 }
@@ -135,12 +135,12 @@ export async function directoryTable(
   storage: FileStorage,
   source: ArchiveSource,
   directory: Directory,
-): Promise<{ ok: true; table: EntryTable; rules: NameRules } | { ok: false; reason: DirectoryRefusal }> {
+): Promise<{ ok: true; table: EntryTable; rules: NameRules; directoryRecordCount: number } | { ok: false; reason: DirectoryRefusal }> {
   const cd = directory.bytesFromTail ?? (await readDirectory(storage, source.key, directory));
   if (!cd) return { ok: false, reason: "missing" };
   const rules = surveyBytes(cd, directory, source.filename);
-  const table = rules && buildTable(cd, directory, rules);
-  return table && rules ? { ok: true, table, rules } : { ok: false, reason: "corrupt" };
+  const built = rules && buildTable(cd, directory, rules);
+  return built && rules ? { ok: true, rules, ...built } : { ok: false, reason: "corrupt" };
 }
 
 export function surveyBytes(cd: Uint8Array, directory: Directory, filename: string): NameRules | null {
@@ -162,7 +162,8 @@ export async function surveyStream(storage: FileStorage, source: ArchiveSource, 
   for await (const chunk of chunks(file.body)) {
     if (!parser.push(chunk)) return null;
   }
-  return parser.end() === null ? null : survey.result();
+  const directoryRecordCount = parser.end();
+  return directoryRecordCount === null ? null : { rules: survey.result(), directoryRecordCount };
 }
 
 function readerOver(view: TableView, archive: ArchiveObject, cached: { builtThisRequest: boolean; evict: () => void }): ArchiveReader {

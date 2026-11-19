@@ -13,6 +13,7 @@ type ArchiveEntry struct {
 	Size           int64  `json:"size"`           // uncompressed size (-1 if unknown)
 	CompressedSize int64  `json:"compressedSize"` // size in archive (-1 if unknown)
 	IsDirectory    bool   `json:"isDirectory"`
+	Superseded     bool   `json:"superseded,omitempty"`
 	Offset         int64  `json:"offset"` // offset of entry data in archive (-1 if unknown)
 	Method         uint16 `json:"method"` // compression method (zip only: 0=store, 8=deflate)
 }

@@ -67,6 +67,38 @@ describe("GET /api/v1/assets/:id/files on a zip nobody extracted", () => {
   });
 });
 
+describe("GET /api/v1/assets/:id/files when the active version cannot be listed in place", () => {
+  async function overFirstUpload(activeName: string, activeBytes: Uint8Array, archiveFormat: "zip" | "tar.gz") {
+    const f = await unextracted("deflate.zip");
+    const asset = f.metadata.assets.get(ASSET_ID)!;
+    f.metadata.assets.set(ASSET_ID, { ...asset, filename: "store.zip", size: zipBytes("store.zip").byteLength, archiveFormat: "zip" });
+    await put(f.storage, `assets/${ASSET_ID}/store.zip`, zipBytes("store.zip"));
+    const version = f.versions.versions.get(VERSION_ID)!;
+    f.versions.versions.set(VERSION_ID, { ...version, filename: activeName, size: activeBytes.byteLength, archiveFormat });
+    await put(f.storage, `assets/${ASSET_ID}/v/${VERSION_ID}/${activeName}`, activeBytes);
+    return f;
+  }
+
+  test("a corrupt zip lists nothing, not the first upload's files", async () => {
+    const f = await overFirstUpload("broken.zip", new Uint8Array(400), "zip");
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    expect(await listing(f)).toEqual([]);
+    warn.mockRestore();
+  });
+
+  test("a tar.gz with no manifest lists nothing, not the first upload's files", async () => {
+    const f = await overFirstUpload("data.tar.gz", new Uint8Array(400), "tar.gz");
+    expect(await listing(f)).toEqual([]);
+  });
+
+  test("a manifest the extractor wrote under the asset's own prefix still answers", async () => {
+    const f = await overFirstUpload("data.tar.gz", new Uint8Array(400), "tar.gz");
+    const manifest = '{"path":"x.txt","size":1,"contentType":"text/plain; charset=utf-8","hash":"md5:00112233445566778899aabbccddeeff"}\n';
+    await f.storage.put(`assets/${ASSET_ID}/_archive/_manifest.jsonl`, new Blob([manifest]).stream(), "application/x-ndjson", manifest.length);
+    expect((await listing(f)).map((e) => e.path)).toEqual(["x.txt"]);
+  });
+});
+
 test("an extracted archive's manifest still answers first, byte for byte", async () => {
   const f = await unextracted("deflate.zip");
   const manifest = '{"path":"a.txt","size":6600,"contentType":"text/plain; charset=utf-8","hash":"md5:00112233445566778899aabbccddeeff"}\n';
