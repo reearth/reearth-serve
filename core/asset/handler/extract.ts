@@ -3,10 +3,12 @@ import { describeRoute } from "hono-openapi";
 import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata } from "../usecase";
+import { extractionCompleted } from "../model";
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { denyAnonymousUpload } from "./shared";
 import { jobResponseSchema, idParamSchema } from "../../../shared/openapi";
 import { jsonError, jsonResponse } from "../../openapi";
+import { failureClassOf } from "../../job/failure-class";
 
 export function registerExtractRoute(app: Hono<AppEnv>) {
   app.post("/:id/extract",
@@ -38,7 +40,7 @@ export function registerExtractRoute(app: Hono<AppEnv>) {
       return c.json({ error: "Asset is not an archive" }, 400);
     }
 
-    if (asset.status === "ready") {
+    if (extractionCompleted(asset)) {
       return c.json({ error: "Archive already extracted" }, 400);
     }
 
@@ -58,6 +60,7 @@ export function registerExtractRoute(app: Hono<AppEnv>) {
       assetId: id,
       type: "archive-extraction" as const,
       status: "pending" as const,
+      failureClass: failureClassOf("archive-extraction", asset.archiveFormat),
       createdAt: now,
       updatedAt: now,
       ...(sessionId && { sessionId }),

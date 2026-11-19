@@ -24,7 +24,7 @@ const SITE: SyntheticEntry[] = [
   { name: "b.bz2", data: text("y"), method: 12, compressed: text("BZh") },
 ];
 
-type Status = "pending" | "ready" | "failed" | undefined;
+type Status = "pending" | "extracted" | "ready" | "failed" | undefined;
 
 function arrived(entries: SyntheticEntry[] = SITE, status: Status = "pending") {
   return arrivedBytes(writeZip(entries), status);
@@ -33,7 +33,8 @@ function arrived(entries: SyntheticEntry[] = SITE, status: Status = "pending") {
 async function arrivedBytes(bytes: Uint8Array, status: Status = "pending") {
   const f = await fixture();
   const version = f.versions.versions.get(VERSION_ID)!;
-  f.versions.versions.set(VERSION_ID, { ...version, size: bytes.byteLength, status, archiveFormat: "zip" });
+  const row = status === "extracted" ? { status: "ready" as const, fileCount: 1 } : { status, fileCount: undefined };
+  f.versions.versions.set(VERSION_ID, { ...version, ...row, size: bytes.byteLength, archiveFormat: "zip" });
   await f.storage.delete(ORIGINAL);
   await f.storage.put(ORIGINAL, new Blob([bytes as BlobPart]).stream(), "application/zip", bytes.byteLength);
   const replace = async (next: Uint8Array) => {
@@ -193,14 +194,14 @@ describe("a zip uploaded with extraction skipped", () => {
 
 describe("an archive that finished extraction", () => {
   test("serves the extracted object, not the in-place entry", async () => {
-    const f = await arrived([{ name: "index.html", data: text("from the original") }], "ready");
+    const f = await arrived([{ name: "index.html", data: text("from the original") }], "extracted");
     const res = await f.get("index.html");
     expect(await res.text()).not.toBe("from the original");
     expect(res.headers.get("ETag")).toMatch(/^"[0-9a-f]{32}"$/);
   });
 
   test("answers 404 for an entry the extractor did not write, without reading the original", async () => {
-    const f = await arrived(SITE, "ready");
+    const f = await arrived(SITE, "extracted");
     const get = vi.spyOn(f.storage, "get");
     for (const path of ["secret.txt", "b.bz2", "tile.bin", "nope.js"]) {
       expect((await f.get(path)).status, path).toBe(404);
@@ -213,6 +214,12 @@ describe("a failed extraction", () => {
   test("still serves entries in place", async () => {
     const f = await arrived(SITE, "failed");
     expect(await (await f.get("index.html")).text()).toBe("<!doctype html><title>in place</title>");
+  });
+
+  test("of a zip left ready by its failure class still serves entries in place", async () => {
+    const f = await arrived(SITE, "ready");
+    expect(await (await f.get("index.html")).text()).toBe("<!doctype html><title>in place</title>");
+    expect(await (await f.get("tile.bin")).arrayBuffer()).toEqual(STORED.buffer);
   });
 });
 

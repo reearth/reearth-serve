@@ -52,6 +52,7 @@ function enumComponent<T extends z.ZodEnum>(ref: string, schema: T): T {
 export const assetTypeSchema = enumComponent("AssetType", z.enum(["file", "archive"]));
 export const assetStatusSchema = enumComponent("AssetStatus", z.enum(["pending", "ready", "extracting", "failed"]));
 export const archiveFormatSchema = enumComponent("ArchiveFormat", z.enum(["zip", "tar", "tar.gz", "tar.bz2"]));
+export const failureClassSchema = enumComponent("FailureClass", z.enum(["missing-feature", "slower-reads", "rejected-version"]));
 /**
  * How an asset's files are guarded (ADR-013 B7, ADR-014 §1).
  *
@@ -369,6 +370,7 @@ export const jobSchema = component("Job", z.object({
   assetId: z.string(),
   type: jobTypeSchema,
   status: jobStatusSchema,
+  failureClass: failureClassSchema.optional(),
   createdAt: z.number(),
   updatedAt: z.number(),
   completedAt: z.number().optional(),
@@ -491,6 +493,7 @@ export type ContainerMeta = z.infer<typeof containerSchema>;
 export type AssetType = z.infer<typeof assetTypeSchema>;
 export type AssetStatus = z.infer<typeof assetStatusSchema>;
 export type ArchiveFormat = z.infer<typeof archiveFormatSchema>;
+export type FailureClass = z.infer<typeof failureClassSchema>;
 export type AssetVersion = z.infer<typeof assetVersionSchema>;
 export type AssetMetadata = z.infer<typeof assetMetadataSchema>;
 export type AssetUploadResult = z.infer<typeof assetUploadResultSchema>;

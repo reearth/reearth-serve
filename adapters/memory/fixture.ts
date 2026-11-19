@@ -378,6 +378,7 @@ export async function fixture(overrides?: Partial<Deps>) {
     expiresAt: 0,
     type: "archive",
     status: "ready",
+    fileCount: 3,
   });
   versions.versions.set(VERSION_ID, {
     id: VERSION_ID,
@@ -389,6 +390,7 @@ export async function fixture(overrides?: Partial<Deps>) {
     createdAt: 0,
     type: "archive",
     status: "ready",
+    fileCount: 3,
   });
   const prefix = `assets/${ASSET_ID}/v/${VERSION_ID}`;
   await storage.put(`${prefix}/site.zip`, stream(bytes("PK\x03")), "application/zip", 3);

@@ -6,6 +6,7 @@ import type { AtomicWrites, MetadataStore, VersionStore } from "../asset/reposit
 import type { Deps } from "../types";
 import { extractionMessageForJob, type ExtractionMessage } from "../extraction/handler";
 import type { JobQueue } from "../queue/port";
+import { failMirror } from "../job/failure-class";
 
 const MAX_RETRIES = 5;
 // Cap per-tick re-enqueue work so a backlog of failed jobs cannot blow the
@@ -140,18 +141,16 @@ async function retriggerPendingJobs(
         updatedAt: Date.now(),
         completedAt: Date.now(),
       };
-      // Job and its mirror in one atomic write (ADR-012 §3). A version's job
-      // fails only that version; the asset and its other versions stay usable.
+      // Job and its mirror in one atomic write (ADR-012 §3).
       if (job.versionId) {
         const version = await versions.find(job.versionId);
-        if (version) version.status = "failed";
+        failMirror(updatedJob, version, "max retries exceeded");
         await writes.saveJob({ job: updatedJob, version: version ?? undefined });
       } else {
         const asset = await metadata.find(job.assetId);
-        if (asset) asset.status = "failed";
+        failMirror(updatedJob, asset, "max retries exceeded");
         await writes.saveJob({ job: updatedJob, asset: asset ?? undefined });
       }
-      console.log(`Marked job ${job.id} (asset ${job.assetId}) as permanently failed: max retries exceeded`);
       continue;
     }
 

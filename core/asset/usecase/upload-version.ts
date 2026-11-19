@@ -10,6 +10,7 @@ import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
 import type { JobQueue } from "../../queue/port";
 import type { ExtractionMessage } from "../../extraction/handler";
+import { failureClassOf } from "../../job/failure-class";
 
 export interface UploadVersionResult {
   version: AssetVersion;
@@ -82,6 +83,7 @@ export async function uploadVersion(
       assetId,
       type: "archive-extraction",
       status: "pending",
+      failureClass: failureClassOf("archive-extraction", archiveFormat),
       createdAt: now,
       updatedAt: now,
       versionId,

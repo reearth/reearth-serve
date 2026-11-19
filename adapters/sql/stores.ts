@@ -37,6 +37,7 @@ const JOB_META_KEYS = [
   "extractedSize",
   "retryFileCount",
   "retryExtractedSize",
+  "failureClass",
 ];
 
 // Cap unbounded list results so a runaway workspace/project doesn't ship the

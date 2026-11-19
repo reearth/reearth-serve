@@ -102,6 +102,7 @@ describe("Archive & Job", () => {
       expect(jobRes.status).toBe(200);
       const job = await jobRes.json() as any;
       expect(job.status).toBe("pending");
+      expect(job.failureClass).toBe("slower-reads");
 
       // Container reports running → asset becomes extracting
       const runRes = await fetch(`${BASE}/api/internal/jobs/${assetId}/status`, {
@@ -126,6 +127,45 @@ describe("Archive & Job", () => {
       expect(assetAfter.asset.status).toBe("ready");
       expect(assetAfter.asset.fileCount).toBe(1);
       expect(assetAfter.asset.extractedSize).toBe(5);
+    });
+
+    test("A zip whose extraction fails stays ready and serves from the original", async () => {
+      const { body: uploadBody, sessionId } = await uploadFile(buildMiniZip({ "a.txt": "still here" }), "fails.zip", "application/zip");
+      const assetId = uploadBody.asset.id;
+      const headers: Record<string, string> = sessionId ? { "X-Session-Id": sessionId } : {};
+
+      const failRes = await fetch(`${BASE}/api/internal/jobs/${assetId}/status`, {
+        method: "POST",
+        headers: internalHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ status: "failed", error: "forced" }),
+      });
+      expect(failRes.status).toBe(200);
+
+      const job = await (await fetch(`${BASE}/api/v1/jobs/${assetId}`, { headers })).json() as any;
+      expect(job).toMatchObject({ status: "failed", failureClass: "slower-reads" });
+      const asset = await (await fetch(`${BASE}/api/v1/assets/${assetId}`, { headers })).json() as any;
+      expect(asset.asset.status).toBe("ready");
+      const entry = await fetch(`${BASE}/files/${assetId}/a.txt`);
+      expect(entry.status).toBe(200);
+      expect(await entry.text()).toBe("still here");
+    });
+
+    test("A tar.gz whose extraction fails is marked failed", async () => {
+      const { body: uploadBody, sessionId } = await uploadFile(new TextEncoder().encode("fake-tar-gz"), "fails.tar.gz", "application/gzip");
+      const assetId = uploadBody.asset.id;
+      const headers: Record<string, string> = sessionId ? { "X-Session-Id": sessionId } : {};
+
+      const failRes = await fetch(`${BASE}/api/internal/jobs/${assetId}/status`, {
+        method: "POST",
+        headers: internalHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ status: "failed", error: "forced" }),
+      });
+      expect(failRes.status).toBe(200);
+
+      const job = await (await fetch(`${BASE}/api/v1/jobs/${assetId}`, { headers })).json() as any;
+      expect(job).toMatchObject({ status: "failed", failureClass: "missing-feature" });
+      const asset = await (await fetch(`${BASE}/api/v1/assets/${assetId}`, { headers })).json() as any;
+      expect(asset.asset.status).toBe("failed");
     });
 
     test("A version's job reports to its own job and mirrors onto the version, not the asset", async () => {

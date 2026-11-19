@@ -14,7 +14,7 @@ export type {
 } from "../../shared/api";
 
 // Re-export archive format detection (shared enum values)
-import type { ArchiveFormat } from "../../shared/api";
+import type { ArchiveFormat, AssetMetadata, AssetVersion } from "../../shared/api";
 
 const archiveExtensions: Record<string, ArchiveFormat> = {
   ".zip": "zip",
@@ -30,6 +30,10 @@ export function detectArchiveFormat(filename: string): ArchiveFormat | null {
     if (lower.endsWith(ext)) return format;
   }
   return null;
+}
+
+export function extractionCompleted(row: Pick<AssetMetadata | AssetVersion, "status" | "fileCount">): boolean {
+  return row.status === "ready" && row.fileCount !== undefined;
 }
 
 // Worker-only types (not in shared — use runtime-specific APIs)
