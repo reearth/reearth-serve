@@ -225,6 +225,8 @@ function injectDeps(deps: Deps, opts: { siteHost: boolean }): MiddlewareHandler<
     c.set("cache", deps.cache);
     c.set("signingSecret", deps.signingSecret);
     c.set("credentialedOrigins", deps.credentialedOrigins);
+    c.set("compat", deps.compat);
+    c.set("compatApiHost", deps.compatApiHost);
     c.set("siteHost", opts.siteHost);
     await next();
   };

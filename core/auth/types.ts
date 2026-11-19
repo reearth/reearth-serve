@@ -1,3 +1,5 @@
+import type { Role } from "../../shared/api";
+
 const REDACTED = "[redacted]";
 
 export class BearerCredential {
@@ -38,6 +40,20 @@ export interface AuthUser {
   email?: string;
   name?: string;
 }
+
+/**
+ * A role on exactly one project, optionally narrowed to one bucket of it.
+ * `bucket: null` reaches the whole project, as ADR-016 decision 11 service
+ * clients would.
+ */
+export type ProjectGrant = { projectId: string; bucket: string | null; role: Role };
+
+export type ServicePrincipal = {
+  kind: "service";
+  id: string;
+  grant: ProjectGrant;
+  revokedAt: number | null;
+};
 
 if (import.meta.vitest) {
   const { test, expect } = import.meta.vitest;

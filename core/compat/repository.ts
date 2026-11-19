@@ -1,0 +1,73 @@
+/**
+ * The compat_* tables behind one port (ADR-019).
+ *
+ * `claim`, `bind`, `releaseClaim` and `advanceUpload` are each one statement
+ * with compare-and-set semantics, so two writers racing on one key or one
+ * upload session cannot both win.
+ */
+import type {
+  Binding, BindingKind, BucketName, CompatBucket, CompatCredential, CredentialId,
+  ExactHashes, FolderKey, ObjectKey, UploadId, UploadSession,
+} from "./model";
+
+export type BindingKey = ObjectKey | FolderKey;
+
+export type ClaimResult =
+  /** This call inserted the claim or took over a stale one. `token` guards bind and release. */
+  | { kind: "claimed"; token: number }
+  /** The key already names an asset. */
+  | { kind: "bound"; binding: Binding }
+  /** Another writer's fresh claim holds the key. Retryable. */
+  | { kind: "busy" };
+
+export type DeleteBucketResult = "deleted" | "absent" | "not_empty";
+
+export interface CompatStore {
+  findBucket(name: BucketName): Promise<CompatBucket | null>;
+  listBuckets(projectId: string): Promise<CompatBucket[]>;
+  /** False when the name is taken, in any project. */
+  insertBucket(bucket: CompatBucket): Promise<boolean>;
+  /**
+   * Remove an empty bucket of `projectId`, revoke its credentials at
+   * `revokedAt` and drop its upload sessions, all or nothing. A bucket that
+   * still binds a key is left alone.
+   */
+  deleteBucket(projectId: string, name: BucketName, revokedAt: number): Promise<DeleteBucketResult>;
+
+  /** Bound rows only; a claim with no asset yet reads as absent. */
+  findBinding(bucket: BucketName, key: BindingKey): Promise<Binding | null>;
+  /** Claim `key` at `now`. A claim older than `staleBefore` is abandoned and may be taken over. */
+  claim(bucket: BucketName, key: BindingKey, kind: BindingKind, now: number, staleBefore: number): Promise<ClaimResult>;
+  /**
+   * Fill the claim `token` with `assetId`. True when the row now names
+   * `assetId`, including a repeat of the same bind; false when the claim was
+   * lost to a takeover or the key names another asset.
+   */
+  bind(bucket: BucketName, key: BindingKey, token: number, assetId: string): Promise<boolean>;
+  /** Drop the claim `token` this writer failed to fill. No-op once bound or taken over. */
+  releaseClaim(bucket: BucketName, key: BindingKey, token: number): Promise<void>;
+  deleteBinding(bucket: BucketName, key: BindingKey): Promise<void>;
+  /** Bound rows with key in [from, until), ascending by key, at most `limit`. */
+  scanBindings(bucket: BucketName, from: string, until: string | null, limit: number): Promise<Binding[]>;
+
+  findHashes(objectRef: string): Promise<ExactHashes | null>;
+  putHashes(objectRef: string, assetId: string, hashes: ExactHashes): Promise<void>;
+
+  findCredential(id: CredentialId): Promise<CompatCredential | null>;
+  findCredentialByEmail(clientEmail: string): Promise<CompatCredential | null>;
+  insertCredential(credential: CompatCredential): Promise<void>;
+  listCredentials(projectId: string): Promise<CompatCredential[]>;
+  /** Revoke a credential of `projectId`. Keeps the first revocation time. False when no such credential. */
+  revokeCredential(projectId: string, id: CredentialId, at: number): Promise<boolean>;
+
+  createUpload(session: UploadSession): Promise<void>;
+  findUpload(id: UploadId): Promise<UploadSession | null>;
+  /** Move the session only if it still has `expect`'s `received` and `state`. False when another request moved it first. */
+  advanceUpload(
+    id: UploadId,
+    expect: Pick<UploadSession, "received" | "state">,
+    next: Pick<UploadSession, "received" | "hashState" | "state" | "result">,
+  ): Promise<boolean>;
+  listExpiredUploads(now: number, limit: number): Promise<UploadSession[]>;
+  deleteUpload(id: UploadId): Promise<void>;
+}

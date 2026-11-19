@@ -14,6 +14,7 @@ import { CloudflareJobQueue } from "./queues";
 import { D1SqlClient } from "./sql";
 import { SqlAtomicWrites } from "../sql/writes";
 import { SqlSiteHostStore } from "../sql/site-hosts";
+import { SqlCompatStore } from "../sql/compat";
 import { DohDnsResolver } from "../doh/dns";
 import { CloudflareCustomHostnames } from "./custom-hostnames";
 import { NoopProvisioner, type CustomHostnameProvisioner } from "../../core/site/provisioner";
@@ -99,6 +100,8 @@ export function buildDeps(env: Env): Deps {
     // verify.
     signingSecret: env.SIGNING_SECRET || undefined,
     credentialedOrigins: parseCredentialedOrigins(env.CREDENTIALED_ORIGINS),
+    compat: new SqlCompatStore(sql),
+    compatApiHost: env.COMPAT_GCS_HOST || undefined,
 
     sessions: new KeyValueSessionStore(kv),
     sessionTtlSeconds: SESSION_TTL_SECONDS,

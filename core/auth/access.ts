@@ -1,6 +1,6 @@
 import type { Context } from "hono";
 import type { AppEnv } from "../types";
-import type { AuthUser } from "./types";
+import type { AuthUser, ServicePrincipal } from "./types";
 import type { Authorizer, AuthzRequest } from "./authorizer";
 import type { AssetMetadata } from "../asset/model";
 import type { Job } from "../job/model";
@@ -9,6 +9,7 @@ import type { MemberStore } from "../member/repository";
 import type { Project } from "../project/model";
 import type { ProjectStore } from "../project/repository";
 import { withinPolicy, type ProjectAction, type WorkspaceAction } from "./permissions";
+import type { Role } from "../../shared/api";
 
 export type AccessContext = {
   user: AuthUser | null;
@@ -38,7 +39,7 @@ export function accessCtx(c: Context<AppEnv>): AccessContext {
   };
 }
 
-async function permitted(ctx: AccessContext, req: AuthzRequest): Promise<boolean> {
+async function permitted(ctx: Pick<AccessContext, "authorizer">, req: AuthzRequest): Promise<boolean> {
   return withinPolicy(req) && await ctx.authorizer.check(req);
 }
 
@@ -67,11 +68,35 @@ export async function authorizeProject(
   if (!project.workspaceId) {
     return project.ownerId === user.id ? { ok: true, value: project } : notFound;
   }
-  const workspaceId = project.workspaceId;
-  const member = await ctx.members.find(workspaceId, user.id);
+  const member = await ctx.members.find(project.workspaceId, user.id);
   if (!member) return notFound;
-  const principal = { id: user.id, role: member.role };
-  const ok = await permitted(ctx, { principal, workspaceId, resource: { kind: "project", projectId }, action });
+  return decideProject(ctx, project, project.workspaceId, { id: user.id, role: member.role }, action);
+}
+
+export async function authorizeService(
+  ctx: Pick<AccessContext, "authorizer" | "projects">,
+  service: ServicePrincipal,
+  target: { projectId: string; bucket: string },
+  action: ProjectAction,
+): Promise<Decision<Project>> {
+  const { grant } = service;
+  if (service.revokedAt !== null || grant.projectId !== target.projectId) return notFound;
+  if (grant.bucket !== null && grant.bucket !== target.bucket) return notFound;
+  const project = await ctx.projects.find(target.projectId);
+  if (!project?.workspaceId) return notFound;
+  const principal = { id: `service:${service.id}`, role: service.grant.role };
+  return decideProject(ctx, project, project.workspaceId, principal, action);
+}
+
+async function decideProject(
+  ctx: Pick<AccessContext, "authorizer">,
+  project: Project,
+  workspaceId: string,
+  principal: { id: string; role: Role },
+  action: ProjectAction,
+): Promise<Decision<Project>> {
+  const resource = { kind: "project", projectId: project.id } as const;
+  const ok = await permitted(ctx, { principal, workspaceId, resource, action });
   return ok ? { ok: true, value: project } : forbidden;
 }
 
@@ -248,6 +273,61 @@ if (import.meta.vitest) {
     test("authorizeWorkspace returns the caller's membership", async () => {
       const d = await authorizeWorkspace(ctx({ user: "u1", role: "admin" }).access, "ws1", "manage_members");
       expect(d).toEqual({ ok: true, value: expect.objectContaining({ userId: "u1", role: "admin" }) });
+    });
+  });
+
+  describe("service principals", () => {
+    function service(over: Partial<ServicePrincipal["grant"]> = {}, revokedAt: number | null = null): ServicePrincipal {
+      return { kind: "service", id: "cred1", grant: { projectId: "p1", bucket: "media", role: "editor", ...over }, revokedAt };
+    }
+    const media = { projectId: "p1", bucket: "media" };
+
+    test("reach their own project and bucket with the service principal and their role", async () => {
+      const { access, authorizer } = ctx();
+      expect(await authorizeService(access, service(), media, "create_asset")).toEqual({ ok: true, value: wsProject });
+      expect(authorizer.check).toHaveBeenCalledWith({
+        principal: { id: "service:cred1", role: "editor" },
+        workspaceId: "ws1",
+        resource: { kind: "project", projectId: "p1" },
+        action: "create_asset",
+      });
+    });
+
+    test("another project, another bucket or a missing project is not_found and the authorizer is not asked", async () => {
+      const { access, authorizer } = ctx();
+      expect(await authorizeService(access, service(), { projectId: "p2", bucket: "media" }, "read_asset")).toEqual(NOT_FOUND);
+      expect(await authorizeService(access, service(), { projectId: "p1", bucket: "other" }, "read_asset")).toEqual(NOT_FOUND);
+      expect(await authorizeService(access, service({ projectId: "gone" }), { projectId: "gone", bucket: "media" }, "read_asset")).toEqual(NOT_FOUND);
+      expect(authorizer.check).not.toHaveBeenCalled();
+    });
+
+    test("a grant with no bucket reaches every bucket of its project", async () => {
+      const { access } = ctx();
+      expect((await authorizeService(access, service({ bucket: null }), { projectId: "p1", bucket: "other" }, "read_asset")).ok).toBe(true);
+    });
+
+    test("an action above the role is forbidden by the floor", async () => {
+      const { access, authorizer } = ctx();
+      expect(await authorizeService(access, service({ role: "viewer" }), media, "create_asset")).toEqual(FORBIDDEN);
+      expect(await authorizeService(access, service(), media, "manage_compat")).toEqual(FORBIDDEN);
+      expect(authorizer.check).not.toHaveBeenCalled();
+    });
+
+    test("an authorizer refusal is forbidden", async () => {
+      expect(await authorizeService(ctx({ allow: false }).access, service(), media, "read_asset")).toEqual(FORBIDDEN);
+    });
+
+    test("a revoked credential is not_found", async () => {
+      const { access, authorizer } = ctx();
+      expect(await authorizeService(access, service({}, 1), media, "read_asset")).toEqual(NOT_FOUND);
+      expect(authorizer.check).not.toHaveBeenCalled();
+    });
+
+    test("a project outside any workspace is never reached by a service", async () => {
+      const { access, authorizer } = ctx();
+      const own = service({ projectId: "p2" });
+      expect(await authorizeService(access, own, { projectId: "p2", bucket: "media" }, "read_asset")).toEqual(NOT_FOUND);
+      expect(authorizer.check).not.toHaveBeenCalled();
     });
   });
 

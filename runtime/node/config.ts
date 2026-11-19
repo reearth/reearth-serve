@@ -75,6 +75,7 @@ export type NodeConfig = {
   objectStore: ObjectStoreConfig | null;
   containerLauncher: ContainerLauncherKind;
   deliveryTokenKeys: DeliveryKeyRing | null;
+  compatApiHost: string | undefined;
 };
 
 const DEFAULT_PORT = 8788;
@@ -109,6 +110,7 @@ export function loadConfig(env: Env): NodeConfig {
     objectStore: objectStore(env),
     containerLauncher: containerLauncher(env.CONTAINER_LAUNCHER),
     deliveryTokenKeys: env.DELIVERY_TOKEN_KEYS ? parseDeliveryTokenKeys(env.DELIVERY_TOKEN_KEYS) : null,
+    compatApiHost: env.COMPAT_GCS_HOST || undefined,
   };
 }
 

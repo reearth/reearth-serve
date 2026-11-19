@@ -108,6 +108,8 @@ function fakeDeps(overrides: Partial<Deps> = {}): Deps {
     cache: strictFake("cache"),
     signingSecret: undefined,
     credentialedOrigins: [],
+    compat: strictFake("compat"),
+    compatApiHost: undefined,
     sessions: new MemorySessionStore(),
     sessionTtlSeconds: 60,
     internalApiSecret: undefined,
