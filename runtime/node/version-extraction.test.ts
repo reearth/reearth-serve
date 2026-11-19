@@ -119,6 +119,7 @@ describe("version extraction jobs", () => {
     await handleScheduled(runtime.deps);
 
     expect((await runtime.deps.jobs.find(versionJobId))!.status).toBe("failed");
+    expect((await runtime.deps.versions.find(versionId))!.status).toBe("ready");
     expect((await runtime.deps.metadata.find(assetId))!.status).not.toBe("failed");
   });
 

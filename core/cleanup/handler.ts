@@ -141,16 +141,15 @@ async function retriggerPendingJobs(
         updatedAt: Date.now(),
         completedAt: Date.now(),
       };
-      const reason = "max retries exceeded";
       // Job and its mirror in one atomic write (ADR-012 §3). A version's job
       // touches only that version; the asset and its other versions stay usable.
       if (job.versionId) {
         const version = await versions.find(job.versionId);
-        failMirror(updatedJob, version, reason);
+        failMirror(updatedJob, version, "max retries exceeded");
         await writes.saveJob({ job: updatedJob, version: version ?? undefined });
       } else {
         const asset = await metadata.find(job.assetId);
-        failMirror(updatedJob, asset, reason);
+        failMirror(updatedJob, asset, "max retries exceeded");
         await writes.saveJob({ job: updatedJob, asset: asset ?? undefined });
       }
       continue;
