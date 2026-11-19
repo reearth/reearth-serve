@@ -69,8 +69,9 @@ export interface EntryTable {
 }
 
 const RECORD = 48;
+const CD_RECORD_SIZE = 46;
 const NAME_OFFSET = 0;
-const NAME_LENGTH = 4;
+const CD_EXTRA_LENGTH = 4;
 const METHOD = 6;
 const FLAGS = 8;
 const CD_NAME_LENGTH = 10;
@@ -79,12 +80,18 @@ const COMPRESSED_SIZE = 16;
 const SIZE = 24;
 const LOCAL_HEADER_OFFSET = 32;
 const CD_INDEX = 40;
-const CD_EXTRA_LENGTH = 44;
+const NAME_LENGTH = 44;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
 
-export function buildTable(cd: Uint8Array, directory: Directory, rules: NameRules): EntryTable | null {
-  let records = new DataView(new ArrayBuffer(Math.max(directory.entryCount, 16) * RECORD));
+export interface BuiltTable {
+  table: EntryTable;
+  /** Records in the central directory, directories and duplicates included. */
+  recordCount: number;
+}
+
+export function buildTable(cd: Uint8Array, directory: Directory, rules: NameRules): BuiltTable | null {
+  const records = new DataView(new ArrayBuffer(Math.floor(cd.byteLength / CD_RECORD_SIZE) * RECORD));
   let names = new Uint8Array(Math.max(cd.byteLength, 1024));
   let count = 0;
   let heap = 0;
@@ -93,21 +100,20 @@ export function buildTable(cd: Uint8Array, directory: Directory, rules: NameRule
     const path = listedPath(record, rules);
     if (path === null) return;
     const bytes = encoder.encode(path);
-    if (bytes.byteLength > 0xffff) return;
-    if ((count + 1) * RECORD > records.byteLength) records = grow(records);
     while (heap + bytes.byteLength > names.byteLength) names = growBytes(names);
     names.set(bytes, heap);
     writeRecord(records, count, heap, bytes.byteLength, record);
     heap += bytes.byteLength;
     count++;
   });
-  if (!parser.push(cd) || parser.end() === null) return null;
+  const recordCount = parser.push(cd) ? parser.end() : null;
+  if (recordCount === null) return null;
 
   const offsets = new Uint32Array(count);
-  const lengths = new Uint16Array(count);
+  const lengths = new Uint32Array(count);
   for (let i = 0; i < count; i++) {
     offsets[i] = records.getUint32(i * RECORD + NAME_OFFSET, true);
-    lengths[i] = records.getUint16(i * RECORD + NAME_LENGTH, true);
+    lengths[i] = records.getUint32(i * RECORD + NAME_LENGTH, true);
   }
   const order = new Uint32Array(count).map((_, i) => i);
   order.sort((a, b) => compareBytes(names, offsets[a], lengths[a], names, offsets[b], lengths[b]) || a - b);
@@ -124,13 +130,13 @@ export function buildTable(cd: Uint8Array, directory: Directory, rules: NameRule
   const from = new Uint8Array(records.buffer);
   const to = new Uint8Array(sorted.buffer);
   kept.forEach((i, k) => to.set(from.subarray(i * RECORD, (i + 1) * RECORD), k * RECORD));
-  return { count: kept.length, records: sorted, names: names.slice(0, heap) };
+  return { table: { count: kept.length, records: sorted, names: names.slice(0, heap) }, recordCount };
 }
 
 function writeRecord(records: DataView, i: number, nameOffset: number, nameLength: number, record: CdRecord): void {
   const at = i * RECORD;
   records.setUint32(at + NAME_OFFSET, nameOffset, true);
-  records.setUint16(at + NAME_LENGTH, nameLength, true);
+  records.setUint32(at + NAME_LENGTH, nameLength, true);
   records.setUint16(at + METHOD, record.method, true);
   records.setUint16(at + FLAGS, record.flags, true);
   records.setUint16(at + CD_NAME_LENGTH, record.rawName.byteLength, true);
@@ -142,12 +148,6 @@ function writeRecord(records: DataView, i: number, nameOffset: number, nameLengt
   records.setUint16(at + CD_EXTRA_LENGTH, record.extraLength, true);
 }
 
-function grow(view: DataView<ArrayBuffer>): DataView<ArrayBuffer> {
-  const next = new Uint8Array(view.byteLength * 2);
-  next.set(new Uint8Array(view.buffer, view.byteOffset, view.byteLength));
-  return new DataView(next.buffer);
-}
-
 function growBytes(bytes: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
   const next = new Uint8Array(bytes.byteLength * 2);
   next.set(bytes);
@@ -157,7 +157,7 @@ function growBytes(bytes: Uint8Array<ArrayBuffer>): Uint8Array<ArrayBuffer> {
 export function nameAt(table: EntryTable, i: number): Uint8Array {
   const at = i * RECORD;
   const offset = table.records.getUint32(at + NAME_OFFSET, true);
-  return table.names.subarray(offset, offset + table.records.getUint16(at + NAME_LENGTH, true));
+  return table.names.subarray(offset, offset + table.records.getUint32(at + NAME_LENGTH, true));
 }
 
 export function entryAt(table: EntryTable, i: number): TableEntry {

@@ -76,6 +76,7 @@ export function scanView(
   key: string,
   directory: Directory,
   rules: NameRules,
+  entryCount: number,
   onStale: () => void,
 ): TableView {
   const pass = async (visit: (path: string, record: CdRecord) => void): Promise<void> => {
@@ -99,7 +100,7 @@ export function scanView(
   };
 
   return {
-    entryCount: directory.entryCount,
+    entryCount,
     rootPrefix: rules.rootPrefix,
     async find(path) {
       let found: TableEntry | null = null;

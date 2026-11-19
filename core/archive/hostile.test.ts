@@ -167,12 +167,12 @@ describe("hostile end records answer what Go's archive/zip answers", () => {
   });
 });
 
-describe("a name whose UTF-8 form outgrows 65,535 bytes", () => {
+describe("a name whose UTF-8 form outgrows 65,535 bytes (25,000 half-width katakana, 3 bytes each)", () => {
   const bytes = () => zipRaw([{ name: new Uint8Array(25_000).fill(0xb0) }, { name: enc.encode("ok.txt") }]);
 
   test("is listed", async () => {
     const names = await listNames(bytes());
-    expect(names.map((n) => n.length).sort()).toEqual([6, 25_000]);
+    expect(names.map((n) => n.length).sort((a, b) => a - b)).toEqual([6, 25_000]);
   });
 
   test("is listed the same by the scan view and the memory view", async () => {
@@ -181,9 +181,11 @@ describe("a name whose UTF-8 form outgrows 65,535 bytes", () => {
     const scan = await buildView(storage, source, () => {}, 0);
     if (!memory.ok || !scan.ok) throw new Error("refused");
     const list = async (built: typeof memory) =>
-      built.ok && (await built.view.list({ prefix: "", delimiter: "", after: "", limit: 10_000 })).entries.map((e) => e.path);
-    expect(await list(scan)).toEqual(await list(memory));
-    const found = await memory.view.find("░".repeat(25_000));
-    expect(found?.path.length).toBe(25_000);
+      built.ok ? (await built.view.list({ prefix: "", delimiter: "", after: "", limit: 10_000 })).entries.map((e) => e.path) : [];
+    const listed = await list(memory);
+    expect(await list(scan)).toEqual(listed);
+    const long = listed.find((p) => p.length === 25_000)!;
+    expect((await memory.view.find(long))?.path).toBe(long);
+    expect((await scan.view.find(long))?.path).toBe(long);
   });
 });
