@@ -315,6 +315,23 @@ received. With Serve as the endpoint the signed host is already Serve,
 so CMS must turn `replaceUploadURL` off: its `publicBase` becomes the
 read-only host of §6, and a rewritten URL would send the `PUT` there.
 
+When a path prefix is configured, the front end reads a signed request's
+path twice: as received, then with the prefix removed. It writes the
+object named by the reading whose signature verifies. The signature
+covers the path, so at most one reading verifies, and a bucket named
+like the prefix's first segment keeps working. The XML write applies
+`Content-MD5` (`400 BadDigest` on a mismatch, before the object becomes
+visible), `x-goog-content-length-range`, `x-goog-if-generation-match`
+and `x-goog-meta-*` from the request, for a bearer and a signed URL
+alike. A URL that signs any other `x-goog-*` header is refused with
+`501` rather than verified and ignored. Query keys are ordered by their
+UTF-8 bytes, as the Go signer orders them, and a signed URL with more
+than 64 query parameters is refused before any credential lookup. Both
+runtimes resolve `.` and `..` path segments before Serve reads the path,
+so such keys verify only when their slashes are sent as `%2F`. A
+virtual-hosted-style URL answers `501`; the Go client signs path style
+by default.
+
 ### 5. How an application connects
 
 CMS creates its client with `storage.NewClient(ctx)` and no options. It
