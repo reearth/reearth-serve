@@ -16,7 +16,7 @@ async function post(path: string, body: BodyInit, headers: Record<string, string
 }
 
 const text = (s: string) => new TextEncoder().encode(s);
-const ZIP = writeZip([{ name: "a.txt", data: text("in place") }, { name: "b.txt", data: text("also in place") }]);
+const ZIP = new Uint8Array(writeZip([{ name: "a.txt", data: text("in place") }, { name: "b.txt", data: text("also in place") }]));
 
 async function upload(path: string, filename: string): Promise<Record<string, unknown>> {
   const bytes = filename.endsWith(".zip") ? ZIP : text(`archive ${filename}`);
