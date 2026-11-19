@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, test } from "vitest";
 import { createApp } from "../../core/app";
 import { handleScheduled } from "../../core/cleanup/handler";
 import type { Job } from "../../shared/api";
+import { writeZip } from "../../adapters/memory/zip";
 import { buildNodeRuntime, type NodeRuntime } from "./deps";
 
 const SECRET = "test-secret";
@@ -14,8 +15,11 @@ async function post(path: string, body: BodyInit, headers: Record<string, string
   return app.fetch(new Request(`http://localhost${path}`, { method: "POST", body, headers }));
 }
 
+const text = (s: string) => new TextEncoder().encode(s);
+const ZIP = writeZip([{ name: "a.txt", data: text("in place") }, { name: "b.txt", data: text("also in place") }]);
+
 async function upload(path: string, filename: string): Promise<Record<string, unknown>> {
-  const bytes = new TextEncoder().encode(`archive ${filename}`);
+  const bytes = filename.endsWith(".zip") ? ZIP : text(`archive ${filename}`);
   const res = await post(path, bytes, {
     "Content-Type": "application/octet-stream",
     "Content-Length": String(bytes.byteLength),
@@ -37,12 +41,18 @@ async function uploadVersion(assetId: string, filename: string): Promise<{ id: s
   return version;
 }
 
-async function reportFailed(jobId: string): Promise<void> {
-  const res = await post(`/api/internal/jobs/${jobId}/status`, JSON.stringify({ status: "failed", error: "boom" }), {
+async function report(jobId: string, body: Record<string, unknown>): Promise<void> {
+  const res = await post(`/api/internal/jobs/${jobId}/status`, JSON.stringify(body), {
     "Content-Type": "application/json",
     Authorization: `Bearer ${SECRET}`,
   });
   expect(res.status).toBe(200);
+}
+
+const reportFailed = (jobId: string) => report(jobId, { status: "failed", error: "boom" });
+
+async function getFile(assetId: string, path: string): Promise<Response> {
+  return app.fetch(new Request(`http://localhost/files/${assetId}/${path}`));
 }
 
 async function exhaustRetries(jobId: string): Promise<void> {
@@ -88,6 +98,24 @@ describe.each(finalFailures)("when %s", (_, fail) => {
     expect(await assetStatus(id)).toBe("ready");
   });
 
+  test("a zip asset keeps serving its entries in place from the original", async () => {
+    const id = await uploadAsset("a.zip");
+    await fail(id);
+    const res = await getFile(id, "a.txt");
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("in place");
+  });
+
+  test("a zip version keeps serving its entries in place from the original", async () => {
+    const assetId = await uploadAsset("root.zip");
+    await report(assetId, { status: "completed", fileCount: 0 });
+    const zip = await uploadVersion(assetId, "v2.zip");
+    await fail(zip.jobId);
+    const res = await getFile(assetId, "b.txt");
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe("also in place");
+  });
+
   test("a tar.gz asset is failed and its job is failed with missing-feature", async () => {
     const id = await uploadAsset("a.tar.gz");
     await fail(id);
@@ -124,5 +152,14 @@ describe.each(finalFailures)("when %s", (_, fail) => {
     expect(await assetStatus(zip)).toBe("ready");
     expect((await job(tar)).failureClass).toBe("missing-feature");
     expect(await assetStatus(tar)).toBe("failed");
+  });
+});
+
+describe("a zip whose extraction completed", () => {
+  test("answers 404 for an entry the extractor did not write", async () => {
+    const id = await uploadAsset("a.zip");
+    await report(id, { status: "completed", fileCount: 1, extractedSize: 8 });
+    expect(await assetStatus(id)).toBe("ready");
+    expect((await getFile(id, "a.txt")).status).toBe(404);
   });
 });
