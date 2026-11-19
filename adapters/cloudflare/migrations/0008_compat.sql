@@ -19,6 +19,7 @@ CREATE TABLE compat_bindings (
   binding     TEXT NOT NULL CHECK (binding IN ('object', 'folder')),
   asset_id    TEXT,
   claimed_at  INTEGER NOT NULL,
+  claim_token TEXT NOT NULL,
   PRIMARY KEY (bucket, key)
 );
 

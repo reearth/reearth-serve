@@ -41,12 +41,19 @@ export interface AuthUser {
   name?: string;
 }
 
+export const SERVICE_ROLES = ["viewer", "editor"] as const satisfies readonly Role[];
+export type ServiceRole = (typeof SERVICE_ROLES)[number];
+
+export function isServiceRole(role: string): role is ServiceRole {
+  return (SERVICE_ROLES as readonly string[]).includes(role);
+}
+
 /**
  * A role on exactly one project, optionally narrowed to one bucket of it.
  * `bucket: null` reaches the whole project, as ADR-016 decision 11 service
  * clients would.
  */
-export type ProjectGrant = { projectId: string; bucket: string | null; role: Role };
+export type ProjectGrant = { projectId: string; bucket: string | null; role: ServiceRole };
 
 export type ServicePrincipal = {
   kind: "service";

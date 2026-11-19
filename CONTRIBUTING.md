@@ -161,7 +161,7 @@ Set via `npx wrangler secret put <NAME>`:
 | `CF_ZONE_ID` | No† | The zone the custom hostnames are registered on (ADR-013 B5) |
 | `SITE_FALLBACK_ORIGIN` | No | What a customer CNAMEs their domain at — Cloudflare for SaaS's fallback origin. Unset ⇒ the host of `BASE_URL` |
 | `SITE_DNS_RESOLVER_URL` | No | DNS-over-HTTPS endpoint used for the custom-domain TXT check. Default `https://cloudflare-dns.com/dns-query` |
-| `COMPAT_GCS_HOST` | No | Host the GCS-compatible API answers on (ADR-019), e.g. `storage.example.com`. Key files name it as their token endpoint. Unset ⇒ issuing a compat credential answers 503 |
+| `COMPAT_GCS_HOST` | No | Host the GCS-compatible API answers on (ADR-019), e.g. `storage.example.com`. A bare `host[:port]`; a scheme or path refuses to start. Key files name it as their token endpoint. Unset ⇒ issuing a compat credential answers 503 |
 | `ACCOUNTS_URL` | No | Optional adapter setting. Takes workspaces, members and decisions from an external accounts service; see [`adapters/accounts/README.md`](./adapters/accounts/README.md). Excludes `CERBOS_ENDPOINT` and needs `OIDC_ISSUER_URL`. An invalid value stops Node at startup; on Workers every `/api/` and `/files` request answers `500`. |
 
 \* Required for presigned URL uploads and archive extraction containers.

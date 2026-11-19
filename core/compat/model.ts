@@ -1,5 +1,5 @@
 import type { z } from "zod";
-import type { Role } from "../../shared/api";
+import type { ServicePrincipal, ServiceRole } from "../auth/types";
 import type { compatMountRuleSchema } from "../../shared/compat";
 
 export type BucketName = string & { readonly __brand: "BucketName" };
@@ -40,17 +40,11 @@ export type Binding =
 
 export type ExactHashes = { md5: Uint8Array; crc32c: number };
 
-export type CredentialRole = Extract<Role, "viewer" | "editor">;
-
-export function isCredentialRole(role: Role): role is CredentialRole {
-  return role === "viewer" || role === "editor";
-}
-
 export type CompatCredential = {
   id: CredentialId;
   projectId: string;
   bucket: BucketName;
-  role: CredentialRole;
+  role: ServiceRole;
   clientEmail: string;
   publicJwk: JsonWebKey;
   label: string | null;
@@ -58,6 +52,21 @@ export type CompatCredential = {
   createdAt: number;
   revokedAt: number | null;
 };
+
+export function servicePrincipalOf(credential: CompatCredential): ServicePrincipal {
+  const { id, projectId, bucket, role, revokedAt } = credential;
+  return { kind: "service", id, grant: { projectId, bucket, role }, revokedAt };
+}
+
+export function parseCompatApiHost(value: string | undefined): string | undefined {
+  if (!value) return undefined;
+  const label = "[a-z0-9](?:[a-z0-9-]*[a-z0-9])?";
+  const match = new RegExp(`^${label}(?:\\.${label})*(?::(\\d{1,5}))?$`).exec(value);
+  if (!match || Number(match[1] ?? 1) > 65535) {
+    throw new Error(`COMPAT_GCS_HOST "${value}" is not a bare host[:port] (lowercase, no scheme or path)`);
+  }
+  return value;
+}
 
 export type PutMeta = {
   contentType: string;

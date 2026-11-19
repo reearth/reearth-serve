@@ -1,4 +1,5 @@
-import type { BucketName, CompatCredential, CredentialId, CredentialRole } from "./model";
+import type { ServiceRole } from "../auth/types";
+import type { BucketName, CompatCredential, CredentialId } from "./model";
 
 /** The fields of a Google service-account key file that client libraries read. */
 export type KeyFile = {
@@ -14,7 +15,7 @@ export type KeyFile = {
 export type IssueInput = {
   projectId: string;
   bucket: BucketName;
-  role: CredentialRole;
+  role: ServiceRole;
   label: string | null;
   createdBy: string;
   apiOrigin: string;

@@ -2,9 +2,12 @@ import type {
   Binding, BindingKind, BucketName, CompatBucket, CompatCredential, CredentialId,
   ExactHashes, UploadId, UploadSession,
 } from "../../core/compat/model";
-import type { BindingKey, ClaimResult, CompatStore, DeleteBucketResult } from "../../core/compat/repository";
+import {
+  newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatStore, type DeleteBucketResult,
+} from "../../core/compat/repository";
 import type { Row, SqlClient, SqlStatement } from "../../core/sql/port";
 import { queryAll, queryFirst } from "./helpers";
+import { isServiceRole } from "../../core/auth/types";
 
 const BUCKET_COLUMNS = "name, project_id, mount_rule, created_at";
 const BINDING_COLUMNS = "bucket, key, binding, asset_id";
@@ -59,6 +62,16 @@ export class SqlCompatStore implements CompatStore {
     return bucket?.projectId === projectId ? "not_empty" : "absent";
   }
 
+  async deleteProject(projectId: string): Promise<void> {
+    const ofProject = "bucket IN (SELECT name FROM compat_buckets WHERE project_id = ?1)";
+    await this.db.batch([
+      { sql: `DELETE FROM compat_bindings WHERE ${ofProject}`, args: [projectId] },
+      { sql: `DELETE FROM compat_uploads WHERE ${ofProject}`, args: [projectId] },
+      { sql: "DELETE FROM compat_credentials WHERE project_id = ?1", args: [projectId] },
+      { sql: "DELETE FROM compat_buckets WHERE project_id = ?1", args: [projectId] },
+    ]);
+  }
+
   async findBinding(bucket: BucketName, key: BindingKey): Promise<Binding | null> {
     const row = await queryFirst(
       this.db,
@@ -69,31 +82,33 @@ export class SqlCompatStore implements CompatStore {
   }
 
   async claim(bucket: BucketName, key: BindingKey, kind: BindingKind, now: number, staleBefore: number): Promise<ClaimResult> {
+    const token = newClaimToken();
     const claimed = await queryFirst(
       this.db,
-      `INSERT INTO compat_bindings (bucket, key, binding, asset_id, claimed_at) VALUES (?1, ?2, ?3, NULL, ?4)
-         ON CONFLICT (bucket, key) DO UPDATE SET binding = excluded.binding, claimed_at = excluded.claimed_at
+      `INSERT INTO compat_bindings (bucket, key, binding, asset_id, claimed_at, claim_token) VALUES (?1, ?2, ?3, NULL, ?4, ?6)
+         ON CONFLICT (bucket, key) DO UPDATE
+           SET binding = excluded.binding, claimed_at = excluded.claimed_at, claim_token = excluded.claim_token
            WHERE compat_bindings.asset_id IS NULL AND compat_bindings.claimed_at < ?5
-         RETURNING claimed_at`,
-      [bucket, key, kind, now, staleBefore],
+         RETURNING claim_token`,
+      [bucket, key, kind, now, staleBefore, token],
     );
-    if (claimed) return { kind: "claimed", token: now };
+    if (claimed) return { kind: "claimed", token };
     const binding = await this.findBinding(bucket, key);
     return binding ? { kind: "bound", binding } : { kind: "busy" };
   }
 
-  async bind(bucket: BucketName, key: BindingKey, token: number, assetId: string): Promise<boolean> {
+  async bind(bucket: BucketName, key: BindingKey, token: ClaimToken, assetId: string): Promise<boolean> {
     const result = await this.db.execute(
       `UPDATE compat_bindings SET asset_id = ?4
-         WHERE bucket = ?1 AND key = ?2 AND ((asset_id IS NULL AND claimed_at = ?3) OR asset_id = ?4)`,
+         WHERE bucket = ?1 AND key = ?2 AND ((asset_id IS NULL AND claim_token = ?3) OR asset_id = ?4)`,
       [bucket, key, token, assetId],
     );
     return result.rowsAffected > 0;
   }
 
-  async releaseClaim(bucket: BucketName, key: BindingKey, token: number): Promise<void> {
+  async releaseClaim(bucket: BucketName, key: BindingKey, token: ClaimToken): Promise<void> {
     await this.db.execute(
-      "DELETE FROM compat_bindings WHERE bucket = ?1 AND key = ?2 AND asset_id IS NULL AND claimed_at = ?3",
+      "DELETE FROM compat_bindings WHERE bucket = ?1 AND key = ?2 AND asset_id IS NULL AND claim_token = ?3",
       [bucket, key, token],
     );
   }
@@ -139,14 +154,16 @@ export class SqlCompatStore implements CompatStore {
     return row ? parseCredential(row) : null;
   }
 
-  async insertCredential(c: CompatCredential): Promise<void> {
-    await this.db.execute(
-      `INSERT INTO compat_credentials (${CREDENTIAL_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
+  async insertCredential(c: CompatCredential): Promise<boolean> {
+    const result = await this.db.execute(
+      `INSERT INTO compat_credentials (${CREDENTIAL_COLUMNS}) SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10
+         WHERE EXISTS (SELECT 1 FROM compat_buckets WHERE name = ?3 AND project_id = ?2)`,
       [
         c.id, c.projectId, c.bucket, c.role, c.clientEmail, JSON.stringify(c.publicJwk),
         c.label, c.createdBy, c.createdAt, c.revokedAt,
       ],
     );
+    return result.rowsAffected > 0;
   }
 
   async listCredentials(projectId: string): Promise<CompatCredential[]> {
@@ -230,11 +247,13 @@ function parseBinding(row: Row): Binding {
 }
 
 function parseCredential(row: Row): CompatCredential {
+  const role = String(row.role);
+  if (!isServiceRole(role)) throw new Error(`compat credential ${String(row.id)} has role ${role}`);
   return {
     id: row.id as CredentialId,
     projectId: row.project_id as string,
     bucket: row.bucket as BucketName,
-    role: row.role as CompatCredential["role"],
+    role,
     clientEmail: row.client_email as string,
     publicJwk: JSON.parse(row.public_jwk as string),
     label: (row.label as string | null) ?? null,

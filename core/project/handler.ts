@@ -125,7 +125,7 @@ projectRoutes.delete("/:id",
 
     const access = await authorizeProject(accessCtx(c), c.req.valid("param").id, "delete");
     if (!access.ok) return deniedResponse(c, access, { notFound: "Project not found or not authorized" });
-    await deleteProject(c.get("projects"), access.value.id);
+    await deleteProject(c.get("projects"), c.get("compat"), access.value.id);
     return c.body(null, 204);
   },
 );
