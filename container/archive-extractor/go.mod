@@ -10,6 +10,7 @@ require (
 	github.com/aws/smithy-go v1.24.2
 	github.com/klauspost/compress v1.18.6
 	github.com/reearth/compressible/go v0.1.0
+	golang.org/x/text v0.31.0
 )
 
 require (

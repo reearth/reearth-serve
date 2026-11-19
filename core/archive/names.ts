@@ -20,12 +20,22 @@ export function classifyName(raw: Uint8Array, flags: number, unicodePath: Uint8A
   return { kind: "legacy", raw };
 }
 
+/**
+ * ICU (Node, workerd), WHATWG and the extractor's x/text agree on the JIS X 0208
+ * and IBM extension pairs but not on 0x80, the user-defined area, or ICU's swap
+ * of 0x1A, 0x1C and 0x7F, so a name that decodes to any of those is not
+ * Shift_JIS. container/archive-extractor/zipnames.go applies the same rule.
+ */
+const AMBIGUOUS_SHIFT_JIS = /[\u001a\u001c\u007f\u0080\ue000-\uf8ff]/u;
+
 export function decodeShiftJis(raw: Uint8Array): string | null {
+  let name: string;
   try {
-    return strictShiftJis.decode(raw);
+    name = strictShiftJis.decode(raw);
   } catch {
     return null;
   }
+  return AMBIGUOUS_SHIFT_JIS.test(name) ? null : name;
 }
 
 export function decodeLegacy(raw: Uint8Array, encoding: LegacyEncoding): string {

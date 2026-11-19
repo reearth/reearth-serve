@@ -16,6 +16,7 @@ type ZipExtractor struct {
 	reader  *zip.Reader
 	storage ObjectStorage
 	key     string
+	names   []string
 }
 
 // NewZipExtractor creates a ZipExtractor. It reads the Central Directory
@@ -60,11 +61,19 @@ func NewZipExtractor(ctx context.Context, storage ObjectStorage, key string) (*Z
 		}
 	}
 
-	return &ZipExtractor{reader: zr, storage: storage, key: key}, nil
+	return &ZipExtractor{reader: zr, storage: storage, key: key, names: zipNames(zr.File)}, nil
 }
 
-// ListEntries streams entries from the ZIP Central Directory one at a time.
+// ListEntries streams entries from the ZIP Central Directory one at a time,
+// with decoded names. When names collide the last entry in directory order
+// wins and the earlier ones are marked superseded.
 func (z *ZipExtractor) ListEntries(ctx context.Context, yield func(entry ArchiveEntry) error) error {
+	winner := make(map[string]int, len(z.names))
+	for i, f := range z.reader.File {
+		if !f.FileInfo().IsDir() {
+			winner[NormalizeSeparators(z.names[i])] = i
+		}
+	}
 	for i, f := range z.reader.File {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -73,12 +82,14 @@ func (z *ZipExtractor) ListEntries(ctx context.Context, yield func(entry Archive
 		if err != nil {
 			offset = -1
 		}
+		isDir := f.FileInfo().IsDir()
 		if err := yield(ArchiveEntry{
 			Index:          i,
-			Path:           f.Name,
+			Path:           z.names[i],
 			Size:           int64(f.UncompressedSize64),
 			CompressedSize: int64(f.CompressedSize64),
-			IsDirectory:    f.FileInfo().IsDir(),
+			IsDirectory:    isDir,
+			Superseded:     !isDir && winner[NormalizeSeparators(z.names[i])] != i,
 			Offset:         offset,
 			Method:         f.Method,
 		}); err != nil {
