@@ -10,6 +10,7 @@ import { jobSchema } from "../../shared/api";
 import { hostingOnExtractionComplete } from "../site/hosting";
 import { extractionMessageForJob } from "../extraction/handler";
 import { jsonError, jsonResponse } from "../openapi";
+import { classify, failMirror } from "./failure-class";
 
 // --- Public API routes (mounted at /api/v1/jobs) ---
 
@@ -193,6 +194,7 @@ jobInternalRoutes.post("/:id/status", async (c) => {
     ? await c.get("versions").find(job.versionId).catch(readFailed)
     : null;
   const mirror = job.versionId ? version : asset;
+  classify(job, mirror);
 
   if (mirror && body.status === "running") {
     mirror.status = "extracting";
@@ -202,8 +204,8 @@ jobInternalRoutes.post("/:id/status", async (c) => {
     mirror.fileCount = job.fileCount;
     mirror.extractedSize = job.extractedSize;
   }
-  if (mirror && body.status === "failed") {
-    mirror.status = "failed";
+  if (body.status === "failed") {
+    failMirror(job, mirror, body.error ?? "reported by the extractor");
   }
   if (asset && body.status !== "failed") {
     extendDemoExpiry(asset, ttl);

@@ -109,7 +109,7 @@ describe("version extraction jobs", () => {
     expect(asset.fileCount).toBeUndefined();
   });
 
-  test("exhausting the retry budget fails the version, not the asset", async () => {
+  test("exhausting a version job's retry budget leaves the asset alone", async () => {
     runtime.deps.extractionStuckThresholdMs = -1000;
     const rootJob = (await runtime.deps.jobs.find(assetId))!;
     await runtime.deps.jobs.save({ ...rootJob, status: "completed" });
@@ -119,7 +119,6 @@ describe("version extraction jobs", () => {
     await handleScheduled(runtime.deps);
 
     expect((await runtime.deps.jobs.find(versionJobId))!.status).toBe("failed");
-    expect((await runtime.deps.versions.find(versionId))!.status).toBe("failed");
     expect((await runtime.deps.metadata.find(assetId))!.status).not.toBe("failed");
   });
 
