@@ -26,7 +26,13 @@ WORKER=http://localhost:18732 node harness.mjs    # through workerd
 
 `ONLY=chromium,firefox` limits the browsers. `CHROME=<path>` points
 Chromium at an existing binary. The Worker's `/decode/<case>` route pipes
-the body through `DecompressionStream("gzip")`.
+the body through `DecompressionStream("gzip")`. Its `/assemble` route
+builds one gzip member from a segment table and a `Range` read of the raw
+full-flush segments, as §5 describes, and the `worker-assembled-*` cases
+check it when `WORKER` is set.
+
+`gzip-delivery/size-probe.mjs <file>...` prints the size cost of a full
+flush every 64 KiB, 256 KiB and 1 MiB against one deflate stream.
 
 ## Corpus (measurements 2 to 5)
 

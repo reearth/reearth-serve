@@ -102,7 +102,27 @@ const ffCut = ff.slice(10, 40);
 add("fullflush-range-cut", Buffer.concat(split(big, 65536).slice(10, 40)), singleMemberFromSegments(ffCut));
 add("fullflush-one-seg", split(big, 65536)[7], singleMemberFromSegments([ff[7]]));
 
+const segBody = Buffer.concat(ff.map((s) => s.raw));
+const segIndex = [];
+for (let i = 0, off = 0; i < ff.length; off += ff[i].raw.length, i++) segIndex.push({ off, clen: ff[i].raw.length, crc: ff[i].crc, len: ff[i].len });
+if (process.env.WORKER) {
+  add("worker-assembled-cut", Buffer.concat(split(big, 65536).slice(10, 40)), Buffer.alloc(0), { path: "assemble?from=10&to=40" });
+  add("worker-assembled-whole", big, Buffer.alloc(0), { path: `assemble?from=0&to=${ff.length}` });
+}
+
 const server = http.createServer((req, res) => {
+  if (req.url === "/segindex") {
+    res.writeHead(200, { "content-type": "application/json" });
+    res.end(JSON.stringify(segIndex));
+    return;
+  }
+  if (req.url === "/segments") {
+    const m = /bytes=(\d+)-(\d+)/.exec(req.headers.range ?? "");
+    const [a, b] = m ? [Number(m[1]), Number(m[2])] : [0, segBody.length - 1];
+    res.writeHead(m ? 206 : 200, { "content-type": "application/octet-stream", "content-length": String(b - a + 1) });
+    res.end(segBody.subarray(a, b + 1));
+    return;
+  }
   if (req.url.startsWith("/raw/")) {
     const c = cases[decodeURIComponent(req.url.slice(5))];
     if (!c) { res.writeHead(404); res.end(); return; }
@@ -155,7 +175,7 @@ async function inBrowser(type) {
       } catch (e) {
         return { ok: false, error: String(e) };
       }
-    }, [`${base}/${encodeURIComponent(name)}`, c.expect]);
+    }, [`${base}/${c.path ?? encodeURIComponent(name)}`, c.expect]);
     results[name].expectBytes = c.plain.length;
   }
   await browser.close();
@@ -165,7 +185,7 @@ async function inBrowser(type) {
 async function inNode() {
   const results = {};
   for (const [name, c] of Object.entries(cases)) {
-    const r = await fetch(`${base}/${encodeURIComponent(name)}`);
+    const r = await fetch(`${base}/${c.path ?? encodeURIComponent(name)}`);
     const buf = Buffer.from(await r.arrayBuffer());
     results[name] = { ok: sha(buf) === c.expect, bytes: buf.length, expectBytes: c.plain.length };
   }

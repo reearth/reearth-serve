@@ -220,7 +220,7 @@ member (Measurement 1). BGZF, which is a run of members, is therefore not
 a delivery format.
 
 A repacked object is instead one gzip member whose DEFLATE stream is
-written with a full flush at every access point (every 64 KiB of input by
+written with a full flush at every access point (every 1 MiB of input by
 default). A full flush ends the block on a byte boundary and resets the
 dictionary, so the compressed bytes between two access points decode on
 their own with no saved window. The access-point table records, per
@@ -241,16 +241,22 @@ combining CRCs costs microseconds, so this path costs about the same CPU
 as passing an uncompressed object through. The choice between "range read
 and decode" and "store expanded and pass through" disappears.
 
-The repacker also flushes at every entry boundary of the container, so an
-entry is exactly a run of whole segments and its response carries no
-bytes of its neighbours. The rules for gzip-stored objects in
-`core/file/handler.ts` still apply: the single member is passed through
-when the client accepts gzip and sent no `Range`, and decoded and sliced
-in the Worker otherwise.
+The repacker also starts a segment at every entry that is at least one
+interval long, so such an entry is a run of whole segments and its
+response carries no bytes of its neighbours. Smaller entries share
+segments; reading one decodes at most one interval in the Worker and
+returns the slice, which costs a few milliseconds of CPU and streams. The
+rules for gzip-stored objects in `core/file/handler.ts` still apply: the
+single member is passed through when the client accepts gzip and sent no
+`Range`, and decoded and sliced in the Worker otherwise.
 
-A full flush every 64 KiB costs about 1% in size against one unbroken
-stream on CityGML-like text, about the same as BGZF's per-member headers
-(Measurement 1).
+The interval is a size trade-off. A full flush resets the dictionary, and
+CityGML compresses about 20 times, so short segments lose most of their
+context. On PLATEAU bldg files a flush every 64 KiB costs 33% to 61% in
+size against one unbroken stream, every 256 KiB costs 9% to 16%, and
+every 1 MiB costs 2% to 4% (Measurement 1). BGZF's 64 KiB members lose the
+same. Free egress makes the over-read of a wide interval cheap, so 1 MiB
+is the default.
 
 **gzip is the single encoding.** zstd reached Safari in 26.3
 (2026-02-11) and became Baseline Newly Available that day; Chrome 123 and
@@ -526,8 +532,21 @@ local workerd Worker with `encodeBody: "manual"`.
 §5 was rewritten from BGZF to full-flush segments in one member. That
 layout returned the exact bytes in Chromium, curl, workerd and Node
 `DecompressionStream`, for the whole object, a 30-segment cut and a single
-segment, with the trailer CRC built by `crc32_combine`. Its size cost
-was 1.0% against one unbroken stream (BGZF: 1.3%) on synthetic text.
+segment, with the trailer CRC built by `crc32_combine`. A local workerd
+Worker that assembled the member itself, from one `Range` read of the raw
+segments and a segment table, gave Chromium the exact bytes too.
+
+The size cost of the flushes, against one unbroken deflate stream at
+level 6, on four PLATEAU bldg `.gml` files of 26 to 43 MB:
+
+| Interval | Size cost |
+|---|---|
+| 64 KiB | 33% to 61% |
+| 256 KiB | 9% to 16% |
+| 1 MiB | 2% to 4% |
+
+On synthetic CityGML-like text the 64 KiB cost was only 1.0%, because that
+text compresses 8 times where real bldg files compress 17 to 26 times.
 
 **2. The p99 zip needs a container index.** Sample: every zip resource of
 the 367 `plateau*` datasets on geospatial.jp CKAN, 1,635 of 1,642 parsed
