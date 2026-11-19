@@ -225,7 +225,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
   // `hosting`, so only rows from before finalisation parse them per request.
   const finalised = (version ?? asset).container !== undefined;
   const hosting = isArchive
-    ? hostingFor(asset, version) ?? (src.inPlace && !src.tryExtracted && !finalised ? await readSiteHostingInPlace(src, src.inPlace) : null)
+    ? hostingFor(asset, version) ?? (src.inPlace && !finalised ? await readSiteHostingInPlace(src, src.inPlace) : null)
     : null;
 
   // The control files are the site's configuration, not its content. They are
@@ -275,7 +275,11 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     }
   }
 
-  if (isRefused(found)) return decorate(c.json({ error: found.error }, found.refused));
+  if (isRefused(found)) {
+    const res = c.json({ error: found.error }, found.refused);
+    if (found.refused === 416) res.headers.set("Content-Range", `bytes */${found.size}`);
+    return decorate(res);
+  }
 
   let located = found;
   if (!located) {
@@ -434,12 +438,16 @@ fileRoutes.get("/:id/:path{.+}",
         },
       },
       404: jsonError("Asset, file, or thumbnail not found. An archive with a root `404.html` answers with that page instead"),
+      416: {
+        ...jsonError("A `Range` a zip entry served from the original cannot satisfy: it starts at or past the entry's end, or ends before it starts"),
+        headers: { ...nosniff, ...corsHeaders, "Content-Range": stringHeader("`bytes */<size>`, the entry's size") },
+      },
       429: {
         ...jsonError("Too many wrong passwords from this client for this asset; wait for `Retry-After`"),
         headers: { ...nosniff, ...corsHeaders, "Retry-After": stringHeader("Seconds until the window rolls over") },
       },
       501: jsonError("The zip entry is encrypted, or compressed with a method other than store and deflate"),
-      502: jsonError("The zip's local header contradicts its central directory"),
+      502: jsonError("The zip entry's bytes do not match its central directory: a contradicting local header, or sizes and offsets that do not fit the file"),
       503: jsonError("The asset is password-protected but the deployment has no `SIGNING_SECRET`, or its protection is misconfigured"),
     },
   }),

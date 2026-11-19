@@ -24,9 +24,14 @@ const SITE: SyntheticEntry[] = [
   { name: "b.bz2", data: text("y"), method: 12, compressed: text("BZh") },
 ];
 
-async function arrived(entries: SyntheticEntry[] = SITE, status: "pending" | "ready" | undefined = "pending") {
+type Status = "pending" | "ready" | "failed" | undefined;
+
+function arrived(entries: SyntheticEntry[] = SITE, status: Status = "pending") {
+  return arrivedBytes(writeZip(entries), status);
+}
+
+async function arrivedBytes(bytes: Uint8Array, status: Status = "pending") {
   const f = await fixture();
-  const bytes = writeZip(entries);
   const version = f.versions.versions.get(VERSION_ID)!;
   f.versions.versions.set(VERSION_ID, { ...version, size: bytes.byteLength, status, archiveFormat: "zip" });
   await f.storage.delete(ORIGINAL);
@@ -154,6 +159,16 @@ describe("serving a zip entry in place, before extraction", () => {
     expect((await f.get("_headers")).status).toBe(404);
   });
 
+  test("_headers still apply on the first request after the original is rewritten", async () => {
+    const headers = { name: "_headers", data: text("/index.html\n  X-From-Zip: yes\n") };
+    const f = await arrived([{ name: "index.html", data: text("one") }, headers]);
+    expect((await f.get("index.html")).headers.get("X-From-Zip")).toBe("yes");
+    await f.replace(writeZip([{ name: "index.html", data: text("two") }, headers]));
+    const res = await f.get("index.html");
+    expect(await res.text()).toBe("two");
+    expect(res.headers.get("X-From-Zip")).toBe("yes");
+  });
+
   test("a protected asset is challenged before the original is read", async () => {
     const f = await arrived();
     await protect(f.metadata, ASSET_ID, "hunter2");
@@ -184,8 +199,78 @@ describe("an archive that finished extraction", () => {
     expect(res.headers.get("ETag")).toMatch(/^"[0-9a-f]{32}"$/);
   });
 
-  test("falls back to the original for an entry the extractor did not write", async () => {
-    const f = await arrived([{ name: "late.txt", data: text("in place after all") }], "ready");
-    expect(await (await f.get("late.txt")).text()).toBe("in place after all");
+  test("answers 404 for an entry the extractor did not write, without reading the original", async () => {
+    const f = await arrived(SITE, "ready");
+    const get = vi.spyOn(f.storage, "get");
+    for (const path of ["secret.txt", "b.bz2", "tile.bin", "nope.js"]) {
+      expect((await f.get(path)).status, path).toBe(404);
+    }
+    expect(get.mock.calls.filter(([key]) => key === ORIGINAL)).toEqual([]);
+  });
+});
+
+describe("a failed extraction", () => {
+  test("still serves entries in place", async () => {
+    const f = await arrived(SITE, "failed");
+    expect(await (await f.get("index.html")).text()).toBe("<!doctype html><title>in place</title>");
+  });
+});
+
+describe("an entry whose central directory claims do not fit the original", () => {
+  const CD_SIGNATURE = 0x02014b50;
+  const PLAIN = text("hello, hostile zip!");
+
+  function patchCompressedSize(bytes: Uint8Array, compressedSize: number): Uint8Array {
+    const out = bytes.slice();
+    const view = new DataView(out.buffer);
+    for (let i = 0; i + 4 <= out.byteLength; i++) {
+      if (view.getUint32(i, true) === CD_SIGNATURE) {
+        view.setUint32(i + 20, compressedSize, true);
+        return out;
+      }
+    }
+    throw new Error("no central directory record");
+  }
+
+  test.each([
+    ["a stored entry claiming 20 bytes more than it has", [{ name: "a.txt", data: PLAIN }], PLAIN.byteLength + 20],
+    ["a stored entry claiming 5 bytes fewer than it has", [{ name: "a.txt", data: PLAIN }], PLAIN.byteLength - 5],
+    ["a deflate entry claiming data past the end of the file", [deflated("a.txt", "abc ".repeat(40))], 0x10000],
+  ])("%s answers 502 before any body", async (_, entries, compressedSize) => {
+    const f = await arrivedBytes(patchCompressedSize(writeZip(entries), compressedSize));
+    const res = await f.get("a.txt", { "Accept-Encoding": "gzip" });
+    expect(res.status).toBe(502);
+    expect(res.headers.get("Content-Type")).toMatch(/^application\/json/);
+    expect(await res.json()).toEqual({ error: expect.any(String) });
+  });
+});
+
+describe("a Range an in-place entry cannot satisfy", () => {
+  const BIG = new Uint8Array(3 << 20).map((_, i) => (i * 13) & 0xff);
+
+  test.each([
+    ["starts at the end", `bytes=${BIG.byteLength}-`],
+    ["starts past the end", `bytes=${BIG.byteLength + 10}-${BIG.byteLength + 20}`],
+    ["ends before it starts", "bytes=2000000-100"],
+  ])("%s answers 416 with the entry size, never reading the entry or rebuilding the directory", async (_, range) => {
+    const f = await arrived([{ name: "big.bin", data: BIG }]);
+    await (await f.get("big.bin", { Range: "bytes=0-9" })).arrayBuffer();
+    const get = vi.spyOn(f.storage, "get");
+    for (let i = 0; i < 3; i++) {
+      const res = await f.get("big.bin", { Range: range });
+      expect(res.status).toBe(416);
+      expect(res.headers.get("Content-Range")).toBe(`bytes */${BIG.byteLength}`);
+    }
+    expect(get).not.toHaveBeenCalled();
+    const ok = await f.get("big.bin", { Range: "bytes=0-9" });
+    expect(new Uint8Array(await ok.arrayBuffer())).toEqual(BIG.subarray(0, 10));
+    expect(get.mock.calls).toHaveLength(1);
+  });
+
+  test("a deflate entry answers 416 past its decoded size", async () => {
+    const f = await arrived();
+    const res = await f.get("dir/a.geojson", { Range: `bytes=${DEFLATED.length}-` });
+    expect(res.status).toBe(416);
+    expect(res.headers.get("Content-Range")).toBe(`bytes */${DEFLATED.length}`);
   });
 });
