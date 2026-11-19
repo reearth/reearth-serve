@@ -333,9 +333,10 @@ describe("Archive & Job", () => {
       },
     );
 
-    // The Vite dev server fetches the worker through undici, which asks for
-    // gzip on its own, decodes the body and keeps the encoded Content-Length,
-    // so a whole-entry response is only checkable on the Node runtime.
+    // Under the Vite dev server the worker sees Accept-Encoding gzip even from
+    // a client that sent none, and miniflare's dispatchFetch decodes the body
+    // but keeps the encoded Content-Length, so a whole deflate entry arrives
+    // truncated. A whole-entry response is only checkable on the Node runtime.
     test.skipIf(!NODE_RUNTIME).each(["deflate.zip", "store.zip", "descriptor.zip", "shift_jis.zip", "site.zip"])(
       "every entry of %s comes back whole with its length to a client without gzip",
       async (name) => {
@@ -453,7 +454,6 @@ function entryUrl(assetId: string, path: string): string {
   return `${BASE}/files/${assetId}/${path.split("/").map(encodeURIComponent).join("/")}`;
 }
 
-/** Set flags or the method on the first entry's local and central headers. */
 function patchFirstEntry(zip: Uint8Array, patch: { flags?: number; method?: number }): Uint8Array {
   const out = zip.slice();
   const view = new DataView(out.buffer);

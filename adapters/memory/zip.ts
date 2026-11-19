@@ -4,9 +4,7 @@ export interface SyntheticEntry {
   commentPadding?: number;
   method?: number;
   flags?: number;
-  /** The bytes written for `data` when `method` is not store. */
   compressed?: Uint8Array;
-  /** Bytes appended to the local header only, as some writers do. */
   localExtra?: Uint8Array;
 }
 

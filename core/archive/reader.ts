@@ -70,14 +70,6 @@ export interface ArchiveListPage {
 
 export type ArchiveOpenFailure = "not-found" | "unsupported-method" | "encrypted" | "corrupt" | "changed";
 
-/**
- * A stored entry comes back as itself, with `range` set when one was asked
- * for. A deflate entry always comes back whole, as one gzip member with
- * `contentEncoding: "gzip"`, exactly like a gzip-stored object, and
- * `originalSize` is its decoded size. `changed` means the original no longer
- * matches the cached central directory; the cache entry is already gone, so
- * opening the archive again reads it fresh.
- */
 export type ArchiveOpenResult =
   | { ok: true; file: StoredFile; originalSize: number }
   | { ok: false; reason: ArchiveOpenFailure };
@@ -101,14 +93,14 @@ export interface ArchiveReader {
 export async function openArchive(deps: ArchiveDeps, source: ArchiveSource): Promise<OpenResult> {
   const cacheKey = `${source.key}#${source.size}`;
   const evict = () => deps.archives.evict(cacheKey);
-  let fresh = false;
+  let builtThisRequest = false;
   const built = await deps.archives.load(cacheKey, () => {
-    fresh = true;
+    builtThisRequest = true;
     return buildView(deps.storage, source, evict);
   });
   if (!built.ok) return built;
   const archive: ArchiveObject = { storage: deps.storage, key: source.key, size: source.size, etag: built.view.etag };
-  return { ok: true, reader: readerOver(built.view, archive, { fresh, evict }) };
+  return { ok: true, reader: readerOver(built.view, archive, { builtThisRequest, evict }) };
 }
 
 export async function buildView(
@@ -158,12 +150,7 @@ async function surveyStream(storage: FileStorage, source: ArchiveSource, directo
   return parser.end() === null ? null : survey.result();
 }
 
-/**
- * `fresh` says this request built the view. A local header that contradicts a
- * view read moments ago is a corrupt archive; one that contradicts a cached
- * view may be a replaced object, so the view is dropped for a re-read.
- */
-function readerOver(view: TableView, archive: ArchiveObject, cached: { fresh: boolean; evict: () => void }): ArchiveReader {
+function readerOver(view: TableView, archive: ArchiveObject, cached: { builtThisRequest: boolean; evict: () => void }): ArchiveReader {
   const stale = (): ArchiveOpenResult => {
     cached.evict();
     return { ok: false, reason: "changed" };
@@ -193,7 +180,7 @@ function readerOver(view: TableView, archive: ArchiveObject, cached: { fresh: bo
       const range = entry.method === STORED && options?.range ? clamp(options.range, entry.size) : null;
       const read = await readEntryBytes(archive, entry, range ?? undefined);
       if (!read.ok) {
-        if (read.reason === "mismatch" && cached.fresh) return { ok: false, reason: "corrupt" };
+        if (read.reason === "mismatch" && cached.builtThisRequest) return { ok: false, reason: "corrupt" };
         return stale();
       }
 
@@ -217,11 +204,6 @@ function clamp(range: Span, size: number): Span {
   return { offset, length: Math.min(range.length, size - offset) };
 }
 
-/**
- * Strong, since the bytes of one entry of one original never change. The
- * original's tag keeps a re-upload from matching an old entry; the CRC keeps
- * two entries apart.
- */
 function entryEtag(archiveEtag: string | undefined, entry: TableEntry): string {
   const crc = entry.crc32.toString(16).padStart(8, "0");
   const original = archiveEtag?.replace(/^W\//, "").replace(/"/g, "");

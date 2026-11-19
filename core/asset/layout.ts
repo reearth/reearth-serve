@@ -19,11 +19,6 @@ export interface Layout {
   archiveFormat?: string;
 }
 
-/**
- * The versioned layout first, the legacy one second. The Cloudflare launcher
- * still extracts a version's files under the legacy prefix, so a lookup that
- * only knew the versioned one would miss them.
- */
 export function assetLayouts(asset: AssetMetadata, version: AssetVersion | null): Layout[] {
   const legacy = layoutOf(`assets/${asset.id}`, asset);
   return version ? [layoutOf(`assets/${asset.id}/v/${version.id}`, version), legacy] : [legacy];
@@ -54,7 +49,6 @@ export function manifestKey(layout: Layout): string {
   return `${layout.root}/_archive/_manifest.jsonl`;
 }
 
-/** The original as an in-place source, for the formats that can be read in place. */
 export function archiveSource(layout: Layout): ArchiveSource | null {
   if (layout.archiveFormat !== "zip") return null;
   return { key: mainKey(layout), size: layout.size, filename: layout.filename };

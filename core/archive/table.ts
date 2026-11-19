@@ -16,7 +16,6 @@ export interface TableEntry {
   localHeaderOffset: number;
   cdNameLength: number;
   cdExtraLength: number;
-  /** CRC-32 of the raw central directory name, which a local header must repeat. */
   cdNameCrc: number;
 }
 

@@ -15,11 +15,9 @@ export interface Located {
   contentEncoding?: string;
   displayName: string;
   originalSize?: number;
-  /** Re-reads the object for a Range the first read did not apply. */
   rangeRead?: (range: Span) => Promise<StoredFile | null>;
 }
 
-/** An entry that exists in place but cannot be served: 501 for what Serve cannot decode, 502 for a broken original. */
 export interface Refused {
   refused: 501 | 502;
   error: string;
@@ -31,19 +29,11 @@ export function isRefused(lookup: Lookup): lookup is Refused {
   return lookup !== null && "refused" in lookup;
 }
 
-/** Everything one request needs to find an asset's bytes. */
 export interface FileSource {
   storage: FileStorage;
   archives: ArchiveCache;
   layouts: Layout[];
-  /**
-   * True when the extracted tree may hold the entry: the serving row says
-   * extraction finished, or the original cannot be read in place. A zip that
-   * is pending, failed or uploaded with extraction skipped is read only in
-   * place, so an entry costs one read and never a miss first.
-   */
-  extracted: boolean;
-  /** The resolved row's own original, when it can be read in place. */
+  tryExtracted: boolean;
   inPlace: ArchiveSource | null;
 }
 
@@ -57,7 +47,7 @@ export function fileSource(
   return {
     ...deps,
     layouts,
-    extracted: (version ?? asset).status === "ready" || !inPlace,
+    tryExtracted: (version ?? asset).status === "ready" || !inPlace,
     inPlace,
   };
 }
@@ -69,9 +59,7 @@ export function fileSource(
  *   the uploaded file itself (single-file assets).
  * - The archive's own filename → the archive.
  * - Anything else on an archive → the extracted entry at that path, then the
- *   same entry read in place from the original (ADR-018). Extracted objects go
- *   first so an archive that finished extraction serves exactly what it did
- *   before in-place reads existed.
+ *   same entry read in place from the original (ADR-018).
  * - Anything else on a single-file asset → the uploaded file. The path after
  *   the ID has never been checked for single-file assets, and links in the
  *   wild depend on that.
@@ -87,7 +75,7 @@ export async function locate(src: FileSource, filePath: string, range: Span | nu
       continue;
     }
     wantsEntry = true;
-    const found = src.extracted ? await locateExtracted(src.storage, layout, entryPath) : null;
+    const found = src.tryExtracted ? await locateExtracted(src.storage, layout, entryPath) : null;
     if (found) return found;
   }
   return wantsEntry ? locateInPlace(src, entryPath, range) : null;
@@ -126,11 +114,6 @@ const REFUSALS: Record<Exclude<ArchiveOpenFailure, "not-found" | "changed">, Ref
   corrupt: { refused: 502, error: "The archive's local header contradicts its central directory" },
 };
 
-/**
- * A stored entry with a Range costs one bounded read, a deflate entry comes
- * back as one gzip member, and an original replaced since its central
- * directory was cached is re-read once before the request gives up.
- */
 async function locateInPlace(src: FileSource, entryPath: string, range: Span | null): Promise<Lookup> {
   const path = toArchivePath(entryPath);
   if (!src.inPlace || !path) return null;
@@ -161,10 +144,9 @@ function displayName(path: string): string {
   return path.split("/").pop() || path;
 }
 
-/** True when `path` names a directory that has an index file, extracted or in place. */
 export async function hasIndex(src: FileSource, path: string): Promise<boolean> {
   const name = `${path}/${INDEX_FILE}`;
-  if (src.extracted) {
+  if (src.tryExtracted) {
     for (const layout of src.layouts) {
       if (layout.archive && (await src.storage.head(entryKey(layout, name)))) return true;
     }
@@ -175,7 +157,6 @@ export async function hasIndex(src: FileSource, path: string): Promise<boolean> 
   return opened.ok && (await opened.reader.stat(archivePath)) !== null;
 }
 
-/** Locate a file at the archive root; a root file that cannot be served counts as missing. */
 async function locateRootFile(src: FileSource, name: string): Promise<Located | null> {
   const found = await locate({ ...src, layouts: src.layouts.filter((l) => l.archive) }, name, null);
   return isRefused(found) ? null : found;

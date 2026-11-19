@@ -24,7 +24,6 @@ const SITE: SyntheticEntry[] = [
   { name: "b.bz2", data: text("y"), method: 12, compressed: text("BZh") },
 ];
 
-/** The seeded archive's version replaced by a just-uploaded zip that no extractor has touched. */
 async function arrived(entries: SyntheticEntry[] = SITE, status: "pending" | "ready" | undefined = "pending") {
   const f = await fixture();
   const bytes = writeZip(entries);

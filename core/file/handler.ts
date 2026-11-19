@@ -221,11 +221,9 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
   const isArchive = src.layouts.some((l) => l.archive);
 
   // `_headers` / `_redirects` (ADR-013 C3). The rules were parsed once, at
-  // extraction time; this is all the request pays for them. Until extraction
-  // has finished they are read from the original, so a site's rules hold from
-  // its first request (ADR-018).
+  // extraction time; this is all the request pays for them.
   const hosting = isArchive
-    ? hostingFor(asset, version) ?? (src.inPlace && !src.extracted ? await readSiteHostingInPlace(src, src.inPlace) : null)
+    ? hostingFor(asset, version) ?? (src.inPlace && !src.tryExtracted ? await readSiteHostingInPlace(src, src.inPlace) : null)
     : null;
 
   // The control files are the site's configuration, not its content. They are
@@ -515,8 +513,6 @@ async function serveFile(located: Located, opts: ServeOptions): Promise<Response
   if (!isGzipStored) {
     const headers: Record<string, string> = { ...common, "Accept-Ranges": "bytes" };
     if (range) {
-      // A read that did not apply the range fetched the whole object to learn
-      // its metadata; the range itself is then a second, bounded read.
       let rangedFile = file;
       if (!file.range && rangeRead) {
         await file.body.cancel().catch(() => {});

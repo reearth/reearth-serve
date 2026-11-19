@@ -3,12 +3,7 @@ export const GZIP_TRAILER_BYTES = 8;
 
 const OS_UNKNOWN = 0xff;
 
-/**
- * Wrap a zip entry's raw DEFLATE bytes as exactly one gzip member (ADR-011).
- * The trailer comes from the central directory, so nothing is inflated here;
- * the client's decoder checks the CRC. Browsers stop at the first member, so
- * a body must never hold two.
- */
+/** Browsers stop at the first gzip member without an error (ADR-018 Measurement 1), so a body must never hold two. */
 export function gzipMember(rawDeflate: ReadableStream<Uint8Array>, crc32: number, size: number): ReadableStream<Uint8Array> {
   const header = new Uint8Array([0x1f, 0x8b, 8, 0, 0, 0, 0, 0, 0, OS_UNKNOWN]);
   const trailer = new Uint8Array(GZIP_TRAILER_BYTES);

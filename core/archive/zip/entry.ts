@@ -5,11 +5,6 @@ import { crc32 } from "./directory";
 const LOCAL_SIGNATURE = 0x04034b50;
 const LOCAL_HEADER = 30;
 const MAX_LOCAL_EXTRA = 0xffff;
-/**
- * A range that starts this deep in a stored entry is read in one request from
- * the local header; a deeper one probes the header first, so the over-read
- * stays under a MiB plus the extra-field slack.
- */
 const SINGLE_READ_DEPTH = 1 << 20;
 
 export interface ArchiveObject {
@@ -28,12 +23,7 @@ export type EntryBytes =
   | { ok: true; body: ReadableStream<Uint8Array> }
   | { ok: false; reason: "missing" | "changed" | "mismatch" };
 
-/**
- * Stream an entry's stored bytes, or a span of them, after checking that the
- * local header repeats the central directory. A local extra field can be up to
- * 64 KiB longer than the central one, so one read covers the header, that
- * slack and the data, and the unused tail is cancelled.
- */
+/** A local header's extra field has its own 16-bit length (APPNOTE.TXT 4.3.7), so up to 64 KiB of it may sit between the name and the data. */
 export async function readEntryBytes(archive: ArchiveObject, entry: TableEntry, span: Span = { offset: 0, length: entry.compressedSize }): Promise<EntryBytes> {
   const headerEnd = LOCAL_HEADER + entry.cdNameLength;
   if (span.offset > SINGLE_READ_DEPTH) {
@@ -41,7 +31,7 @@ export async function readEntryBytes(archive: ArchiveObject, entry: TableEntry, 
     if (!probe.ok) return probe;
     const head = await take(probe.body, headerEnd);
     await probe.body.cancel().catch(() => {});
-    const extra = head && checkHeader(head, entry);
+    const extra = head && localExtraLength(head, entry);
     if (extra === null) return { ok: false, reason: "mismatch" };
     const data = await fetchRange(archive, entry.localHeaderOffset + headerEnd + extra + span.offset, span.length);
     if (!data.ok) return data;
@@ -52,7 +42,7 @@ export async function readEntryBytes(archive: ArchiveObject, entry: TableEntry, 
   if (!read.ok) return read;
   const reader = read.body.getReader();
   const head = await takeFrom(reader, headerEnd);
-  const extra = head && checkHeader(head.bytes, entry);
+  const extra = head && localExtraLength(head.bytes, entry);
   if (!head || extra === null) {
     await reader.cancel().catch(() => {});
     return { ok: false, reason: "mismatch" };
@@ -72,8 +62,7 @@ async function fetchRange(archive: ArchiveObject, offset: number, length: number
   return { ok: true, body: file.body };
 }
 
-/** The local extra field's length, or null when the header contradicts the central directory. */
-function checkHeader(head: Uint8Array, entry: TableEntry): number | null {
+function localExtraLength(head: Uint8Array, entry: TableEntry): number | null {
   const view = new DataView(head.buffer, head.byteOffset, head.byteLength);
   if (view.getUint32(0, true) !== LOCAL_SIGNATURE) return null;
   if (view.getUint16(8, true) !== entry.method) return null;
@@ -129,11 +118,6 @@ function resume(reader: ReadableStreamDefaultReader<Uint8Array>, first: Uint8Arr
   });
 }
 
-/**
- * Skip `skip` bytes, pass exactly `length`, then cancel the source. A source
- * that ends early errors the stream, so a truncated object never reaches a
- * client as a short but well-formed body.
- */
 function exactly(source: ReadableStream<Uint8Array>, skip: number, length: number): ReadableStream<Uint8Array> {
   const reader = source.getReader();
   let skipped = 0;

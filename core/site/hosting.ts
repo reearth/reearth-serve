@@ -91,12 +91,6 @@ export async function readSiteHosting(
   );
 }
 
-/**
- * The same rules read from the original, for an archive whose extraction has
- * not finished and so has no parsed rules on its row yet (ADR-018). The
- * entries' sizes come from the central directory, so an absent or oversized
- * file costs no read once the directory is cached.
- */
 export async function readSiteHostingInPlace(deps: ArchiveDeps, source: ArchiveSource): Promise<SiteHosting | null> {
   const opened = await openArchive(deps, source);
   if (!opened.ok) return null;

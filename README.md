@@ -248,7 +248,7 @@ It is **opt-in**, because the default has to stay right for the other use case: 
 
 Independently of the flag, if the archive has a root **`404.html`** it is served — with status `404`, `Cache-Control: no-store` and no `ETag` — for any miss the SPA fallback did not take. The status stays `404`, so an error page cannot mislead a loader the way a `200` can. Site (archive) assets in a project only; the flag is a property of the asset, so it applies on every URL form (`/files/:id/…`, ID and named hosts, previews). See [ADR-013 C1](./docs/adr/013-static-site-hosting.md).
 
-**Headers and redirects.** Two Netlify-style control files at the root of the archive configure the site. They are read and parsed once, when extraction finishes, and stored on the version — so a redeploy replaces them and nothing is parsed per request. Until then they are read from the original zip on each request. Neither file is ever served: `/_headers` and `/_redirects` answer `404` like any other miss.
+**Headers and redirects.** Two Netlify-style control files at the root of the archive configure the site. They are read and parsed once, when extraction finishes, and stored on the version, so a redeploy replaces them and nothing is parsed per request. Until then they are read from the original zip on each request. Neither file is ever served: `/_headers` and `/_redirects` answer `404` like any other miss.
 
 `_headers` attaches response headers to paths. A line starting with `/` opens a block; indented `Name: value` lines belong to it; `#` comments and blank lines are ignored. Patterns are an exact path, a trailing `/*` prefix wildcard, or `:placeholder` segments that match one segment each. Later rules override earlier ones for the same header.
 

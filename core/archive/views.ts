@@ -23,7 +23,6 @@ export interface ListResult {
  */
 export interface TableView {
   readonly entryCount: number;
-  /** The original's entity tag when its central directory was read, if the store gave one. */
   readonly etag: string | undefined;
   readonly rootPrefix: string;
   find(path: string): Promise<TableEntry | null>;
