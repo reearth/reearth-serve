@@ -72,7 +72,7 @@ export interface EntryTable {
 
 export const RECORD = 52;
 const CD_RECORD_SIZE = 46;
-export const NAME_OFFSET = 0;
+const NAME_OFFSET = 0;
 const CD_EXTRA_LENGTH = 4;
 const METHOD = 6;
 const FLAGS = 8;
@@ -82,7 +82,7 @@ const COMPRESSED_SIZE = 16;
 const SIZE = 24;
 const LOCAL_HEADER_OFFSET = 32;
 const CD_INDEX = 40;
-export const NAME_LENGTH = 44;
+const NAME_LENGTH = 44;
 const CD_NAME_CRC = 48;
 const encoder = new TextEncoder();
 const decoder = new TextDecoder();
