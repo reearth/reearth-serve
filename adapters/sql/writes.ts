@@ -9,7 +9,7 @@ import {
   CLEANUP_PENDING_ADD_SQL,
 } from "./stores";
 import { parseSiteHost, SITE_HOSTS_RELEASE_BY_ASSET_SQL } from "./site-hosts";
-import { compatDeleteByAsset, compatHolds } from "./compat";
+import { compatDeleteByAsset, compatHolds, compatPublish } from "./compat";
 
 // Runs before the version and asset rows are deleted in the same batch: it
 // reads their sizes, and the EXISTS guard skips it once the asset is gone.
@@ -82,7 +82,7 @@ export class SqlAtomicWrites implements AtomicWrites {
 
 function guarded(statements: SqlStatement[], guard: WriteGuard | undefined): SqlStatement[] {
   if (!guard) return statements;
-  return statements.map(({ sql, args = [] }) => {
+  const checked = statements.map(({ sql, args = [] }) => {
     const open = sql.indexOf("VALUES (");
     if (open < 0) throw new Error(`cannot guard a statement without VALUES: ${sql}`);
     let close = open + "VALUES ".length;
@@ -96,6 +96,7 @@ function guarded(statements: SqlStatement[], guard: WriteGuard | undefined): Sql
       args: [...args, ...holds.args],
     };
   });
+  return guard.publish ? [...checked, compatPublish(guard, guard.publish)] : checked;
 }
 
 function usageStatements(scopes: string[] | undefined, sizeBytes: number): SqlStatement[] {

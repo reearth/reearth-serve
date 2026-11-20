@@ -416,11 +416,11 @@ export async function fixture(overrides?: Partial<Deps>) {
     storage,
     writes: {
       async createAsset({ asset, guard }) {
-        if (guard && !compat.holds(guard)) throw new HoldLost();
+        if (guard && !compat.admit(guard)) throw new HoldLost();
         await metadata.save(asset);
       },
       async createVersion({ version, guard }) {
-        if (guard && !compat.holds(guard)) throw new HoldLost();
+        if (guard && !compat.admit(guard)) throw new HoldLost();
         const numbers = [...versions.versions.values()].filter((v) => v.assetId === version.assetId).map((v) => v.version);
         return versions.save({ ...version, version: Math.max(0, ...numbers) + 1 });
       },

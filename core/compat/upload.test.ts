@@ -235,7 +235,7 @@ describe("a commit replayed after a crash", () => {
     const id = await begin(f);
     crash(f);
     await expect(sendAll(f, id, data)).rejects.toThrow(CRASH);
-    expect((await f.compat.findUpload(id as UploadId))?.phase).toMatchObject({ state: "committing", owner: null });
+    expect((await f.compat.findUpload(id as UploadId))?.phase).toMatchObject(overwrite ? { state: "published" } : { state: "committing", owner: null });
     vi.restoreAllMocks();
 
     const { uploads } = f.as("cred-a");
