@@ -191,7 +191,7 @@ export class SqlCompatStore implements CompatStore {
 
   async putRecord(objectRef: string, assetId: string, { generation, hashes }: VersionRecord): Promise<void> {
     await this.db.execute(
-      "INSERT OR REPLACE INTO compat_hashes (object_ref, asset_id, generation, md5, crc32c) VALUES (?1, ?2, ?3, ?4, ?5)",
+      "INSERT INTO compat_hashes (object_ref, asset_id, generation, md5, crc32c) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT (object_ref) DO NOTHING",
       [objectRef, assetId, generation, hashes.md5, hashes.crc32c],
     );
   }
@@ -294,6 +294,14 @@ export function compatHolds(guard: WriteGuard, firstParam: number): { sql: strin
   const lease = `EXISTS (SELECT 1 FROM compat_bindings WHERE bucket = ?${firstParam + 2} AND key = ?${firstParam + 3} AND lease_token = ?${firstParam + 4} AND asset_id = ?${firstParam + 5})`;
   const { bucket, key, token, assetId } = guard.lease;
   return { sql: `${upload} AND ${lease}`, args: [...args, bucket, key, token, assetId] };
+}
+
+export function compatPublish(guard: WriteGuard, phase: UploadPhase): SqlStatement {
+  const holds = compatHolds(guard, 2);
+  return {
+    sql: `UPDATE compat_uploads SET phase = ?1, revision = revision + 1 WHERE id = ?2 AND ${holds.sql}`,
+    args: [encodePhase(phase), ...holds.args],
+  };
 }
 
 /** Runs inside `SqlAtomicWrites.deleteAsset`'s batch, so the rows go only if the asset row goes too. */

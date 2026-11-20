@@ -125,7 +125,7 @@ export class MemoryCompatStore implements CompatStore {
     return this.hashes.get(objectRef)?.record ?? null;
   }
   async putRecord(objectRef: string, assetId: string, record: VersionRecord): Promise<void> {
-    this.hashes.set(objectRef, { assetId, record });
+    if (!this.hashes.has(objectRef)) this.hashes.set(objectRef, { assetId, record });
   }
 
   async findCredential(id: CredentialId): Promise<CompatCredential | null> {
@@ -194,11 +194,15 @@ export class MemoryCompatStore implements CompatStore {
     return { claims, leases };
   }
 
-  holds(guard: WriteGuard): boolean {
-    if (this.uploads.get(guard.upload.id)?.revision !== guard.upload.revision) return false;
-    if (!guard.lease) return true;
-    const row = this.bindings.get(rowKey(guard.lease.bucket, guard.lease.key));
-    return row?.lease?.token === guard.lease.token && row.assetId === guard.lease.assetId;
+  admit(guard: WriteGuard): boolean {
+    const u = this.uploads.get(guard.upload.id);
+    if (u?.revision !== guard.upload.revision) return false;
+    if (guard.lease) {
+      const row = this.bindings.get(rowKey(guard.lease.bucket, guard.lease.key));
+      if (row?.lease?.token !== guard.lease.token || row.assetId !== guard.lease.assetId) return false;
+    }
+    if (guard.publish) this.uploads.set(u.id, { ...u, revision: u.revision + 1, phase: structuredClone(guard.publish) });
+    return true;
   }
 
   dropAsset(assetId: string): void {

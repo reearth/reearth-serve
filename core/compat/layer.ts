@@ -17,7 +17,7 @@ import { newLeaseToken, type ClaimToken, type LeaseToken, type UploadTransition,
 import {
   parseBucketName,
   type Binding, type CompatBucket, type CompatError, type ExactHashes, type ObjectInfo, type ObjectKey,
-  type PutMeta, type Result, type SizedBody,
+  type PutMeta, type Result, type SizedBody, type UploadPhase,
 } from "./model";
 
 export type ObjectLayerDeps = Pick<
@@ -34,6 +34,8 @@ export type CommitIds = { assetId: string; versionId: string };
 export type UploadCommit = CommitIds & {
   earlier: CommitIds[];
   overwritingAssetId: string | null;
+  ownedSince: number;
+  publish: UploadPhase;
   overwrite(assetId: string): Promise<boolean>;
   heartbeat(): Promise<boolean>;
   hold(): WriteGuard["upload"];
@@ -45,6 +47,7 @@ export interface ObjectLayer {
   list(bucket: string, query: ListQuery): Promise<Result<ListPage>>;
   put(bucket: string, key: ObjectKey, meta: PutMeta, body: SizedBody, commit?: UploadCommit): Promise<Result<ObjectInfo>>;
   delete(bucket: string, key: ObjectKey): Promise<Result<void>>;
+  finish(bucket: string, key: ObjectKey, versionId: string, hashes: ExactHashes): Promise<Result<ObjectInfo>>;
 }
 
 export const HOLD_STALE_MS = 10 * 60 * 1000;
@@ -104,7 +107,7 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
     const generation = await compat.nextGeneration(bucket.name, generationFromCreatedAt(createdAt));
     const stored = { generation, hashes };
     await compat.putRecord(objectRef, assetId, stored);
-    return stored;
+    return (await compat.findRecord(objectRef)) ?? stored;
   }
 
   async function writeVersion(
@@ -145,7 +148,7 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
   ): Promise<Result<ObjectInfo>> {
     if (commit) await dropEarlierAssets(commit, scopes, null);
     const beat = commit
-      ? beating(body.stream, async () => (await compat.renewClaim(bucket.name, key, token, now())) && commit.heartbeat())
+      ? beating(body.stream, commit.ownedSince, async () => (await compat.renewClaim(bucket.name, key, token, now())) && commit.heartbeat())
       : null;
     if (beat) body = { ...body, stream: beat.stream };
     const checked = lengthCheckedBody(body);
@@ -188,10 +191,7 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
       const live = await resolve(bucket, key);
       if (!live) return fail({ code: "busy" });
       if (!commit) return preconditioned(bucket, meta, live, () => writeVersion(bucket, key, scopes, meta, body, live.asset));
-      const result = await commitVersion(bucket, key, scopes, meta, body, live, commit, lease);
-      if (!result.ok) return result;
-      const done = commit.committedTransition(result.value);
-      return (await compat.updateUpload(done.id, done.revision, done.phase)) ? result : fail({ code: "busy" });
+      return commitVersion(bucket, key, scopes, meta, body, live, commit, lease);
     });
   }
 
@@ -210,19 +210,16 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
   ): Promise<Result<ObjectInfo>> {
     if (commit.overwritingAssetId !== null && commit.overwritingAssetId !== live.asset.id) return fail({ code: "precondition_failed" });
     await dropEarlierAssets(commit, scopes, live.asset.id);
-    for (const earlier of commit.earlier) {
-      const written = await deps.versions.find(earlier.versionId);
-      if (written?.assetId === live.asset.id && body.hashes) {
-        await body.stream.cancel();
-        return activate(bucket, key, live.asset, written, body.hashes);
-      }
-    }
     return preconditioned(bucket, meta, live, async () => {
       if (commit.overwritingAssetId === null && !(await commit.overwrite(live.asset.id))) return fail({ code: "busy" });
-      const beat = beating(body.stream, async () => (await compat.renewLease(bucket.name, key, lease, now())) && commit.heartbeat());
+      const beat = beating(body.stream, commit.ownedSince, async () => (await compat.renewLease(bucket.name, key, lease, now())) && commit.heartbeat());
       return writeVersion(bucket, key, scopes, meta, { ...body, stream: beat.stream }, live.asset, {
         versionId: commit.versionId,
-        guard: () => ({ upload: commit.hold(), lease: { bucket: bucket.name, key, token: lease, assetId: live.asset.id } }),
+        guard: () => ({
+          upload: commit.hold(),
+          lease: { bucket: bucket.name, key, token: lease, assetId: live.asset.id },
+          publish: commit.publish,
+        }),
         lost: beat.lost,
       });
     });
@@ -241,9 +238,11 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
     return compat.lease(bucket.name, key, token, at, at - HOLD_STALE_MS);
   }
 
-  function beating(source: ReadableStream<Uint8Array>, beat: () => Promise<boolean>): { stream: ReadableStream<Uint8Array>; lost(): boolean } {
+  function beating(
+    source: ReadableStream<Uint8Array>, since: number, beat: () => Promise<boolean>,
+  ): { stream: ReadableStream<Uint8Array>; lost(): boolean } {
     const reader = source.getReader();
-    let last = now();
+    let last = since;
     let lost = false;
     const stream = new ReadableStream<Uint8Array>({
       async pull(controller) {
@@ -252,7 +251,10 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
           if (lost) throw new HoldLost();
           last = now();
         }
-        const { done, value } = await reader.read();
+        const { done, value } = await reader.read().catch((e) => {
+          if (e instanceof HoldLost) lost = true;
+          throw e;
+        });
         if (done) controller.close();
         else controller.enqueue(value);
       },
@@ -344,6 +346,16 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
         await removeAsset(asset, scopesOf(project));
         return { ok: true, value: undefined };
       });
+    },
+
+    async finish(raw, key, versionId, hashes) {
+      const auth = await authorized(raw, "update_asset");
+      if (!auth.ok) return auth;
+      const { bucket } = auth.value;
+      const version = await deps.versions.find(versionId);
+      const asset = version && await deps.metadata.find(version.assetId);
+      if (!version || !asset || asset.projectId !== bucket.projectId) return fail({ code: "no_such_key" });
+      return activate(bucket, key, asset, version, hashes);
     },
   };
 }

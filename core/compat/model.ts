@@ -92,6 +92,7 @@ export type UploadPhase =
     ownerTokens: string[];
     overwritingAssetId: string | null;
   }
+  | { state: "published"; versionId: string; hashState: HashState }
   | { state: "committed"; result: ObjectInfo }
   | { state: "failed"; error: CompatError };
 

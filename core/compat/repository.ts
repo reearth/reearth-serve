@@ -92,6 +92,7 @@ export interface CompatStore {
    */
   nextGeneration(bucket: BucketName, atLeast: number): Promise<number>;
   findRecord(objectRef: string): Promise<VersionRecord | null>;
+  /** Keeps the record already stored for `objectRef`, so concurrent writers converge on the first. */
   putRecord(objectRef: string, assetId: string, record: VersionRecord): Promise<void>;
 
   findCredential(id: CredentialId): Promise<CompatCredential | null>;

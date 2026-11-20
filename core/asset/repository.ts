@@ -1,6 +1,7 @@
 import type { AssetMetadata, AssetVersion, StoredFile, UploadSession, UploadPart } from "./model";
 import type { Job } from "../job/model";
 import type { SiteHost } from "../site/repository";
+import type { UploadPhase } from "../compat/model";
 
 export interface ListResult<T> {
   items: T[];
@@ -102,6 +103,7 @@ export interface VersionStore {
 export type WriteGuard = {
   upload: { id: string; revision: number };
   lease?: { bucket: string; key: string; token: string; assetId: string };
+  publish?: UploadPhase;
 };
 
 export class HoldLost extends Error {
