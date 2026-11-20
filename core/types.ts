@@ -16,6 +16,7 @@ import type { CustomHostnameProvisioner } from "./site/provisioner";
 import type { ExtractionMessage } from "./extraction/handler";
 import type { ThumbnailMessage } from "./thumbnail/queue";
 import type { DeliveryTokenCodec } from "./access/token";
+import type { CompatStore } from "./compat/repository";
 
 /**
  * Dependencies that route handlers read off the request context.
@@ -90,6 +91,10 @@ export type ContextDeps = {
    * cookie-authorized file read answers with credentialed CORS (ADR-013 B7).
    */
   credentialedOrigins: readonly string[];
+  /** Buckets, bindings and credentials of the storage compatibility layer (ADR-019). */
+  compat: CompatStore;
+  /** `COMPAT_GCS_HOST`. Undefined ⇒ issuing a credential answers 503. */
+  compatApiHost: string | undefined;
 };
 
 /**

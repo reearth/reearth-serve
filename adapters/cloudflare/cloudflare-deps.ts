@@ -14,11 +14,13 @@ import { CloudflareJobQueue } from "./queues";
 import { D1SqlClient } from "./sql";
 import { SqlAtomicWrites } from "../sql/writes";
 import { SqlSiteHostStore } from "../sql/site-hosts";
+import { SqlCompatStore } from "../sql/compat";
 import { DohDnsResolver } from "../doh/dns";
 import { CloudflareCustomHostnames } from "./custom-hostnames";
 import { NoopProvisioner, type CustomHostnameProvisioner } from "../../core/site/provisioner";
 import { apexHost } from "../../core/site/middleware";
 import { parseCredentialedOrigins } from "../../core/file/cors";
+import { parseCompatApiHost } from "../../core/compat/model";
 import { checkSiteIsolation, PUBLIC_SUFFIX_OVERRIDE_NOTICE } from "../../core/site/isolation";
 import { WebCryptoDeliveryTokenCodec } from "../webcrypto/delivery-token";
 import { parseDeliveryTokenKeys, type DeliveryTokenCodec } from "../../core/access/token";
@@ -99,6 +101,8 @@ export function buildDeps(env: Env): Deps {
     // verify.
     signingSecret: env.SIGNING_SECRET || undefined,
     credentialedOrigins: parseCredentialedOrigins(env.CREDENTIALED_ORIGINS),
+    compat: new SqlCompatStore(sql),
+    compatApiHost: parseCompatApiHost(env.COMPAT_GCS_HOST),
 
     sessions: new KeyValueSessionStore(kv),
     sessionTtlSeconds: SESSION_TTL_SECONDS,

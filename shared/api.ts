@@ -40,7 +40,7 @@ export function component<T extends z.ZodType>(ref: string, schema: T, meta: Rec
  * type name (`RoleOwner`, `ArchiveFormatTarGz`); oapi-codegen otherwise emits
  * bare `Owner` / `Pending` constants unless two enums happen to collide.
  */
-function enumComponent<T extends z.ZodEnum>(ref: string, schema: T): T {
+export function enumComponent<T extends z.ZodEnum>(ref: string, schema: T): T {
   const varnames = schema.options.map((value) =>
     ref + String(value).split(/[^A-Za-z0-9]+/).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(""),
   );

@@ -20,6 +20,7 @@ export const POLICY = {
     read_job: "viewer",
     retry_job: "editor",
     manage_webhooks: "admin",
+    manage_compat: "admin",
   },
 } as const satisfies Record<string, Record<string, Role>>;
 
@@ -106,6 +107,7 @@ if (import.meta.vitest) {
       "project.read_job": [true, true, true, true],
       "project.retry_job": [false, true, true, true],
       "project.manage_webhooks": [false, false, true, true],
+      "project.manage_compat": [false, false, true, true],
     };
     expect(actualTable()).toEqual(expected);
   });

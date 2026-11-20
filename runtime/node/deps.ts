@@ -9,6 +9,7 @@ import {
 import { buildTenancy } from "../../adapters/tenancy";
 import { SqlAtomicWrites } from "../../adapters/sql/writes";
 import { SqlSiteHostStore } from "../../adapters/sql/site-hosts";
+import { SqlCompatStore } from "../../adapters/sql/compat";
 import { DohDnsResolver } from "../../adapters/doh/dns";
 import { NoopProvisioner } from "../../core/site/provisioner";
 import { apexHost } from "../../core/site/middleware";
@@ -107,6 +108,8 @@ export function buildNodeRuntime(env: Env = process.env): NodeRuntime {
     internalApiSecret: config.internalApiSecret,
     signingSecret: config.signingSecret,
     credentialedOrigins: config.credentialedOrigins,
+    compat: new SqlCompatStore(sql),
+    compatApiHost: config.compatApiHost,
     auth: {
       issuer: config.oidcIssuerUrl,
       audience: config.oidcAudience,
