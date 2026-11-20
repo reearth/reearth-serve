@@ -120,6 +120,7 @@ function fakeDeps(overrides: Partial<Deps> = {}): Deps {
     limits: { subrequestBudget: 700 },
     deliveryTokens: null,
     compatObjectsHost: undefined,
+    compatSignedPathPrefix: null,
     serviceAuthorizer: strictFake("serviceAuthorizer"),
     ...overrides,
   };

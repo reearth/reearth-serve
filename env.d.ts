@@ -67,6 +67,8 @@ interface Env {
   // credentials cannot be issued.
   COMPAT_GCS_HOST?: string;
   COMPAT_OBJECTS_HOST?: string;
+  // Path CMS's toPublicUrl prepends to a signed URL (ADR-019 §4), stripped before verifying.
+  COMPAT_SIGNED_PATH_PREFIX?: string;
   // Cloudflare Containers
   ARCHIVE_EXTRACTOR?: DurableObjectNamespace;
   THUMBNAIL_GENERATOR?: DurableObjectNamespace;

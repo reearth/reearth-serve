@@ -85,6 +85,7 @@ fi
   echo 'SITE_REGISTRABLE_DOMAIN = "localhost"'
   echo 'SITE_DOMAIN_IS_PUBLIC_SUFFIX = "true"'
   echo "COMPAT_GCS_HOST = \"storage.localhost:${PORT}\""
+  echo 'COMPAT_SIGNED_PATH_PREFIX = "/gcs-uploads"'
 } > .dev.vars
 
 echo "Starting dev server on port ${PORT}..."
@@ -115,4 +116,5 @@ E2E_ENDPOINT="${ENDPOINT}" \
 E2E_MOCK_OIDC="http://localhost:${MOCK_OIDC_PORT}" \
 E2E_INTERNAL_API_SECRET="${INTERNAL_API_SECRET}" \
 E2E_COMPAT_GCS_HOST="storage.localhost:${PORT}" \
+E2E_COMPAT_SIGNED_PATH_PREFIX="/gcs-uploads" \
   npm run test:e2e -- "$@"

@@ -10,6 +10,7 @@ import { BASE, signToken } from "./helpers";
 
 const run = promisify(execFile);
 const COMPAT_HOST = process.env.E2E_COMPAT_GCS_HOST;
+const SIGNED_PATH_PREFIX = process.env.E2E_COMPAT_SIGNED_PATH_PREFIX;
 const GO = await run("go", ["version"]).then(() => true, () => false);
 
 if (COMPAT_HOST && !GO) {
@@ -181,6 +182,36 @@ describe.runIf(COMPAT_HOST && GO)("Go storage client v1.69 (e2e/compat-gcs)", ()
     expect(stdout.trim().split("\n")).toEqual(["chunk acknowledged: 16777216", "committed: 16777216 bytes"]);
     expect((await assetsOf(admin, projectId)).map((a) => a.filename)).toEqual(["16m.bin"]);
   }, 300_000);
+
+  test("signed-put: a URL signed with CMS's options takes a PUT, and Attrs reads its MD5 and signed metadata, also when rewritten under the prefix", async () => {
+    const { bucket, path } = await keyFileOnDisk();
+    const { stdout } = await scenario("signed-put", {
+      E2E_GCS_KEY_FILE: path, E2E_GCS_BUCKET: bucket, E2E_COMPAT_SIGNED_PATH_PREFIX: SIGNED_PATH_PREFIX ?? "",
+    });
+    const [first, metadata, ...rest] = stdout.trim().split("\n");
+    expect(metadata).toBe("signed x-goog-meta-owner: Attrs metadata owner=alice");
+    const puts = [first, ...rest];
+    expect(puts).toHaveLength(SIGNED_PATH_PREFIX ? 2 : 1);
+    for (const line of puts) expect(line).toMatch(/^signed PUT: 200, Attrs MD5 matches [0-9a-f]{32}$/);
+  }, 60_000);
+
+  test("signed-refusals: a tampered, expired, other-key, wrong-method or revoked use of a signed URL is refused, and so is a body its signed headers rule out", async () => {
+    const { admin, bucket, path, revokeUrl } = await keyFileOnDisk();
+    const { stdout } = await scenario("signed-refusals", {
+      E2E_GCS_KEY_FILE: path, E2E_GCS_BUCKET: bucket, E2E_GCS_REVOKE_URL: revokeUrl, E2E_GCS_REVOKE_TOKEN: admin,
+    });
+    expect(stdout.trim().split("\n")).toEqual([
+      "tampered content type: 403 SignatureDoesNotMatch",
+      "expired: 400 ExpiredToken",
+      "other key: 403 SignatureDoesNotMatch",
+      "wrong method: 403 SignatureDoesNotMatch",
+      "content-md5 of other bytes: 400 BadDigest",
+      "outside x-goog-content-length-range: 400 EntityTooLarge",
+      "create-only over an existing object: 412 PreconditionFailed",
+      "unsupported signed header: 501 NotImplemented",
+      "revoked: 403 AccessDenied",
+    ]);
+  }, 60_000);
 
   test("race: two writers on one new key make one asset and both succeed", async () => {
     const { admin, bucket, path, projectId } = await keyFileOnDisk();

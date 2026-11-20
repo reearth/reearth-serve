@@ -1,15 +1,16 @@
-import { Hono, type Context } from "hono";
+import { Hono, type Context, type MiddlewareHandler } from "hono";
 import type { Deps } from "../../types";
 import { createHasher, base64Of, crc32cBase64, fromBase64 } from "../hash";
 import { objectLayer, type ObjectLayerDeps } from "../layer";
 import { MAX_LIST_RESULTS, type ListQuery } from "../list";
-import { parseObjectKey, type ExactHashes, type PutMeta, type SizedBody } from "../model";
+import { parseObjectKey, type ExactHashes, type ObjectKey, type PutMeta, type SizedBody } from "../model";
 import { resumableUploads, type Chunk, type DeclaredHashes, type UploadStatus } from "../upload";
 import { exchangeAssertion, gcsAuth, type GcsEnv, type TokenError } from "./auth";
 import { boundaryOf, MULTIPART_MAX_BYTES, parseRelated, readCapped } from "./multipart";
-import { compatErrorResponse, gcsError, listResource, objectResource, surfaceOf } from "./wire";
+import { objectPathOf, USER_META_PREFIX, WRITE_HEADERS } from "./signed-url";
+import { compatErrorResponse, gcsError, listResource, objectResource, surfaceOf, xmlObjectHeaders } from "./wire";
 
-export type GcsDeps = ObjectLayerDeps & Pick<Deps, "signingSecret">;
+export type GcsDeps = ObjectLayerDeps & Pick<Deps, "signingSecret" | "credentialedOrigins" | "compatSignedPathPrefix">;
 
 /** The Go client sends every list parameter, so an empty value means the parameter is absent. */
 function queryOf(c: Context<GcsEnv>, name: string): string | null {
@@ -92,7 +93,9 @@ export function gcsApp(deps: GcsDeps, apiOrigin: string) {
     return result.ok ? c.json(result.value) : c.json(result.value, result.status);
   });
 
-  app.use("*", gcsAuth(deps.compat, tokenConfig));
+  app.use("*", browserCors(deps.credentialedOrigins));
+  app.options("*", (c) => c.body(null, 204));
+  app.use("*", gcsAuth(deps.compat, { ...tokenConfig, signedPathPrefix: deps.compatSignedPathPrefix }));
 
   app.get("/storage/v1/b/:bucket/o", async (c) => {
     const unsupported = unsupportedListing(c);
@@ -181,8 +184,113 @@ export function gcsApp(deps: GcsDeps, apiOrigin: string) {
     return c.json(objectResource(result.value, apiOrigin));
   });
 
+  app.put("*", async (c) => {
+    if (surfaceOf(c.req.path) === "json") return gcsError("json", "not_implemented");
+    const target = xmlObjectOf(c.get("signedObjectPath") ?? objectPathOf(new URL(c.req.url).pathname));
+    if (!target) return gcsError("xml", "invalid", "Invalid object name.");
+    const length = c.req.header("Content-Length");
+    if (length === undefined || !/^\d+$/.test(length)) return gcsError("xml", "length_required");
+    const write = xmlWriteOf(c.req.raw.headers, Number(length));
+    if (write instanceof Response) return write;
+    const stream = c.req.raw.body ?? streamOf(new Uint8Array(0));
+    const checked = write.md5 ? md5Checked(stream, write.md5) : { stream, mismatched: () => false };
+    let result;
+    try {
+      result = await layerOf(c).put(target.bucket, target.key, write.meta, { stream: checked.stream, size: Number(length) });
+    } catch (e) {
+      if (checked.mismatched()) return gcsError("xml", "bad_digest");
+      throw e;
+    }
+    if (!result.ok) return compatErrorResponse("xml", result.error, `${target.bucket}/${target.key}`);
+    return c.body(null, 200, xmlObjectHeaders(result.value));
+  });
+
   app.all("*", (c) => gcsError(surfaceOf(c.req.path), "not_implemented"));
   return app;
+}
+
+function xmlObjectOf(path: string | null): { bucket: string; key: ObjectKey } | null {
+  const slash = path?.indexOf("/") ?? -1;
+  if (!path || slash < 1) return null;
+  const key = parseObjectKey(path.slice(slash + 1));
+  return key ? { bucket: path.slice(0, slash), key } : null;
+}
+
+const UNSUPPORTED_XML_PRECONDITIONS = ["x-goog-if-generation-not-match", "x-goog-if-metageneration-match", "x-goog-if-metageneration-not-match"];
+
+function xmlWriteOf(headers: Headers, size: number): { meta: PutMeta; md5: Uint8Array | null } | Response {
+  const unsupported = UNSUPPORTED_XML_PRECONDITIONS.find((name) => headers.has(name));
+  if (unsupported) return gcsError("xml", "not_implemented", `Not implemented: ${unsupported}.`);
+  const declaredMd5 = headers.get("Content-MD5");
+  const md5 = declaredMd5 === null ? null : md5Of(declaredMd5);
+  if (declaredMd5 !== null && !md5) return gcsError("xml", "invalid_digest");
+  const range = headers.get(WRITE_HEADERS.lengthRange);
+  if (range !== null) {
+    const bounds = /^\s*(\d+)\s*,\s*(\d+)\s*$/.exec(range);
+    if (!bounds) return gcsError("xml", "invalid", `Invalid ${WRITE_HEADERS.lengthRange}.`);
+    if (size < Number(bounds[1])) return gcsError("xml", "below_length_range");
+    if (size > Number(bounds[2])) return gcsError("xml", "above_length_range");
+  }
+  const generation = headers.get(WRITE_HEADERS.generationMatch);
+  if (generation !== null && !/^\d+$/.test(generation)) return gcsError("xml", "invalid", `Invalid ${WRITE_HEADERS.generationMatch}.`);
+  const userMeta: Record<string, string> = {};
+  for (const [name, value] of headers) {
+    if (name.startsWith(USER_META_PREFIX)) userMeta[name.slice(USER_META_PREFIX.length)] = value;
+  }
+  return {
+    meta: {
+      contentType: headers.get("Content-Type") ?? "application/octet-stream",
+      contentEncoding: headers.get("Content-Encoding"),
+      userMeta,
+      ifGenerationMatch: generation === null ? null : Number(generation),
+    },
+    md5,
+  };
+}
+
+function md5Of(header: string): Uint8Array | null {
+  try {
+    const bytes = fromBase64(header.trim());
+    return bytes.length === 16 ? bytes : null;
+  } catch {
+    return null;
+  }
+}
+
+function md5Checked(stream: ReadableStream<Uint8Array>, expected: Uint8Array): { stream: ReadableStream<Uint8Array>; mismatched(): boolean } {
+  const hasher = createHasher();
+  let mismatch = false;
+  const checked = stream.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      hasher.update(chunk);
+      controller.enqueue(chunk);
+    },
+    flush() {
+      if (base64Of(hasher.digest().md5) === base64Of(expected)) return;
+      mismatch = true;
+      throw new Error("the body does not match Content-MD5");
+    },
+  }));
+  return { stream: checked, mismatched: () => mismatch };
+}
+
+function browserCors(origins: readonly string[]): MiddlewareHandler<GcsEnv> {
+  return async (c, next) => {
+    const origin = c.req.header("Origin");
+    await next();
+    if (!origin || !origins.includes(origin)) return;
+    const headers = c.res.headers;
+    headers.set("Access-Control-Allow-Origin", origin);
+    headers.append("Vary", "Origin");
+    if (c.req.method === "OPTIONS") {
+      headers.set("Access-Control-Allow-Methods", "GET, HEAD, PUT, POST, DELETE");
+      const requested = c.req.header("Access-Control-Request-Headers");
+      if (requested) headers.set("Access-Control-Allow-Headers", requested);
+      headers.set("Access-Control-Max-Age", "3600");
+    } else {
+      headers.set("Access-Control-Expose-Headers", "ETag, x-goog-generation, x-goog-hash");
+    }
+  };
 }
 
 type Upload = { name: string | null; meta: Omit<PutMeta, "ifGenerationMatch">; body: SizedBody };
