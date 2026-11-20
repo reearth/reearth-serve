@@ -419,6 +419,9 @@ Until ADR-017 lands, the index is stored next to the original
 the asset or version row's system metadata. Readers take the key from the
 row and never derive it, so moving to blob keys changes only the writer,
 and a row whose index was never moved reads from the central directory.
+This is a deliberate interim deviation from keying by the blob's SHA-256:
+until then, versions that point at identical bytes each build their own
+index instead of sharing one.
 
 ## Alternatives Considered
 
