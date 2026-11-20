@@ -182,15 +182,29 @@ a field for it, and nothing otherwise.
 number: Serve numbers versions from the highest remaining one, so a
 deleted version or a deleted and recreated asset would hand its number
 to different bytes, and a version pinned over the REST API would make
-the generation go backwards. A write through the layer stores its
-version, then takes
-`max(created_at in microseconds, bucket's last generation + 1)` in one
-statement that also raises the bucket's high mark, and keeps it next to
-the version's hashes. The high mark is per bucket, so it survives the
-deletion of every object in it. An object written outside the layer
-reads its creation time in microseconds. A write through the layer also
-makes its version the live one, clearing a pin set over the REST API, so
-`objects.get` always answers the generation the write returned.
+the generation go backwards. Nor is it a creation time, because a REST
+version that lands after a write through the layer could then be live at
+a lower generation, or share one with it. Every generation comes from
+the bucket's high mark, `compat_buckets.last_generation`, which survives
+the deletion of every object in the bucket, so a generation is unique in
+its bucket. A version written outside the layer, by a REST upload or a
+REST version upload, has no record until the layer first observes it in
+`head`, `list`, `open` or a precondition check. Records are stored in
+version order: storing the record of any version, by an observation or
+by a write through the layer, first stores one for the asset's original
+upload and every older version of that asset that has none, oldest
+first, each at the next generation above the high mark, in one atomic
+write that raises the high mark and keeps every record already there.
+Concurrent observers therefore answer the first record, and a writer
+whose version an observer recorded first answers that stored generation,
+with its hashes added. A listing stores the missing records of its whole
+page in one such write. Because a version's generation is always above
+that of every older version recorded with it or before it, a newer live
+version is always above every generation observed before it. A write
+through the layer also makes its version the live one, clearing a pin
+set over the REST API, so `objects.get` answers the generation the write
+returned until another version becomes live. A REST pin to an older
+version answers that version's stored generation.
 
 **Writes to one key are serialized.** A writer to a new key inserts the
 binding row with no asset (a claim) before it writes any byte, so two
@@ -244,28 +258,29 @@ write: the create-asset or create-version write takes an optional
 publish, and the adapter applies it in the same batch that inserts the
 row, its job and its usage increments. That one write fills the key's
 claim with the new asset, or on an overwrite clears the asset's pinned
-version so the new version is live; takes a generation above the
-bucket's high mark and above every version the asset already has, so a
-REST upload that added a version while the commit streamed never
-outranks the published one; stores the hash record at that generation;
-queues the storage prefixes of the session's earlier owners for cleanup;
-and moves the session to committed with its result. It applies only
-while the session is at the owner's revision and the key is still held:
-by the owner's unfilled claim for a new key, or by the owner's lease on
-a binding that still names the asset for an overwrite. For SQL, every
-statement of the batch selects or updates only under that condition. If
-the hold is lost, nothing is written, the owner deletes only the bytes
-it streamed, and the request answers `503`. If the write fails any other
-way, its outcome is unknown, so the owner re-reads the row it wrote. The
-owner deletes its bytes only when that row is absent, and keeps them
-when the row is present or the re-read fails. A leaked object costs less
-than a live object without bytes. A takeover, a cancel or the expiry
-sweep therefore also stops any later publish by the old owner. Nothing
-about publishing happens after that write, so a crash, sweep, cancel,
-REST pin or newer write never sees a half-published object: the session
-is either still committing, and a replay takes it over once the owner is
-stale, or committed, and every replay, status query or cancel answers
-from the recorded result. The publish is an additive, optional input to
+version so the new version is live; records, in version order, every
+older version of the asset that has none, then takes the next generation
+from the bucket's high mark, so every older version, including one a
+REST upload added while the commit streamed, ranks below the published
+one; stores the hash record at that generation; queues the storage
+prefixes of the session's earlier owners for cleanup; and moves the
+session to committed with its result. It applies only while the session
+is at the owner's revision and the key is still held: by the owner's
+unfilled claim for a new key, or by the owner's lease on a binding that
+still names the asset for an overwrite. For SQL, every statement of the
+batch selects or updates only under that condition. If the hold is lost,
+nothing is written, the owner deletes only the bytes it streamed, and
+the request answers `503`. If the write fails any other way, its outcome
+is unknown, so the owner re-reads the row it wrote. The owner deletes
+its bytes only when that row is absent, and keeps them when the row is
+present or the re-read fails. A leaked object costs less than a live
+object without bytes. A takeover, a cancel or the expiry sweep therefore
+also stops any later publish by the old owner. Nothing about publishing
+happens after that write, so a crash, sweep, cancel, REST pin or newer
+write never sees a half-published object: the session is either still
+committing, and a replay takes it over once the owner is stale, or
+committed, and every replay, status query or cancel answers from the
+recorded result. The publish is an additive, optional input to
 `AtomicWrites`; the storage ports do not change. A commit's heartbeat
 clock starts at the owner's last refresh, and a staged chunk that has
 disappeared counts as a lost hold (`503`). An overwrite records its
