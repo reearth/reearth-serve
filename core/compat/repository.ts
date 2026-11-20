@@ -1,9 +1,9 @@
 /**
  * The compat_* tables behind one port (ADR-019).
  *
- * `claim`, `bind`, `releaseClaim`, `lease`, `nextGeneration` and
- * `updateUpload` are each one step with compare-and-set semantics, so two
- * writers racing on one key or one upload session cannot both win.
+ * `claim`, `bind`, `releaseClaim`, `lease`, `records` and `updateUpload`
+ * are each one atomic step with compare-and-set semantics, so two writers
+ * racing on one key or one upload session cannot both win.
  */
 import type {
   Binding, BindingKind, BucketName, CompatBucket, CompatCredential, CredentialId,
@@ -24,7 +24,11 @@ export function newLeaseToken(): LeaseToken {
   return crypto.randomUUID() as LeaseToken;
 }
 
-export type VersionRecord = { generation: number; hashes: ExactHashes };
+/** A version's generation, and its exact hashes when a layer write stored them. */
+export type VersionRecord = { generation: number; hashes: ExactHashes | null };
+
+/** A version `records` reads or stores: the asset or version id, its asset, and the hashes a layer write computed. */
+export type RecordRef = { objectRef: string; assetId: string; hashes?: ExactHashes };
 
 export type ClaimResult =
   /** This call inserted the claim or took over a stale one. `token` guards bind and release. */
@@ -43,16 +47,15 @@ export type DeleteBucketResult = "deleted" | "absent" | "not_empty";
  * the unfilled claim `token` for a new key, which the write fills with
  * `assetId`, or the lease `token` on the binding that names `assetId` for an
  * overwrite, whose pinned version the write clears. In the same write the
- * generation is issued above the bucket's high mark, `atLeast`, and every
- * generation `assetId` already has, the hash record of `objectRef` is stored
- * at it, the `reclaim` prefixes (the bytes of the session's earlier owners)
- * are queued for cleanup, and the session moves to committed with `result`
- * at it. Otherwise nothing is written and the write throws `HoldLost`.
+ * next generation is issued from the bucket's high mark, the hash record of
+ * `objectRef` is stored at it, the `reclaim` prefixes (the bytes of the
+ * session's earlier owners) are queued for cleanup, and the session moves to
+ * committed with `result` at it. Otherwise nothing is written and the write throws `HoldLost`.
  */
 export type CompatPublish = {
   upload: { id: UploadId; revision: number };
   hold: { kind: "claim" | "lease"; bucket: BucketName; key: ObjectKey; token: string; assetId: string };
-  record: { objectRef: string; atLeast: number; hashes: ExactHashes };
+  record: { objectRef: string; hashes: ExactHashes };
   result: Omit<ObjectInfo, "generation">;
   reclaim: string[];
 };
@@ -103,15 +106,17 @@ export interface CompatStore {
   scanBindings(bucket: BucketName, from: string, until: string | null, limit: number): Promise<Binding[]>;
 
   /**
-   * A generation for a write to `bucket`: `atLeast`, or one more than the
-   * highest generation the bucket issued before when that is larger. The
-   * bucket keeps its high mark across object deletes, so no key sees a
-   * generation twice.
+   * The record of each ref, keyed by `objectRef`. A ref with no record gets
+   * one at the next generation above `bucket`'s high mark, which rises with
+   * it, all in one atomic write, so every generation is unique in the bucket
+   * and later than every one issued before. A stored record keeps its
+   * generation, so concurrent callers converge on the first; a ref's `hashes`
+   * fill a stored record that has none. The high mark survives object
+   * deletes. Refs of a bucket that is gone are left out.
    */
-  nextGeneration(bucket: BucketName, atLeast: number): Promise<number>;
+  records(bucket: BucketName, refs: RecordRef[]): Promise<Map<string, VersionRecord>>;
+  /** The stored record of `objectRef`, never storing one. */
   findRecord(objectRef: string): Promise<VersionRecord | null>;
-  /** Keeps the record already stored for `objectRef`, so concurrent writers converge on the first. */
-  putRecord(objectRef: string, assetId: string, record: VersionRecord): Promise<void>;
 
   findCredential(id: CredentialId): Promise<CompatCredential | null>;
   findCredentialByEmail(clientEmail: string): Promise<CompatCredential | null>;

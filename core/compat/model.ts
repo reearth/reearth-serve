@@ -125,13 +125,6 @@ export type ObjectInfo = {
   userMeta: Record<string, string>;
 };
 
-/** A generation counts microseconds, so one taken from a creation time is that time in ms times this. */
-export const GENERATIONS_PER_MS = 1000;
-
-export function generationFromCreatedAt(createdAt: number): number {
-  return createdAt * GENERATIONS_PER_MS;
-}
-
 export type SizedBody = {
   stream: ReadableStream<Uint8Array>;
   size: number;

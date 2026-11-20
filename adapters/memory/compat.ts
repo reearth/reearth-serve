@@ -4,7 +4,7 @@ import type {
 } from "../../core/compat/model";
 import {
   newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatPublish, type CompatStore,
-  type DeleteBucketResult, type LeaseToken, type VersionRecord,
+  type DeleteBucketResult, type LeaseToken, type RecordRef, type VersionRecord,
 } from "../../core/compat/repository";
 import { isServiceRole } from "../../core/auth/types";
 
@@ -113,17 +113,24 @@ export class MemoryCompatStore implements CompatStore {
       .slice(0, limit);
   }
 
-  async nextGeneration(bucket: BucketName, atLeast: number): Promise<number> {
-    if (!this.buckets.has(bucket)) return atLeast;
-    const next = Math.max((this.generations.get(bucket) ?? 0) + 1, atLeast);
-    this.generations.set(bucket, next);
-    return next;
+  async records(bucket: BucketName, refs: RecordRef[]): Promise<Map<string, VersionRecord>> {
+    const out = new Map<string, VersionRecord>();
+    if (!this.buckets.has(bucket)) return out;
+    for (const { objectRef, assetId, hashes } of refs) {
+      let stored = this.hashes.get(objectRef);
+      if (!stored) {
+        const generation = (this.generations.get(bucket) ?? 0) + 1;
+        this.generations.set(bucket, generation);
+        stored = { assetId, record: { generation, hashes: null } };
+        this.hashes.set(objectRef, stored);
+      }
+      if (hashes && !stored.record.hashes) stored.record = { ...stored.record, hashes };
+      out.set(objectRef, stored.record);
+    }
+    return out;
   }
   async findRecord(objectRef: string): Promise<VersionRecord | null> {
     return this.hashes.get(objectRef)?.record ?? null;
-  }
-  async putRecord(objectRef: string, assetId: string, record: VersionRecord): Promise<void> {
-    if (!this.hashes.has(objectRef)) this.hashes.set(objectRef, { assetId, record });
   }
 
   async findCredential(id: CredentialId): Promise<CompatCredential | null> {
@@ -194,11 +201,10 @@ export class MemoryCompatStore implements CompatStore {
 
   /**
    * The compat rows of `publish` (see `SqlAtomicWrites`), synchronously so no
-   * other request runs between the check and the writes. `above` is the
-   * highest generation the asset's other versions have. Returns the issued
+   * other request runs between the check and the writes. Returns the issued
    * generation, or null when the publish no longer holds and nothing changed.
    */
-  publish({ upload, hold, record, result }: CompatPublish, above: number): number | null {
+  publish({ upload, hold, record, result }: CompatPublish): number | null {
     const session = this.uploads.get(upload.id);
     const row = this.bindings.get(rowKey(hold.bucket, hold.key));
     if (session?.revision !== upload.revision || !row) return null;
@@ -207,7 +213,7 @@ export class MemoryCompatStore implements CompatStore {
       : row.claimToken === hold.token && row.assetId === null;
     if (!holds) return null;
     if (hold.kind === "claim") row.assetId = hold.assetId;
-    const generation = Math.max((this.generations.get(hold.bucket) ?? 0) + 1, record.atLeast, above + 1);
+    const generation = (this.generations.get(hold.bucket) ?? 0) + 1;
     this.generations.set(hold.bucket, generation);
     this.hashes.set(record.objectRef, { assetId: hold.assetId, record: { generation, hashes: record.hashes } });
     const committed = { state: "committed" as const, result: structuredClone({ ...result, generation }) };

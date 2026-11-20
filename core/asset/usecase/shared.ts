@@ -59,14 +59,17 @@ export async function usageScopesFor(
   return scopes;
 }
 
+/** A re-read telling whether a create write that threw applied anyway (a lost response, say). */
+export type Written = { applied(): Promise<boolean> };
+
 /**
  * After a create write threw, delete the bytes it was to point at, unless the
- * write may have applied: a publish that failed other than by `HoldLost` and
- * whose row a re-read finds, or cannot rule out, keeps its bytes. A leak is
- * cheaper than a live object without bytes.
+ * write may have applied: one that failed other than by `HoldLost` and whose
+ * row `written` finds, or cannot rule out, keeps its bytes. A leak is cheaper
+ * than a live object without bytes.
  */
-export async function dropUnwrittenBytes(storage: FileStorage, key: string, error: unknown, publishing?: Pick<Publishing<unknown>, "applied">): Promise<void> {
-  if (publishing && !(error instanceof HoldLost) && (await publishing.applied().catch(() => true))) return;
+export async function dropUnwrittenBytes(storage: FileStorage, key: string, error: unknown, written?: Written): Promise<void> {
+  if (written && !(error instanceof HoldLost) && (await written.applied().catch(() => true))) return;
   try {
     await storage.delete(key);
   } catch (e) {

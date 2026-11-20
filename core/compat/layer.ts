@@ -13,9 +13,10 @@ import { updateAsset } from "../asset/usecase/update-asset";
 import { siteHostDepsFrom } from "../site/handler";
 import { hashingStream, type HashingStream } from "./hash";
 import { listPage, type ListQuery } from "./list";
-import { newLeaseToken, type ClaimToken, type CompatPublish, type LeaseToken, type VersionRecord } from "./repository";
+import { generateId } from "../asset/usecase/shared";
+import { newLeaseToken, type ClaimToken, type CompatPublish, type LeaseToken, type RecordRef, type VersionRecord } from "./repository";
 import {
-  generationFromCreatedAt, parseBucketName,
+  parseBucketName,
   type Binding, type CommitIds, type CompatBucket, type CompatError, type ExactHashes, type ObjectInfo, type ObjectKey,
   type PutMeta, type Result, type SizedBody,
 } from "./model";
@@ -96,16 +97,23 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
     return { binding, ...found };
   }
 
-  async function describe(bucket: CompatBucket, r: Resolved): Promise<ObjectInfo> {
-    const record = await compat.findRecord(r.version?.id ?? r.asset.id);
-    return infoOf(bucket, r.binding.key, r.asset, r.version, record);
+  /** Each resolved object with its record, storing the missing ones in one store call. Objects whose record is gone with the bucket are left out. */
+  async function describeAll(bucket: CompatBucket, objects: Resolved[]): Promise<ObjectInfo[]> {
+    const records = await compat.records(bucket.name, objects.map((r) => ({ objectRef: refOf(r), assetId: r.asset.id })));
+    return objects.flatMap((r) => {
+      const record = records.get(refOf(r));
+      return record ? [infoOf(bucket, r.binding.key, r.asset, r.version, record)] : [];
+    });
   }
 
-  async function recordVersion(bucket: CompatBucket, objectRef: string, assetId: string, createdAt: number, hashes: ExactHashes): Promise<VersionRecord> {
-    const generation = await compat.nextGeneration(bucket.name, generationFromCreatedAt(createdAt));
-    const stored = { generation, hashes };
-    await compat.putRecord(objectRef, assetId, stored);
-    return (await compat.findRecord(objectRef)) ?? stored;
+  async function describe(bucket: CompatBucket, r: Resolved): Promise<ObjectInfo | null> {
+    return (await describeAll(bucket, [r]))[0] ?? null;
+  }
+
+  async function recordWrite(bucket: CompatBucket, ref: Omit<RecordRef, "hashes">, hashes: ExactHashes): Promise<VersionRecord> {
+    const record = (await compat.records(bucket.name, [{ ...ref, hashes }])).get(ref.objectRef);
+    if (!record) throw new Error(`bucket ${bucket.name} is gone`);
+    return record;
   }
 
   async function writeVersion(
@@ -113,6 +121,7 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
     held?: { versionId: string; publish: Publishing<AssetVersion>; lost(): boolean },
   ): Promise<Result<ObjectInfo>> {
     const checked = lengthCheckedBody(body);
+    const versionId = held?.versionId ?? generateId();
     let result: UploadVersionResult | null;
     try {
       result = await uploadVersion(deps.metadata, deps.writes, deps.storage, asset.id, fileOf(key, meta, body, checked.stream), deps.baseUrl, {
@@ -121,7 +130,10 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
         usageScopes: scopes,
         siteHostSuffix: deps.siteHostSuffix,
         userMeta: meta.userMeta,
-        ...(held && { versionId: held.versionId, publish: held.publish }),
+        versionId,
+        ...(held
+          ? { publish: held.publish }
+          : { written: { applied: async () => (await deps.versions.find(versionId)) !== null } }),
       });
     } catch (e) {
       if (e instanceof HoldLost || held?.lost()) return fail({ code: "busy" });
@@ -138,8 +150,7 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
     bucket: CompatBucket, key: ObjectKey, asset: AssetMetadata, version: AssetVersion, hashes: ExactHashes,
   ): Promise<Result<ObjectInfo>> {
     if (asset.activeVersionId) await updateAsset(deps.metadata, deps.versions, asset.id, { activeVersionId: null });
-    const stored = (await compat.findRecord(version.id))
-      ?? await recordVersion(bucket, version.id, asset.id, version.createdAt, hashes);
+    const stored = await recordWrite(bucket, { objectRef: version.id, assetId: asset.id }, hashes);
     return { ok: true, value: infoOf(bucket, key, asset, version, stored) };
   }
 
@@ -151,6 +162,7 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
       : null;
     if (beat) body = { ...body, stream: beat.stream };
     const checked = lengthCheckedBody(body);
+    const id = commit?.assetId ?? generateId();
     try {
       const { asset, generation } = await uploadAsset(deps.writes, deps.storage, fileOf(key, meta, body, checked.stream), deps.ttlSeconds, deps.baseUrl, {
         projectId: bucket.projectId,
@@ -159,13 +171,15 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
         usageScopes: scopes,
         siteHostSuffix: deps.siteHostSuffix,
         userMeta: meta.userMeta,
-        ...(commit && {
-          id: commit.assetId,
-          publish: {
-            of: (asset) => publishing(bucket, key, commit, { kind: "claim", token, assetId: asset.id }, asset, null),
-            applied: async () => (await deps.metadata.find(commit.assetId)) !== null,
-          },
-        }),
+        id,
+        ...(commit
+          ? {
+            publish: {
+              of: (asset) => publishing(bucket, key, commit, { kind: "claim", token, assetId: asset.id }, asset, null),
+              applied: async () => (await deps.metadata.find(id)) !== null,
+            },
+          }
+          : { written: { applied: async () => (await deps.metadata.find(id)) !== null } }),
       });
       const hashes = await checked.digest();
       if (generation !== undefined) return { ok: true, value: infoOf(bucket, key, asset, null, { generation, hashes }) };
@@ -181,7 +195,7 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
   async function bindAsset(
     bucket: CompatBucket, key: ObjectKey, scopes: string[], token: ClaimToken, asset: AssetMetadata, hashes: ExactHashes,
   ): Promise<Result<ObjectInfo>> {
-    const stored = (await compat.findRecord(asset.id)) ?? await recordVersion(bucket, asset.id, asset.id, asset.createdAt, hashes);
+    const stored = await recordWrite(bucket, { objectRef: asset.id, assetId: asset.id }, hashes);
     const info = infoOf(bucket, key, asset, null, stored);
     if (await compat.bind(bucket.name, key, token, asset.id)) return { ok: true, value: info };
     await removeAsset(asset, scopes);
@@ -204,7 +218,7 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
   async function preconditioned(
     bucket: CompatBucket, meta: PutMeta, live: Resolved, write: () => Promise<Result<ObjectInfo>>,
   ): Promise<Result<ObjectInfo>> {
-    if (meta.ifGenerationMatch !== null && meta.ifGenerationMatch !== (await describe(bucket, live)).generation) {
+    if (meta.ifGenerationMatch !== null && meta.ifGenerationMatch !== (await describe(bucket, live))?.generation) {
       return fail({ code: "precondition_failed" });
     }
     return write();
@@ -237,8 +251,8 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
     return {
       upload: commit.hold(),
       hold: { ...hold, bucket: bucket.name, key },
-      record: { objectRef: current.id, atLeast: generationFromCreatedAt(current.createdAt), hashes: commit.hashes },
-      result: { ...infoOf(bucket, key, asset, version, null), hashes: commit.hashes },
+      record: { objectRef: current.id, hashes: commit.hashes },
+      result: unissued(infoOf(bucket, key, asset, version, { generation: 0, hashes: commit.hashes })),
       reclaim: commit.leftovers(),
     };
   }
@@ -296,7 +310,8 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
       const auth = await authorized(raw, "read_asset");
       if (!auth.ok) return auth;
       const r = await resolve(auth.value.bucket, key);
-      return r ? { ok: true, value: await describe(auth.value.bucket, r) } : fail({ code: "no_such_key" });
+      const info = r && await describe(auth.value.bucket, r);
+      return info ? { ok: true, value: info } : fail({ code: "no_such_key" });
     },
 
     async list(raw, query) {
@@ -308,15 +323,9 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
         (from, until, limit) => compat.scanBindings(bucket.name, from, until, limit),
       );
       if (!page) return fail({ code: "invalid", message: "Invalid pageToken." });
-      const infos = await Promise.all(page.objects.map(async (binding) => {
-        if (binding.kind !== "object") return null;
-        const r = await load(bucket, binding);
-        return r ? describe(bucket, r) : null;
-      }));
-      return {
-        ok: true,
-        value: { objects: infos.filter((i): i is ObjectInfo => i !== null), prefixes: page.prefixes, nextPageToken: page.nextPageToken },
-      };
+      const loaded = await Promise.all(page.objects.map((binding) => binding.kind === "object" ? load(bucket, binding) : null));
+      const objects = await describeAll(bucket, loaded.filter((r): r is Resolved => r !== null));
+      return { ok: true, value: { objects, prefixes: page.prefixes, nextPageToken: page.nextPageToken } };
     },
 
     async put(raw, key, meta, body, commit) {
@@ -391,6 +400,15 @@ function lengthCheckedBody(body: SizedBody): LengthCheckedBody {
   return { ...hashed, lengthMismatched: counted.lengthMismatched };
 }
 
+function refOf(r: Resolved): string {
+  return r.version?.id ?? r.asset.id;
+}
+
+/** `info` before its publish issues the generation. */
+function unissued({ generation: _, ...info }: ObjectInfo): Omit<ObjectInfo, "generation"> {
+  return info;
+}
+
 function scopesOf(project: Project): string[] {
   return project.workspaceId ? [`project:${project.id}`, `workspace:${project.workspaceId}`] : [`project:${project.id}`];
 }
@@ -416,7 +434,7 @@ function stringMeta(meta: Record<string, unknown> | undefined): Record<string, s
 }
 
 function infoOf(
-  bucket: CompatBucket, key: ObjectKey, asset: AssetMetadata, version: AssetVersion | null, record: VersionRecord | null,
+  bucket: CompatBucket, key: ObjectKey, asset: AssetMetadata, version: AssetVersion | null, record: VersionRecord,
 ): ObjectInfo {
   const current = version ?? asset;
   return {
@@ -425,12 +443,12 @@ function infoOf(
     size: current.size,
     contentType: current.contentType,
     contentEncoding: current.contentEncoding ?? null,
-    generation: record?.generation ?? generationFromCreatedAt(current.createdAt),
+    generation: record.generation,
     metageneration: 1,
     etag: version?.id ?? asset.id,
     created: new Date(current.createdAt),
     updated: new Date(current.createdAt),
-    hashes: record?.hashes ?? null,
+    hashes: record.hashes,
     userMeta: stringMeta(current.userMeta),
   };
 }

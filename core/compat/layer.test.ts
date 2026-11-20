@@ -55,11 +55,11 @@ function written(result: Result<ObjectInfo>): ObjectInfo {
 }
 
 describe("put and head", () => {
-  test("a new key becomes an asset whose generation is its creation time in microseconds, with the hashes of its bytes", async () => {
+  test("a new key becomes an asset at the bucket's first generation, with the hashes of its bytes", async () => {
     const f = await layerFixture();
     const put = await f.editor.put(BUCKET, key("assets/ab/a.txt"), meta({ userMeta: { k: "v" } }), body("small body"));
     if (!put.ok) throw new Error(put.error.code);
-    expect(put.value).toMatchObject({ generation: f.assets()[0].createdAt * 1000, size: 10, contentType: "text/plain", userMeta: { k: "v" } });
+    expect(put.value).toMatchObject({ generation: 1, size: 10, contentType: "text/plain", userMeta: { k: "v" } });
     expect(hex(put.value.hashes!.md5)).toBe(md5("small body"));
 
     const head = await f.viewer.head(BUCKET, key("assets/ab/a.txt"));
@@ -202,12 +202,12 @@ describe("generations", () => {
     expect((await f.editor.put(BUCKET, key("k"), meta({ ifGenerationMatch: fresh.generation }), body("X"))).ok).toBe(true);
   });
 
-  test("an object written over REST reads its creation time in microseconds", async () => {
+  test("an object with no record gets the next generation, with no hashes, when first read", async () => {
     const f = await layerFixture();
     await f.editor.put(BUCKET, key("k"), meta(), body("one"));
-    const asset = f.assets()[0];
-    f.compat.hashes.delete(asset.id);
-    expect(written(await f.viewer.head(BUCKET, key("k")))).toMatchObject({ generation: asset.createdAt * 1000, hashes: null });
+    f.compat.hashes.delete(f.assets()[0].id);
+    expect(written(await f.viewer.head(BUCKET, key("k")))).toMatchObject({ generation: 2, hashes: null });
+    expect(written(await f.viewer.head(BUCKET, key("k")))).toMatchObject({ generation: 2, hashes: null });
   });
 });
 

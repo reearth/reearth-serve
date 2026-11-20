@@ -2,7 +2,7 @@ import type { AssetMetadata, AssetUploadResult } from "../model";
 import { detectArchiveFormat } from "../model";
 import type { AtomicWrites, FileStorage, Publishing } from "../repository";
 import type { Job } from "../../job/model";
-import { dropUnwrittenBytes, generateId, storageKey } from "./shared";
+import { dropUnwrittenBytes, generateId, storageKey, type Written } from "./shared";
 import { siteUrlFor } from "../../site/url";
 import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
@@ -22,7 +22,7 @@ export async function uploadAsset(
   },
   ttlSeconds: number,
   baseUrl: string,
-  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string; id?: string; userMeta?: Record<string, unknown>; publish?: Publishing<AssetMetadata> },
+  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string; id?: string; userMeta?: Record<string, unknown>; publish?: Publishing<AssetMetadata>; written?: Written },
 ): Promise<AssetUploadResult & { generation?: number }> {
   const id = options?.id ?? generateId();
   const now = Date.now();
@@ -102,7 +102,7 @@ export async function uploadAsset(
   } catch (e) {
     // The bytes are stored but the metadata write failed. Cleanup drives off
     // the rows, so without this the object is orphaned.
-    await dropUnwrittenBytes(storage, key, e, options?.publish);
+    await dropUnwrittenBytes(storage, key, e, options?.publish ?? options?.written);
     throw e;
   }
 

@@ -2,7 +2,7 @@ import type { AssetVersion } from "../model";
 import { detectArchiveFormat } from "../model";
 import type { AtomicWrites, FileStorage, MetadataStore, Publishing } from "../repository";
 import type { Job } from "../../job/model";
-import { dropUnwrittenBytes, generateId, versionStorageKey } from "./shared";
+import { dropUnwrittenBytes, generateId, versionStorageKey, type Written } from "./shared";
 import { siteUrlFor } from "../../site/url";
 import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
@@ -32,7 +32,7 @@ export async function uploadVersion(
     originalSize?: number;
   },
   baseUrl: string,
-  options?: { extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string; versionId?: string; userMeta?: Record<string, unknown>; publish?: Publishing<AssetVersion> },
+  options?: { extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string; versionId?: string; userMeta?: Record<string, unknown>; publish?: Publishing<AssetVersion>; written?: Written },
 ): Promise<UploadVersionResult | null> {
   const asset = await metadata.find(assetId);
   if (!asset) return null;
@@ -123,7 +123,7 @@ export async function uploadVersion(
       size: file.size,
     });
   } catch (e) {
-    await dropUnwrittenBytes(storage, key, e, options?.publish);
+    await dropUnwrittenBytes(storage, key, e, options?.publish ?? options?.written);
     throw e;
   }
 
