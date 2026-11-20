@@ -1,9 +1,9 @@
 /**
  * The compat_* tables behind one port (ADR-019).
  *
- * `claim`, `bind`, `releaseClaim` and `advanceUpload` are each one statement
- * with compare-and-set semantics, so two writers racing on one key or one
- * upload session cannot both win.
+ * `claim`, `bind`, `releaseClaim`, `lease`, `records` and `advanceUpload`
+ * are each one atomic step with compare-and-set semantics, so two writers
+ * racing on one key or one upload session cannot both win.
  */
 import type {
   Binding, BindingKind, BucketName, CompatBucket, CompatCredential, CredentialId,
@@ -18,6 +18,20 @@ export function newClaimToken(): ClaimToken {
   return crypto.randomUUID() as ClaimToken;
 }
 
+export type LeaseToken = string & { readonly __brand: "LeaseToken" };
+
+export function newLeaseToken(): LeaseToken {
+  return crypto.randomUUID() as LeaseToken;
+}
+
+export function generationSeed(): number {
+  return Date.now() * 1000;
+}
+
+export type VersionRecord = { generation: number; hashes: ExactHashes | null };
+
+export type RecordRef = { objectRef: string; assetId: string; hashes?: ExactHashes };
+
 export type ClaimResult =
   /** This call inserted the claim or took over a stale one. `token` guards bind and release. */
   | { kind: "claimed"; token: ClaimToken }
@@ -31,7 +45,7 @@ export type DeleteBucketResult = "deleted" | "absent" | "not_empty";
 export interface CompatStore {
   findBucket(name: BucketName): Promise<CompatBucket | null>;
   listBuckets(projectId: string): Promise<CompatBucket[]>;
-  /** False when the name is taken, in any project. */
+  /** False when the name is taken, in any project. A new bucket's high mark starts at `generationSeed()`. */
   insertBucket(bucket: CompatBucket): Promise<boolean>;
   /**
    * Remove an empty bucket of `projectId`, revoke its credentials at
@@ -58,11 +72,27 @@ export interface CompatStore {
   /** Drop the claim `token` this writer failed to fill. No-op once bound or taken over. */
   releaseClaim(bucket: BucketName, key: BindingKey, token: ClaimToken): Promise<void>;
   deleteBinding(bucket: BucketName, key: BindingKey): Promise<void>;
+  /**
+   * Lease the bound `key` at `now` for one overwrite or delete. False while
+   * another fresh lease (not older than `staleBefore`) holds it, or when the
+   * key is not bound.
+   */
+  lease(bucket: BucketName, key: BindingKey, token: LeaseToken, now: number, staleBefore: number): Promise<boolean>;
+  /** Drop the lease `token`. No-op once it was taken over or the row is gone. */
+  releaseLease(bucket: BucketName, key: BindingKey, token: LeaseToken): Promise<void>;
   /** Bound rows with key in [from, until), ascending by key, at most `limit`. */
   scanBindings(bucket: BucketName, from: string, until: string | null, limit: number): Promise<Binding[]>;
 
-  findHashes(objectRef: string): Promise<ExactHashes | null>;
-  putHashes(objectRef: string, assetId: string, hashes: ExactHashes): Promise<void>;
+  /**
+   * The record of each ref, keyed by `objectRef`. A ref with no record gets
+   * one at the next generation above `bucket`'s high mark, which rises with
+   * it, all in one atomic write, so every generation is unique in the bucket
+   * and later than every one issued before. A stored record keeps its
+   * generation, so concurrent callers converge on the first; a ref's `hashes`
+   * fill a stored record that has none. The high mark survives object
+   * deletes. Refs of a bucket that is gone are left out.
+   */
+  records(bucket: BucketName, refs: RecordRef[]): Promise<Map<string, VersionRecord>>;
 
   findCredential(id: CredentialId): Promise<CompatCredential | null>;
   findCredentialByEmail(clientEmail: string): Promise<CompatCredential | null>;

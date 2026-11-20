@@ -38,7 +38,7 @@ async function issuedKeyFile() {
   expect(issued.status).toBe(201);
   const keyFile = await issued.json() as KeyFile;
   const revokeUrl = `${BASE}/api/v1/projects/${project.id}/compat/credentials/${keyFile.private_key_id}`;
-  return { admin, bucket, keyFile, revokeUrl };
+  return { admin, bucket, keyFile, revokeUrl, projectId: project.id };
 }
 
 function onCompatHost(path: string, headers: Record<string, string>): Promise<{ status: number; body: string }> {
@@ -111,4 +111,37 @@ describe.runIf(COMPAT_HOST && GO)("Go storage client v1.69 (e2e/compat-gcs)", ()
     expect(before).toMatch(/^storage: object doesn't exist/);
     expect(after).toBe("after revocation: 401");
   }, 60_000);
+
+  async function assetsOf(admin: string, projectId: string) {
+    const res = await api(admin, "GET", `/assets?projectId=${projectId}`);
+    expect(res.status).toBe(200);
+    return (await res.json() as { assets: { filename: string }[] }).assets;
+  }
+
+  test("write-attrs-list-delete: hashes, rising generations, a delimited listing, idempotent deletes and a recreate", async () => {
+    const { admin, bucket, path, projectId } = await keyFileOnDisk();
+    const { stdout } = await scenario("write-attrs-list-delete", { E2E_GCS_KEY_FILE: path, E2E_GCS_BUCKET: bucket });
+    expect(stdout.trim().split("\n")).toEqual([
+      "overwrite: generation increased",
+      "listed: [assets/ab/cdef/a.txt] [assets/ab/cdef/sub/]",
+      "deleted: assets/ab/cdef/a.txt",
+      "deleted: assets/ab/cdef/a.txt",
+      "deleted: never/written.txt",
+      "recreate: generation increased",
+    ]);
+    expect((await assetsOf(admin, projectId)).map((a) => a.filename)).toEqual(["b.txt"]);
+  }, 120_000);
+
+  test("paging: 1,050 keys come back from the iterator once each", async () => {
+    const { bucket, path } = await keyFileOnDisk();
+    const { stdout } = await scenario("paging", { E2E_GCS_KEY_FILE: path, E2E_GCS_BUCKET: bucket });
+    expect(stdout.trim()).toBe("listed: 1050");
+  }, 300_000);
+
+  test("race: two writers on one new key make one asset and both succeed", async () => {
+    const { admin, bucket, path, projectId } = await keyFileOnDisk();
+    const { stdout } = await scenario("race", { E2E_GCS_KEY_FILE: path, E2E_GCS_BUCKET: bucket });
+    expect(stdout.trim()).toBe("generation: the later of two distinct writes");
+    expect((await assetsOf(admin, projectId)).map((a) => a.filename)).toEqual(["new.txt"]);
+  }, 120_000);
 });

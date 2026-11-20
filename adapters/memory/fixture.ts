@@ -362,7 +362,7 @@ export async function fixture(overrides?: Partial<Deps>) {
   const storage = new MemoryFileStorage();
   const siteHosts = new MemorySiteHostStore((id) => metadata.assets.has(id));
   const cache = new MemoryKeyValue();
-  const compat = new MemoryCompatStore();
+  const compat = new MemoryCompatStore((assetId) => [...versions.versions.values()].filter((v) => v.assetId === assetId));
   // Custom domains (ADR-013 B5): a resolver with no records — a test publishes
   // the one it wants found — and a provisioner that issues instantly.
   const dns = new MemoryDnsResolver();
@@ -414,10 +414,14 @@ export async function fixture(overrides?: Partial<Deps>) {
     metadata,
     versions,
     storage,
-    // Only delete is exercised through the app; uploads have their own tests.
     writes: {
-      createAsset: () => { throw new Error('fake dependency "writes.createAsset" was called unexpectedly'); },
-      createVersion: () => { throw new Error('fake dependency "writes.createVersion" was called unexpectedly'); },
+      async createAsset({ asset }) {
+        await metadata.save(asset);
+      },
+      async createVersion({ version }) {
+        const numbers = [...versions.versions.values()].filter((v) => v.assetId === version.assetId).map((v) => v.version);
+        return versions.save({ ...version, version: Math.max(0, ...numbers) + 1 });
+      },
       saveJob: () => { throw new Error('fake dependency "writes.saveJob" was called unexpectedly'); },
       async deleteAsset({ asset, releasedAt }) {
         metadata.assets.delete(asset.id);

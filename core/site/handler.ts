@@ -19,7 +19,7 @@
 import type { Hono } from "hono";
 import { describeRoute, resolver, validator as zValidator } from "hono-openapi";
 import type { Context } from "hono";
-import type { AppEnv } from "../types";
+import type { AppEnv, Deps } from "../types";
 import { accessCtx, authorizeAsset, authorizeProject, deniedResponse } from "../auth/access";
 import { getAssetMetadata } from "../asset/usecase";
 import type { SiteHost as SiteHostRow } from "./repository";
@@ -36,16 +36,32 @@ import {
   siteHostVerificationFailedSchema, updateSiteHostBodySchema,
 } from "../../shared/openapi";
 
-export function siteHostDeps(c: Context<AppEnv>): SiteHostDeps {
+export type SiteHostSources = Pick<
+  Deps, "siteHosts" | "cache" | "siteHostSuffix" | "baseUrl" | "dns" | "customHostnames" | "siteFallbackOrigin"
+>;
+
+export function siteHostDepsFrom(d: SiteHostSources): SiteHostDeps {
   return {
-    hosts: c.get("siteHosts"),
+    hosts: d.siteHosts,
+    cache: d.cache,
+    suffix: d.siteHostSuffix,
+    baseUrl: d.baseUrl,
+    dns: d.dns,
+    provisioner: d.customHostnames,
+    fallbackOrigin: d.siteFallbackOrigin,
+  };
+}
+
+export function siteHostDeps(c: Context<AppEnv>): SiteHostDeps {
+  return siteHostDepsFrom({
+    siteHosts: c.get("siteHosts"),
     cache: c.get("cache"),
-    suffix: c.get("siteHostSuffix"),
+    siteHostSuffix: c.get("siteHostSuffix"),
     baseUrl: c.get("baseUrl"),
     dns: c.get("dns"),
-    provisioner: c.get("customHostnames"),
-    fallbackOrigin: c.get("siteFallbackOrigin"),
-  };
+    customHostnames: c.get("customHostnames"),
+    siteFallbackOrigin: c.get("siteFallbackOrigin"),
+  });
 }
 
 /** The row as the API shows it: internal-only columns dropped, URL added. */

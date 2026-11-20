@@ -8,7 +8,8 @@ CREATE TABLE compat_buckets (
   project_id  TEXT NOT NULL,
   mount_rule  TEXT,
   upstream    TEXT,
-  created_at  INTEGER NOT NULL
+  created_at  INTEGER NOT NULL,
+  last_generation INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX idx_compat_buckets_project ON compat_buckets(project_id);
@@ -20,6 +21,8 @@ CREATE TABLE compat_bindings (
   asset_id    TEXT,
   claimed_at  INTEGER NOT NULL,
   claim_token TEXT NOT NULL,
+  lease_token TEXT,
+  leased_at   INTEGER,
   PRIMARY KEY (bucket, key)
 );
 
@@ -28,8 +31,9 @@ CREATE INDEX idx_compat_bindings_asset ON compat_bindings(asset_id);
 CREATE TABLE compat_hashes (
   object_ref  TEXT PRIMARY KEY,
   asset_id    TEXT NOT NULL,
-  md5         BLOB NOT NULL,
-  crc32c      INTEGER NOT NULL
+  generation  INTEGER NOT NULL,
+  md5         BLOB,
+  crc32c      INTEGER
 );
 
 CREATE INDEX idx_compat_hashes_asset ON compat_hashes(asset_id);

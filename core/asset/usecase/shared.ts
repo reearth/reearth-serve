@@ -1,3 +1,6 @@
+import type { FileStorage } from "../repository";
+import type { ProjectStore } from "../../project/repository";
+
 export function generateId(): string {
   return crypto.randomUUID().replace(/-/g, "").slice(0, 16);
 }
@@ -35,4 +38,31 @@ export function legacyThumbsPrefix(assetId: string): string {
 
 export function legacyThumbKey(assetId: string, filename: string): string {
   return `assets/${assetId}/_thumbs/${filename}`;
+}
+
+export async function usageScopesFor(
+  projects: Pick<ProjectStore, "find">,
+  projectId: string | null | undefined,
+): Promise<string[]> {
+  if (!projectId) return [];
+  const scopes = [`project:${projectId}`];
+  const project = await projects.find(projectId);
+  if (project?.workspaceId) scopes.push(`workspace:${project.workspaceId}`);
+  return scopes;
+}
+
+export type Written = { applied(): Promise<boolean> };
+
+/**
+ * After a create write threw, delete the bytes it was to point at, unless
+ * `written` finds its row or cannot rule it out. A leak is cheaper than a
+ * live object without bytes.
+ */
+export async function dropUnwrittenBytes(storage: FileStorage, key: string, written?: Written): Promise<void> {
+  if (written && (await written.applied().catch(() => true))) return;
+  try {
+    await storage.delete(key);
+  } catch (e) {
+    console.error(`Failed to clean up ${key} after its metadata write failed:`, e);
+  }
 }

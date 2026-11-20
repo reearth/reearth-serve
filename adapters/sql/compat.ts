@@ -1,9 +1,10 @@
 import type {
   Binding, BindingKind, BucketName, CompatBucket, CompatCredential, CredentialId,
-  ExactHashes, UploadId, UploadSession,
+  UploadId, UploadSession,
 } from "../../core/compat/model";
 import {
-  newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatStore, type DeleteBucketResult,
+  generationSeed, newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatStore, type DeleteBucketResult,
+  type LeaseToken, type RecordRef, type VersionRecord,
 } from "../../core/compat/repository";
 import type { Row, SqlClient, SqlStatement } from "../../core/sql/port";
 import { queryAll, queryFirst } from "./helpers";
@@ -38,8 +39,8 @@ export class SqlCompatStore implements CompatStore {
 
   async insertBucket(bucket: CompatBucket): Promise<boolean> {
     const result = await this.db.execute(
-      `INSERT OR IGNORE INTO compat_buckets (${BUCKET_COLUMNS}) VALUES (?1, ?2, ?3, ?4)`,
-      [bucket.name, bucket.projectId, bucket.mount ? JSON.stringify(bucket.mount) : null, bucket.createdAt],
+      `INSERT OR IGNORE INTO compat_buckets (${BUCKET_COLUMNS}, last_generation) VALUES (?1, ?2, ?3, ?4, ?5)`,
+      [bucket.name, bucket.projectId, bucket.mount ? JSON.stringify(bucket.mount) : null, bucket.createdAt, generationSeed()],
     );
     return result.rowsAffected > 0;
   }
@@ -117,6 +118,22 @@ export class SqlCompatStore implements CompatStore {
     await this.db.execute("DELETE FROM compat_bindings WHERE bucket = ?1 AND key = ?2", [bucket, key]);
   }
 
+  async lease(bucket: BucketName, key: BindingKey, token: LeaseToken, now: number, staleBefore: number): Promise<boolean> {
+    const result = await this.db.execute(
+      `UPDATE compat_bindings SET lease_token = ?3, leased_at = ?4
+         WHERE bucket = ?1 AND key = ?2 AND asset_id IS NOT NULL AND (lease_token IS NULL OR leased_at < ?5)`,
+      [bucket, key, token, now, staleBefore],
+    );
+    return result.rowsAffected > 0;
+  }
+
+  async releaseLease(bucket: BucketName, key: BindingKey, token: LeaseToken): Promise<void> {
+    await this.db.execute(
+      "UPDATE compat_bindings SET lease_token = NULL, leased_at = NULL WHERE bucket = ?1 AND key = ?2 AND lease_token = ?3",
+      [bucket, key, token],
+    );
+  }
+
   async scanBindings(bucket: BucketName, from: string, until: string | null, limit: number): Promise<Binding[]> {
     const rows = await queryAll(
       this.db,
@@ -128,16 +145,30 @@ export class SqlCompatStore implements CompatStore {
     return rows.map(parseBinding);
   }
 
-  async findHashes(objectRef: string): Promise<ExactHashes | null> {
-    const row = await queryFirst(this.db, "SELECT md5, crc32c FROM compat_hashes WHERE object_ref = ?1", [objectRef]);
-    return row ? { md5: toBytes(row.md5), crc32c: Number(row.crc32c) } : null;
-  }
-
-  async putHashes(objectRef: string, assetId: string, hashes: ExactHashes): Promise<void> {
-    await this.db.execute(
-      "INSERT OR REPLACE INTO compat_hashes (object_ref, asset_id, md5, crc32c) VALUES (?1, ?2, ?3, ?4)",
-      [objectRef, assetId, hashes.md5, hashes.crc32c],
-    );
+  async records(bucket: BucketName, refs: RecordRef[]): Promise<Map<string, VersionRecord>> {
+    const unique = [...new Map(refs.map((r) => [r.objectRef, r])).values()];
+    if (unique.length === 0) return new Map();
+    const wanted = JSON.stringify(unique.map((r) => ({ ref: r.objectRef, asset: r.assetId })));
+    const refIds = JSON.stringify(unique.map((r) => r.objectRef));
+    const results = await this.db.batch([
+      ...recordInVersionOrder(bucket, wanted),
+      ...unique.flatMap((r) => r.hashes
+        ? [{
+          sql: "UPDATE compat_hashes SET md5 = ?2, crc32c = ?3 WHERE object_ref = ?1 AND md5 IS NULL",
+          args: [r.objectRef, r.hashes.md5, r.hashes.crc32c],
+        }]
+        : []),
+      {
+        sql: `SELECT h.object_ref, h.generation, h.md5, h.crc32c FROM compat_hashes AS h
+               WHERE h.object_ref IN (SELECT value FROM json_each(?2))
+                 AND EXISTS (SELECT 1 FROM compat_buckets WHERE name = ?1)`,
+        args: [bucket, refIds],
+      },
+    ]);
+    return new Map(results[results.length - 1].rows.map((row) => [row.object_ref as string, {
+      generation: Number(row.generation),
+      hashes: row.md5 === null ? null : { md5: toBytes(row.md5), crc32c: Number(row.crc32c) },
+    }]));
   }
 
   async findCredential(id: CredentialId): Promise<CompatCredential | null> {
@@ -220,6 +251,36 @@ export class SqlCompatStore implements CompatStore {
   async deleteUpload(id: UploadId): Promise<void> {
     await this.db.execute("DELETE FROM compat_uploads WHERE id = ?1", [id]);
   }
+}
+
+export function recordInVersionOrder(bucket: BucketName, wanted: string): SqlStatement[] {
+  return [
+    {
+      sql: `WITH wanted AS (
+              SELECT json_extract(w.value, '$.ref') AS ref, json_extract(w.value, '$.asset') AS asset, v.version AS version
+                FROM json_each(?2) AS w
+                LEFT JOIN asset_versions AS v ON v.id = json_extract(w.value, '$.ref') AND v.asset_id = json_extract(w.value, '$.asset')
+            ),
+            due (ref, asset, version) AS (
+              SELECT ref, asset, COALESCE(version, 0) FROM wanted
+              UNION SELECT asset, asset, 0 FROM wanted WHERE version IS NOT NULL
+              UNION SELECT o.id, o.asset_id, o.version FROM wanted AS w JOIN asset_versions AS o ON o.asset_id = w.asset AND o.version < w.version
+            )
+            INSERT INTO compat_hashes (object_ref, asset_id, generation, md5, crc32c)
+              SELECT d.ref, d.asset, b.last_generation + ROW_NUMBER() OVER (ORDER BY d.asset, d.version), NULL, NULL
+                FROM due AS d JOIN compat_buckets AS b ON b.name = ?1
+               WHERE NOT EXISTS (SELECT 1 FROM compat_hashes AS h WHERE h.object_ref = d.ref)
+            ON CONFLICT (object_ref) DO NOTHING`,
+      args: [bucket, wanted],
+    },
+    {
+      sql: `UPDATE compat_buckets SET last_generation = m.top
+              FROM (SELECT MAX(generation) AS top FROM compat_hashes
+                     WHERE asset_id IN (SELECT json_extract(value, '$.asset') FROM json_each(?2))) AS m
+             WHERE name = ?1 AND m.top > last_generation`,
+      args: [bucket, wanted],
+    },
+  ];
 }
 
 /** Runs inside `SqlAtomicWrites.deleteAsset`'s batch, so the rows go only if the asset row goes too. */

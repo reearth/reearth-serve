@@ -127,15 +127,6 @@ describe("objects.get before objects are served", () => {
     expect(res.status).toBe(404);
   });
 
-  test("a bound key answers 501 until objects are described", async () => {
-    const f = await compatFixture();
-    const token = await accessToken(f, await keyFor(f));
-    const claim = await f.compat.claim("media" as BucketName, "a/b.txt" as ObjectKey, "object", 0, -1);
-    if (claim.kind !== "claimed") throw new Error(claim.kind);
-    await f.compat.bind("media" as BucketName, "a/b.txt" as ObjectKey, claim.token, "3f9a1c2b4d5e6f70");
-    expect((await onApi(f, "/storage/v1/b/media/o/a%2Fb.txt", { headers: bearer(token) })).status).toBe(501);
-  });
-
   test("a bucket outside the grant, in another project or the same one, answers exactly like an unknown bucket", async () => {
     const f = await compatFixture();
     await f.deps.projects.save({ id: "p2", name: "P2", createdAt: 0, updatedAt: 0, ownerId: "u2", workspaceId: "ws2" });
@@ -157,6 +148,107 @@ describe("objects.get before objects are served", () => {
     const res = await onApi(f, "/storage/v1/b/media/o/k", { headers: bearer(token) });
     expect(res.status).toBe(403);
     expect(await res.json()).toMatchObject({ error: { code: 403, errors: [{ reason: "forbidden" }] } });
+  });
+});
+
+function multipart(metadata: Record<string, unknown>, media: string, boundary = "b88f") {
+  return {
+    headers: { "Content-Type": `multipart/related; boundary=${boundary}` },
+    body: `--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(metadata)}\n\r\n`
+      + `--${boundary}\r\nContent-Type: text/plain\r\n\r\n${media}\r\n--${boundary}--\r\n`,
+  };
+}
+
+const GO_LIST_PARAMS = "alt=json&delimiter=&endOffset=&includeFoldersAsPrefixes=false&includeTrailingDelimiter=false"
+  + "&matchGlob=&pageToken=&prettyPrint=false&projection=full&startOffset=&versions=false";
+
+describe("objects", () => {
+  async function editor() {
+    const f = await compatFixture();
+    await f.deps.projects.save({ id: "p1", name: "P", createdAt: 0, updatedAt: 0, ownerId: "u1", workspaceId: "ws1" });
+    return { f, headers: bearer(await accessToken(f, await keyFor(f, "editor"))) };
+  }
+
+  test("a multipart write is described, listed and deleted the way the Go client reads it", async () => {
+    const { f, headers } = await editor();
+    const upload = multipart({ name: "assets/ab/a.txt", contentType: "text/plain", metadata: { k: "v" }, crc32c: "Yk9x6g==" }, "small body");
+    const written = await onApi(f, "/upload/storage/v1/b/media/o?alt=json&name=assets%2Fab%2Fa.txt&prettyPrint=false&projection=full&uploadType=multipart", {
+      method: "POST", headers: { ...headers, ...upload.headers }, body: upload.body,
+    });
+    expect(written.status).toBe(200);
+    const resource = await written.json();
+    expect(resource).toMatchObject({
+      kind: "storage#object", name: "assets/ab/a.txt", bucket: "media", metageneration: "1",
+      contentType: "text/plain", size: "10", crc32c: "Yk9x6g==", md5Hash: "KJ2vAHjAOf4oawDFYf2glw==", metadata: { k: "v" },
+    });
+    expect((resource as { generation: string }).generation).toMatch(/^\d{16}$/);
+
+    const got = await onApi(f, "/storage/v1/b/media/o/assets%2Fab%2Fa.txt?alt=json&prettyPrint=false&projection=full", { headers });
+    expect(await got.json()).toEqual(resource);
+
+    const listed = await onApi(f, `/storage/v1/b/media/o?${GO_LIST_PARAMS}`.replace("delimiter=&", "delimiter=%2F&"), { headers });
+    expect(await listed.json()).toEqual({ kind: "storage#objects", prefixes: ["assets/"], items: [] });
+    const inFolder = await onApi(f, `/storage/v1/b/media/o?${GO_LIST_PARAMS}&prefix=assets%2Fab%2F`, { headers });
+    expect(await inFolder.json()).toEqual({ kind: "storage#objects", items: [resource] });
+
+    for (const name of ["assets%2Fab%2Fa.txt", "assets%2Fab%2Fa.txt", "never-written"]) {
+      expect((await onApi(f, `/storage/v1/b/media/o/${name}`, { method: "DELETE", headers })).status).toBe(204);
+    }
+    expect((await onApi(f, "/storage/v1/b/media/o/assets%2Fab%2Fa.txt", { headers })).status).toBe(404);
+  });
+
+  test("a declared hash that does not match the bytes is refused and nothing is written", async () => {
+    const { f, headers } = await editor();
+    const upload = multipart({ name: "k", crc32c: "AAAAAA==" }, "small body");
+    const res = await onApi(f, "/upload/storage/v1/b/media/o?uploadType=multipart", { method: "POST", headers: { ...headers, ...upload.headers }, body: upload.body });
+    expect(res.status).toBe(400);
+    expect(f.compat.bindings.size).toBe(0);
+  });
+
+  test("uploadType=media needs a Content-Length", async () => {
+    const { f, headers } = await editor();
+    const stream = new Blob(["abc"]).stream();
+    const res = await onApi(f, "/upload/storage/v1/b/media/o?uploadType=media&name=k", {
+      method: "POST", headers, body: stream, duplex: "half",
+    } as RequestInit);
+    expect(res.status).toBe(411);
+    const sized = await onApi(f, "/upload/storage/v1/b/media/o?uploadType=media&name=k", {
+      method: "POST", headers: { ...headers, "Content-Type": "text/plain", "Content-Length": "3" }, body: "abc",
+    });
+    expect(await sized.json()).toMatchObject({ name: "k", size: "3", md5Hash: "kAFQmDzST7DWlj99KOF/cg==" });
+  });
+
+  test.each([["10"], ["2"], ["0"]])("a media upload whose Content-Length is %s for a 3-byte body is 400 and stores nothing", async (length) => {
+    const { f, headers } = await editor();
+    const res = await onApi(f, "/upload/storage/v1/b/media/o?uploadType=media&name=k", {
+      method: "POST", headers: { ...headers, "Content-Type": "text/plain", "Content-Length": length }, body: "abc",
+    });
+    expect(res.status).toBe(400);
+    expect(await res.json()).toMatchObject({ error: { code: 400, errors: [{ reason: "invalid" }] } });
+    expect(f.compat.bindings.size).toBe(0);
+    expect([...f.metadata.assets.values()].filter((a) => a.projectId === "p1")).toHaveLength(0);
+  });
+
+  test.each([["0x2"], ["1e0"], ["1.0"], ["-1"], ["0"], ["abc"]])("maxResults=%s is 400", async (value) => {
+    const { f, headers } = await editor();
+    expect((await onApi(f, `/storage/v1/b/media/o?maxResults=${value}`, { headers })).status).toBe(400);
+  });
+
+  test.each([
+    ["matchGlob=*.txt"],
+    ["versions=true"],
+    ["delimiter=-"],
+  ])("a listing with %s answers 501", async (param) => {
+    const { f, headers } = await editor();
+    expect((await onApi(f, `/storage/v1/b/media/o?${param}`, { headers })).status).toBe(501);
+  });
+
+  test("a viewer's write is 403", async () => {
+    const f = await compatFixture();
+    const headers = bearer(await accessToken(f, await keyFor(f, "viewer")));
+    const upload = multipart({ name: "k" }, "x");
+    const res = await onApi(f, "/upload/storage/v1/b/media/o?uploadType=multipart", { method: "POST", headers: { ...headers, ...upload.headers }, body: upload.body });
+    expect(res.status).toBe(403);
   });
 });
 

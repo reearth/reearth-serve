@@ -90,3 +90,42 @@ export type UploadSession = {
   result: string | null;
   expiresAt: number;
 };
+
+export type ObjectInfo = {
+  bucket: BucketName;
+  key: ObjectKey;
+  size: number;
+  contentType: string;
+  contentEncoding: string | null;
+  generation: number;
+  metageneration: number;
+  etag: string;
+  created: Date;
+  updated: Date;
+  hashes: ExactHashes | null;
+  userMeta: Record<string, string>;
+};
+
+export type SizedBody = {
+  stream: ReadableStream<Uint8Array>;
+  size: number;
+  hashes?: ExactHashes;
+};
+
+export type CompatError =
+  | { code: "no_such_bucket" }
+  | { code: "no_such_key" }
+  | { code: "forbidden" }
+  | { code: "precondition_failed" }
+  | { code: "busy" }
+  | { code: "invalid"; message: string }
+  | { code: "too_large" }
+  | { code: "not_implemented"; what: string };
+
+export type Result<T> = { ok: true; value: T } | { ok: false; error: CompatError };
+
+export function parseObjectKey(raw: string): ObjectKey | null {
+  const bytes = new TextEncoder().encode(raw).length;
+  if (bytes === 0 || bytes > 1024 || /[\r\n]/.test(raw) || raw === "." || raw === "..") return null;
+  return raw as ObjectKey;
+}
