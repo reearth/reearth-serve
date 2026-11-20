@@ -81,7 +81,7 @@ A **compat bucket** is a name that belongs to one project. Its objects
 are that project's assets; there is no second store.
 
 ```sql
-compat_buckets(name PRIMARY KEY, project_id, mount_rule, upstream)
+compat_buckets(name PRIMARY KEY, project_id, mount_rule, upstream, last_generation)
 compat_bindings(bucket, key, binding, asset_id, PRIMARY KEY (bucket, key))
 ```
 
@@ -187,24 +187,32 @@ version that lands after a write through the layer could then be live at
 a lower generation, or share one with it. Every generation comes from
 the bucket's high mark, `compat_buckets.last_generation`, which survives
 the deletion of every object in the bucket, so a generation is unique in
-its bucket. A version written outside the layer, by a REST upload or a
-REST version upload, has no record until the layer first observes it in
-`head`, `list`, `open` or a precondition check. Records are stored in
-version order: storing the record of any version, by an observation or
-by a write through the layer, first stores one for the asset's original
-upload and every older version of that asset that has none, oldest
-first, each at the next generation above the high mark, in one atomic
-write that raises the high mark and keeps every record already there.
-Concurrent observers therefore answer the first record, and a writer
-whose version an observer recorded first answers that stored generation,
-with its hashes added. A listing stores the missing records of its whole
-page in one such write. Because a version's generation is always above
-that of every older version recorded with it or before it, a newer live
-version is always above every generation observed before it. A write
-through the layer also makes its version the live one, clearing a pin
-set over the REST API, so `objects.get` answers the generation the write
-returned until another version becomes live. A REST pin to an older
-version answers that version's stored generation.
+its bucket. A new bucket's high mark starts at the clock in
+microseconds, and each generation after it is the high mark plus one.
+Deleting a bucket drops its high mark, but a bucket recreated under the
+same name still never reissues a generation: to reach the new bucket's
+starting value, the deleted bucket would have had to issue more than one
+generation per microsecond of its lifetime. Generations are therefore
+16-digit numbers, as in Cloud Storage. A version written outside the
+layer, by a REST upload or a REST version upload, has no record until
+the layer first observes it in `head`, `list`, `open` or a precondition
+check. Records are stored in version order: storing the record of any
+version, by an observation or by a write through the layer, first stores
+one for the asset's original upload and every older version of that
+asset that has none, oldest first, each at the next generation above the
+high mark, in one atomic write that raises the high mark and keeps every
+record already there. Concurrent observers therefore answer the first
+record, and a writer whose version an observer recorded first answers
+that stored generation, with its hashes added. A listing stores the
+missing records of its whole page in one such write. The raise writes
+nothing when every record was already stored, so a `head`, `list` or
+`open` of recorded objects is a read only. Because a version's
+generation is always above that of every older version recorded with it
+or before it, a newer live version is always above every generation
+observed before it. A write through the layer also makes its version the
+live one, clearing a pin set over the REST API, so `objects.get` answers
+the generation the write returned until another version becomes live. A
+REST pin to an older version answers that version's stored generation.
 
 **Writes to one key are serialized.** A writer to a new key inserts the
 binding row with no asset (a claim) before it writes any byte, so two
