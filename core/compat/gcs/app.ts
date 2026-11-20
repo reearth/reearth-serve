@@ -144,6 +144,7 @@ export function gcsApp(deps: GcsDeps, apiOrigin: string) {
     if (queryOf(c, "uploadType") !== "resumable" || id === null) return gcsError("json", "not_implemented");
     const result = await uploadsOf(c).cancel(id, c.req.param("bucket"));
     if (!result.ok) return compatErrorResponse("json", result.error);
+    if (result.value.kind === "committed") return uploadStatusResponse(c, result.value, apiOrigin);
     return new Response(null, { status: CLIENT_CLOSED_REQUEST });
   });
 

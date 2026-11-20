@@ -197,23 +197,33 @@ describe.each([
     });
   });
 
-  test("version records round-trip the generation and the exact hash bytes", async () => {
-    const s = make();
-    const md5 = new Uint8Array([0, 1, 2, 250, 255, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
-    const record = { generation: 1_763_000_000_000_001, hashes: { md5, crc32c: 0xffffffff } };
-    await s.putRecord("v1", "a1", record);
-    expect(await s.findRecord("v1")).toEqual(record);
-    expect(await s.findRecord("v2")).toBeNull();
-  });
-
-  test("a bucket issues generations above every earlier one, and only for a bucket that exists", async () => {
+  test("records store the exact hash bytes, and a record stored first keeps its generation", async () => {
     const s = make();
     await s.insertBucket(bucket());
-    expect(await s.nextGeneration(media, 5000)).toBe(5000);
-    expect(await s.nextGeneration(media, 5000)).toBe(5001);
-    expect(await s.nextGeneration(media, 4000)).toBe(5002);
-    expect(await s.nextGeneration(media, 9000)).toBe(9000);
-    expect(await s.nextGeneration("absent" as BucketName, 7)).toBe(7);
+    const md5 = new Uint8Array([0, 1, 2, 250, 255, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
+    const observed = await s.records(media, [{ objectRef: "v1", assetId: "a1" }]);
+    expect(observed.get("v1")).toEqual({ generation: 1, hashes: null });
+    const filled = await s.records(media, [{ objectRef: "v1", assetId: "a1", hashes: { md5, crc32c: 0xffffffff } }]);
+    expect(filled.get("v1")).toEqual({ generation: 1, hashes: { md5, crc32c: 0xffffffff } });
+    const other = await s.records(media, [{ objectRef: "v1", assetId: "a1", hashes: { md5: new Uint8Array(16), crc32c: 1 } }]);
+    expect(other.get("v1")).toEqual({ generation: 1, hashes: { md5, crc32c: 0xffffffff } });
+  });
+
+  test("a bucket issues each missing record the next generation above its high mark, and none for a bucket that is gone", async () => {
+    const s = make();
+    await s.insertBucket(bucket());
+    const page = await s.records(media, ["v1", "v2", "v1", "v3"].map((objectRef) => ({ objectRef, assetId: "a1" })));
+    expect([...page.entries()].sort()).toEqual([["v1", { generation: 1, hashes: null }], ["v2", { generation: 2, hashes: null }], ["v3", { generation: 3, hashes: null }]]);
+    expect((await s.records(media, [{ objectRef: "v2", assetId: "a1" }, { objectRef: "v4", assetId: "a1" }])).get("v4")?.generation).toBe(4);
+    expect((await s.records("absent" as BucketName, [{ objectRef: "v9", assetId: "a9" }])).size).toBe(0);
+  });
+
+  test("concurrent first observers of one record agree on its generation", async () => {
+    const s = make();
+    await s.insertBucket(bucket());
+    const seen = await Promise.all([1, 2, 3, 4].map(() => s.records(media, [{ objectRef: "v1", assetId: "a1" }])));
+    expect(new Set(seen.map((m) => m.get("v1")?.generation))).toEqual(new Set([1]));
+    expect((await s.records(media, [{ objectRef: "v2", assetId: "a1" }])).get("v2")?.generation).toBe(2);
   });
 
   describe("leases", () => {
@@ -328,20 +338,6 @@ describe.each([
       expect(await s.findUpload("up1" as UploadId)).toEqual(upload({ revision: 1, phase: { state: "committed", result } }));
     });
 
-    test("a bind that carries an upload's move happens with it or not at all", async () => {
-      const s = make();
-      await s.createUpload(upload());
-      const failed: UploadPhase = { state: "failed", error: { code: "busy" } };
-      const token = await claimed(s, key, 1000);
-      expect(await s.bind(media, key, token, "asset-1", { id: "up1" as UploadId, revision: 7, phase: failed })).toBe(false);
-      expect(await s.findBinding(media, key)).toBeNull();
-      expect(await s.bind(media, key, "other" as ClaimToken, "asset-1", { id: "up1" as UploadId, revision: 0, phase: failed })).toBe(false);
-      expect((await s.findUpload("up1" as UploadId))?.revision).toBe(0);
-      expect(await s.bind(media, key, token, "asset-1", { id: "up1" as UploadId, revision: 0, phase: failed })).toBe(true);
-      expect(await s.findBinding(media, key)).toMatchObject({ assetId: "asset-1" });
-      expect(await s.findUpload("up1" as UploadId)).toEqual(upload({ revision: 1, phase: failed }));
-    });
-
     test("expired sessions are listed oldest first, and delete removes one, from its revision when given", async () => {
       const s = make();
       await s.createUpload(upload({ id: "late" as UploadId, expiresAt: 3000 }));
@@ -367,15 +363,15 @@ describe("SqlAtomicWrites.deleteAsset", () => {
     for (const [k, id] of [[key, "a1"], [other, "a2"]] as const) {
       await store.bind(media, k, await claimed(store, k, 1000), id);
     }
-    await store.putRecord("v1", "a1", { generation: 1, hashes: { md5: new Uint8Array(16), crc32c: 1 } });
-    await store.putRecord("v2", "a2", { generation: 2, hashes: { md5: new Uint8Array(16), crc32c: 2 } });
+    await store.insertBucket(bucket());
+    await store.records(media, [{ objectRef: "v1", assetId: "a1" }, { objectRef: "v2", assetId: "a2" }]);
+    const recorded = async () => (await sql.execute("SELECT object_ref FROM compat_hashes ORDER BY object_ref")).rows.map((r) => r.object_ref);
 
     await new SqlAtomicWrites(sql).deleteAsset({ asset, cleanupPrefix: "assets/a1/" });
 
     expect(await store.findBinding(media, key)).toBeNull();
-    expect(await store.findRecord("v1")).toBeNull();
     expect(await store.findBinding(media, other)).not.toBeNull();
-    expect(await store.findRecord("v2")).not.toBeNull();
+    expect(await recorded()).toEqual(["v2"]);
     expect(await metadata.find("a1")).toBeNull();
   });
 });

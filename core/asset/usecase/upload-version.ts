@@ -1,8 +1,8 @@
 import type { AssetVersion } from "../model";
 import { detectArchiveFormat } from "../model";
-import type { AtomicWrites, FileStorage, MetadataStore, WriteGuard } from "../repository";
+import type { AtomicWrites, FileStorage, MetadataStore, Publishing } from "../repository";
 import type { Job } from "../../job/model";
-import { generateId, versionStorageKey } from "./shared";
+import { dropUnwrittenBytes, generateId, versionStorageKey, type Written } from "./shared";
 import { siteUrlFor } from "../../site/url";
 import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
@@ -14,6 +14,8 @@ export interface UploadVersionResult {
   url: string;
   /** Site host of the asset when it is an archive (ADR-013 B1). */
   siteUrl?: string;
+  /** The generation `options.publish` issued. */
+  generation?: number;
 }
 
 export async function uploadVersion(
@@ -30,7 +32,7 @@ export async function uploadVersion(
     originalSize?: number;
   },
   baseUrl: string,
-  options?: { extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string; versionId?: string; userMeta?: Record<string, unknown>; guard?: () => WriteGuard },
+  options?: { extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string; versionId?: string; userMeta?: Record<string, unknown>; publish?: Publishing<AssetVersion>; written?: Written },
 ): Promise<UploadVersionResult | null> {
   const asset = await metadata.find(assetId);
   if (!asset) return null;
@@ -86,15 +88,16 @@ export async function uploadVersion(
   }
 
   let savedVersion: AssetVersion;
+  let generation: number | null;
   try {
     // Job row, version row and storage-usage counters in one atomic write
     // (ADR-012 §3). The version number is assigned inside that batch.
-    savedVersion = await writes.createVersion({
+    ({ generation, ...savedVersion } = await writes.createVersion({
       version: versionInput,
       job,
       usageScopes: asset.projectId ? options?.usageScopes : [],
-      guard: options?.guard?.(),
-    });
+      publish: options?.publish?.of(versionInput),
+    }));
 
     // Enqueue only after the rows are committed: the consumer reads them.
     if (job && archiveFormat && options?.extractionQueue) {
@@ -120,13 +123,7 @@ export async function uploadVersion(
       size: file.size,
     });
   } catch (e) {
-    // Compensation: drop the orphaned R2 object so it doesn't leak forever
-    // if the D1 version row failed to persist.
-    try {
-      await storage.delete(key);
-    } catch (delErr) {
-      console.error("Failed to clean up R2 object after version save failure:", delErr);
-    }
+    await dropUnwrittenBytes(storage, key, e, options?.publish ?? options?.written);
     throw e;
   }
 
@@ -143,5 +140,6 @@ export async function uploadVersion(
     version: savedVersion,
     url: `${baseUrl}/files/${assetId}/${encodeURIComponent(file.name)}`,
     ...(siteUrl && { siteUrl }),
+    ...(generation !== null && { generation }),
   };
 }

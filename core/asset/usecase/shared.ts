@@ -1,4 +1,5 @@
 import type { ProjectStore } from "../../project/repository";
+import { HoldLost, type FileStorage, type Publishing } from "../repository";
 
 export function generateId(): string {
   return crypto.randomUUID().replace(/-/g, "").slice(0, 16);
@@ -6,6 +7,14 @@ export function generateId(): string {
 
 export function storageKey(id: string, filename: string): string {
   return `assets/${id}/${filename}`;
+}
+
+export function assetPrefix(id: string): string {
+  return `assets/${id}/`;
+}
+
+export function versionPrefix(assetId: string, versionId: string): string {
+  return `assets/${assetId}/v/${versionId}/`;
 }
 
 export function versionStorageKey(assetId: string, versionId: string, filename: string): string {
@@ -48,4 +57,22 @@ export async function usageScopesFor(
   const project = await projects.find(projectId);
   if (project?.workspaceId) scopes.push(`workspace:${project.workspaceId}`);
   return scopes;
+}
+
+/** A re-read telling whether a create write that threw applied anyway (a lost response, say). */
+export type Written = { applied(): Promise<boolean> };
+
+/**
+ * After a create write threw, delete the bytes it was to point at, unless the
+ * write may have applied: one that failed other than by `HoldLost` and whose
+ * row `written` finds, or cannot rule out, keeps its bytes. A leak is cheaper
+ * than a live object without bytes.
+ */
+export async function dropUnwrittenBytes(storage: FileStorage, key: string, error: unknown, written?: Written): Promise<void> {
+  if (written && !(error instanceof HoldLost) && (await written.applied().catch(() => true))) return;
+  try {
+    await storage.delete(key);
+  } catch (e) {
+    console.error(`Failed to clean up ${key} after its metadata write failed:`, e);
+  }
 }

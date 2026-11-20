@@ -4,10 +4,9 @@ import type {
 } from "../../core/compat/model";
 import { base64Of, fromBase64 } from "../../core/compat/hash";
 import {
-  newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatStore, type DeleteBucketResult,
-  type LeaseToken, type UploadTransition, type VersionRecord,
+  newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatPublish, type CompatStore,
+  type DeleteBucketResult, type LeaseToken, type RecordRef, type VersionRecord,
 } from "../../core/compat/repository";
-import type { WriteGuard } from "../../core/asset/repository";
 import type { Row, SqlClient, SqlStatement, SqlValue } from "../../core/sql/port";
 import { queryAll, queryFirst } from "./helpers";
 import { isServiceRole } from "../../core/auth/types";
@@ -99,22 +98,13 @@ export class SqlCompatStore implements CompatStore {
     return binding ? { kind: "bound", binding } : { kind: "busy" };
   }
 
-  async bind(bucket: BucketName, key: BindingKey, token: ClaimToken, assetId: string, upload?: UploadTransition): Promise<boolean> {
-    const fill = `UPDATE compat_bindings SET asset_id = ?4
-      WHERE bucket = ?1 AND key = ?2 AND ((asset_id IS NULL AND claim_token = ?3) OR asset_id = ?4)`;
-    if (!upload) return (await this.db.execute(fill, [bucket, key, token, assetId])).rowsAffected > 0;
-    const [, moved] = await this.db.batch([
-      {
-        sql: `${fill} AND EXISTS (SELECT 1 FROM compat_uploads WHERE id = ?5 AND revision = ?6)`,
-        args: [bucket, key, token, assetId, upload.id, upload.revision],
-      },
-      {
-        sql: `UPDATE compat_uploads SET phase = ?3, revision = ?2 + 1
-          WHERE id = ?1 AND revision = ?2 AND EXISTS (SELECT 1 FROM compat_bindings WHERE bucket = ?4 AND key = ?5 AND asset_id = ?6)`,
-        args: [upload.id, upload.revision, encodePhase(upload.phase), bucket, key, assetId],
-      },
-    ]);
-    return moved.rowsAffected > 0;
+  async bind(bucket: BucketName, key: BindingKey, token: ClaimToken, assetId: string): Promise<boolean> {
+    const result = await this.db.execute(
+      `UPDATE compat_bindings SET asset_id = ?4
+         WHERE bucket = ?1 AND key = ?2 AND ((asset_id IS NULL AND claim_token = ?3) OR asset_id = ?4)`,
+      [bucket, key, token, assetId],
+    );
+    return result.rowsAffected > 0;
   }
 
   async releaseClaim(bucket: BucketName, key: BindingKey, token: ClaimToken): Promise<void> {
@@ -171,29 +161,49 @@ export class SqlCompatStore implements CompatStore {
     return rows.map(parseBinding);
   }
 
-  async nextGeneration(bucket: BucketName, atLeast: number): Promise<number> {
-    const row = await queryFirst(
-      this.db,
-      "UPDATE compat_buckets SET last_generation = MAX(last_generation + 1, ?2) WHERE name = ?1 RETURNING last_generation",
-      [bucket, atLeast],
-    );
-    return row ? Number(row.last_generation) : atLeast;
+  async records(bucket: BucketName, refs: RecordRef[]): Promise<Map<string, VersionRecord>> {
+    const unique = [...new Map(refs.map((r) => [r.objectRef, r])).values()];
+    if (unique.length === 0) return new Map();
+    const wanted = JSON.stringify(unique.map((r) => ({ ref: r.objectRef, asset: r.assetId })));
+    const refIds = JSON.stringify(unique.map((r) => r.objectRef));
+    const results = await this.db.batch([
+      {
+        sql: `INSERT INTO compat_hashes (object_ref, asset_id, generation, md5, crc32c)
+                SELECT json_extract(w.value, '$.ref'), json_extract(w.value, '$.asset'),
+                       b.last_generation + ROW_NUMBER() OVER (ORDER BY w.key), NULL, NULL
+                  FROM json_each(?2) AS w JOIN compat_buckets AS b ON b.name = ?1
+                 WHERE NOT EXISTS (SELECT 1 FROM compat_hashes AS h WHERE h.object_ref = json_extract(w.value, '$.ref'))
+                ON CONFLICT (object_ref) DO NOTHING`,
+        args: [bucket, wanted],
+      },
+      {
+        sql: `UPDATE compat_buckets SET last_generation = MAX(last_generation, COALESCE(
+                (SELECT MAX(generation) FROM compat_hashes WHERE object_ref IN (SELECT value FROM json_each(?2))), 0))
+              WHERE name = ?1`,
+        args: [bucket, refIds],
+      },
+      ...unique.flatMap((r) => r.hashes
+        ? [{
+          sql: "UPDATE compat_hashes SET md5 = ?2, crc32c = ?3 WHERE object_ref = ?1 AND md5 IS NULL",
+          args: [r.objectRef, r.hashes.md5, r.hashes.crc32c],
+        }]
+        : []),
+      {
+        sql: `SELECT h.object_ref, h.generation, h.md5, h.crc32c FROM compat_hashes AS h
+               WHERE h.object_ref IN (SELECT value FROM json_each(?2))
+                 AND EXISTS (SELECT 1 FROM compat_buckets WHERE name = ?1)`,
+        args: [bucket, refIds],
+      },
+    ]);
+    return new Map(results[results.length - 1].rows.map((row) => [row.object_ref as string, {
+      generation: Number(row.generation),
+      hashes: hashesOf(row),
+    }]));
   }
 
   async findRecord(objectRef: string): Promise<VersionRecord | null> {
-    const row = await queryFirst(
-      this.db,
-      "SELECT generation, md5, crc32c FROM compat_hashes WHERE object_ref = ?1",
-      [objectRef],
-    );
-    return row ? { generation: Number(row.generation), hashes: { md5: toBytes(row.md5), crc32c: Number(row.crc32c) } } : null;
-  }
-
-  async putRecord(objectRef: string, assetId: string, { generation, hashes }: VersionRecord): Promise<void> {
-    await this.db.execute(
-      "INSERT INTO compat_hashes (object_ref, asset_id, generation, md5, crc32c) VALUES (?1, ?2, ?3, ?4, ?5) ON CONFLICT (object_ref) DO NOTHING",
-      [objectRef, assetId, generation, hashes.md5, hashes.crc32c],
-    );
+    const row = await queryFirst(this.db, "SELECT generation, md5, crc32c FROM compat_hashes WHERE object_ref = ?1", [objectRef]);
+    return row ? { generation: Number(row.generation), hashes: hashesOf(row) } : null;
   }
 
   async findCredential(id: CredentialId): Promise<CompatCredential | null> {
@@ -287,20 +297,61 @@ export class SqlCompatStore implements CompatStore {
   }
 }
 
-export function compatHolds(guard: WriteGuard, firstParam: number): { sql: string; args: SqlValue[] } {
-  const upload = `EXISTS (SELECT 1 FROM compat_uploads WHERE id = ?${firstParam} AND revision = ?${firstParam + 1})`;
-  const args: SqlValue[] = [guard.upload.id, guard.upload.revision];
-  if (!guard.lease) return { sql: upload, args };
-  const lease = `EXISTS (SELECT 1 FROM compat_bindings WHERE bucket = ?${firstParam + 2} AND key = ?${firstParam + 3} AND lease_token = ?${firstParam + 4} AND asset_id = ?${firstParam + 5})`;
-  const { bucket, key, token, assetId } = guard.lease;
-  return { sql: `${upload} AND ${lease}`, args: [...args, bucket, key, token, assetId] };
+/**
+ * The condition under which `publish` applies, with its parameters numbered
+ * from `firstParam`. A claim stays held after the publish's own statement
+ * fills it with `assetId`, so every statement of the publish sees one answer.
+ */
+export function compatHolds(publish: CompatPublish, firstParam: number): { sql: string; args: SqlValue[] } {
+  const [id, revision, bucket, key, token, assetId] = [0, 1, 2, 3, 4, 5].map((i) => `?${firstParam + i}`);
+  const binding = publish.hold.kind === "lease"
+    ? `lease_token = ${token} AND asset_id = ${assetId}`
+    : `claim_token = ${token} AND (asset_id IS NULL OR asset_id = ${assetId})`;
+  const { hold, upload } = publish;
+  return {
+    sql: `EXISTS (SELECT 1 FROM compat_uploads WHERE id = ${id} AND revision = ${revision})
+      AND EXISTS (SELECT 1 FROM compat_bindings WHERE bucket = ${bucket} AND key = ${key} AND ${binding})`,
+    args: [upload.id, upload.revision, hold.bucket, hold.key, hold.token, hold.assetId],
+  };
 }
 
-export function compatPublish(guard: WriteGuard, phase: UploadPhase): SqlStatement {
-  const holds = compatHolds(guard, 2);
+/**
+ * The statements after the row inserts that publish a resumable commit
+ * (ADR-019 §3), each under `compatHolds`. The session moves last, so the
+ * revision the others check is still the one the commit owns. `generationAt`
+ * is the statement whose `last_generation` row is the issued generation, the
+ * next one above the bucket's high mark.
+ */
+export function compatPublish(publish: CompatPublish): { statements: SqlStatement[]; generationAt: number } {
+  const { hold, record, upload } = publish;
+  const at = (sql: string, args: SqlValue[], returning = ""): SqlStatement => {
+    const holds = compatHolds(publish, args.length + 1);
+    return { sql: `${sql} AND ${holds.sql}${returning}`, args: [...args, ...holds.args] };
+  };
+  const high = "(SELECT last_generation FROM compat_buckets WHERE name = ?1)";
+  const live = hold.kind === "lease"
+    ? at("UPDATE assets SET active_version_id = NULL WHERE id = ?1", [hold.assetId])
+    : at("UPDATE compat_bindings SET asset_id = ?4 WHERE bucket = ?1 AND key = ?2 AND claim_token = ?3 AND asset_id IS NULL",
+      [hold.bucket, hold.key, hold.token, hold.assetId]);
+  const committed = encodePhase({ state: "committed", result: { ...publish.result, generation: 0 } });
   return {
-    sql: `UPDATE compat_uploads SET phase = ?1, revision = revision + 1 WHERE id = ?2 AND ${holds.sql}`,
-    args: [encodePhase(phase), ...holds.args],
+    statements: [
+      live,
+      at("UPDATE compat_buckets SET last_generation = last_generation + 1 WHERE name = ?1", [hold.bucket], " RETURNING last_generation"),
+      at(
+        `INSERT INTO compat_hashes (object_ref, asset_id, generation, md5, crc32c)
+           SELECT ?2, ?3, ${high}, ?4, ?5 WHERE 1`,
+        [hold.bucket, record.objectRef, hold.assetId, record.hashes.md5, record.hashes.crc32c],
+      ),
+      ...publish.reclaim.map((prefix) =>
+        at("INSERT OR REPLACE INTO cleanup_pending (prefix, created_at) SELECT ?1, ?2 WHERE 1", [prefix, Date.now()])),
+      at(
+        `UPDATE compat_uploads SET phase = json_set(?2, '$.result.generation', ${high}), revision = revision + 1
+           WHERE id = ?3`,
+        [hold.bucket, committed, upload.id],
+      ),
+    ],
+    generationAt: 1,
   };
 }
 
@@ -310,6 +361,10 @@ export function compatDeleteByAsset(assetId: string): SqlStatement[] {
     { sql: "DELETE FROM compat_bindings WHERE asset_id = ?1", args: [assetId] },
     { sql: "DELETE FROM compat_hashes WHERE asset_id = ?1", args: [assetId] },
   ];
+}
+
+function hashesOf(row: Row): VersionRecord["hashes"] {
+  return row.md5 === null ? null : { md5: toBytes(row.md5), crc32c: Number(row.crc32c) };
 }
 
 function parseBucket(row: Row): CompatBucket {

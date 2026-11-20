@@ -249,11 +249,11 @@ describe("a commit that crashed, then the object was deleted", () => {
     }) as never);
   };
   const crashes: Crash[] = [
-    { name: "after the asset row", overwrite: false, arm: (d) => { vi.spyOn(d.compat, "findRecord").mockRejectedValueOnce(CRASH); } },
-    { name: "after the hash record of a new asset", overwrite: false, arm: (d) => after(d.compat as never, "putRecord") },
+    { name: "after the asset row", overwrite: false, arm: (d) => { vi.spyOn(d.compat, "records").mockRejectedValueOnce(CRASH); } },
+    { name: "after the hash record of a new asset", overwrite: false, arm: (d) => after(d.compat as never, "records") },
     { name: "after the binding", overwrite: false, arm: (d) => after(d.compat as never, "bind") },
-    { name: "after the version row", overwrite: true, arm: (d) => { vi.spyOn(d.compat, "findRecord").mockRejectedValueOnce(CRASH); } },
-    { name: "after the hash record of a version", overwrite: true, arm: (d) => after(d.compat as never, "putRecord") },
+    { name: "after the version row", overwrite: true, arm: (d) => { vi.spyOn(d.compat, "records").mockRejectedValueOnce(CRASH); } },
+    { name: "after the hash record of a version", overwrite: true, arm: (d) => after(d.compat as never, "records") },
   ];
 
   test.each(crashes.map((c) => [c.name, c] as const))("crash %s: a replay never brings the deleted bytes back (sql)", async (_, crash) => {
@@ -347,7 +347,7 @@ describe("terminal answers", () => {
     const c = client(deps);
     const id = await begin(c, "c.bin");
     await c.uploads.append(id, BUCKET, { start: 0, size: 10, total: null }, stream(fill(10, "c")), NO_HASH);
-    expect(await c.uploads.cancel(id, BUCKET)).toEqual({ ok: true, value: undefined });
+    expect(await c.uploads.cancel(id, BUCKET)).toEqual({ ok: true, value: { kind: "cancelled" } });
     expect(await staged(deps)).toEqual([]);
     expect(await c.uploads.status(id, BUCKET)).toEqual({ ok: false, error: { code: "no_such_upload" } });
     expect(await c.uploads.cancel(id, BUCKET)).toEqual({ ok: false, error: { code: "no_such_upload" } });

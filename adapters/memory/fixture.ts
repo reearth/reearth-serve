@@ -19,6 +19,7 @@ import type { Session, SessionStore } from "../../core/session/repository";
 import { CERTIFICATE_RELEASED, type SiteHost, type SiteHostPatch, type SiteHostStore } from "../../core/site/repository";
 import { MemoryFileStorage } from "./storage";
 import { MemoryCompatStore } from "./compat";
+import type { CompatPublish } from "../../core/compat/repository";
 import { MemoryKeyValue } from "./memory-kv";
 import { MemoryDnsResolver } from "./dns";
 import { MemoryCustomHostnames } from "./custom-hostnames";
@@ -410,19 +411,40 @@ export async function fixture(overrides?: Partial<Deps>) {
   });
   await storage.put(`assets/${SINGLE_FILE_ID}/data.geojson`, stream(bytes(geojson)), "application/geo+json", geojson.length);
 
+  /**
+   * The memory side of `SqlAtomicWrites`' publish batch; see `compatPublish`.
+   * The caller writes its rows before it awaits `reclaim`, so a failing queue
+   * never leaves a committed session without its row.
+   */
+  function published(publish: CompatPublish): { generation: number; reclaim: () => Promise<void> } {
+    const generation = compat.publish(publish);
+    if (generation === null) throw new HoldLost();
+    return {
+      generation,
+      reclaim: async () => { for (const prefix of publish.reclaim) await deps.pendingCleanup.add(prefix); },
+    };
+  }
+
   const deps: Deps = {
     metadata,
     versions,
     storage,
     writes: {
-      async createAsset({ asset, guard }) {
-        if (guard && !compat.admit(guard)) throw new HoldLost();
-        await metadata.save(asset);
+      async createAsset({ asset, publish }) {
+        const done = publish ? published(publish) : null;
+        metadata.assets.set(asset.id, asset);
+        await done?.reclaim();
+        return { generation: done?.generation ?? null };
       },
-      async createVersion({ version, guard }) {
-        if (guard && !compat.admit(guard)) throw new HoldLost();
+      async createVersion({ version, publish }) {
+        const done = publish ? published(publish) : null;
+        const parent = publish && metadata.assets.get(version.assetId);
+        if (parent) metadata.assets.set(parent.id, { ...parent, activeVersionId: undefined });
         const numbers = [...versions.versions.values()].filter((v) => v.assetId === version.assetId).map((v) => v.version);
-        return versions.save({ ...version, version: Math.max(0, ...numbers) + 1 });
+        const saved = { ...version, version: Math.max(0, ...numbers) + 1 };
+        versions.versions.set(saved.id, saved);
+        await done?.reclaim();
+        return { ...saved, generation: done?.generation ?? null };
       },
       saveJob: () => { throw new Error('fake dependency "writes.saveJob" was called unexpectedly'); },
       async deleteAsset({ asset, releasedAt }) {

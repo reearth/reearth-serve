@@ -81,6 +81,9 @@ export type StagedPart = { key: string; size: number };
 
 export type CommitOwner = { token: string; since: number };
 
+/** The asset and version ids a commit owner writes under, derived from its token. */
+export type CommitIds = { assetId: string; versionId: string };
+
 export type UploadPhase =
   | { state: "open"; received: number; total: number | null; hashState: HashState; parts: StagedPart[] }
   | {
@@ -89,10 +92,10 @@ export type UploadPhase =
     hashState: HashState;
     parts: StagedPart[];
     owner: CommitOwner | null;
-    ownerTokens: string[];
+    /** Every owner that has held this commit, the current one last. */
+    owners: CommitIds[];
     overwritingAssetId: string | null;
   }
-  | { state: "published"; versionId: string; hashState: HashState }
   | { state: "committed"; result: ObjectInfo }
   | { state: "failed"; error: CompatError };
 

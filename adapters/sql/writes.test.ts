@@ -9,6 +9,10 @@ import type { SiteHost } from "../../core/site/repository";
 import type { AssetMetadata } from "../../core/asset/model";
 import type { AssetVersion } from "../../core/asset/model";
 import type { Job } from "../../core/job/model";
+import { SqlCompatStore } from "./compat";
+import { HoldLost } from "../../core/asset/repository";
+import type { CompatPublish, LeaseToken } from "../../core/compat/repository";
+import type { BucketName, CredentialId, ObjectKey, UploadId } from "../../core/compat/model";
 
 function fixture() {
   const sql = createSqliteClient();
@@ -114,6 +118,84 @@ describe("SqlAtomicWrites.createVersion", () => {
     expect(await f.jobs.find("should-not-exist")).toBeNull();
     expect(await f.usage.get("project:p1")).toMatchObject({ totalSize: 500, assetCount: 1 });
     expect(await f.versions.count("a1")).toBe(1);
+  });
+});
+
+describe("SqlAtomicWrites with a compat publish", () => {
+  const media = "media" as BucketName;
+  const key = "j.zip" as ObjectKey;
+  const hashes = { md5: new Uint8Array(16).fill(7), crc32c: 42 };
+
+  async function leased() {
+    const f = fixture();
+    const compat = new SqlCompatStore(f.sql);
+    await compat.insertBucket({ name: media, projectId: "p1", mount: null, createdAt: 0 });
+    const claim = await compat.claim(media, key, "object", 1000, 0);
+    if (claim.kind !== "claimed") throw new Error(claim.kind);
+    await f.writes.createAsset({ asset: { ...asset, jobId: undefined, activeVersionId: "pinned" } });
+    await compat.bind(media, key, claim.token, asset.id);
+    await compat.lease(media, key, "lease-1" as LeaseToken, 1000, 0);
+    await compat.createUpload({
+      id: "up1" as UploadId, bucket: media, key, credentialId: "c1" as CredentialId,
+      meta: { contentType: "application/zip", contentEncoding: null, userMeta: {}, ifGenerationMatch: null },
+      expiresAt: 10_000, revision: 3, phase: { state: "failed", error: { code: "busy" } },
+    });
+    const publish = (revision: number, token: string, reclaim: string[] = []): CompatPublish => ({
+      upload: { id: "up1" as UploadId, revision },
+      hold: { kind: "lease", bucket: media, key, token, assetId: asset.id },
+      record: { objectRef: "v9", hashes },
+      result: {
+        bucket: media, key, size: 500, contentType: "application/zip", contentEncoding: null, metageneration: 1, etag: "v9",
+        created: new Date(1000), updated: new Date(1000), hashes, userMeta: {},
+      },
+      reclaim,
+    });
+    const write = (p: CompatPublish) =>
+      f.writes.createVersion({ version: { ...version, id: "v9" }, job: { ...job, id: "j9", versionId: "v9" }, usageScopes: ["project:p1"], publish: p });
+    return { f, compat, publish, write };
+  }
+
+  test.each([
+    ["the session moved on", 2, "lease-1"],
+    ["the lease was taken over", 3, "lease-2"],
+  ])("R5: a publish whose %s writes no row", async (_, revision, token) => {
+    const { f, compat, publish, write } = await leased();
+    await expect(write(publish(revision, token, ["assets/earlier/"]))).rejects.toBeInstanceOf(HoldLost);
+
+    expect(await f.versions.find("v9")).toBeNull();
+    expect(await f.jobs.find("j9")).toBeNull();
+    expect(await f.usage.get("project:p1")).toBeNull();
+    expect((await f.assets.find(asset.id))?.activeVersionId).toBe("pinned");
+    expect(await compat.findRecord("v9")).toBeNull();
+    expect(await compat.findUpload("up1" as UploadId)).toMatchObject({ revision: 3, phase: { state: "failed" } });
+    expect((await compat.records(media, [{ objectRef: "probe", assetId: "x" }])).get("probe")?.generation).toBe(1);
+    expect(await f.pending.list(10)).toEqual([]);
+  });
+
+  test("R5: a publish that holds writes every row, at the bucket's next generation", async () => {
+    const { f, compat, publish, write } = await leased();
+    expect((await compat.records(media, [{ objectRef: "observed", assetId: "x" }])).get("observed")?.generation).toBe(1);
+    const written = await write(publish(3, "lease-1", ["assets/earlier/", "assets/a1/v/earlier/"]));
+
+    expect(written).toMatchObject({ id: "v9", version: 1, generation: 2 });
+    expect(await f.jobs.find("j9")).not.toBeNull();
+    expect(await f.usage.get("project:p1")).toMatchObject({ totalSize: 500 });
+    expect((await f.assets.find(asset.id))?.activeVersionId ?? null).toBeNull();
+    expect(await compat.findRecord("v9")).toEqual({ generation: 2, hashes });
+    expect(await compat.findUpload("up1" as UploadId)).toMatchObject({
+      revision: 4, phase: { state: "committed", result: { etag: "v9", generation: 2, hashes } },
+    });
+    expect((await f.pending.list(10)).map((p) => p.prefix).sort()).toEqual(["assets/a1/v/earlier/", "assets/earlier/"]);
+  });
+
+  test("R6-10: a version a REST upload added while the publish streamed gets a higher generation when first observed", async () => {
+    const { f, compat, publish, write } = await leased();
+    await f.writes.createVersion({ version: { ...version, id: "v8", createdAt: 9_999_999_999_999 } });
+    const written = await write(publish(3, "lease-1"));
+
+    expect(written).toMatchObject({ id: "v9", version: 2, generation: 1 });
+    expect(await compat.findUpload("up1" as UploadId)).toMatchObject({ phase: { state: "committed", result: { generation: 1 } } });
+    expect((await compat.records(media, [{ objectRef: "v8", assetId: asset.id }])).get("v8")?.generation).toBe(2);
   });
 });
 

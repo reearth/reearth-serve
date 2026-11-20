@@ -1,5 +1,6 @@
-import { HoldLost, type AtomicWrites, type WriteGuard } from "../../core/asset/repository";
-import type { SqlClient, SqlStatement } from "../../core/sql/port";
+import { HoldLost, type AtomicWrites, type Published } from "../../core/asset/repository";
+import type { CompatPublish } from "../../core/compat/repository";
+import type { SqlClient, SqlResult, SqlStatement } from "../../core/sql/port";
 import {
   ASSET_UPSERT_SQL, assetUpsertArgs,
   JOB_UPSERT_SQL, jobUpsertArgs,
@@ -31,27 +32,34 @@ const USAGE_DECREMENT_FOR_ASSET_SQL =
 export class SqlAtomicWrites implements AtomicWrites {
   constructor(private db: SqlClient) {}
 
-  async createAsset({ asset, job, usageScopes, guard }: Parameters<AtomicWrites["createAsset"]>[0]): Promise<void> {
+  async createAsset({ asset, job, usageScopes, publish }: Parameters<AtomicWrites["createAsset"]>[0]): Promise<Published> {
     const statements: SqlStatement[] = [];
     // The job row first: the asset's `jobId` points at it.
     if (job) statements.push({ sql: JOB_UPSERT_SQL, args: jobUpsertArgs(job) });
-    const assetIndex = statements.length;
     statements.push({ sql: ASSET_UPSERT_SQL, args: assetUpsertArgs(asset) });
     statements.push(...usageStatements(usageScopes, asset.size));
-    const results = await this.db.batch(guarded(statements, guard));
-    if (results[assetIndex].rowsAffected === 0) throw new HoldLost();
+    const { generation } = await this.batchPublishing(statements, publish);
+    return { generation };
   }
 
-  async createVersion({ version, job, usageScopes, guard }: Parameters<AtomicWrites["createVersion"]>[0]) {
+  async createVersion({ version, job, usageScopes, publish }: Parameters<AtomicWrites["createVersion"]>[0]) {
     const statements: SqlStatement[] = [];
     if (job) statements.push({ sql: JOB_UPSERT_SQL, args: jobUpsertArgs(job) });
     const versionIndex = statements.length;
     statements.push({ sql: VERSION_INSERT_SQL, args: versionInsertArgs(version) });
     statements.push(...usageStatements(usageScopes, version.size));
+    const { results, generation } = await this.batchPublishing(statements, publish);
+    return { ...version, version: assignedVersion(results[versionIndex].rows), generation };
+  }
 
-    const results = await this.db.batch(guarded(statements, guard));
-    if (results[versionIndex].rows.length === 0) throw new HoldLost();
-    return { ...version, version: assignedVersion(results[versionIndex].rows) };
+  /** `statements` with `publish` in the same batch; throws `HoldLost` when the publish no longer holds. */
+  private async batchPublishing(statements: SqlStatement[], publish?: CompatPublish): Promise<{ results: SqlResult[] } & Published> {
+    if (!publish) return { results: await this.db.batch(statements), generation: null };
+    const published = compatPublish(publish);
+    const results = await this.db.batch([...statements.map((s) => guarded(s, publish)), ...published.statements]);
+    const issued = results[statements.length + published.generationAt].rows[0]?.last_generation;
+    if (issued === undefined) throw new HoldLost();
+    return { results, generation: Number(issued) };
   }
 
   async deleteAsset({ asset, usageScopes, cleanupPrefix, releasedAt }: Parameters<AtomicWrites["deleteAsset"]>[0]) {
@@ -80,23 +88,20 @@ export class SqlAtomicWrites implements AtomicWrites {
   }
 }
 
-function guarded(statements: SqlStatement[], guard: WriteGuard | undefined): SqlStatement[] {
-  if (!guard) return statements;
-  const checked = statements.map(({ sql, args = [] }) => {
-    const open = sql.indexOf("VALUES (");
-    if (open < 0) throw new Error(`cannot guard a statement without VALUES: ${sql}`);
-    let close = open + "VALUES ".length;
-    for (let depth = 0; ; close++) {
-      if (sql[close] === "(") depth++;
-      else if (sql[close] === ")" && --depth === 0) break;
-    }
-    const holds = compatHolds(guard, args.length + 1);
-    return {
-      sql: `${sql.slice(0, open)}SELECT ${sql.slice(open + "VALUES (".length, close)} WHERE ${holds.sql}${sql.slice(close + 1)}`,
-      args: [...args, ...holds.args],
-    };
-  });
-  return guard.publish ? [...checked, compatPublish(guard, guard.publish)] : checked;
+/** `INSERT ... VALUES (...)` as `INSERT ... SELECT ... WHERE`, so it lands only while `publish` holds. */
+function guarded({ sql, args = [] }: SqlStatement, publish: CompatPublish): SqlStatement {
+  const open = sql.indexOf("VALUES (");
+  if (open < 0) throw new Error(`cannot guard a statement without VALUES: ${sql}`);
+  let close = open + "VALUES ".length;
+  for (let depth = 0; ; close++) {
+    if (sql[close] === "(") depth++;
+    else if (sql[close] === ")" && --depth === 0) break;
+  }
+  const holds = compatHolds(publish, args.length + 1);
+  return {
+    sql: `${sql.slice(0, open)}SELECT ${sql.slice(open + "VALUES (".length, close)} WHERE ${holds.sql}${sql.slice(close + 1)}`,
+    args: [...args, ...holds.args],
+  };
 }
 
 function usageStatements(scopes: string[] | undefined, sizeBytes: number): SqlStatement[] {

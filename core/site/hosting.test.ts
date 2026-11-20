@@ -43,8 +43,8 @@ class MemoryJobStore implements JobStore {
 /** Job + asset in one write, as the SQL adapter does it with a D1 batch. */
 function memoryWrites(assets: Map<string, AssetMetadata>, jobs: MemoryJobStore): AtomicWrites {
   return {
-    async createAsset() {},
-    async createVersion(input) { return input.version; },
+    async createAsset() { return { generation: null }; },
+    async createVersion(input) { return { ...input.version, generation: null }; },
     async saveJob({ job, asset }) {
       await jobs.save(job);
       if (asset) assets.set(asset.id, asset);

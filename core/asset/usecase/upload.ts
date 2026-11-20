@@ -1,8 +1,8 @@
 import type { AssetMetadata, AssetUploadResult } from "../model";
 import { detectArchiveFormat } from "../model";
-import type { AtomicWrites, FileStorage, WriteGuard } from "../repository";
+import type { AtomicWrites, FileStorage, Publishing } from "../repository";
 import type { Job } from "../../job/model";
-import { generateId, storageKey } from "./shared";
+import { dropUnwrittenBytes, generateId, storageKey, type Written } from "./shared";
 import { siteUrlFor } from "../../site/url";
 import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
@@ -22,8 +22,8 @@ export async function uploadAsset(
   },
   ttlSeconds: number,
   baseUrl: string,
-  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string; id?: string; userMeta?: Record<string, unknown>; guard?: () => WriteGuard },
-): Promise<AssetUploadResult> {
+  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string; id?: string; userMeta?: Record<string, unknown>; publish?: Publishing<AssetMetadata>; written?: Written },
+): Promise<AssetUploadResult & { generation?: number }> {
   const id = options?.id ?? generateId();
   const now = Date.now();
   const contentType = file.type || "application/octet-stream";
@@ -70,11 +70,12 @@ export async function uploadAsset(
     asset.jobId = id;
   }
 
+  let generation: number | null;
   try {
     // Job row, asset row and storage-usage counters in one atomic write, so a
     // failure never leaves an asset without its job or the counters short
     // (ADR-012 §3).
-    await writes.createAsset({ asset, job, usageScopes: options?.usageScopes, guard: options?.guard?.() });
+    ({ generation } = await writes.createAsset({ asset, job, usageScopes: options?.usageScopes, publish: options?.publish?.of(asset) }));
 
     // Enqueue only after the rows are committed: the consumer reads them.
     if (job && options?.extractionQueue) {
@@ -99,15 +100,9 @@ export async function uploadAsset(
       size: file.size,
     });
   } catch (e) {
-    // R2 put already succeeded but D1 metadata write failed. Without
-    // compensation the R2 object is orphaned (cleanup drives off D1 rows),
-    // so try to delete it. Best-effort: a delete failure here is logged
-    // but the original error is what the caller cares about.
-    try {
-      await storage.delete(key);
-    } catch (delErr) {
-      console.error("Failed to clean up R2 object after metadata save failure:", delErr);
-    }
+    // The bytes are stored but the metadata write failed. Cleanup drives off
+    // the rows, so without this the object is orphaned.
+    await dropUnwrittenBytes(storage, key, e, options?.publish ?? options?.written);
     throw e;
   }
 
@@ -122,6 +117,7 @@ export async function uploadAsset(
     asset,
     url: `${baseUrl}/files/${id}/${encodeURIComponent(file.name)}`,
     ...(siteUrl && { siteUrl }),
+    ...(generation !== null && { generation }),
   };
 }
 
@@ -137,7 +133,7 @@ if (import.meta.vitest) {
   function mockWrites() {
     const calls: CreateAssetInput[] = [];
     const writes: AtomicWrites = {
-      createAsset: vi.fn(async (input: CreateAssetInput) => { calls.push(input); }),
+      createAsset: vi.fn(async (input: CreateAssetInput) => { calls.push(input); return { generation: null }; }),
       createVersion: vi.fn(async () => { throw new Error("not used"); }),
       saveJob: vi.fn(async () => { throw new Error("not used"); }),
       deleteAsset: vi.fn(async () => { throw new Error("not used"); }),
@@ -251,7 +247,7 @@ if (import.meta.vitest) {
   test("uploadAsset enqueues extraction only after the rows are committed", async () => {
     const { writes } = mockWrites();
     const order: string[] = [];
-    (writes.createAsset as ReturnType<typeof vi.fn>).mockImplementation(async () => { order.push("write"); });
+    (writes.createAsset as ReturnType<typeof vi.fn>).mockImplementation(async () => { order.push("write"); return { generation: null }; });
     const extractionQueue = { send: vi.fn(async () => { order.push("enqueue"); }) };
 
     await uploadAsset(
