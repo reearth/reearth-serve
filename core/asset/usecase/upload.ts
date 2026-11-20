@@ -100,8 +100,6 @@ export async function uploadAsset(
       size: file.size,
     });
   } catch (e) {
-    // The bytes are stored but the metadata write failed. Cleanup drives off
-    // the rows, so without this the object is orphaned.
     await dropUnwrittenBytes(storage, key, e, options?.publish ?? options?.written);
     throw e;
   }

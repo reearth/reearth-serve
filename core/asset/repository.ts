@@ -93,7 +93,6 @@ export interface VersionStore {
   count(assetId: string): Promise<number>;
 }
 
-/** The generation a `CompatPublish` issued, null without one. */
 export type Published = { generation: number | null };
 
 /** A `CompatPublish` whose session revision or key hold no longer holds: nothing was written. */

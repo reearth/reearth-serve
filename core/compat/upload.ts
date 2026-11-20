@@ -180,7 +180,6 @@ export function resumableUploads(
 
   const heldBy = (token: string): CommitOwner => ({ token, since: now() });
 
-  /** `phase` under a new owner, recorded among its owners in the same compare-and-set that hands it over. */
   async function handedOver(id: UploadId, phase: Omit<Committing, "owner">): Promise<Held> {
     const token = crypto.randomUUID();
     return { ...phase, owner: heldBy(token), owners: [...phase.owners, await commitIdsOf(id, token)] };

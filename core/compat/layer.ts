@@ -36,9 +36,7 @@ export type UploadCommit = CommitIds & {
   ownedSince: number;
   overwrite(assetId: string): Promise<boolean>;
   heartbeat(): Promise<boolean>;
-  /** The session revision this commit owns now. */
   hold(): CompatPublish["upload"];
-  /** The storage prefixes of the session's earlier owners, for the publish to reclaim. */
   leftovers(): string[];
 };
 
@@ -162,6 +160,7 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
     if (beat) body = { ...body, stream: beat.stream };
     const checked = lengthCheckedBody(body);
     const id = commit?.assetId ?? generateId();
+    const applied = async () => (await deps.metadata.find(id)) !== null;
     try {
       const { asset, generation } = await uploadAsset(deps.writes, deps.storage, fileOf(key, meta, body, checked.stream), deps.ttlSeconds, deps.baseUrl, {
         projectId: bucket.projectId,
@@ -175,10 +174,10 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
           ? {
             publish: {
               of: (asset) => publishing(bucket, key, commit, { kind: "claim", token, assetId: asset.id }, asset, null),
-              applied: async () => (await deps.metadata.find(id)) !== null,
+              applied,
             },
           }
-          : { written: { applied: async () => (await deps.metadata.find(id)) !== null } }),
+          : { written: { applied } }),
       });
       const hashes = await checked.digest();
       if (generation !== undefined) return { ok: true, value: infoOf(bucket, key, asset, null, { generation, hashes }) };

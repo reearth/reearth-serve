@@ -52,7 +52,6 @@ export class SqlAtomicWrites implements AtomicWrites {
     return { ...version, version: assignedVersion(results[versionIndex].rows), generation };
   }
 
-  /** `statements` with `publish` in the same batch; throws `HoldLost` when the publish no longer holds. */
   private async batchPublishing(statements: SqlStatement[], publish?: CompatPublish): Promise<{ results: SqlResult[] } & Published> {
     if (!publish) return { results: await this.db.batch(statements), generation: null };
     const published = compatPublish(publish);
@@ -88,7 +87,6 @@ export class SqlAtomicWrites implements AtomicWrites {
   }
 }
 
-/** `INSERT ... VALUES (...)` as `INSERT ... SELECT ... WHERE`, so it lands only while `publish` holds. */
 function guarded({ sql, args = [] }: SqlStatement, publish: CompatPublish): SqlStatement {
   const open = sql.indexOf("VALUES (");
   if (open < 0) throw new Error(`cannot guard a statement without VALUES: ${sql}`);
