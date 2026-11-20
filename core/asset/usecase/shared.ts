@@ -51,7 +51,6 @@ export async function usageScopesFor(
   return scopes;
 }
 
-/** A re-read telling whether a create write that threw applied anyway (a lost response, say). */
 export type Written = { applied(): Promise<boolean> };
 
 /**

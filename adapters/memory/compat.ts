@@ -8,7 +8,6 @@ import {
 } from "../../core/compat/repository";
 import { isServiceRole } from "../../core/auth/types";
 
-/** The version rows of an asset, for recording them in version order. */
 export type VersionsOf = (assetId: string) => { id: string; version: number }[];
 
 type Row = {
@@ -121,7 +120,6 @@ export class MemoryCompatStore implements CompatStore {
     return out;
   }
 
-  /** `objectRef` last, after its asset row and every older version of `assetId`, oldest first. */
   private inVersionOrder(assetId: string, objectRef: string): string[] {
     const versions = this.versionsOf(assetId).sort((a, b) => a.version - b.version);
     const at = versions.findIndex((v) => v.id === objectRef);

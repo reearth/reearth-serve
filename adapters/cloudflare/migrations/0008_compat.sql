@@ -28,8 +28,6 @@ CREATE TABLE compat_bindings (
 
 CREATE INDEX idx_compat_bindings_asset ON compat_bindings(asset_id);
 
--- A version written outside the layer gets its generation when the layer first
--- observes it, with no hashes.
 CREATE TABLE compat_hashes (
   object_ref  TEXT PRIMARY KEY,
   asset_id    TEXT NOT NULL,

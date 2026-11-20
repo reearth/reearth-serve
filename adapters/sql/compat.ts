@@ -253,13 +253,6 @@ export class SqlCompatStore implements CompatStore {
   }
 }
 
-/**
- * Store a record at the bucket's next generations for each wanted ref with
- * none, after its asset row and every older version of its asset, oldest
- * first, then raise the high mark past them. The raise writes no row when no
- * record was new. `wanted` is a JSON array of `{ ref, asset }` bound as ?2;
- * ?1 is the bucket.
- */
 export function recordInVersionOrder(bucket: BucketName, wanted: string): SqlStatement[] {
   return [
     {
