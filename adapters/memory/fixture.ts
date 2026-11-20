@@ -414,14 +414,19 @@ export async function fixture(overrides?: Partial<Deps>) {
   /**
    * The memory side of `SqlAtomicWrites`' publish batch; see `compatPublish`.
    * The caller writes its rows before it awaits `reclaim`, so a failing queue
-   * never leaves a committed session without its row.
+   * never leaves a committed session without its row, and the publish stands
+   * once its rows apply.
    */
   function published(publish: CompatPublish): { generation: number; reclaim: () => Promise<void> } {
     const generation = compat.publish(publish);
     if (generation === null) throw new HoldLost();
     return {
       generation,
-      reclaim: async () => { for (const prefix of publish.reclaim) await deps.pendingCleanup.add(prefix); },
+      reclaim: async () => {
+        for (const prefix of publish.reclaim) {
+          await deps.pendingCleanup.add(prefix).catch((e: unknown) => console.warn(`Failed to queue ${prefix} for cleanup:`, e));
+        }
+      },
     };
   }
 
