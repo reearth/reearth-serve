@@ -363,7 +363,7 @@ export async function fixture(overrides?: Partial<Deps>) {
   const storage = new MemoryFileStorage();
   const siteHosts = new MemorySiteHostStore((id) => metadata.assets.has(id));
   const cache = new MemoryKeyValue();
-  const compat = new MemoryCompatStore();
+  const compat = new MemoryCompatStore((assetId) => [...versions.versions.values()].filter((v) => v.assetId === assetId));
   // Custom domains (ADR-013 B5): a resolver with no records — a test publishes
   // the one it wants found — and a provisioner that issues instantly.
   const dns = new MemoryDnsResolver();
