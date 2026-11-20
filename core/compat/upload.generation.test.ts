@@ -103,7 +103,7 @@ describe.each(STORES)("a resumable overwrite records in version order (%s)", (_,
   });
 });
 
-test("R6-9 (memory): a reclaim queue that fails after the publish never leaves a committed session without its asset", async () => {
+test("R6-9 (memory): a reclaim queue that fails after the publish neither fails the commit nor leaves it without its asset", async () => {
   const deps = await memoryDeps(); const c = client(deps);
   const id = await c.begin("n.bin");
   const original = deps.storage.put.bind(deps.storage);
@@ -118,7 +118,8 @@ test("R6-9 (memory): a reclaim queue that fails after the publish never leaves a
   await reached.opened;
   c.clock.now += HOLD_STALE_MS + 1;
   vi.spyOn(deps.pendingCleanup, "add").mockRejectedValueOnce(new Error("queue down"));
-  await expect(c.uploads.append(id, BUCKET, { start: null, size: 0, total: 5 }, null, NO_HASH)).rejects.toThrow("queue down");
+  const committed = await c.uploads.append(id, BUCKET, { start: null, size: 0, total: 5 }, null, NO_HASH);
+  expect(committed.ok && committed.value.kind).toBe("committed");
   release.open(); await first.catch(() => null);
   const session = await deps.compat.findUpload(id as UploadId);
   const binding = await deps.compat.findBinding(BUCKET as BucketName, "n.bin" as ObjectKey);
