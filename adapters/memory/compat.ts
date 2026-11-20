@@ -8,7 +8,6 @@ import {
 } from "../../core/compat/repository";
 import { isServiceRole } from "../../core/auth/types";
 
-/** The version rows of an asset, for recording them in version order. */
 export type VersionsOf = (assetId: string) => { id: string; version: number }[];
 
 type Row = {

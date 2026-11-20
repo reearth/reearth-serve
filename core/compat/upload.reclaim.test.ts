@@ -82,7 +82,6 @@ async function content(deps: Deps, c: Client, key: string): Promise<string | nul
 
 const stored = async (deps: Deps, key: string) => (await deps.storage.get(key)) !== null;
 
-/** Objects under `assets/` that `seeded` (what the fixture stored first) does not hold. */
 async function written(deps: Deps, seeded: string[]): Promise<string[]> {
   return (await deps.storage.list("assets/")).keys.filter((k) => !seeded.includes(k));
 }
@@ -93,7 +92,6 @@ const queued = async (deps: Deps) => (await deps.pendingCleanup.list(100)).map((
 
 const drain = (deps: Deps) => drainPendingCleanups(deps.storage, deps.pendingCleanup, new SubrequestBudget(500));
 
-/** The first matching put stores its bytes, then hangs: the owner streamed and has not written. */
 function stallAfterPut(deps: Deps, match: (key: string) => boolean) {
   const release = gate();
   const reached = gate();

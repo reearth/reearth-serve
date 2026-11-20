@@ -14,7 +14,6 @@ export interface UploadVersionResult {
   url: string;
   /** Site host of the asset when it is an archive (ADR-013 B1). */
   siteUrl?: string;
-  /** The generation `options.publish` issued. */
   generation?: number;
 }
 

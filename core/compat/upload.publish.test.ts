@@ -96,7 +96,6 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-/** The overwrite's publish lands, then its request dies before it answers. */
 async function crashedAfterPublish(deps: Deps, c: Client, key: string) {
   await c.layer.put(BUCKET, key as ObjectKey, meta(), { stream: stream(fill(5, "o")), size: 5 });
   const id = await begin(c, key);
