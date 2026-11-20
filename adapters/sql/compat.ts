@@ -3,7 +3,7 @@ import type {
   UploadId, UploadSession,
 } from "../../core/compat/model";
 import {
-  newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatStore, type DeleteBucketResult,
+  generationSeed, newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatStore, type DeleteBucketResult,
   type LeaseToken, type RecordRef, type VersionRecord,
 } from "../../core/compat/repository";
 import type { Row, SqlClient, SqlStatement } from "../../core/sql/port";
@@ -39,8 +39,8 @@ export class SqlCompatStore implements CompatStore {
 
   async insertBucket(bucket: CompatBucket): Promise<boolean> {
     const result = await this.db.execute(
-      `INSERT OR IGNORE INTO compat_buckets (${BUCKET_COLUMNS}) VALUES (?1, ?2, ?3, ?4)`,
-      [bucket.name, bucket.projectId, bucket.mount ? JSON.stringify(bucket.mount) : null, bucket.createdAt],
+      `INSERT OR IGNORE INTO compat_buckets (${BUCKET_COLUMNS}, last_generation) VALUES (?1, ?2, ?3, ?4, ?5)`,
+      [bucket.name, bucket.projectId, bucket.mount ? JSON.stringify(bucket.mount) : null, bucket.createdAt, generationSeed()],
     );
     return result.rowsAffected > 0;
   }
@@ -256,8 +256,9 @@ export class SqlCompatStore implements CompatStore {
 /**
  * Store a record at the bucket's next generations for each wanted ref with
  * none, after its asset row and every older version of its asset, oldest
- * first, then raise the high mark past them. `wanted` is a JSON array of
- * `{ ref, asset }` bound as ?2; ?1 is the bucket.
+ * first, then raise the high mark past them. The raise writes no row when no
+ * record was new. `wanted` is a JSON array of `{ ref, asset }` bound as ?2;
+ * ?1 is the bucket.
  */
 export function recordInVersionOrder(bucket: BucketName, wanted: string): SqlStatement[] {
   return [
@@ -280,9 +281,10 @@ export function recordInVersionOrder(bucket: BucketName, wanted: string): SqlSta
       args: [bucket, wanted],
     },
     {
-      sql: `UPDATE compat_buckets SET last_generation = MAX(last_generation, COALESCE(
-              (SELECT MAX(generation) FROM compat_hashes WHERE asset_id IN (SELECT json_extract(value, '$.asset') FROM json_each(?2))), 0))
-            WHERE name = ?1`,
+      sql: `UPDATE compat_buckets SET last_generation = m.top
+              FROM (SELECT MAX(generation) AS top FROM compat_hashes
+                     WHERE asset_id IN (SELECT json_extract(value, '$.asset') FROM json_each(?2))) AS m
+             WHERE name = ?1 AND m.top > last_generation`,
       args: [bucket, wanted],
     },
   ];

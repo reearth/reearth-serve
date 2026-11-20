@@ -69,11 +69,11 @@ function gate() {
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe.each(STORES)("generations (%s)", (_, mk) => {
-  test("the first write of a bucket is generation 1 and an overwrite is 2", async () => {
+  test("an overwrite takes the bucket's next generation and head answers it", async () => {
     const c = client(await mk());
-    expect(written(await c.put("k", "one")).generation).toBe(1);
-    expect(written(await c.put("k", "two")).generation).toBe(2);
-    expect((await c.head("k")).generation).toBe(2);
+    const one = written(await c.put("k", "one")).generation;
+    expect(written(await c.put("k", "two")).generation).toBe(one + 1);
+    expect((await c.head("k")).generation).toBe(one + 1);
   });
 
   test("a key written after its bucket is deleted and recreated gets a higher generation (R7-1)", async () => {
