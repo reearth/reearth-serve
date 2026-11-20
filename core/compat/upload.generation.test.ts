@@ -3,6 +3,7 @@ import { fixture } from "../../adapters/memory/fixture";
 import { MemoryProjectStore } from "../../adapters/memory/site-fixture";
 import { buildNodeRuntime } from "../../runtime/node/deps";
 import { uploadVersion } from "../asset/usecase/upload-version";
+import { updateAsset } from "../asset/usecase/update-asset";
 import { HOLD_STALE_MS, objectLayer } from "./layer";
 import { resumableUploads, type DeclaredHashes } from "./upload";
 import type { BucketName, CredentialId, ObjectKey, PutMeta, UploadId } from "./model";
@@ -79,6 +80,26 @@ describe.each(STORES)("a resumable publish (%s)", (_, mk) => {
     const restId = (await rest)?.version.id;
     const live = await c.head("o.bin");
     expect({ etag: live.etag, forward: live.generation > done.value.info.generation }).toEqual({ etag: restId, forward: true });
+  });
+});
+
+describe.each(STORES)("a resumable overwrite records in version order (%s)", (_, mk) => {
+  test("older REST versions with no record get generations below the published one", async () => {
+    const deps = await mk(); const c = client(deps);
+    await c.layer.put(BUCKET, "o.bin" as ObjectKey, meta(), { stream: stream(fill(3, "o")), size: 3 });
+    const { assetId } = (await deps.compat.findBinding(BUCKET as BucketName, "o.bin" as ObjectKey))!;
+    const rest = (text: string) =>
+      uploadVersion(deps.metadata, deps.writes, deps.storage, assetId, { name: "rest.bin", type: "text/plain", body: stream(fill(4, text)), size: 4 }, "http://x");
+    const older = [await rest("a"), await rest("b")];
+    const id = await c.begin("o.bin");
+    const done = await c.uploads.append(id, BUCKET, { start: 0, size: 4, total: 4 }, stream(fill(4, "w")), NO_HASH);
+    if (!done.ok || done.value.kind !== "committed") throw new Error(JSON.stringify(done));
+    const published = done.value.info.generation;
+    expect((await c.head("o.bin")).generation).toBe(published);
+    for (const v of older) {
+      await updateAsset(deps.metadata, deps.versions, assetId, { activeVersionId: v!.version.id });
+      expect((await c.head("o.bin")).generation).toBeLessThan(published);
+    }
   });
 });
 

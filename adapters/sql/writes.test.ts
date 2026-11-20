@@ -166,7 +166,7 @@ describe("SqlAtomicWrites with a compat publish", () => {
     expect(await f.jobs.find("j9")).toBeNull();
     expect(await f.usage.get("project:p1")).toBeNull();
     expect((await f.assets.find(asset.id))?.activeVersionId).toBe("pinned");
-    expect(await compat.findRecord("v9")).toBeNull();
+    expect([await compat.findRecord("v9"), await compat.findRecord(asset.id)]).toEqual([null, null]);
     expect(await compat.findUpload("up1" as UploadId)).toMatchObject({ revision: 3, phase: { state: "failed" } });
     expect((await compat.records(media, [{ objectRef: "probe", assetId: "x" }])).get("probe")?.generation).toBe(1);
     expect(await f.pending.list(10)).toEqual([]);
@@ -177,25 +177,26 @@ describe("SqlAtomicWrites with a compat publish", () => {
     expect((await compat.records(media, [{ objectRef: "observed", assetId: "x" }])).get("observed")?.generation).toBe(1);
     const written = await write(publish(3, "lease-1", ["assets/earlier/", "assets/a1/v/earlier/"]));
 
-    expect(written).toMatchObject({ id: "v9", version: 1, generation: 2 });
+    expect(written).toMatchObject({ id: "v9", version: 1, generation: 3 });
+    expect(await compat.findRecord(asset.id)).toEqual({ generation: 2, hashes: null });
     expect(await f.jobs.find("j9")).not.toBeNull();
     expect(await f.usage.get("project:p1")).toMatchObject({ totalSize: 500 });
     expect((await f.assets.find(asset.id))?.activeVersionId ?? null).toBeNull();
-    expect(await compat.findRecord("v9")).toEqual({ generation: 2, hashes });
+    expect(await compat.findRecord("v9")).toEqual({ generation: 3, hashes });
     expect(await compat.findUpload("up1" as UploadId)).toMatchObject({
-      revision: 4, phase: { state: "committed", result: { etag: "v9", generation: 2, hashes } },
+      revision: 4, phase: { state: "committed", result: { etag: "v9", generation: 3, hashes } },
     });
     expect((await f.pending.list(10)).map((p) => p.prefix).sort()).toEqual(["assets/a1/v/earlier/", "assets/earlier/"]);
   });
 
-  test("R6-10: a version a REST upload added while the publish streamed gets a higher generation when first observed", async () => {
+  test("a publish first records the asset's older unrecorded versions, oldest first, below its own generation", async () => {
     const { f, compat, publish, write } = await leased();
     await f.writes.createVersion({ version: { ...version, id: "v8", createdAt: 9_999_999_999_999 } });
     const written = await write(publish(3, "lease-1"));
 
-    expect(written).toMatchObject({ id: "v9", version: 2, generation: 1 });
-    expect(await compat.findUpload("up1" as UploadId)).toMatchObject({ phase: { state: "committed", result: { generation: 1 } } });
-    expect((await compat.records(media, [{ objectRef: "v8", assetId: asset.id }])).get("v8")?.generation).toBe(2);
+    expect(written).toMatchObject({ id: "v9", version: 2, generation: 3 });
+    expect(await compat.findUpload("up1" as UploadId)).toMatchObject({ phase: { state: "committed", result: { generation: 3 } } });
+    expect([await compat.findRecord(asset.id), await compat.findRecord("v8")]).toEqual([{ generation: 1, hashes: null }, { generation: 2, hashes: null }]);
   });
 });
 

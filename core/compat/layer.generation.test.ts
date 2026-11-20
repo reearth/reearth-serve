@@ -168,6 +168,46 @@ describe.each(STORES)("generations (%s)", (_, mk) => {
   });
 });
 
+describe.each(STORES)("records in version order (%s)", (_, mk) => {
+  test("a REST version seen between a plain overwrite's version insert and its record is above the overwrite", async () => {
+    const deps = await mk(); const c = client(deps);
+    written(await c.put("o.bin", "o"));
+    const assetId = await c.assetOf("o.bin");
+    const original = deps.compat.records.bind(deps.compat);
+    let fired = false;
+    vi.spyOn(deps.compat, "records").mockImplementation(async (bucket, refs) => {
+      if (!fired && refs.some((r) => r.hashes)) {
+        fired = true;
+        await c.restVersion(assetId, "rest");
+        await c.head("o.bin");
+      }
+      return original(bucket, refs);
+    });
+    const put = written(await c.put("o.bin", "p"));
+    const live = await c.head("o.bin");
+    expect({ forward: live.generation > put.generation, putHashed: put.hashes !== null }).toEqual({ forward: true, putHashed: true });
+  });
+
+  test("observing a version first records every older unrecorded version of its asset, oldest first", async () => {
+    const deps = await mk(); const c = client(deps);
+    written(await c.put("k", "v0"));
+    const assetId = await c.assetOf("k");
+    const v1 = await c.restVersion(assetId, "v1");
+    const v2 = await c.restVersion(assetId, "v2");
+    const v3 = await c.restVersion(assetId, "v3");
+    const live = await c.head("k");
+    expect(live.etag).toBe(v3?.version.id);
+    for (const pin of [v1, v2]) {
+      await updateAsset(deps.metadata, deps.versions, assetId, { activeVersionId: pin!.version.id });
+      expect((await c.head("k")).generation).toBeLessThan(live.generation);
+    }
+    await updateAsset(deps.metadata, deps.versions, assetId, { activeVersionId: v1!.version.id });
+    const g1 = (await c.head("k")).generation;
+    await updateAsset(deps.metadata, deps.versions, assetId, { activeVersionId: v2!.version.id });
+    expect((await c.head("k")).generation).toBeGreaterThan(g1);
+  });
+});
+
 describe.each(STORES)("a plain overwrite that fails after streaming (%s)", (_, mk) => {
   test("keeps its bytes when the version row landed before the write threw (R6-7)", async () => {
     const deps = await mk(); const c = client(deps);
