@@ -8,6 +8,9 @@ import {
 } from "../../core/compat/repository";
 import { isServiceRole } from "../../core/auth/types";
 
+/** The version rows of an asset, for recording them in version order. */
+export type VersionsOf = (assetId: string) => { id: string; version: number }[];
+
 type Row = {
   bucket: BucketName; key: string; kind: BindingKind; assetId: string | null; claimedAt: number; claimToken: ClaimToken;
   lease: { token: LeaseToken; at: number } | null;
@@ -20,6 +23,8 @@ export class MemoryCompatStore implements CompatStore {
   readonly generations = new Map<string, number>();
   readonly credentials = new Map<string, CompatCredential>();
   readonly uploads = new Map<string, UploadSession>();
+
+  constructor(private readonly versionsOf: VersionsOf = () => []) {}
 
   async findBucket(name: BucketName): Promise<CompatBucket | null> {
     return this.buckets.get(name) ?? null;
@@ -107,17 +112,27 @@ export class MemoryCompatStore implements CompatStore {
     const out = new Map<string, VersionRecord>();
     if (!this.buckets.has(bucket)) return out;
     for (const { objectRef, assetId, hashes } of refs) {
-      let stored = this.hashes.get(objectRef);
-      if (!stored) {
-        const generation = (this.generations.get(bucket) ?? 0) + 1;
-        this.generations.set(bucket, generation);
-        stored = { assetId, record: { generation, hashes: null } };
-        this.hashes.set(objectRef, stored);
-      }
+      for (const ref of this.inVersionOrder(assetId, objectRef)) this.recordOnce(bucket, ref, assetId);
+      const stored = this.hashes.get(objectRef)!;
       if (hashes && !stored.record.hashes) stored.record = { ...stored.record, hashes };
       out.set(objectRef, stored.record);
     }
     return out;
+  }
+
+  /** `objectRef` last, after its asset row and every older version of `assetId`, oldest first. */
+  private inVersionOrder(assetId: string, objectRef: string): string[] {
+    const versions = this.versionsOf(assetId).sort((a, b) => a.version - b.version);
+    const at = versions.findIndex((v) => v.id === objectRef);
+    if (at < 0) return [objectRef];
+    return [assetId, ...versions.slice(0, at).map((v) => v.id), objectRef];
+  }
+
+  private recordOnce(bucket: BucketName, objectRef: string, assetId: string): void {
+    if (this.hashes.has(objectRef)) return;
+    const generation = (this.generations.get(bucket) ?? 0) + 1;
+    this.generations.set(bucket, generation);
+    this.hashes.set(objectRef, { assetId, record: { generation, hashes: null } });
   }
 
   async findCredential(id: CredentialId): Promise<CompatCredential | null> {

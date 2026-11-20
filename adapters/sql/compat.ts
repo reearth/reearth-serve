@@ -151,21 +151,7 @@ export class SqlCompatStore implements CompatStore {
     const wanted = JSON.stringify(unique.map((r) => ({ ref: r.objectRef, asset: r.assetId })));
     const refIds = JSON.stringify(unique.map((r) => r.objectRef));
     const results = await this.db.batch([
-      {
-        sql: `INSERT INTO compat_hashes (object_ref, asset_id, generation, md5, crc32c)
-                SELECT json_extract(w.value, '$.ref'), json_extract(w.value, '$.asset'),
-                       b.last_generation + ROW_NUMBER() OVER (ORDER BY w.key), NULL, NULL
-                  FROM json_each(?2) AS w JOIN compat_buckets AS b ON b.name = ?1
-                 WHERE NOT EXISTS (SELECT 1 FROM compat_hashes AS h WHERE h.object_ref = json_extract(w.value, '$.ref'))
-                ON CONFLICT (object_ref) DO NOTHING`,
-        args: [bucket, wanted],
-      },
-      {
-        sql: `UPDATE compat_buckets SET last_generation = MAX(last_generation, COALESCE(
-                (SELECT MAX(generation) FROM compat_hashes WHERE object_ref IN (SELECT value FROM json_each(?2))), 0))
-              WHERE name = ?1`,
-        args: [bucket, refIds],
-      },
+      ...recordInVersionOrder(bucket, wanted),
       ...unique.flatMap((r) => r.hashes
         ? [{
           sql: "UPDATE compat_hashes SET md5 = ?2, crc32c = ?3 WHERE object_ref = ?1 AND md5 IS NULL",
@@ -265,6 +251,41 @@ export class SqlCompatStore implements CompatStore {
   async deleteUpload(id: UploadId): Promise<void> {
     await this.db.execute("DELETE FROM compat_uploads WHERE id = ?1", [id]);
   }
+}
+
+/**
+ * Store a record at the bucket's next generations for each wanted ref with
+ * none, after its asset row and every older version of its asset, oldest
+ * first, then raise the high mark past them. `wanted` is a JSON array of
+ * `{ ref, asset }` bound as ?2; ?1 is the bucket.
+ */
+export function recordInVersionOrder(bucket: BucketName, wanted: string): SqlStatement[] {
+  return [
+    {
+      sql: `WITH wanted AS (
+              SELECT json_extract(w.value, '$.ref') AS ref, json_extract(w.value, '$.asset') AS asset, v.version AS version
+                FROM json_each(?2) AS w
+                LEFT JOIN asset_versions AS v ON v.id = json_extract(w.value, '$.ref') AND v.asset_id = json_extract(w.value, '$.asset')
+            ),
+            due (ref, asset, version) AS (
+              SELECT ref, asset, COALESCE(version, 0) FROM wanted
+              UNION SELECT asset, asset, 0 FROM wanted WHERE version IS NOT NULL
+              UNION SELECT o.id, o.asset_id, o.version FROM wanted AS w JOIN asset_versions AS o ON o.asset_id = w.asset AND o.version < w.version
+            )
+            INSERT INTO compat_hashes (object_ref, asset_id, generation, md5, crc32c)
+              SELECT d.ref, d.asset, b.last_generation + ROW_NUMBER() OVER (ORDER BY d.asset, d.version), NULL, NULL
+                FROM due AS d JOIN compat_buckets AS b ON b.name = ?1
+               WHERE NOT EXISTS (SELECT 1 FROM compat_hashes AS h WHERE h.object_ref = d.ref)
+            ON CONFLICT (object_ref) DO NOTHING`,
+      args: [bucket, wanted],
+    },
+    {
+      sql: `UPDATE compat_buckets SET last_generation = MAX(last_generation, COALESCE(
+              (SELECT MAX(generation) FROM compat_hashes WHERE asset_id IN (SELECT json_extract(value, '$.asset') FROM json_each(?2))), 0))
+            WHERE name = ?1`,
+      args: [bucket, wanted],
+    },
+  ];
 }
 
 /** Runs inside `SqlAtomicWrites.deleteAsset`'s batch, so the rows go only if the asset row goes too. */
