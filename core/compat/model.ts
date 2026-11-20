@@ -1,6 +1,7 @@
 import type { z } from "zod";
 import type { ServicePrincipal, ServiceRole } from "../auth/types";
 import type { compatMountRuleSchema } from "../../shared/compat";
+import type { HashState } from "./hash";
 
 export type BucketName = string & { readonly __brand: "BucketName" };
 /** A decoded object key. May contain '/' and end with it. */
@@ -76,7 +77,25 @@ export type PutMeta = {
   ifGenerationMatch: number | null;
 };
 
-export type UploadState = "open" | "committing" | "committed";
+export type StagedPart = { key: string; size: number };
+
+export type CommitOwner = { token: string; since: number };
+
+export type CommitIds = { assetId: string; versionId: string };
+
+export type UploadPhase =
+  | { state: "open"; received: number; total: number | null; hashState: HashState; parts: StagedPart[] }
+  | {
+    state: "committing";
+    size: number;
+    hashState: HashState;
+    parts: StagedPart[];
+    owner: CommitOwner | null;
+    owners: CommitIds[];
+    overwritingAssetId: string | null;
+  }
+  | { state: "committed"; result: ObjectInfo }
+  | { state: "failed"; error: CompatError };
 
 export type UploadSession = {
   id: UploadId;
@@ -84,11 +103,9 @@ export type UploadSession = {
   key: ObjectKey;
   credentialId: CredentialId;
   meta: PutMeta;
-  received: number;
-  hashState: string;
-  state: UploadState;
-  result: string | null;
   expiresAt: number;
+  revision: number;
+  phase: UploadPhase;
 };
 
 export type ObjectInfo = {
@@ -115,6 +132,7 @@ export type SizedBody = {
 export type CompatError =
   | { code: "no_such_bucket" }
   | { code: "no_such_key" }
+  | { code: "no_such_upload" }
   | { code: "forbidden" }
   | { code: "precondition_failed" }
   | { code: "busy" }

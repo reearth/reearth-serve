@@ -6,6 +6,7 @@ import type { Deps } from "../../types";
 import { issueCredential, type KeyFile } from "../credential";
 import type { BucketName, CredentialId, ObjectKey } from "../model";
 import type { ServiceRole } from "../../auth/types";
+import { contentRangeOf, declaredHashesOf } from "./app";
 
 const API_HOST = "storage.example.test";
 const API = `https://${API_HOST}`;
@@ -249,6 +250,103 @@ describe("objects", () => {
     const upload = multipart({ name: "k" }, "x");
     const res = await onApi(f, "/upload/storage/v1/b/media/o?uploadType=multipart", { method: "POST", headers: { ...headers, ...upload.headers }, body: upload.body });
     expect(res.status).toBe(403);
+  });
+});
+
+describe("resumable uploads", () => {
+  async function editor() {
+    const f = await compatFixture();
+    return { f, headers: bearer(await accessToken(f, await keyFor(f, "editor"))) };
+  }
+
+  async function begin(f: Fixture, headers: Record<string, string>) {
+    const res = await onApi(f, "/upload/storage/v1/b/media/o?alt=json&name=big.txt&prettyPrint=false&projection=full&uploadType=resumable", {
+      method: "POST",
+      headers: { ...headers, "Content-Type": "application/json", "X-Upload-Content-Type": "text/plain; charset=utf-8" },
+      body: JSON.stringify({ bucket: "media", name: "big.txt", metadata: { k: "v" } }),
+    });
+    expect(res.status).toBe(200);
+    const location = new URL(res.headers.get("Location")!);
+    expect(location.origin).toBe(API);
+    return `${location.pathname}${location.search}`;
+  }
+
+  test("the Go client's exchange: begin, an incomplete chunk acknowledged without a 308, then the final chunk with its CRC32C", async () => {
+    const { f, headers } = await editor();
+    const session = await begin(f, headers);
+    const chunk = await onApi(f, session, {
+      method: "POST", headers: { ...headers, "Content-Range": "bytes 0-5/*", "X-GUploader-No-308": "yes" }, body: "hello ",
+    });
+    expect(chunk.status).toBe(200);
+    expect(chunk.headers.get("X-Http-Status-Code-Override")).toBe("308");
+    expect(chunk.headers.get("Range")).toBe("bytes=0-5");
+
+    const status = await onApi(f, session, { method: "PUT", headers: { ...headers, "Content-Range": "bytes */*" } });
+    expect(status.status).toBe(308);
+    expect(status.headers.get("Range")).toBe("bytes=0-5");
+
+    const final = await onApi(f, session, {
+      method: "POST",
+      headers: { ...headers, "Content-Range": "bytes 6-10/11", "X-GUploader-No-308": "yes", "X-Goog-Hash": "crc32c=yZRlqg==" },
+      body: "world",
+    });
+    expect(final.status).toBe(200);
+    expect(await final.json()).toMatchObject({
+      name: "big.txt", size: "11", contentType: "text/plain; charset=utf-8", metadata: { k: "v" },
+      md5Hash: "XrY7u+Ae7tCTyyK7j1rNww==", crc32c: "yZRlqg==",
+    });
+  });
+
+  test("a final chunk whose X-Goog-Hash does not match is 400 and stores nothing", async () => {
+    const { f, headers } = await editor();
+    const session = await begin(f, headers);
+    const res = await onApi(f, session, {
+      method: "PUT", headers: { ...headers, "Content-Range": "bytes 0-10/11", "X-Goog-Hash": "crc32c=AAAAAA==" }, body: "hello world",
+    });
+    expect(res.status).toBe(400);
+    expect(f.compat.bindings.size).toBe(0);
+  });
+
+  test("another credential on the same bucket cannot continue the session", async () => {
+    const { f, headers } = await editor();
+    const session = await begin(f, headers);
+    const other = bearer(await accessToken(f, await keyFor(f, "editor")));
+    const res = await onApi(f, session, { method: "PUT", headers: { ...other, "Content-Range": "bytes 0-2/3" }, body: "abc" });
+    expect(res.status).toBe(403);
+  });
+
+  test("DELETE on the session cancels it with 499, and the session is then unknown", async () => {
+    const { f, headers } = await editor();
+    const session = await begin(f, headers);
+    await onApi(f, session, { method: "PUT", headers: { ...headers, "Content-Range": "bytes 0-5/*" }, body: "hello " });
+    const cancel = await onApi(f, session, { method: "DELETE", headers });
+    expect(cancel.status).toBe(499);
+    const status = await onApi(f, session, { method: "PUT", headers: { ...headers, "Content-Range": "bytes */*" } });
+    expect(status.status).toBe(404);
+    expect((await f.deps.storage.list("compat-staging/")).keys).toEqual([]);
+  });
+
+  test.each([
+    ["bytes 0-9/*", { start: 0, size: 10, total: null }],
+    ["bytes 10-19/20", { start: 10, size: 10, total: 20 }],
+    ["bytes */20", { start: null, size: 0, total: 20 }],
+    ["bytes */*", "query"],
+    ["bytes 9-0/*", null],
+    ["bytes 0-20/20", null],
+    ["bytes=0-9/*", null],
+    [undefined, null],
+  ])("Content-Range %s", (header, want) => {
+    expect(contentRangeOf(header)).toEqual(want);
+  });
+
+  test.each([
+    [undefined, { crc32c: null, md5: null }],
+    ["crc32c=yZRlqg==", { crc32c: 0xc99465aa, md5: null }],
+    ["crc32c=yZRlqg==,md5=XrY7u+Ae7tCTyyK7j1rNww==", { crc32c: 0xc99465aa, md5: expect.any(Uint8Array) }],
+    ["crc32c=AAAA", null],
+    ["md5=!!", null],
+  ])("X-Goog-Hash %s", (header, want) => {
+    expect(declaredHashesOf(header)).toEqual(want);
   });
 });
 

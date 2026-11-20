@@ -1,6 +1,6 @@
 // The composite writes, against a real SQLite engine: they must land as one
 // unit, so a failing statement leaves none of the other rows behind (ADR-012 §3).
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { createSqliteClient } from "../memory/sqlite-node";
 import { SqlAtomicWrites } from "./writes";
 import { SqlCleanupPendingStore, SqlJobStore, SqlMetadataStore, SqlStorageUsageStore, SqlVersionStore } from "./stores";
@@ -9,6 +9,18 @@ import type { SiteHost } from "../../core/site/repository";
 import type { AssetMetadata } from "../../core/asset/model";
 import type { AssetVersion } from "../../core/asset/model";
 import type { Job } from "../../core/job/model";
+import { SqlCompatStore } from "./compat";
+import { HoldLost } from "../../core/asset/repository";
+import type { CompatPublish, LeaseToken } from "../../core/compat/repository";
+import type { BucketName, CredentialId, ObjectKey, UploadId } from "../../core/compat/model";
+import type { SqlClient } from "../../core/sql/port";
+
+async function recordOf(sql: SqlClient, objectRef: string) {
+  const row = (await sql.execute("SELECT generation, md5, crc32c FROM compat_hashes WHERE object_ref = ?1", [objectRef])).rows[0];
+  if (!row) return null;
+  const hashes = row.md5 === null ? null : { md5: new Uint8Array(row.md5 as Uint8Array), crc32c: Number(row.crc32c) };
+  return { generation: Number(row.generation), hashes };
+}
 
 function fixture() {
   const sql = createSqliteClient();
@@ -114,6 +126,92 @@ describe("SqlAtomicWrites.createVersion", () => {
     expect(await f.jobs.find("should-not-exist")).toBeNull();
     expect(await f.usage.get("project:p1")).toMatchObject({ totalSize: 500, assetCount: 1 });
     expect(await f.versions.count("a1")).toBe(1);
+  });
+});
+
+describe("SqlAtomicWrites with a compat publish", () => {
+  const media = "media" as BucketName;
+  const key = "j.zip" as ObjectKey;
+  const hashes = { md5: new Uint8Array(16).fill(7), crc32c: 42 };
+
+  const NOW = 1_700_000_000_000;
+  const seed = NOW * 1000;
+  afterEach(() => { vi.useRealTimers(); });
+
+  async function leased() {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
+    const f = fixture();
+    const compat = new SqlCompatStore(f.sql);
+    await compat.insertBucket({ name: media, projectId: "p1", mount: null, createdAt: 0 });
+    const claim = await compat.claim(media, key, "object", 1000, 0);
+    if (claim.kind !== "claimed") throw new Error(claim.kind);
+    await f.writes.createAsset({ asset: { ...asset, jobId: undefined, activeVersionId: "pinned" } });
+    await compat.bind(media, key, claim.token, asset.id);
+    await compat.lease(media, key, "lease-1" as LeaseToken, 1000, 0);
+    await compat.createUpload({
+      id: "up1" as UploadId, bucket: media, key, credentialId: "c1" as CredentialId,
+      meta: { contentType: "application/zip", contentEncoding: null, userMeta: {}, ifGenerationMatch: null },
+      expiresAt: 10_000, revision: 3, phase: { state: "failed", error: { code: "busy" } },
+    });
+    const publish = (revision: number, token: string, reclaim: string[] = []): CompatPublish => ({
+      upload: { id: "up1" as UploadId, revision },
+      hold: { kind: "lease", bucket: media, key, token, assetId: asset.id },
+      record: { objectRef: "v9", hashes },
+      result: {
+        bucket: media, key, size: 500, contentType: "application/zip", contentEncoding: null, metageneration: 1, etag: "v9",
+        created: new Date(1000), updated: new Date(1000), hashes, userMeta: {},
+      },
+      reclaim,
+    });
+    const write = (p: CompatPublish) =>
+      f.writes.createVersion({ version: { ...version, id: "v9" }, job: { ...job, id: "j9", versionId: "v9" }, usageScopes: ["project:p1"], publish: p });
+    return { f, compat, publish, write };
+  }
+
+  test.each([
+    ["the session moved on", 2, "lease-1"],
+    ["the lease was taken over", 3, "lease-2"],
+  ])("R5: a publish whose %s writes no row", async (_, revision, token) => {
+    const { f, compat, publish, write } = await leased();
+    await expect(write(publish(revision, token, ["assets/earlier/"]))).rejects.toBeInstanceOf(HoldLost);
+
+    expect(await f.versions.find("v9")).toBeNull();
+    expect(await f.jobs.find("j9")).toBeNull();
+    expect(await f.usage.get("project:p1")).toBeNull();
+    expect((await f.assets.find(asset.id))?.activeVersionId).toBe("pinned");
+    expect([await recordOf(f.sql, "v9"), await recordOf(f.sql, asset.id)]).toEqual([null, null]);
+    expect(await compat.findUpload("up1" as UploadId)).toMatchObject({ revision: 3, phase: { state: "failed" } });
+    expect((await compat.records(media, [{ objectRef: "probe", assetId: "x" }])).get("probe")?.generation).toBe(seed + 1);
+    expect(await f.pending.list(10)).toEqual([]);
+  });
+
+  test("R5: a publish that holds writes every row, at the bucket's next generation", async () => {
+    const { f, compat, publish, write } = await leased();
+    expect((await compat.records(media, [{ objectRef: "observed", assetId: "x" }])).get("observed")?.generation).toBe(seed + 1);
+    const written = await write(publish(3, "lease-1", ["assets/earlier/", "assets/a1/v/earlier/"]));
+
+    expect(written).toMatchObject({ id: "v9", version: 1, generation: seed + 3 });
+    expect(await recordOf(f.sql, asset.id)).toEqual({ generation: seed + 2, hashes: null });
+    expect(await f.jobs.find("j9")).not.toBeNull();
+    expect(await f.usage.get("project:p1")).toMatchObject({ totalSize: 500 });
+    expect((await f.assets.find(asset.id))?.activeVersionId ?? null).toBeNull();
+    expect(await recordOf(f.sql, "v9")).toEqual({ generation: seed + 3, hashes });
+    expect(await compat.findUpload("up1" as UploadId)).toMatchObject({
+      revision: 4, phase: { state: "committed", result: { etag: "v9", generation: seed + 3, hashes } },
+    });
+    expect((await f.pending.list(10)).map((p) => p.prefix).sort()).toEqual(["assets/a1/v/earlier/", "assets/earlier/"]);
+  });
+
+  test("a publish first records the asset's older unrecorded versions, oldest first, below its own generation", async () => {
+    const { f, compat, publish, write } = await leased();
+    await f.writes.createVersion({ version: { ...version, id: "v8", createdAt: 9_999_999_999_999 } });
+    const written = await write(publish(3, "lease-1"));
+
+    expect(written).toMatchObject({ id: "v9", version: 2, generation: seed + 3 });
+    expect(await compat.findUpload("up1" as UploadId)).toMatchObject({ phase: { state: "committed", result: { generation: seed + 3 } } });
+    expect([await recordOf(f.sql, asset.id), await recordOf(f.sql, "v8")])
+      .toEqual([{ generation: seed + 1, hashes: null }, { generation: seed + 2, hashes: null }]);
   });
 });
 

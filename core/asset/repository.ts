@@ -1,6 +1,7 @@
 import type { AssetMetadata, AssetVersion, StoredFile, UploadSession, UploadPart } from "./model";
 import type { Job } from "../job/model";
 import type { SiteHost } from "../site/repository";
+import type { CompatPublish } from "../compat/repository";
 
 export interface ListResult<T> {
   items: T[];
@@ -92,6 +93,22 @@ export interface VersionStore {
   count(assetId: string): Promise<number>;
 }
 
+export type Published = { generation: number | null };
+
+/** A `CompatPublish` whose session revision or key hold no longer holds: nothing was written. */
+export class HoldLost extends Error {
+  constructor() {
+    super("the upload commit no longer holds its session or lease");
+  }
+}
+
+/**
+ * The `CompatPublish` a create write applies for `row`, and a re-read that
+ * tells whether a write that failed some other way than `HoldLost` (a lost
+ * response, say) applied it anyway.
+ */
+export type Publishing<Row> = { of(row: Row): CompatPublish; applied(): Promise<boolean> };
+
 /**
  * Writes that must land together or not at all (ADR-012 §3).
  *
@@ -105,13 +122,17 @@ export interface VersionStore {
  * the size of the asset or version being written.
  */
 export interface AtomicWrites {
-  /** A new asset, its optional extraction job, and storage-usage increments. */
-  createAsset(input: { asset: AssetMetadata; job?: Job; usageScopes?: string[] }): Promise<void>;
+  /**
+   * A new asset, its optional extraction job, and storage-usage increments.
+   * With `publish`, also that publish; returns the generation it issued.
+   */
+  createAsset(input: { asset: AssetMetadata; job?: Job; usageScopes?: string[]; publish?: CompatPublish }): Promise<Published>;
   /**
    * A new version, its optional extraction job, and storage-usage increments.
    * Returns the version with the number the store assigned (see `VersionStore.save`).
+   * With `publish`, also that publish, and the generation it issued.
    */
-  createVersion(input: { version: AssetVersion; job?: Job; usageScopes?: string[] }): Promise<AssetVersion>;
+  createVersion(input: { version: AssetVersion; job?: Job; usageScopes?: string[]; publish?: CompatPublish }): Promise<AssetVersion & Published>;
   /**
    * A job row plus the row that mirrors its status: the version for a
    * version's job, the asset otherwise. A version's job may still pass the

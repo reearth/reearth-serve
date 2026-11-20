@@ -1,12 +1,13 @@
 import type {
-  Binding, BindingKind, BucketName, CompatBucket, CompatCredential, CredentialId,
-  UploadId, UploadSession,
+  Binding, BindingKind, BucketName, CompatBucket, CompatCredential, CredentialId, ObjectInfo,
+  UploadId, UploadPhase, UploadSession,
 } from "../../core/compat/model";
+import { base64Of, fromBase64 } from "../../core/compat/hash";
 import {
-  generationSeed, newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatStore, type DeleteBucketResult,
-  type LeaseToken, type RecordRef, type VersionRecord,
+  generationSeed, newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatPublish, type CompatStore,
+  type DeleteBucketResult, type LeaseToken, type RecordRef, type VersionRecord,
 } from "../../core/compat/repository";
-import type { Row, SqlClient, SqlStatement } from "../../core/sql/port";
+import type { Row, SqlClient, SqlStatement, SqlValue } from "../../core/sql/port";
 import { queryAll, queryFirst } from "./helpers";
 import { isServiceRole } from "../../core/auth/types";
 
@@ -14,8 +15,7 @@ const BUCKET_COLUMNS = "name, project_id, mount_rule, created_at";
 const BINDING_COLUMNS = "bucket, key, binding, asset_id";
 const CREDENTIAL_COLUMNS =
   "id, project_id, bucket, role, client_email, public_jwk, label, created_by, created_at, revoked_at";
-const UPLOAD_COLUMNS =
-  "id, bucket, key, credential_id, meta, received, hash_state, state, result, expires_at";
+const UPLOAD_COLUMNS = "id, bucket, key, credential_id, meta, expires_at, revision, phase";
 
 const BUCKET_IS_EMPTY = "NOT EXISTS (SELECT 1 FROM compat_bindings WHERE bucket = ?2)";
 const BUCKET_IN_PROJECT = "EXISTS (SELECT 1 FROM compat_buckets WHERE name = ?2 AND project_id = ?1)";
@@ -127,6 +127,22 @@ export class SqlCompatStore implements CompatStore {
     return result.rowsAffected > 0;
   }
 
+  async renewLease(bucket: BucketName, key: BindingKey, token: LeaseToken, now: number): Promise<boolean> {
+    const result = await this.db.execute(
+      "UPDATE compat_bindings SET leased_at = ?4 WHERE bucket = ?1 AND key = ?2 AND lease_token = ?3",
+      [bucket, key, token, now],
+    );
+    return result.rowsAffected > 0;
+  }
+
+  async renewClaim(bucket: BucketName, key: BindingKey, token: ClaimToken, now: number): Promise<boolean> {
+    const result = await this.db.execute(
+      "UPDATE compat_bindings SET claimed_at = ?4 WHERE bucket = ?1 AND key = ?2 AND asset_id IS NULL AND claim_token = ?3",
+      [bucket, key, token, now],
+    );
+    return result.rowsAffected > 0;
+  }
+
   async releaseLease(bucket: BucketName, key: BindingKey, token: LeaseToken): Promise<void> {
     await this.db.execute(
       "UPDATE compat_bindings SET lease_token = NULL, leased_at = NULL WHERE bucket = ?1 AND key = ?2 AND lease_token = ?3",
@@ -167,7 +183,7 @@ export class SqlCompatStore implements CompatStore {
     ]);
     return new Map(results[results.length - 1].rows.map((row) => [row.object_ref as string, {
       generation: Number(row.generation),
-      hashes: row.md5 === null ? null : { md5: toBytes(row.md5), crc32c: Number(row.crc32c) },
+      hashes: hashesOf(row),
     }]));
   }
 
@@ -216,8 +232,8 @@ export class SqlCompatStore implements CompatStore {
 
   async createUpload(u: UploadSession): Promise<void> {
     await this.db.execute(
-      `INSERT INTO compat_uploads (${UPLOAD_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)`,
-      [u.id, u.bucket, u.key, u.credentialId, JSON.stringify(u.meta), u.received, u.hashState, u.state, u.result, u.expiresAt],
+      `INSERT INTO compat_uploads (${UPLOAD_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)`,
+      [u.id, u.bucket, u.key, u.credentialId, JSON.stringify(u.meta), u.expiresAt, u.revision, encodePhase(u.phase)],
     );
   }
 
@@ -226,15 +242,10 @@ export class SqlCompatStore implements CompatStore {
     return row ? parseUpload(row) : null;
   }
 
-  async advanceUpload(
-    id: UploadId,
-    expect: Pick<UploadSession, "received" | "state">,
-    next: Pick<UploadSession, "received" | "hashState" | "state" | "result">,
-  ): Promise<boolean> {
+  async updateUpload(id: UploadId, revision: number, phase: UploadPhase): Promise<boolean> {
     const result = await this.db.execute(
-      `UPDATE compat_uploads SET received = ?4, hash_state = ?5, state = ?6, result = ?7
-         WHERE id = ?1 AND received = ?2 AND state = ?3`,
-      [id, expect.received, expect.state, next.received, next.hashState, next.state, next.result],
+      "UPDATE compat_uploads SET phase = ?3, revision = ?2 + 1 WHERE id = ?1 AND revision = ?2",
+      [id, revision, encodePhase(phase)],
     );
     return result.rowsAffected > 0;
   }
@@ -248,12 +259,95 @@ export class SqlCompatStore implements CompatStore {
     return rows.map(parseUpload);
   }
 
-  async deleteUpload(id: UploadId): Promise<void> {
-    await this.db.execute("DELETE FROM compat_uploads WHERE id = ?1", [id]);
+  async deleteUpload(id: UploadId, revision?: number): Promise<boolean> {
+    const result = revision === undefined
+      ? await this.db.execute("DELETE FROM compat_uploads WHERE id = ?1", [id])
+      : await this.db.execute("DELETE FROM compat_uploads WHERE id = ?1 AND revision = ?2", [id, revision]);
+    return result.rowsAffected > 0;
+  }
+
+  async sweepStaleHolds(staleBefore: number): Promise<{ claims: number; leases: number }> {
+    const [claims, leases] = await this.db.batch([
+      { sql: "DELETE FROM compat_bindings WHERE asset_id IS NULL AND claimed_at < ?1", args: [staleBefore] },
+      {
+        sql: "UPDATE compat_bindings SET lease_token = NULL, leased_at = NULL WHERE lease_token IS NOT NULL AND leased_at < ?1",
+        args: [staleBefore],
+      },
+    ]);
+    return { claims: claims.rowsAffected, leases: leases.rowsAffected };
   }
 }
 
-export function recordInVersionOrder(bucket: BucketName, wanted: string): SqlStatement[] {
+/**
+ * The condition under which `publish` applies, with its parameters numbered
+ * from `firstParam`. A claim stays held after the publish's own statement
+ * fills it with `assetId`, so every statement of the publish sees one answer.
+ */
+export function compatHolds(publish: CompatPublish, firstParam: number): { sql: string; args: SqlValue[] } {
+  const [id, revision, bucket, key, token, assetId] = [0, 1, 2, 3, 4, 5].map((i) => `?${firstParam + i}`);
+  const binding = publish.hold.kind === "lease"
+    ? `lease_token = ${token} AND asset_id = ${assetId}`
+    : `claim_token = ${token} AND (asset_id IS NULL OR asset_id = ${assetId})`;
+  const { hold, upload } = publish;
+  return {
+    sql: `EXISTS (SELECT 1 FROM compat_uploads WHERE id = ${id} AND revision = ${revision})
+      AND EXISTS (SELECT 1 FROM compat_bindings WHERE bucket = ${bucket} AND key = ${key} AND ${binding})`,
+    args: [upload.id, upload.revision, hold.bucket, hold.key, hold.token, hold.assetId],
+  };
+}
+
+/**
+ * The statements after the row inserts that publish a resumable commit
+ * (ADR-019 §3), each under `compatHolds`. The session moves last, so the
+ * revision the others check is still the one the commit owns. `generationAt`
+ * is the statement whose `last_generation` row is the issued generation. The
+ * new row is the newest version of its asset, so it is recorded after every
+ * older unrecorded version, at the top of the bucket's high mark.
+ */
+export function compatPublish(publish: CompatPublish): { statements: SqlStatement[]; generationAt: number } {
+  const { hold, record, upload } = publish;
+  const at = (sql: string, args: SqlValue[], returning = ""): SqlStatement => {
+    const holds = compatHolds(publish, args.length + 1);
+    return { sql: `${sql} AND ${holds.sql}${returning}`, args: [...args, ...holds.args] };
+  };
+  const high = "(SELECT last_generation FROM compat_buckets WHERE name = ?1)";
+  const live = hold.kind === "lease"
+    ? at("UPDATE assets SET active_version_id = NULL WHERE id = ?1", [hold.assetId])
+    : at("UPDATE compat_bindings SET asset_id = ?4 WHERE bucket = ?1 AND key = ?2 AND claim_token = ?3 AND asset_id IS NULL",
+      [hold.bucket, hold.key, hold.token, hold.assetId]);
+  const committed = encodePhase({ state: "committed", result: { ...publish.result, generation: 0 } });
+  const [recordOlder, raise] = recordInVersionOrder(
+    hold.bucket, JSON.stringify([{ ref: record.objectRef, asset: hold.assetId }]), compatHolds(publish, 3),
+  );
+  return {
+    statements: [
+      live,
+      recordOlder,
+      { ...raise, sql: `${raise.sql} RETURNING last_generation` },
+      at("UPDATE compat_hashes SET md5 = ?2, crc32c = ?3 WHERE object_ref = ?1", [record.objectRef, record.hashes.md5, record.hashes.crc32c]),
+      ...publish.reclaim.map((prefix) =>
+        at("INSERT OR REPLACE INTO cleanup_pending (prefix, created_at) SELECT ?1, ?2 WHERE 1", [prefix, Date.now()])),
+      at(
+        `UPDATE compat_uploads SET phase = json_set(?2, '$.result.generation', ${high}), revision = revision + 1
+           WHERE id = ?3`,
+        [hold.bucket, committed, upload.id],
+      ),
+    ],
+    generationAt: 2,
+  };
+}
+
+/**
+ * Store a record at the bucket's next generations for each wanted ref with
+ * none, after its asset row and every older version of its asset, oldest
+ * first, then raise the high mark past them. The raise writes no row when no
+ * record was new. `wanted` is a JSON array of `{ ref, asset }` bound as ?2;
+ * ?1 is the bucket. Both statements apply only under `guard`, whose
+ * parameters are numbered from ?3.
+ */
+export function recordInVersionOrder(
+  bucket: BucketName, wanted: string, guard: { sql: string; args: SqlValue[] } = { sql: "1", args: [] },
+): SqlStatement[] {
   return [
     {
       sql: `WITH wanted AS (
@@ -269,16 +363,16 @@ export function recordInVersionOrder(bucket: BucketName, wanted: string): SqlSta
             INSERT INTO compat_hashes (object_ref, asset_id, generation, md5, crc32c)
               SELECT d.ref, d.asset, b.last_generation + ROW_NUMBER() OVER (ORDER BY d.asset, d.version), NULL, NULL
                 FROM due AS d JOIN compat_buckets AS b ON b.name = ?1
-               WHERE NOT EXISTS (SELECT 1 FROM compat_hashes AS h WHERE h.object_ref = d.ref)
+               WHERE NOT EXISTS (SELECT 1 FROM compat_hashes AS h WHERE h.object_ref = d.ref) AND ${guard.sql}
             ON CONFLICT (object_ref) DO NOTHING`,
-      args: [bucket, wanted],
+      args: [bucket, wanted, ...guard.args],
     },
     {
       sql: `UPDATE compat_buckets SET last_generation = m.top
               FROM (SELECT MAX(generation) AS top FROM compat_hashes
                      WHERE asset_id IN (SELECT json_extract(value, '$.asset') FROM json_each(?2))) AS m
-             WHERE name = ?1 AND m.top > last_generation`,
-      args: [bucket, wanted],
+             WHERE name = ?1 AND m.top > last_generation AND ${guard.sql}`,
+      args: [bucket, wanted, ...guard.args],
     },
   ];
 }
@@ -289,6 +383,10 @@ export function compatDeleteByAsset(assetId: string): SqlStatement[] {
     { sql: "DELETE FROM compat_bindings WHERE asset_id = ?1", args: [assetId] },
     { sql: "DELETE FROM compat_hashes WHERE asset_id = ?1", args: [assetId] },
   ];
+}
+
+function hashesOf(row: Row): VersionRecord["hashes"] {
+  return row.md5 === null ? null : { md5: toBytes(row.md5), crc32c: Number(row.crc32c) };
 }
 
 function parseBucket(row: Row): CompatBucket {
@@ -331,11 +429,42 @@ function parseUpload(row: Row): UploadSession {
     key: row.key as UploadSession["key"],
     credentialId: row.credential_id as CredentialId,
     meta: JSON.parse(row.meta as string),
-    received: row.received as number,
-    hashState: row.hash_state as string,
-    state: row.state as UploadSession["state"],
-    result: (row.result as string | null) ?? null,
     expiresAt: row.expires_at as number,
+    revision: row.revision as number,
+    phase: decodePhase(row.phase as string),
+  };
+}
+
+type StoredInfo = Omit<ObjectInfo, "created" | "updated" | "hashes"> & {
+  created: number; updated: number; hashes: { md5: string; crc32c: number } | null;
+};
+
+type StoredPhase = Exclude<UploadPhase, { state: "committed" }> | { state: "committed"; result: StoredInfo };
+
+function encodePhase(phase: UploadPhase): string {
+  if (phase.state !== "committed") return JSON.stringify(phase);
+  const info = phase.result;
+  const result: StoredInfo = {
+    ...info,
+    created: info.created.getTime(),
+    updated: info.updated.getTime(),
+    hashes: info.hashes && { md5: base64Of(info.hashes.md5), crc32c: info.hashes.crc32c },
+  };
+  return JSON.stringify({ state: "committed", result } satisfies StoredPhase);
+}
+
+function decodePhase(text: string): UploadPhase {
+  const stored = JSON.parse(text) as StoredPhase;
+  if (stored.state !== "committed") return stored;
+  const { result } = stored;
+  return {
+    state: "committed",
+    result: {
+      ...result,
+      created: new Date(result.created),
+      updated: new Date(result.updated),
+      hashes: result.hashes && { md5: fromBase64(result.hashes.md5), crc32c: result.hashes.crc32c },
+    },
   };
 }
 

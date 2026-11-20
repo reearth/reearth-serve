@@ -1,13 +1,13 @@
 /**
  * The compat_* tables behind one port (ADR-019).
  *
- * `claim`, `bind`, `releaseClaim`, `lease`, `records` and `advanceUpload`
+ * `claim`, `bind`, `releaseClaim`, `lease`, `records` and `updateUpload`
  * are each one atomic step with compare-and-set semantics, so two writers
  * racing on one key or one upload session cannot both win.
  */
 import type {
   Binding, BindingKind, BucketName, CompatBucket, CompatCredential, CredentialId,
-  ExactHashes, FolderKey, ObjectKey, UploadId, UploadSession,
+  ExactHashes, FolderKey, ObjectInfo, ObjectKey, UploadId, UploadPhase, UploadSession,
 } from "./model";
 
 export type BindingKey = ObjectKey | FolderKey;
@@ -41,6 +41,26 @@ export type ClaimResult =
   | { kind: "busy" };
 
 export type DeleteBucketResult = "deleted" | "absent" | "not_empty";
+
+/**
+ * A resumable commit's publish (ADR-019 §3), applied by `AtomicWrites` in the
+ * same atomic write as the asset or version row it names. The write applies
+ * only while the session is still at `upload.revision` and `hold` still holds:
+ * the unfilled claim `token` for a new key, which the write fills with
+ * `assetId`, or the lease `token` on the binding that names `assetId` for an
+ * overwrite, whose pinned version the write clears. In the same write the
+ * next generation is issued from the bucket's high mark, the hash record of
+ * `objectRef` is stored at it, the `reclaim` prefixes (the bytes of the
+ * session's earlier owners) are queued for cleanup, and the session moves to
+ * committed with `result` at it. Otherwise nothing is written and the write throws `HoldLost`.
+ */
+export type CompatPublish = {
+  upload: { id: UploadId; revision: number };
+  hold: { kind: "claim" | "lease"; bucket: BucketName; key: ObjectKey; token: string; assetId: string };
+  record: { objectRef: string; hashes: ExactHashes };
+  result: Omit<ObjectInfo, "generation">;
+  reclaim: string[];
+};
 
 export interface CompatStore {
   findBucket(name: BucketName): Promise<CompatBucket | null>;
@@ -78,6 +98,10 @@ export interface CompatStore {
    * key is not bound.
    */
   lease(bucket: BucketName, key: BindingKey, token: LeaseToken, now: number, staleBefore: number): Promise<boolean>;
+  /** Refresh the lease `token` at `now`. False once it was released, taken over or swept. */
+  renewLease(bucket: BucketName, key: BindingKey, token: LeaseToken, now: number): Promise<boolean>;
+  /** Refresh the unfilled claim `token` at `now`. False once it was released, taken over or swept. */
+  renewClaim(bucket: BucketName, key: BindingKey, token: ClaimToken, now: number): Promise<boolean>;
   /** Drop the lease `token`. No-op once it was taken over or the row is gone. */
   releaseLease(bucket: BucketName, key: BindingKey, token: LeaseToken): Promise<void>;
   /** Bound rows with key in [from, until), ascending by key, at most `limit`. */
@@ -107,12 +131,11 @@ export interface CompatStore {
 
   createUpload(session: UploadSession): Promise<void>;
   findUpload(id: UploadId): Promise<UploadSession | null>;
-  /** Move the session only if it still has `expect`'s `received` and `state`. False when another request moved it first. */
-  advanceUpload(
-    id: UploadId,
-    expect: Pick<UploadSession, "received" | "state">,
-    next: Pick<UploadSession, "received" | "hashState" | "state" | "result">,
-  ): Promise<boolean>;
+  /** Set the phase and bump the revision, only from `revision`. False when another request moved the session first, or it is gone. */
+  updateUpload(id: UploadId, revision: number, phase: UploadPhase): Promise<boolean>;
   listExpiredUploads(now: number, limit: number): Promise<UploadSession[]>;
-  deleteUpload(id: UploadId): Promise<void>;
+  /** Remove the session, only from `revision` when given. False when it moved first or is gone. */
+  deleteUpload(id: UploadId, revision?: number): Promise<boolean>;
+  /** Drop claims that never named an asset and clear leases, each held since before `staleBefore`. */
+  sweepStaleHolds(staleBefore: number): Promise<{ claims: number; leases: number }>;
 }
