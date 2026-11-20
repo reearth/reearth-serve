@@ -1,6 +1,6 @@
 // The composite writes, against a real SQLite engine: they must land as one
 // unit, so a failing statement leaves none of the other rows behind (ADR-012 §3).
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test, vi } from "vitest";
 import { createSqliteClient } from "../memory/sqlite-node";
 import { SqlAtomicWrites } from "./writes";
 import { SqlCleanupPendingStore, SqlJobStore, SqlMetadataStore, SqlStorageUsageStore, SqlVersionStore } from "./stores";
@@ -126,7 +126,13 @@ describe("SqlAtomicWrites with a compat publish", () => {
   const key = "j.zip" as ObjectKey;
   const hashes = { md5: new Uint8Array(16).fill(7), crc32c: 42 };
 
+  const NOW = 1_700_000_000_000;
+  const seed = NOW * 1000;
+  afterEach(() => { vi.useRealTimers(); });
+
   async function leased() {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(NOW);
     const f = fixture();
     const compat = new SqlCompatStore(f.sql);
     await compat.insertBucket({ name: media, projectId: "p1", mount: null, createdAt: 0 });
@@ -168,23 +174,23 @@ describe("SqlAtomicWrites with a compat publish", () => {
     expect((await f.assets.find(asset.id))?.activeVersionId).toBe("pinned");
     expect([await compat.findRecord("v9"), await compat.findRecord(asset.id)]).toEqual([null, null]);
     expect(await compat.findUpload("up1" as UploadId)).toMatchObject({ revision: 3, phase: { state: "failed" } });
-    expect((await compat.records(media, [{ objectRef: "probe", assetId: "x" }])).get("probe")?.generation).toBe(1);
+    expect((await compat.records(media, [{ objectRef: "probe", assetId: "x" }])).get("probe")?.generation).toBe(seed + 1);
     expect(await f.pending.list(10)).toEqual([]);
   });
 
   test("R5: a publish that holds writes every row, at the bucket's next generation", async () => {
     const { f, compat, publish, write } = await leased();
-    expect((await compat.records(media, [{ objectRef: "observed", assetId: "x" }])).get("observed")?.generation).toBe(1);
+    expect((await compat.records(media, [{ objectRef: "observed", assetId: "x" }])).get("observed")?.generation).toBe(seed + 1);
     const written = await write(publish(3, "lease-1", ["assets/earlier/", "assets/a1/v/earlier/"]));
 
-    expect(written).toMatchObject({ id: "v9", version: 1, generation: 3 });
-    expect(await compat.findRecord(asset.id)).toEqual({ generation: 2, hashes: null });
+    expect(written).toMatchObject({ id: "v9", version: 1, generation: seed + 3 });
+    expect(await compat.findRecord(asset.id)).toEqual({ generation: seed + 2, hashes: null });
     expect(await f.jobs.find("j9")).not.toBeNull();
     expect(await f.usage.get("project:p1")).toMatchObject({ totalSize: 500 });
     expect((await f.assets.find(asset.id))?.activeVersionId ?? null).toBeNull();
-    expect(await compat.findRecord("v9")).toEqual({ generation: 3, hashes });
+    expect(await compat.findRecord("v9")).toEqual({ generation: seed + 3, hashes });
     expect(await compat.findUpload("up1" as UploadId)).toMatchObject({
-      revision: 4, phase: { state: "committed", result: { etag: "v9", generation: 3, hashes } },
+      revision: 4, phase: { state: "committed", result: { etag: "v9", generation: seed + 3, hashes } },
     });
     expect((await f.pending.list(10)).map((p) => p.prefix).sort()).toEqual(["assets/a1/v/earlier/", "assets/earlier/"]);
   });
@@ -194,9 +200,10 @@ describe("SqlAtomicWrites with a compat publish", () => {
     await f.writes.createVersion({ version: { ...version, id: "v8", createdAt: 9_999_999_999_999 } });
     const written = await write(publish(3, "lease-1"));
 
-    expect(written).toMatchObject({ id: "v9", version: 2, generation: 3 });
-    expect(await compat.findUpload("up1" as UploadId)).toMatchObject({ phase: { state: "committed", result: { generation: 3 } } });
-    expect([await compat.findRecord(asset.id), await compat.findRecord("v8")]).toEqual([{ generation: 1, hashes: null }, { generation: 2, hashes: null }]);
+    expect(written).toMatchObject({ id: "v9", version: 2, generation: seed + 3 });
+    expect(await compat.findUpload("up1" as UploadId)).toMatchObject({ phase: { state: "committed", result: { generation: seed + 3 } } });
+    expect([await compat.findRecord(asset.id), await compat.findRecord("v8")])
+      .toEqual([{ generation: seed + 1, hashes: null }, { generation: seed + 2, hashes: null }]);
   });
 });
 

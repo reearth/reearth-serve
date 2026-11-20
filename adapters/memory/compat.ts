@@ -3,7 +3,7 @@ import type {
   UploadId, UploadPhase, UploadSession,
 } from "../../core/compat/model";
 import {
-  newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatPublish, type CompatStore,
+  generationSeed, newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatPublish, type CompatStore,
   type DeleteBucketResult, type LeaseToken, type RecordRef, type VersionRecord,
 } from "../../core/compat/repository";
 import { isServiceRole } from "../../core/auth/types";
@@ -35,6 +35,7 @@ export class MemoryCompatStore implements CompatStore {
   async insertBucket(bucket: CompatBucket): Promise<boolean> {
     if (this.buckets.has(bucket.name)) return false;
     this.buckets.set(bucket.name, { ...bucket });
+    this.generations.set(bucket.name, generationSeed());
     return true;
   }
   async deleteBucket(projectId: string, name: BucketName, revokedAt: number): Promise<DeleteBucketResult> {
