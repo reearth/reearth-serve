@@ -234,33 +234,38 @@ A commit has one owner. The move to committing records a random owner
 token; any other request gets a retryable `503` until the owner finishes
 or has been silent for a fixed time, and a takeover is another
 compare-and-set. While it copies staged bytes, the owner refreshes its
-timestamp and its key lease at a quarter of that time, so a slow but
-live owner is never displaced. The owner publishes only while it still
-holds the commit: the create-asset and create-version writes take an
-optional guard, and the adapter checks it inside the same atomic batch
-that inserts the row, its job and its usage increments (for SQL, every
-statement selects only when the session is at the owner's revision and,
-on an overwrite, the key's lease carries the owner's token). If the
-guard fails, nothing is written and the request answers `503`. A
-takeover, a cancel or the expiry sweep therefore also stops any later
-publish by the old owner. The guard is an additive, optional input to
-`AtomicWrites`; the storage ports do not change. On an overwrite, the
-guarded version write also moves the session to published in the same
-batch. From published, a cancel answers `503`, and any chunk request,
-status query or the owner activates the version, records its hashes
-(the first record wins) and moves the session to committed. The sweep
-drops an expired published session like a committed one. A commit's
-heartbeat clock starts at the owner's last refresh, and a staged chunk
-that has disappeared counts as a lost hold (`503`). Each owner writes under asset or version ids derived
-from its own token, so no two owners can collide on one row or delete
-each other's bytes. The bind of a new key and the move to committed land
-in one batch, and an overwrite records its target asset first, so a
-replay after any crash either returns the recorded result or finishes
-the single commit, and never writes an object again after it was
-deleted. A precondition that fails at the commit ends the session with
-that error and drops its staged chunks at once. `DELETE` on the session
-URI cancels it (`499`). Expired sessions and their staged chunks are
-swept.
+timestamp and its claim or key lease at a quarter of that time, so a slow
+but live owner is never displaced. The owner streams the staged chunks
+into the object's storage key under asset or version ids derived from
+its own token, so no two owners can collide on one row or delete each
+other's bytes. It then publishes in one atomic, guarded write: the
+create-asset or create-version write takes an optional publish, and the
+adapter applies it in the same batch that inserts the row, its job and
+its usage increments. That one write fills the key's claim with the new
+asset, or on an overwrite clears the asset's pinned version so the new
+version is live; takes the generation from the bucket's high mark;
+stores the hash record at that generation; and moves the session to
+committed with its result. It applies only while the session is at the
+owner's revision and the key is still held: by the owner's unfilled
+claim for a new key, or by the owner's lease on a binding that still
+names the asset for an overwrite. For SQL, every statement of the batch
+selects or updates only under that condition. If it fails, nothing is
+written, the owner deletes only the bytes it streamed, and the request
+answers `503`. A takeover, a cancel or the expiry sweep therefore also
+stops any later publish by the old owner. Nothing about publishing
+happens after that write, so a crash, sweep, cancel, REST pin or newer
+write never sees a half-published object: the session is either still
+committing, and a replay takes it over once the owner is stale, or
+committed, and every replay, status query or cancel answers from the
+recorded result. The publish is an additive, optional input to
+`AtomicWrites`; the storage ports do not change. A commit's heartbeat
+clock starts at the owner's last refresh, and a staged chunk that has
+disappeared counts as a lost hold (`503`). An overwrite records its
+target asset before it writes, so a replay after the key was deleted
+answers `412` and never writes the object again. A precondition that
+fails at the commit ends the session with that error and drops its
+staged chunks at once. `DELETE` on the session URI cancels it (`499`).
+Expired sessions and their staged chunks are swept.
 
 Operations outside this table (bucket policies, lifecycle, object lock,
 customer-supplied encryption, tagging, compose) answer the protocol's
