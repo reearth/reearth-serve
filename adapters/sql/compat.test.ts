@@ -342,3 +342,23 @@ describe("SqlAtomicWrites.deleteAsset", () => {
     expect(await metadata.find("a1")).toBeNull();
   });
 });
+
+describe("SqlCompatStore read cost", () => {
+  test("recording refs that are all recorded already writes no row (R7-5)", async () => {
+    const db = createSqliteClient();
+    const s = new SqlCompatStore(db);
+    await s.insertBucket(bucket());
+    const refs = [{ objectRef: "v1", assetId: "a1" }, { objectRef: "v2", assetId: "a1" }];
+    await s.records(media, refs);
+    const real = db.batch.bind(db);
+    const affected: number[] = [];
+    db.batch = async (statements) => {
+      const results = await real(statements);
+      affected.push(...results.map((r) => r.rowsAffected));
+      return results;
+    };
+    expect((await s.records(media, refs)).size).toBe(2);
+    expect(affected.length).toBeGreaterThan(0);
+    expect(affected.reduce((a, b) => a + b, 0)).toBe(0);
+  });
+});

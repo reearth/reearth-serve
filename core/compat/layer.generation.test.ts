@@ -76,6 +76,18 @@ describe.each(STORES)("generations (%s)", (_, mk) => {
     expect((await c.head("k")).generation).toBe(2);
   });
 
+  test("a key written after its bucket is deleted and recreated gets a higher generation (R7-1)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_700_000_000_000);
+    const deps = await mk(); const c = client(deps);
+    const first = written(await c.put("k", "old"));
+    expect((await c.layer.delete(BUCKET, "k" as ObjectKey)).ok).toBe(true);
+    expect(await deps.compat.deleteBucket("p1", BUCKET as BucketName, Date.now())).toBe("deleted");
+    vi.setSystemTime(1_700_000_000_001);
+    expect(await deps.compat.insertBucket({ name: BUCKET as BucketName, projectId: "p1", mount: null, createdAt: Date.now() })).toBe(true);
+    expect(written(await c.put("k", "new")).generation).toBeGreaterThan(first.generation);
+  });
+
   test("a REST version that lands after a layer write is live at a higher generation (R6-11)", async () => {
     const deps = await mk(); const c = client(deps);
     written(await c.put("o.bin", "o"));
