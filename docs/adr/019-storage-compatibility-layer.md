@@ -244,7 +244,14 @@ on an overwrite, the key's lease carries the owner's token). If the
 guard fails, nothing is written and the request answers `503`. A
 takeover, a cancel or the expiry sweep therefore also stops any later
 publish by the old owner. The guard is an additive, optional input to
-`AtomicWrites`; the storage ports do not change. Each owner writes under asset or version ids derived
+`AtomicWrites`; the storage ports do not change. On an overwrite, the
+guarded version write also moves the session to published in the same
+batch. From published, a cancel answers `503`, and any chunk request,
+status query or the owner activates the version, records its hashes
+(the first record wins) and moves the session to committed. The sweep
+drops an expired published session like a committed one. A commit's
+heartbeat clock starts at the owner's last refresh, and a staged chunk
+that has disappeared counts as a lost hold (`503`). Each owner writes under asset or version ids derived
 from its own token, so no two owners can collide on one row or delete
 each other's bytes. The bind of a new key and the move to committed land
 in one batch, and an overwrite records its target asset first, so a
