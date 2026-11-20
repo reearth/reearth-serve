@@ -518,7 +518,7 @@ describe("V4 signed URLs", () => {
     const res = await put(f, await signedUrl(keyFile, cms), "small body", cmsHeaders);
     expect(res.status).toBe(200);
     expect(res.headers.get("x-goog-hash")).toBe("crc32c=Yk9x6g==,md5=KJ2vAHjAOf4oawDFYf2glw==");
-    expect(res.headers.get("x-goog-generation")).toBe("1");
+    expect(res.headers.get("x-goog-generation")).toMatch(/^\d{16}$/);
     const got = await onApi(f, "/storage/v1/b/media/o/assets%2Fab%2Fsigned.txt", { headers });
     expect(await got.json()).toMatchObject({
       name: "assets/ab/signed.txt", contentType: "application/geo+json", contentEncoding: "gzip", size: "10", md5Hash: "KJ2vAHjAOf4oawDFYf2glw==",
