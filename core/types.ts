@@ -16,6 +16,7 @@ import type { CustomHostnameProvisioner } from "./site/provisioner";
 import type { ExtractionMessage } from "./extraction/handler";
 import type { ThumbnailMessage } from "./thumbnail/queue";
 import type { DeliveryTokenCodec } from "./access/token";
+import type { ArchiveCache } from "./archive";
 
 /**
  * Dependencies that route handlers read off the request context.
@@ -90,6 +91,7 @@ export type ContextDeps = {
    * cookie-authorized file read answers with credentialed CORS (ADR-013 B7).
    */
   credentialedOrigins: readonly string[];
+  archives: ArchiveCache;
 };
 
 /**

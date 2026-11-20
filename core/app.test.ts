@@ -1,5 +1,6 @@
 import { describe, expect, test, vi } from "vitest";
 import { createApp } from "./app";
+import { createArchiveCache } from "./archive";
 import type { Deps } from "./types";
 import type { AssetMetadata } from "./asset/model";
 import type { MetadataStore, VersionStore } from "./asset/repository";
@@ -108,6 +109,7 @@ function fakeDeps(overrides: Partial<Deps> = {}): Deps {
     cache: strictFake("cache"),
     signingSecret: undefined,
     credentialedOrigins: [],
+    archives: createArchiveCache(),
     sessions: new MemorySessionStore(),
     sessionTtlSeconds: 60,
     internalApiSecret: undefined,

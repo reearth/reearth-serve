@@ -12,4 +12,4 @@ export { updateAsset } from "./usecase/update-asset";
 export { setAssetAccess } from "./usecase/set-access";
 export { checkSpaChange } from "./usecase/set-spa";
 export { updateVersion } from "./usecase/update-version";
-export { resolveAssetVersion, enrichAssetWithVersion } from "./usecase/resolve-version";
+export { activeVersion, resolveAssetVersion, enrichAssetWithVersion } from "./usecase/resolve-version";

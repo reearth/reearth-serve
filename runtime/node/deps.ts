@@ -23,6 +23,7 @@ import {
 import { WebCryptoDeliveryTokenCodec } from "../../adapters/webcrypto/delivery-token";
 import { UnavailableContainerLauncher } from "./container";
 import { loadConfig, type Env, type NodeConfig } from "./config";
+import { createArchiveCache } from "../../core/archive";
 
 const SESSION_TTL_SECONDS = 7 * 24 * 60 * 60;
 const STUCK_THRESHOLD_MS = 24 * 60 * 60 * 1000;
@@ -107,6 +108,7 @@ export function buildNodeRuntime(env: Env = process.env): NodeRuntime {
     internalApiSecret: config.internalApiSecret,
     signingSecret: config.signingSecret,
     credentialedOrigins: config.credentialedOrigins,
+    archives: createArchiveCache(),
     auth: {
       issuer: config.oidcIssuerUrl,
       audience: config.oidcAudience,

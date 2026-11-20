@@ -1,0 +1,166 @@
+[
+  {
+    "path": "dir/file.GEOJSON",
+    "contentType": "application/geo+json"
+  },
+  {
+    "path": "dir/file.topojson",
+    "contentType": "application/json"
+  },
+  {
+    "path": "dir/file.pbf",
+    "contentType": "application/x-protobuf"
+  },
+  {
+    "path": "dir/file.MVT",
+    "contentType": "application/vnd.mapbox-vector-tile"
+  },
+  {
+    "path": "dir/file.kml",
+    "contentType": "application/vnd.google-earth.kml+xml"
+  },
+  {
+    "path": "dir/file.kmz",
+    "contentType": "application/vnd.google-earth.kmz"
+  },
+  {
+    "path": "dir/file.GML",
+    "contentType": "application/gml+xml"
+  },
+  {
+    "path": "dir/file.czml",
+    "contentType": "application/json"
+  },
+  {
+    "path": "dir/file.glb",
+    "contentType": "model/gltf-binary"
+  },
+  {
+    "path": "dir/file.GLTF",
+    "contentType": "model/gltf+json"
+  },
+  {
+    "path": "dir/file.b3dm",
+    "contentType": "application/octet-stream"
+  },
+  {
+    "path": "dir/file.pnts",
+    "contentType": "application/octet-stream"
+  },
+  {
+    "path": "dir/file.I3DM",
+    "contentType": "application/octet-stream"
+  },
+  {
+    "path": "dir/file.cmpt",
+    "contentType": "application/octet-stream"
+  },
+  {
+    "path": "dir/file.terrain",
+    "contentType": "application/vnd.quantized-mesh"
+  },
+  {
+    "path": "dir/file.TIF",
+    "contentType": "image/tiff"
+  },
+  {
+    "path": "dir/file.tiff",
+    "contentType": "image/tiff"
+  },
+  {
+    "path": "dir/file.webp",
+    "contentType": "image/webp"
+  },
+  {
+    "path": "dir/file.TXT",
+    "contentType": "text/plain; charset=utf-8"
+  },
+  {
+    "path": "dir/file.md",
+    "contentType": "text/markdown; charset=utf-8"
+  },
+  {
+    "path": "dir/file.csv",
+    "contentType": "text/csv; charset=utf-8"
+  },
+  {
+    "path": "dir/file.YAML",
+    "contentType": "application/yaml"
+  },
+  {
+    "path": "dir/file.yml",
+    "contentType": "application/yaml"
+  },
+  {
+    "path": "dir/file.xhtml",
+    "contentType": "application/xhtml+xml"
+  },
+  {
+    "path": "dir/file.MAP",
+    "contentType": "application/json"
+  },
+  {
+    "path": "dir/file.webmanifest",
+    "contentType": "application/manifest+json"
+  },
+  {
+    "path": "dir/file.ico",
+    "contentType": "image/x-icon"
+  },
+  {
+    "path": "dir/file.BMP",
+    "contentType": "image/bmp"
+  },
+  {
+    "path": "dir/file.apng",
+    "contentType": "image/apng"
+  },
+  {
+    "path": "dir/file.woff",
+    "contentType": "font/woff"
+  },
+  {
+    "path": "dir/file.WOFF2",
+    "contentType": "font/woff2"
+  },
+  {
+    "path": "dir/file.ttf",
+    "contentType": "font/ttf"
+  },
+  {
+    "path": "dir/file.otf",
+    "contentType": "font/otf"
+  },
+  {
+    "path": "dir/file.EOT",
+    "contentType": "application/vnd.ms-fontobject"
+  },
+  {
+    "path": "dir/file.mp4",
+    "contentType": "video/mp4"
+  },
+  {
+    "path": "dir/file.webm",
+    "contentType": "video/webm"
+  },
+  {
+    "path": "dir/file.MP3",
+    "contentType": "audio/mpeg"
+  },
+  {
+    "path": "dir/file.ogg",
+    "contentType": "audio/ogg"
+  },
+  {
+    "path": "dir/file.wav",
+    "contentType": "audio/wav"
+  },
+  {
+    "path": "no-extension",
+    "contentType": "application/octet-stream"
+  },
+  {
+    "path": "dir.d/file.unknownext",
+    "contentType": "application/octet-stream"
+  }
+]

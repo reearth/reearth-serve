@@ -2,7 +2,9 @@ import type { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
 import { resolver, validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
-import { getAssetMetadata } from "../usecase";
+import { activeVersion, getAssetMetadata } from "../usecase";
+import type { AssetMetadata, AssetVersion } from "../model";
+import { openArchive, type ArchiveReader } from "../../archive";
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { fileListExamples } from "../../openapi-examples";
 import { fileEntrySchema, idParamSchema, fileListQuerySchema } from "../../../shared/openapi";
@@ -25,57 +27,87 @@ export function registerListFilesRoute(app: Hono<AppEnv>) {
       const metadata = c.get("metadata");
       const storage = c.get("storage");
       const { id } = c.req.valid("param");
-      const { prefix: prefixParam } = c.req.valid("query");
-      const prefix = prefixParam || "";
+      const prefix = c.req.valid("query").prefix || "";
 
     const access = await authorizeAsset(accessCtx(c), await getAssetMetadata(metadata, id), "read_asset");
     if (!access.ok) return deniedResponse(c, access, { notFound: "Asset not found" });
     const asset = access.value;
+    const layouts = listingLayouts(asset, await activeVersion(c.get("versions"), asset));
 
     // Body framing is the runtime's business, not ours: an explicit
     // `Transfer-Encoding: chunked` next to the empty-string bodies below makes
     // Node emit both that header and `Content-Length: 0`, which is not valid
     // HTTP/1.1 and undici refuses to parse. Workers already chunks a streaming
     // body on its own, so dropping the header changes nothing there.
-    const ndjsonHeaders = {
-      "Content-Type": "application/x-ndjson",
-    };
-    const encoder = new TextEncoder();
+    const ndjson = (body: BodyInit) => new Response(body, { status: 200, headers: { "Content-Type": "application/x-ndjson" } });
 
-    // Non-archive asset: emit single entry
-    if (asset.type !== "archive") {
-      if (!prefix || asset.filename.startsWith(prefix)) {
-        // Get ETag from storage for hash
-        const storageKey = `assets/${id}/${asset.filename}`;
-        const head = await storage.head(storageKey);
-        const hash = head?.etag ? `md5:${head.etag.replace(/"/g, "")}` : undefined;
-        const entry = { path: asset.filename, size: asset.size, contentType: asset.contentType, ...(hash && { hash }) };
-        const body = new ReadableStream({
-          start(controller) {
-            controller.enqueue(encoder.encode(JSON.stringify(entry) + "\n"));
-            controller.close();
-          },
-        });
-        return new Response(body, { status: 200, headers: ndjsonHeaders });
+    if (!layouts[0].archive) {
+      const layout = layouts[0];
+      if (prefix && !layout.filename.startsWith(prefix)) return ndjson("");
+      const head = await storage.head(`${layout.root}/${layout.filename}`);
+      const hash = head?.etag ? `md5:${head.etag.replace(/"/g, "")}` : undefined;
+      const entry = { path: layout.filename, size: layout.size, contentType: layout.contentType, ...(hash && { hash }) };
+      return ndjson(JSON.stringify(entry) + "\n");
+    }
+
+    for (const layout of layouts.filter((l) => l.archive)) {
+      const manifest = await storage.get(`${layout.root}/_archive/_manifest.jsonl`);
+      if (manifest) {
+        return ndjson(manifest.body
+          .pipeThrough(new TextDecoderStream())
+          .pipeThrough(filterNdjsonByPrefix(prefix))
+          .pipeThrough(new TextEncoderStream()));
       }
-      // No match
-      return new Response("", { status: 200, headers: ndjsonHeaders });
+      if (!layout.readInPlace || layout.archiveFormat !== "zip") continue;
+      const source = { key: `${layout.root}/${layout.filename}`, size: layout.size, filename: layout.filename };
+      const opened = await openArchive({ storage, archives: c.get("archives") }, source);
+      if (opened.ok) return ndjson(entryLines(opened.reader, prefix));
+      console.warn(`list-files: ${source.key} is not listable in place (${opened.reason})`);
     }
+    return ndjson("");
+  });
+}
 
-    // Archive: stream manifest from R2, filtering by prefix
-    const manifestKey = `assets/${id}/_archive/_manifest.jsonl`;
-    const manifestFile = await storage.get(manifestKey);
-    if (!manifestFile) {
-      return new Response("", { status: 200, headers: ndjsonHeaders });
-    }
+interface ListingLayout {
+  root: string;
+  filename: string;
+  size: number;
+  contentType: string;
+  archive: boolean;
+  archiveFormat?: string;
+  /** False for the legacy prefix behind a version: its original is the first upload, not the active one. */
+  readInPlace: boolean;
+}
 
-    // Stream-transform: read manifest line by line, filter by prefix, forward
-    const body = manifestFile.body
-      .pipeThrough(new TextDecoderStream())
-      .pipeThrough(filterNdjsonByPrefix(prefix))
-      .pipeThrough(new TextEncoderStream());
+function listingLayouts(asset: AssetMetadata, version: AssetVersion | null): ListingLayout[] {
+  const layout = (root: string, row: AssetMetadata | AssetVersion, readInPlace: boolean): ListingLayout => ({
+    root,
+    filename: row.filename,
+    size: row.size,
+    contentType: row.contentType,
+    archive: row.type === "archive",
+    archiveFormat: row.archiveFormat,
+    readInPlace,
+  });
+  const legacy = layout(`assets/${asset.id}`, asset, !version);
+  return version ? [layout(`assets/${asset.id}/v/${version.id}`, version, true), legacy] : [legacy];
+}
 
-    return new Response(body, { status: 200, headers: ndjsonHeaders });
+const PAGE = 10_000;
+
+function entryLines(reader: ArchiveReader, prefix: string): ReadableStream<Uint8Array> {
+  const encoder = new TextEncoder();
+  let after: string | undefined;
+  return new ReadableStream({
+    async pull(controller) {
+      const page = await reader.list({ prefix, after, limit: PAGE });
+      const lines = page.entries
+        .map((e) => JSON.stringify({ path: e.path, size: e.size, contentType: e.contentType, hash: `crc32:${e.crc32.toString(16).padStart(8, "0")}` }) + "\n")
+        .join("");
+      if (lines) controller.enqueue(encoder.encode(lines));
+      if (page.next === undefined) controller.close();
+      else after = page.next;
+    },
   });
 }
 

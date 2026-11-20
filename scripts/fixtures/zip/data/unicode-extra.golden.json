@@ -1,0 +1,15 @@
+{
+  "archive": "unicode-extra.zip",
+  "entries": [
+    {
+      "path": "Grüße.txt",
+      "size": 5,
+      "crc32": "3610a686"
+    },
+    {
+      "path": "café.txt",
+      "size": 11,
+      "crc32": "6a861ce3"
+    }
+  ]
+}

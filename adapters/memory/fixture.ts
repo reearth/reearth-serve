@@ -24,6 +24,7 @@ import { MemoryCustomHostnames } from "./custom-hostnames";
 import { SimpleAuthorizer } from "../../core/auth/permissions";
 import type { MemberStore } from "../../core/member/repository";
 import type { Tenancy, TenantScope } from "../../core/tenancy/port";
+import { createArchiveCache } from "../../core/archive";
 
 /** Archive asset, active version {@link VERSION_ID}. */
 export const ASSET_ID = "3f9a1c2b4d5e6f70";
@@ -443,6 +444,7 @@ export async function fixture(overrides?: Partial<Deps>) {
     cache,
     signingSecret: SIGNING_SECRET,
     credentialedOrigins: [],
+    archives: createArchiveCache(),
     sessions: new MemorySessionStore(),
     sessionTtlSeconds: 60,
     internalApiSecret: undefined,

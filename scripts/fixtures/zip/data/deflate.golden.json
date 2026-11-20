@@ -1,0 +1,25 @@
+{
+  "archive": "deflate.zip",
+  "entries": [
+    {
+      "path": "a.txt",
+      "size": 6600,
+      "crc32": "ba2f1212"
+    },
+    {
+      "path": "dir/b.geojson",
+      "size": 42,
+      "crc32": "90b4e9f7"
+    },
+    {
+      "path": "dir/sub/c.bin",
+      "size": 4096,
+      "crc32": "2842687d"
+    },
+    {
+      "path": "empty.txt",
+      "size": 0,
+      "crc32": "00000000"
+    }
+  ]
+}

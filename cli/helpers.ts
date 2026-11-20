@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync } from "node:fs";
+import { createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, statSync } from "node:fs";
 import { dirname, join, relative } from "node:path";
 import { Writable } from "node:stream";
 import type { AssetMetadata, AssetVersion, FileEntry, Job } from "../shared/api";
 import { loadConfig, loadCredentials, loadOrCreateSessionId, loadSessionId, saveSessionId } from "./config";
 import { refreshAccessToken } from "./auth";
+import { crc32 } from "./zip";
 
 // --- Output helpers ---
 
@@ -249,6 +250,12 @@ export function parseSrc(src: string): { assetId: string; filePath: string | nul
   return { assetId: src.slice(0, colonIdx), filePath: src.slice(colonIdx + 1) };
 }
 
+export class DownloadFailed extends Error {
+  constructor(readonly status: number, url: string) {
+    super(`Download failed (${status}): ${url}`);
+  }
+}
+
 export async function downloadFile(
   url: string,
   dest: string,
@@ -260,7 +267,7 @@ export async function downloadFile(
   }
   const res = await fetch(url, { headers });
   if (!res.ok) {
-    throw new Error(`Download failed (${res.status}): ${url}`);
+    throw new DownloadFailed(res.status, url);
   }
   if (!res.body) {
     throw new Error("Empty response body");
@@ -272,9 +279,20 @@ export async function downloadFile(
   return true; // downloaded
 }
 
-export function localMd5(filePath: string): string {
-  const data = readFileSync(filePath);
-  return `md5:${createHash("md5").update(data).digest("hex")}`;
+export function localHash(filePath: string, remote: string): string | null {
+  const scheme = remote.slice(0, remote.indexOf(":"));
+  if (scheme === "md5") return `md5:${createHash("md5").update(readFileSync(filePath)).digest("hex")}`;
+  if (scheme === "crc32") return `crc32:${crc32(readFileSync(filePath)).toString(16).padStart(8, "0")}`;
+  return null;
+}
+
+export function matchesListing(filePath: string, entry: FileEntry): boolean {
+  const sameSize = statSync(filePath).size === entry.size;
+  if (!entry.hash) return sameSize;
+  const local = localHash(filePath, entry.hash);
+  if (local === null) return sameSize;
+  if (entry.hash.startsWith("crc32:")) return local === entry.hash && sameSize;
+  return local === entry.hash;
 }
 
 export function listLocalFiles(dir: string): string[] {

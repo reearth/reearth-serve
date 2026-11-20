@@ -1,3 +1,4 @@
+import { readFileSync } from "node:fs";
 import { describe, test, expect, beforeAll } from "vitest";
 import { BASE, internalHeaders, rewriteUrl, uploadFile } from "./helpers";
 
@@ -242,7 +243,7 @@ describe("Archive & Job", () => {
       expect(entries[0].size).toBe(5);
     });
 
-    test("GET /api/v1/assets/:id/files returns empty for pending archive", async () => {
+    test("GET /api/v1/assets/:id/files lists a pending zip in place, from its central directory", async () => {
       const zipBytes = buildMiniZip({ "a.txt": "data" });
       const { body, sessionId } = await uploadFile(zipBytes, "pending.zip", "application/zip");
       const assetId = body.asset.id;
@@ -252,7 +253,8 @@ describe("Archive & Job", () => {
       const res = await fetch(`${BASE}/api/v1/assets/${assetId}/files`, { headers });
       expect(res.status).toBe(200);
       const entries = parseNdjson(await res.text());
-      expect(entries).toHaveLength(0);
+      const hash = `crc32:${crc32(new TextEncoder().encode("data")).toString(16).padStart(8, "0")}`;
+      expect(entries).toEqual([{ path: "a.txt", size: 4, contentType: "text/plain; charset=utf-8", hash }]);
     });
 
     test("GET /api/v1/assets/:id/files supports prefix filter", async () => {
@@ -278,6 +280,42 @@ describe("Archive & Job", () => {
     test("GET /api/v1/assets/:id/files returns 404 for non-existent asset", async () => {
       const res = await fetch(`${BASE}/api/v1/assets/nonexistent/files`);
       expect(res.status).toBe(404);
+    });
+  });
+
+  describe("In-place listing", () => {
+    test.each(["deflate.zip", "store.zip", "descriptor.zip", "prepended.zip", "shift_jis.zip", "cp437.zip", "unicode-extra.zip", "site.zip"])(
+      "%s lists its golden entries the moment the upload completes",
+      async (name) => {
+        const { assetId, headers } = await uploadFixture(name);
+        expect(await listFiles(assetId, headers)).toEqual(golden(name));
+      },
+    );
+
+    test("a prefix lists only the entries under it", async () => {
+      const { assetId, headers } = await uploadFixture("deflate.zip");
+      expect(await listFiles(assetId, headers, "dir/sub/")).toEqual(golden("deflate.zip").filter((e) => e.path.startsWith("dir/sub/")));
+    });
+
+    test("a new version lists that version's entries", async () => {
+      const { assetId, headers } = await uploadFixture("deflate.zip");
+      const bytes = fixtureBytes("store.zip");
+      const res = await fetch(`${BASE}/api/v1/assets/${assetId}`, {
+        method: "POST",
+        headers: { ...headers, "Content-Type": "application/zip", "Content-Length": String(bytes.byteLength), "X-Filename": "store.zip" },
+        body: bytes as BodyInit,
+      });
+      expect(res.status).toBe(201);
+      expect(await listFiles(assetId, headers)).toEqual(golden("store.zip"));
+    });
+
+    test.each([
+      ["a text file named .zip", () => new TextEncoder().encode("not an archive at all, only text")],
+      ["a truncated zip", () => fixtureBytes("deflate.zip").slice(0, 200)],
+    ])("%s answers 200 with an empty listing", async (_, make) => {
+      const { status, body, sessionId } = await uploadFile(make(), "broken.zip", "application/zip");
+      expect(status).toBe(201);
+      expect(await listFiles(body.asset.id, sessionId ? { "X-Session-Id": sessionId } : {})).toEqual([]);
     });
   });
 
@@ -400,6 +438,32 @@ function buildMiniZip(files: Record<string, string>): Uint8Array {
   result.set(new Uint8Array(eocd), pos);
 
   return result;
+}
+
+const FIXTURES = new URL("../scripts/fixtures/zip/data/", import.meta.url);
+
+function fixtureBytes(name: string): Uint8Array {
+  return new Uint8Array(readFileSync(new URL(name, FIXTURES)));
+}
+
+function golden(name: string): { path: string; size: number; hash: string }[] {
+  const { entries } = JSON.parse(readFileSync(new URL(name.replace(/\.zip$/, ".golden.json"), FIXTURES), "utf8")) as {
+    entries: { path: string; size: number; crc32: string }[];
+  };
+  return entries.map((e) => ({ path: e.path, size: e.size, hash: `crc32:${e.crc32}` }));
+}
+
+async function uploadFixture(name: string) {
+  const { status, body, sessionId } = await uploadFile(fixtureBytes(name), name, "application/zip");
+  expect(status).toBe(201);
+  return { assetId: body.asset.id as string, headers: sessionId ? { "X-Session-Id": sessionId } : ({} as Record<string, string>) };
+}
+
+async function listFiles(assetId: string, headers: Record<string, string>, prefix?: string) {
+  const query = prefix ? `?prefix=${encodeURIComponent(prefix)}` : "";
+  const res = await fetch(`${BASE}/api/v1/assets/${assetId}/files${query}`, { headers });
+  expect(res.status).toBe(200);
+  return parseNdjson(await res.text()).map(({ path, size, hash }) => ({ path, size, hash }));
 }
 
 function parseNdjson(text: string): any[] {

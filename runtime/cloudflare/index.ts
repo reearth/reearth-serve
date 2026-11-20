@@ -6,6 +6,7 @@ import { handleScheduled } from "../../core/cleanup/handler";
 import { handleQueue } from "../../core/extraction/handler";
 import { handleThumbnailQueue } from "../../core/thumbnail/handler";
 import { toQueueMessages } from "../../adapters/cloudflare/queues";
+import { createArchiveCache } from "../../core/archive";
 
 export { ArchiveExtractorContainer, ThumbnailContainer } from "../../adapters/cloudflare/container";
 
@@ -17,6 +18,8 @@ declare module "react-router" {
     };
   }
 }
+
+const archives = createArchiveCache();
 
 const requestHandler = createRequestHandler(
   () => import("virtual:react-router/server-build"),
@@ -49,7 +52,7 @@ export default {
     ) {
       let deps;
       try {
-        deps = buildDeps(env);
+        deps = buildDeps(env, archives);
       } catch (err) {
         console.error(err);
         return Response.json({ error: "Server misconfigured" }, { status: 500 });
@@ -64,11 +67,11 @@ export default {
   },
 
   async scheduled(_event, env, _ctx) {
-    await handleScheduled(buildDeps(env));
+    await handleScheduled(buildDeps(env, archives));
   },
 
   async queue(batch: MessageBatch, env: Env, _ctx: ExecutionContext) {
-    const deps = buildDeps(env);
+    const deps = buildDeps(env, archives);
     if (batch.queue === "reearth-serve-thumbnail") {
       await handleThumbnailQueue(
         toQueueMessages(batch as MessageBatch<import("../../core/thumbnail/queue").ThumbnailMessage>),

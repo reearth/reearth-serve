@@ -383,7 +383,7 @@ export const fileEntrySchema = component("FileEntry", z.object({
   size: z.number(),
   contentType: z.string(),
   contentEncoding: z.string().optional(),
-  hash: z.string().optional(),
+  hash: z.string().optional().describe("`md5:<hex>` for a single file or an extracted entry. `crc32:<8 hex>` for a zip entry listed in place from the central directory, before or without extraction."),
 }));
 
 // --- Request bodies ---

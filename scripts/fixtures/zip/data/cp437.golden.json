@@ -1,0 +1,20 @@
+{
+  "archive": "cp437.zip",
+  "entries": [
+    {
+      "path": "ascii.txt",
+      "size": 5,
+      "crc32": "d13adaf9"
+    },
+    {
+      "path": "café.txt",
+      "size": 4,
+      "crc32": "4fbd7f10"
+    },
+    {
+      "path": "Ünïcode/naïve.txt",
+      "size": 5,
+      "crc32": "6001155f"
+    }
+  ]
+}

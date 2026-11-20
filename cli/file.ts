@@ -1,4 +1,4 @@
-import { existsSync, rmSync, statSync } from "node:fs";
+import { existsSync, rmSync } from "node:fs";
 import { join } from "node:path";
 import type { Command } from "commander";
 import { PATHS } from "../shared/paths";
@@ -7,10 +7,11 @@ import {
   apiGet,
   basicAuthHeader,
   collectFiles,
+  DownloadFailed,
   downloadFile,
   formatBytes,
   listLocalFiles,
-  localMd5,
+  matchesListing,
   output,
   parseSrc,
   resolveSitePassword,
@@ -253,26 +254,16 @@ export function registerFileCommands(program: Command, file: Command) {
         remotePaths.add(entry.path);
         const localPath = join(destDir, entry.path);
 
-        if (existsSync(localPath)) {
-          if (entry.hash) {
-            const localHash = localMd5(localPath);
-            if (localHash === entry.hash) {
-              skipped++;
-              continue;
-            }
-          } else {
-            const localSize = statSync(localPath).size;
-            if (localSize === entry.size) {
-              skipped++;
-              continue;
-            }
-          }
+        if (existsSync(localPath) && matchesListing(localPath, entry)) {
+          skipped++;
+          continue;
         }
 
         toDownload.push(entry);
       }
 
       let downloaded = 0;
+      let unavailable = 0;
       const queue = [...toDownload];
 
       async function worker() {
@@ -280,10 +271,15 @@ export function registerFileCommands(program: Command, file: Command) {
           const entry = queue.shift()!;
           const localPath = join(destDir, entry.path);
           const url = `${opts.endpoint}${PATHS.file(assetId, entry.path)}`;
-          await downloadFile(url, localPath, true, auth);
-          downloaded++;
+          try {
+            await downloadFile(url, localPath, true, auth);
+            downloaded++;
+          } catch (err) {
+            if (!(err instanceof DownloadFailed && err.status === 404)) throw err;
+            unavailable++;
+          }
           if (!opts.json) {
-            process.stdout.write(`\r  ${downloaded + skipped}/${remoteFiles.length}`);
+            process.stdout.write(`\r  ${downloaded + unavailable + skipped}/${remoteFiles.length}`);
           }
         }
       }
@@ -306,12 +302,13 @@ export function registerFileCommands(program: Command, file: Command) {
       }
 
       if (opts.json) {
-        output({ ok: true, downloaded, skipped, deleted, totalSize, dest: destDir }, true);
+        output({ ok: true, downloaded, skipped, deleted, unavailable, totalSize, dest: destDir }, true);
       } else {
         const parts: string[] = [];
         if (downloaded > 0) parts.push(`${downloaded} downloaded`);
         if (skipped > 0) parts.push(`${skipped} unchanged`);
         if (deleted > 0) parts.push(`${deleted} deleted`);
+        if (unavailable > 0) parts.push(`${unavailable} file(s) not yet available (extraction may be in progress)`);
         console.log(`\nDone: ${parts.join(", ")}`);
       }
     });

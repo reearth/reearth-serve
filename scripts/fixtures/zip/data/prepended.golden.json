@@ -1,0 +1,15 @@
+{
+  "archive": "prepended.zip",
+  "entries": [
+    {
+      "path": "a.txt",
+      "size": 6600,
+      "crc32": "ba2f1212"
+    },
+    {
+      "path": "b/c.txt",
+      "size": 1,
+      "crc32": "06b9df6f"
+    }
+  ]
+}

@@ -1,0 +1,15 @@
+{
+  "archive": "root-mismatch.zip",
+  "entries": [
+    {
+      "path": "site/app.js",
+      "size": 1,
+      "crc32": "83dcefb7"
+    },
+    {
+      "path": "site/index.html",
+      "size": 15,
+      "crc32": "87b9ec48"
+    }
+  ]
+}

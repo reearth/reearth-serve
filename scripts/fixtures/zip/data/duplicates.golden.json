@@ -1,0 +1,15 @@
+{
+  "archive": "duplicates.zip",
+  "entries": [
+    {
+      "path": "dup.txt",
+      "size": 25,
+      "crc32": "2cf9600c"
+    },
+    {
+      "path": "other.txt",
+      "size": 5,
+      "crc32": "d9583520"
+    }
+  ]
+}

@@ -22,6 +22,7 @@ import { parseCredentialedOrigins } from "../../core/file/cors";
 import { checkSiteIsolation, PUBLIC_SUFFIX_OVERRIDE_NOTICE } from "../../core/site/isolation";
 import { WebCryptoDeliveryTokenCodec } from "../webcrypto/delivery-token";
 import { parseDeliveryTokenKeys, type DeliveryTokenCodec } from "../../core/access/token";
+import type { ArchiveCache } from "../../core/archive";
 
 // Anonymous sessions are identity, not content — they must outlive the
 // demo asset TTL. A large multipart upload can take many hours between the
@@ -43,7 +44,7 @@ const CLEANUP_SUBREQUEST_BUDGET = 700;
  */
 let overrideLogged = false;
 
-export function buildDeps(env: Env): Deps {
+export function buildDeps(env: Env, archives: ArchiveCache): Deps {
   // A Worker has no start, so a misconfiguration fails every invocation instead.
   if (checkSiteIsolation(env).publicSuffixOverride && !overrideLogged) {
     overrideLogged = true;
@@ -99,6 +100,7 @@ export function buildDeps(env: Env): Deps {
     // verify.
     signingSecret: env.SIGNING_SECRET || undefined,
     credentialedOrigins: parseCredentialedOrigins(env.CREDENTIALED_ORIGINS),
+    archives,
 
     sessions: new KeyValueSessionStore(kv),
     sessionTtlSeconds: SESSION_TTL_SECONDS,
