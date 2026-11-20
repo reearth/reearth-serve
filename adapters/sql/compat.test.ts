@@ -201,20 +201,22 @@ describe.each([
     const s = make();
     await s.insertBucket(bucket());
     const md5 = new Uint8Array([0, 1, 2, 250, 255, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
-    const observed = await s.records(media, [{ objectRef: "v1", assetId: "a1" }]);
-    expect(observed.get("v1")).toEqual({ generation: 1, hashes: null });
+    const generation = (await s.records(media, [{ objectRef: "v1", assetId: "a1" }])).get("v1")!.generation;
     const filled = await s.records(media, [{ objectRef: "v1", assetId: "a1", hashes: { md5, crc32c: 0xffffffff } }]);
-    expect(filled.get("v1")).toEqual({ generation: 1, hashes: { md5, crc32c: 0xffffffff } });
+    expect(filled.get("v1")).toEqual({ generation, hashes: { md5, crc32c: 0xffffffff } });
     const other = await s.records(media, [{ objectRef: "v1", assetId: "a1", hashes: { md5: new Uint8Array(16), crc32c: 1 } }]);
-    expect(other.get("v1")).toEqual({ generation: 1, hashes: { md5, crc32c: 0xffffffff } });
+    expect(other.get("v1")).toEqual({ generation, hashes: { md5, crc32c: 0xffffffff } });
   });
 
   test("a bucket issues each missing record the next generation above its high mark, and none for a bucket that is gone", async () => {
     const s = make();
+    const seed = Date.now() * 1000;
     await s.insertBucket(bucket());
     const page = await s.records(media, ["v1", "v2", "v1", "v3"].map((objectRef) => ({ objectRef, assetId: "a1" })));
-    expect([...page.entries()].sort()).toEqual([["v1", { generation: 1, hashes: null }], ["v2", { generation: 2, hashes: null }], ["v3", { generation: 3, hashes: null }]]);
-    expect((await s.records(media, [{ objectRef: "v2", assetId: "a1" }, { objectRef: "v4", assetId: "a1" }])).get("v4")?.generation).toBe(4);
+    const base = page.get("v1")!.generation;
+    expect(base).toBeGreaterThan(seed);
+    expect([...page.entries()].sort()).toEqual([["v1", { generation: base, hashes: null }], ["v2", { generation: base + 1, hashes: null }], ["v3", { generation: base + 2, hashes: null }]]);
+    expect((await s.records(media, [{ objectRef: "v2", assetId: "a1" }, { objectRef: "v4", assetId: "a1" }])).get("v4")?.generation).toBe(base + 3);
     expect((await s.records("absent" as BucketName, [{ objectRef: "v9", assetId: "a9" }])).size).toBe(0);
   });
 
@@ -222,8 +224,10 @@ describe.each([
     const s = make();
     await s.insertBucket(bucket());
     const seen = await Promise.all([1, 2, 3, 4].map(() => s.records(media, [{ objectRef: "v1", assetId: "a1" }])));
-    expect(new Set(seen.map((m) => m.get("v1")?.generation))).toEqual(new Set([1]));
-    expect((await s.records(media, [{ objectRef: "v2", assetId: "a1" }])).get("v2")?.generation).toBe(2);
+    const generations = new Set(seen.map((m) => m.get("v1")!.generation));
+    expect(generations.size).toBe(1);
+    const [first] = generations;
+    expect((await s.records(media, [{ objectRef: "v2", assetId: "a1" }])).get("v2")?.generation).toBe(first + 1);
   });
 
   describe("leases", () => {
@@ -373,5 +377,25 @@ describe("SqlAtomicWrites.deleteAsset", () => {
     expect(await store.findBinding(media, other)).not.toBeNull();
     expect(await recorded()).toEqual(["v2"]);
     expect(await metadata.find("a1")).toBeNull();
+  });
+});
+
+describe("SqlCompatStore read cost", () => {
+  test("recording refs that are all recorded already writes no row (R7-5)", async () => {
+    const db = createSqliteClient();
+    const s = new SqlCompatStore(db);
+    await s.insertBucket(bucket());
+    const refs = [{ objectRef: "v1", assetId: "a1" }, { objectRef: "v2", assetId: "a1" }];
+    await s.records(media, refs);
+    const real = db.batch.bind(db);
+    const affected: number[] = [];
+    db.batch = async (statements) => {
+      const results = await real(statements);
+      affected.push(...results.map((r) => r.rowsAffected));
+      return results;
+    };
+    expect((await s.records(media, refs)).size).toBe(2);
+    expect(affected.length).toBeGreaterThan(0);
+    expect(affected.reduce((a, b) => a + b, 0)).toBe(0);
   });
 });

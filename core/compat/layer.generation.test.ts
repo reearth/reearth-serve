@@ -69,11 +69,23 @@ function gate() {
 afterEach(() => { vi.restoreAllMocks(); vi.useRealTimers(); });
 
 describe.each(STORES)("generations (%s)", (_, mk) => {
-  test("the first write of a bucket is generation 1 and an overwrite is 2", async () => {
+  test("an overwrite takes the bucket's next generation and head answers it", async () => {
     const c = client(await mk());
-    expect(written(await c.put("k", "one")).generation).toBe(1);
-    expect(written(await c.put("k", "two")).generation).toBe(2);
-    expect((await c.head("k")).generation).toBe(2);
+    const one = written(await c.put("k", "one")).generation;
+    expect(written(await c.put("k", "two")).generation).toBe(one + 1);
+    expect((await c.head("k")).generation).toBe(one + 1);
+  });
+
+  test("a key written after its bucket is deleted and recreated gets a higher generation (R7-1)", async () => {
+    vi.useFakeTimers({ toFake: ["Date"] });
+    vi.setSystemTime(1_700_000_000_000);
+    const deps = await mk(); const c = client(deps);
+    const first = written(await c.put("k", "old"));
+    expect((await c.layer.delete(BUCKET, "k" as ObjectKey)).ok).toBe(true);
+    expect(await deps.compat.deleteBucket("p1", BUCKET as BucketName, Date.now())).toBe("deleted");
+    vi.setSystemTime(1_700_000_000_001);
+    expect(await deps.compat.insertBucket({ name: BUCKET as BucketName, projectId: "p1", mount: null, createdAt: Date.now() })).toBe(true);
+    expect(written(await c.put("k", "new")).generation).toBeGreaterThan(first.generation);
   });
 
   test("a REST version that lands after a layer write is live at a higher generation (R6-11)", async () => {

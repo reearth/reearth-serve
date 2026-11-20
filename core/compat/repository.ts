@@ -24,6 +24,15 @@ export function newLeaseToken(): LeaseToken {
   return crypto.randomUUID() as LeaseToken;
 }
 
+/**
+ * A new bucket's high mark: the clock in microseconds. A deleted bucket of the
+ * same name issued fewer generations than microseconds it lived, so a
+ * recreated bucket never reissues one of them.
+ */
+export function generationSeed(): number {
+  return Date.now() * 1000;
+}
+
 /** A version's generation, and its exact hashes when a layer write stored them. */
 export type VersionRecord = { generation: number; hashes: ExactHashes | null };
 
@@ -63,7 +72,7 @@ export type CompatPublish = {
 export interface CompatStore {
   findBucket(name: BucketName): Promise<CompatBucket | null>;
   listBuckets(projectId: string): Promise<CompatBucket[]>;
-  /** False when the name is taken, in any project. */
+  /** False when the name is taken, in any project. A new bucket's high mark starts at `generationSeed()`. */
   insertBucket(bucket: CompatBucket): Promise<boolean>;
   /**
    * Remove an empty bucket of `projectId`, revoke its credentials at
@@ -115,8 +124,6 @@ export interface CompatStore {
    * deletes. Refs of a bucket that is gone are left out.
    */
   records(bucket: BucketName, refs: RecordRef[]): Promise<Map<string, VersionRecord>>;
-  /** The stored record of `objectRef`, never storing one. */
-  findRecord(objectRef: string): Promise<VersionRecord | null>;
 
   findCredential(id: CredentialId): Promise<CompatCredential | null>;
   findCredentialByEmail(clientEmail: string): Promise<CompatCredential | null>;

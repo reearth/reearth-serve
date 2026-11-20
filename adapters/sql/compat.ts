@@ -4,7 +4,7 @@ import type {
 } from "../../core/compat/model";
 import { base64Of, fromBase64 } from "../../core/compat/hash";
 import {
-  newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatPublish, type CompatStore,
+  generationSeed, newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatPublish, type CompatStore,
   type DeleteBucketResult, type LeaseToken, type RecordRef, type VersionRecord,
 } from "../../core/compat/repository";
 import type { Row, SqlClient, SqlStatement, SqlValue } from "../../core/sql/port";
@@ -39,8 +39,8 @@ export class SqlCompatStore implements CompatStore {
 
   async insertBucket(bucket: CompatBucket): Promise<boolean> {
     const result = await this.db.execute(
-      `INSERT OR IGNORE INTO compat_buckets (${BUCKET_COLUMNS}) VALUES (?1, ?2, ?3, ?4)`,
-      [bucket.name, bucket.projectId, bucket.mount ? JSON.stringify(bucket.mount) : null, bucket.createdAt],
+      `INSERT OR IGNORE INTO compat_buckets (${BUCKET_COLUMNS}, last_generation) VALUES (?1, ?2, ?3, ?4, ?5)`,
+      [bucket.name, bucket.projectId, bucket.mount ? JSON.stringify(bucket.mount) : null, bucket.createdAt, generationSeed()],
     );
     return result.rowsAffected > 0;
   }
@@ -185,11 +185,6 @@ export class SqlCompatStore implements CompatStore {
       generation: Number(row.generation),
       hashes: hashesOf(row),
     }]));
-  }
-
-  async findRecord(objectRef: string): Promise<VersionRecord | null> {
-    const row = await queryFirst(this.db, "SELECT generation, md5, crc32c FROM compat_hashes WHERE object_ref = ?1", [objectRef]);
-    return row ? { generation: Number(row.generation), hashes: hashesOf(row) } : null;
   }
 
   async findCredential(id: CredentialId): Promise<CompatCredential | null> {
@@ -345,9 +340,10 @@ export function compatPublish(publish: CompatPublish): { statements: SqlStatemen
 /**
  * Store a record at the bucket's next generations for each wanted ref with
  * none, after its asset row and every older version of its asset, oldest
- * first, then raise the high mark past them. `wanted` is a JSON array of
- * `{ ref, asset }` bound as ?2; ?1 is the bucket. Both statements apply
- * only under `guard`, whose parameters are numbered from ?3.
+ * first, then raise the high mark past them. The raise writes no row when no
+ * record was new. `wanted` is a JSON array of `{ ref, asset }` bound as ?2;
+ * ?1 is the bucket. Both statements apply only under `guard`, whose
+ * parameters are numbered from ?3.
  */
 export function recordInVersionOrder(
   bucket: BucketName, wanted: string, guard: { sql: string; args: SqlValue[] } = { sql: "1", args: [] },
@@ -372,9 +368,10 @@ export function recordInVersionOrder(
       args: [bucket, wanted, ...guard.args],
     },
     {
-      sql: `UPDATE compat_buckets SET last_generation = MAX(last_generation, COALESCE(
-              (SELECT MAX(generation) FROM compat_hashes WHERE asset_id IN (SELECT json_extract(value, '$.asset') FROM json_each(?2))), 0))
-            WHERE name = ?1 AND ${guard.sql}`,
+      sql: `UPDATE compat_buckets SET last_generation = m.top
+              FROM (SELECT MAX(generation) AS top FROM compat_hashes
+                     WHERE asset_id IN (SELECT json_extract(value, '$.asset') FROM json_each(?2))) AS m
+             WHERE name = ?1 AND m.top > last_generation AND ${guard.sql}`,
       args: [bucket, wanted, ...guard.args],
     },
   ];

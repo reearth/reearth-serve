@@ -7,6 +7,8 @@ import { resumableUploads, type DeclaredHashes } from "./upload";
 import type { BucketName, CredentialId, ObjectKey, PutMeta, UploadId } from "./model";
 import type { LeaseToken } from "./repository";
 import type { Deps } from "../types";
+import type { SqlClient } from "../sql/port";
+import { MemoryCompatStore } from "../../adapters/memory/compat";
 
 const BUCKET = "media";
 const NO_HASH: DeclaredHashes = { crc32c: null, md5: null };
@@ -14,6 +16,12 @@ const meta = (m: Partial<PutMeta> = {}): PutMeta => ({ contentType: "text/plain"
 const fill = (n: number, ch: string) => new TextEncoder().encode(ch.repeat(n));
 const stream = (b: Uint8Array) => new Blob([new Uint8Array(b)]).stream();
 const BUSY = { ok: false, error: { code: "busy" } };
+
+async function hasRecord(deps: Deps, objectRef: string): Promise<boolean> {
+  if (deps.compat instanceof MemoryCompatStore) return deps.compat.hashes.has(objectRef);
+  const db = (deps.compat as unknown as { db: SqlClient }).db;
+  return (await db.execute("SELECT 1 FROM compat_hashes WHERE object_ref = ?1", [objectRef])).rows.length > 0;
+}
 
 function gate() {
   let open!: () => void;
@@ -133,7 +141,7 @@ describe("a stale new-key commit loses to the writer that took the key", () => {
 
     expect(await stalled).toEqual(BUSY);
     expect(await deps.metadata.find(staleAsset)).toBeNull();
-    expect(await deps.compat.findRecord(staleAsset)).toBeNull();
+    expect(await hasRecord(deps, staleAsset)).toBe(false);
     expect((await deps.storage.list(`assets/${staleAsset}/`)).keys).toEqual([]);
     expect(await content(deps, c, "n.bin")).toBe("nnnnnnnnnn");
     expect(await usageOn(store, deps)).toBe(store === "sql" ? 10 : "not tracked");
