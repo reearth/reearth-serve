@@ -13,6 +13,14 @@ import { SqlCompatStore } from "./compat";
 import { HoldLost } from "../../core/asset/repository";
 import type { CompatPublish, LeaseToken } from "../../core/compat/repository";
 import type { BucketName, CredentialId, ObjectKey, UploadId } from "../../core/compat/model";
+import type { SqlClient } from "../../core/sql/port";
+
+async function recordOf(sql: SqlClient, objectRef: string) {
+  const row = (await sql.execute("SELECT generation, md5, crc32c FROM compat_hashes WHERE object_ref = ?1", [objectRef])).rows[0];
+  if (!row) return null;
+  const hashes = row.md5 === null ? null : { md5: new Uint8Array(row.md5 as Uint8Array), crc32c: Number(row.crc32c) };
+  return { generation: Number(row.generation), hashes };
+}
 
 function fixture() {
   const sql = createSqliteClient();
@@ -172,7 +180,7 @@ describe("SqlAtomicWrites with a compat publish", () => {
     expect(await f.jobs.find("j9")).toBeNull();
     expect(await f.usage.get("project:p1")).toBeNull();
     expect((await f.assets.find(asset.id))?.activeVersionId).toBe("pinned");
-    expect([await compat.findRecord("v9"), await compat.findRecord(asset.id)]).toEqual([null, null]);
+    expect([await recordOf(f.sql, "v9"), await recordOf(f.sql, asset.id)]).toEqual([null, null]);
     expect(await compat.findUpload("up1" as UploadId)).toMatchObject({ revision: 3, phase: { state: "failed" } });
     expect((await compat.records(media, [{ objectRef: "probe", assetId: "x" }])).get("probe")?.generation).toBe(seed + 1);
     expect(await f.pending.list(10)).toEqual([]);
@@ -184,11 +192,11 @@ describe("SqlAtomicWrites with a compat publish", () => {
     const written = await write(publish(3, "lease-1", ["assets/earlier/", "assets/a1/v/earlier/"]));
 
     expect(written).toMatchObject({ id: "v9", version: 1, generation: seed + 3 });
-    expect(await compat.findRecord(asset.id)).toEqual({ generation: seed + 2, hashes: null });
+    expect(await recordOf(f.sql, asset.id)).toEqual({ generation: seed + 2, hashes: null });
     expect(await f.jobs.find("j9")).not.toBeNull();
     expect(await f.usage.get("project:p1")).toMatchObject({ totalSize: 500 });
     expect((await f.assets.find(asset.id))?.activeVersionId ?? null).toBeNull();
-    expect(await compat.findRecord("v9")).toEqual({ generation: seed + 3, hashes });
+    expect(await recordOf(f.sql, "v9")).toEqual({ generation: seed + 3, hashes });
     expect(await compat.findUpload("up1" as UploadId)).toMatchObject({
       revision: 4, phase: { state: "committed", result: { etag: "v9", generation: seed + 3, hashes } },
     });
@@ -202,7 +210,7 @@ describe("SqlAtomicWrites with a compat publish", () => {
 
     expect(written).toMatchObject({ id: "v9", version: 2, generation: seed + 3 });
     expect(await compat.findUpload("up1" as UploadId)).toMatchObject({ phase: { state: "committed", result: { generation: seed + 3 } } });
-    expect([await compat.findRecord(asset.id), await compat.findRecord("v8")])
+    expect([await recordOf(f.sql, asset.id), await recordOf(f.sql, "v8")])
       .toEqual([{ generation: seed + 1, hashes: null }, { generation: seed + 2, hashes: null }]);
   });
 });

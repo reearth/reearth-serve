@@ -6,12 +6,20 @@ import { HOLD_STALE_MS, objectLayer } from "./layer";
 import { resumableUploads, stagingPrefix, sweepUploads, UPLOAD_TTL_MS, type DeclaredHashes } from "./upload";
 import type { BucketName, CredentialId, ObjectKey, PutMeta, UploadId } from "./model";
 import type { Deps } from "../types";
+import type { SqlClient } from "../sql/port";
+import { MemoryCompatStore } from "../../adapters/memory/compat";
 
 const BUCKET = "media";
 const NO_HASH: DeclaredHashes = { crc32c: null, md5: null };
 const meta = (m: Partial<PutMeta> = {}): PutMeta => ({ contentType: "text/plain", contentEncoding: null, userMeta: {}, ifGenerationMatch: null, ...m });
 const fill = (n: number, ch: string) => new TextEncoder().encode(ch.repeat(n));
 const stream = (b: Uint8Array) => new Blob([new Uint8Array(b)]).stream();
+
+async function hasRecord(deps: Deps, objectRef: string): Promise<boolean> {
+  if (deps.compat instanceof MemoryCompatStore) return deps.compat.hashes.has(objectRef);
+  const db = (deps.compat as unknown as { db: SqlClient }).db;
+  return (await db.execute("SELECT 1 FROM compat_hashes WHERE object_ref = ?1", [objectRef])).rows.length > 0;
+}
 
 function gate() {
   let open!: () => void;
@@ -226,7 +234,7 @@ describe("a commit stalled at its publish write", () => {
     expect(await pending).toEqual({ ok: false, error: { code: "busy" } });
     expect(await head(c, "o.bin")).toEqual({ ok: false, error: { code: "no_such_key" } });
     expect(await deps.metadata.find(assetId)).toBeNull();
-    expect(await deps.compat.findRecord(assetId)).toBeNull();
+    expect(await hasRecord(deps, assetId)).toBe(false);
     expect((await deps.storage.list(`assets/${assetId}/`)).keys).toEqual([]);
     expect(await c.uploads.append(id, BUCKET, { start: null, size: 0, total: 10 }, null, NO_HASH))
       .toEqual({ ok: false, error: { code: "precondition_failed" } });
@@ -255,7 +263,7 @@ describe("a commit stalled at its publish write", () => {
 
     const committed = await pending;
     if (!committed.ok || committed.value.kind !== "committed") throw new Error(JSON.stringify(committed));
-    expect(await deps.compat.findRecord(committed.value.info.etag)).toBeNull();
+    expect(await hasRecord(deps, committed.value.info.etag)).toBe(false);
     expect(await deps.metadata.find(assetId)).toBeNull();
     expect(await head(c, "o.bin")).toEqual({ ok: false, error: { code: "no_such_key" } });
   });

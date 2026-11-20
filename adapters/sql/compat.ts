@@ -187,11 +187,6 @@ export class SqlCompatStore implements CompatStore {
     }]));
   }
 
-  async findRecord(objectRef: string): Promise<VersionRecord | null> {
-    const row = await queryFirst(this.db, "SELECT generation, md5, crc32c FROM compat_hashes WHERE object_ref = ?1", [objectRef]);
-    return row ? { generation: Number(row.generation), hashes: hashesOf(row) } : null;
-  }
-
   async findCredential(id: CredentialId): Promise<CompatCredential | null> {
     const row = await queryFirst(this.db, `SELECT ${CREDENTIAL_COLUMNS} FROM compat_credentials WHERE id = ?1`, [id]);
     return row ? parseCredential(row) : null;

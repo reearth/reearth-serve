@@ -130,9 +130,6 @@ export class MemoryCompatStore implements CompatStore {
     }
     return out;
   }
-  async findRecord(objectRef: string): Promise<VersionRecord | null> {
-    return this.hashes.get(objectRef)?.record ?? null;
-  }
 
   /**
    * `objectRef` last, after its asset row and every older version of

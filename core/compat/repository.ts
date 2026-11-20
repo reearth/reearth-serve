@@ -124,8 +124,6 @@ export interface CompatStore {
    * deletes. Refs of a bucket that is gone are left out.
    */
   records(bucket: BucketName, refs: RecordRef[]): Promise<Map<string, VersionRecord>>;
-  /** The stored record of `objectRef`, never storing one. */
-  findRecord(objectRef: string): Promise<VersionRecord | null>;
 
   findCredential(id: CredentialId): Promise<CompatCredential | null>;
   findCredentialByEmail(clientEmail: string): Promise<CompatCredential | null>;
