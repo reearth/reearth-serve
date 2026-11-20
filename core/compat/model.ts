@@ -81,6 +81,9 @@ export type StagedPart = { key: string; size: number };
 
 export type CommitOwner = { token: string; since: number };
 
+/** The asset and version ids a commit owner writes under, derived from its token. */
+export type CommitIds = { assetId: string; versionId: string };
+
 export type UploadPhase =
   | { state: "open"; received: number; total: number | null; hashState: HashState; parts: StagedPart[] }
   | {
@@ -89,6 +92,8 @@ export type UploadPhase =
     hashState: HashState;
     parts: StagedPart[];
     owner: CommitOwner | null;
+    /** Every owner that has held this commit, the current one last. */
+    owners: CommitIds[];
     overwritingAssetId: string | null;
   }
   | { state: "committed"; result: ObjectInfo }
@@ -119,6 +124,13 @@ export type ObjectInfo = {
   hashes: ExactHashes | null;
   userMeta: Record<string, string>;
 };
+
+/** A generation counts microseconds, so one taken from a creation time is that time in ms times this. */
+export const GENERATIONS_PER_MS = 1000;
+
+export function generationFromCreatedAt(createdAt: number): number {
+  return createdAt * GENERATIONS_PER_MS;
+}
 
 export type SizedBody = {
   stream: ReadableStream<Uint8Array>;

@@ -347,7 +347,7 @@ describe("terminal answers", () => {
     const c = client(deps);
     const id = await begin(c, "c.bin");
     await c.uploads.append(id, BUCKET, { start: 0, size: 10, total: null }, stream(fill(10, "c")), NO_HASH);
-    expect(await c.uploads.cancel(id, BUCKET)).toEqual({ ok: true, value: undefined });
+    expect(await c.uploads.cancel(id, BUCKET)).toEqual({ ok: true, value: { kind: "cancelled" } });
     expect(await staged(deps)).toEqual([]);
     expect(await c.uploads.status(id, BUCKET)).toEqual({ ok: false, error: { code: "no_such_upload" } });
     expect(await c.uploads.cancel(id, BUCKET)).toEqual({ ok: false, error: { code: "no_such_upload" } });

@@ -194,10 +194,11 @@ export class MemoryCompatStore implements CompatStore {
 
   /**
    * The compat rows of `publish` (see `SqlAtomicWrites`), synchronously so no
-   * other request runs between the check and the writes. Returns the issued
+   * other request runs between the check and the writes. `above` is the
+   * highest generation the asset's other versions have. Returns the issued
    * generation, or null when the publish no longer holds and nothing changed.
    */
-  publish({ upload, hold, record, result }: CompatPublish): number | null {
+  publish({ upload, hold, record, result }: CompatPublish, above: number): number | null {
     const session = this.uploads.get(upload.id);
     const row = this.bindings.get(rowKey(hold.bucket, hold.key));
     if (session?.revision !== upload.revision || !row) return null;
@@ -206,7 +207,7 @@ export class MemoryCompatStore implements CompatStore {
       : row.claimToken === hold.token && row.assetId === null;
     if (!holds) return null;
     if (hold.kind === "claim") row.assetId = hold.assetId;
-    const generation = Math.max((this.generations.get(hold.bucket) ?? 0) + 1, record.atLeast);
+    const generation = Math.max((this.generations.get(hold.bucket) ?? 0) + 1, record.atLeast, above + 1);
     this.generations.set(hold.bucket, generation);
     this.hashes.set(record.objectRef, { assetId: hold.assetId, record: { generation, hashes: record.hashes } });
     const committed = { state: "committed" as const, result: structuredClone({ ...result, generation }) };

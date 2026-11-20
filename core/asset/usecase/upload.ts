@@ -1,9 +1,8 @@
 import type { AssetMetadata, AssetUploadResult } from "../model";
 import { detectArchiveFormat } from "../model";
-import type { AtomicWrites, FileStorage } from "../repository";
-import type { CompatPublish } from "../../compat/repository";
+import type { AtomicWrites, FileStorage, Publishing } from "../repository";
 import type { Job } from "../../job/model";
-import { generateId, storageKey } from "./shared";
+import { dropUnwrittenBytes, generateId, storageKey } from "./shared";
 import { siteUrlFor } from "../../site/url";
 import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
@@ -23,7 +22,7 @@ export async function uploadAsset(
   },
   ttlSeconds: number,
   baseUrl: string,
-  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string; id?: string; userMeta?: Record<string, unknown>; publish?: (asset: AssetMetadata) => CompatPublish },
+  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string; id?: string; userMeta?: Record<string, unknown>; publish?: Publishing<AssetMetadata> },
 ): Promise<AssetUploadResult & { generation?: number }> {
   const id = options?.id ?? generateId();
   const now = Date.now();
@@ -76,7 +75,7 @@ export async function uploadAsset(
     // Job row, asset row and storage-usage counters in one atomic write, so a
     // failure never leaves an asset without its job or the counters short
     // (ADR-012 §3).
-    ({ generation } = await writes.createAsset({ asset, job, usageScopes: options?.usageScopes, publish: options?.publish?.(asset) }));
+    ({ generation } = await writes.createAsset({ asset, job, usageScopes: options?.usageScopes, publish: options?.publish?.of(asset) }));
 
     // Enqueue only after the rows are committed: the consumer reads them.
     if (job && options?.extractionQueue) {
@@ -101,15 +100,9 @@ export async function uploadAsset(
       size: file.size,
     });
   } catch (e) {
-    // R2 put already succeeded but D1 metadata write failed. Without
-    // compensation the R2 object is orphaned (cleanup drives off D1 rows),
-    // so try to delete it. Best-effort: a delete failure here is logged
-    // but the original error is what the caller cares about.
-    try {
-      await storage.delete(key);
-    } catch (delErr) {
-      console.error("Failed to clean up R2 object after metadata save failure:", delErr);
-    }
+    // The bytes are stored but the metadata write failed. Cleanup drives off
+    // the rows, so without this the object is orphaned.
+    await dropUnwrittenBytes(storage, key, e, options?.publish);
     throw e;
   }
 

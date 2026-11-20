@@ -1,13 +1,14 @@
 import type { Deps } from "../types";
 import { HoldLost, type FileStorage } from "../asset/repository";
+import { assetPrefix, versionPrefix } from "../asset/usecase/shared";
 import type { ServicePrincipal } from "../auth/types";
 import { deleteAllR2Objects, SubrequestBudget } from "../cleanup/usecase";
 import { createHasher, hashingStream, initialHashState, type HashState } from "./hash";
 import {
-  authorizeBucket, HOLD_STALE_MS, lengthChecked, type CommitIds, type ObjectLayer, type ObjectLayerDeps, type UploadCommit,
+  authorizeBucket, HOLD_STALE_MS, lengthChecked, type ObjectLayer, type ObjectLayerDeps, type UploadCommit,
 } from "./layer";
 import type {
-  CommitOwner, CompatError, CredentialId, ExactHashes, ObjectInfo, ObjectKey, PutMeta, Result, StagedPart, UploadId,
+  CommitIds, CommitOwner, CompatError, CredentialId, ExactHashes, ObjectInfo, ObjectKey, PutMeta, Result, StagedPart, UploadId,
   UploadPhase, UploadSession,
 } from "./model";
 
@@ -27,6 +28,8 @@ export type ChunkDecision =
   | { kind: "reject"; error: CompatError };
 
 export type UploadStatus = { kind: "incomplete"; received: number } | { kind: "committed"; info: ObjectInfo };
+
+export type CancelResult = { kind: "cancelled" } | Extract<UploadStatus, { kind: "committed" }>;
 
 export type DeclaredHashes = { crc32c: number | null; md5: Uint8Array | null };
 
@@ -83,6 +86,22 @@ async function commitIdsOf(id: UploadId, token: string): Promise<CommitIds> {
   return { assetId: hex.slice(0, 16), versionId: hex.slice(16, 32) };
 }
 
+/**
+ * Where the owners of `phase` other than `publisher` may have streamed bytes:
+ * the asset of a new key, or a version of the overwritten asset. Never the
+ * published object's, since every owner writes under ids of its own.
+ */
+function leftovers({ owners, overwritingAssetId }: Committing, publisher: CommitIds | null): string[] {
+  return owners
+    .filter((o) => o.assetId !== publisher?.assetId)
+    .flatMap((o) => [assetPrefix(o.assetId), ...(overwritingAssetId ? [versionPrefix(overwritingAssetId, o.versionId)] : [])]);
+}
+
+async function reclaim(deps: Pick<Deps, "pendingCleanup">, phase: UploadPhase): Promise<void> {
+  if (phase.state !== "committing") return;
+  for (const prefix of leftovers(phase, null)) await deps.pendingCleanup.add(prefix);
+}
+
 function stagedStream(storage: FileStorage, parts: StagedPart[]): ReadableStream<Uint8Array> {
   let next = 0;
   let reader: ReadableStreamDefaultReader<Uint8Array> | null = null;
@@ -128,7 +147,7 @@ export interface ResumableUploads {
   begin(bucket: string, key: ObjectKey, meta: PutMeta): Promise<Result<UploadId>>;
   append(id: string, bucket: string, chunk: Chunk, body: ReadableStream<Uint8Array> | null, declared: DeclaredHashes): Promise<Result<UploadStatus>>;
   status(id: string, bucket: string): Promise<Result<UploadStatus>>;
-  cancel(id: string, bucket: string): Promise<Result<void>>;
+  cancel(id: string, bucket: string): Promise<Result<CancelResult>>;
 }
 
 export function resumableUploads(
@@ -161,8 +180,14 @@ export function resumableUploads(
 
   const heldBy = (token: string): CommitOwner => ({ token, since: now() });
 
-  function sealed(received: number, hashState: HashState, parts: StagedPart[]): Held {
-    return { state: "committing", size: received, hashState, parts, owner: heldBy(crypto.randomUUID()), overwritingAssetId: null };
+  /** `phase` under a new owner, recorded among its owners in the same compare-and-set that hands it over. */
+  async function handedOver(id: UploadId, phase: Omit<Committing, "owner">): Promise<Held> {
+    const token = crypto.randomUUID();
+    return { ...phase, owner: heldBy(token), owners: [...phase.owners, await commitIdsOf(id, token)] };
+  }
+
+  function sealed(id: UploadId, received: number, hashState: HashState, parts: StagedPart[]): Promise<Held> {
+    return handedOver(id, { state: "committing", size: received, hashState, parts, owners: [], overwritingAssetId: null });
   }
 
   async function stage(
@@ -183,7 +208,7 @@ export function resumableUploads(
     const parts = [...open.parts, { key, size }];
     const mismatch = decision.final ? declaredMismatch(declared, createHasher(hashState).digest()) : null;
     const next: Held | Open = decision.final
-      ? sealed(received, hashState, parts)
+      ? await sealed(session.id, received, hashState, parts)
       : { state: "open", received, total: decision.total, hashState, parts };
     if (mismatch || !(await compat.updateUpload(session.id, session.revision, next))) {
       await storage.delete(key);
@@ -196,14 +221,14 @@ export function resumableUploads(
   async function seal(session: UploadSession, open: Open, declared: DeclaredHashes): Promise<Result<UploadStatus>> {
     const mismatch = declaredMismatch(declared, createHasher(open.hashState).digest());
     if (mismatch) return fail({ code: "invalid", message: mismatch });
-    const next = sealed(open.received, open.hashState, open.parts);
+    const next = await sealed(session.id, open.received, open.hashState, open.parts);
     if (!(await compat.updateUpload(session.id, session.revision, next))) return settled(session.id);
     return commit({ ...session, revision: session.revision + 1 }, next);
   }
 
   async function takeOver(session: UploadSession, phase: Committing): Promise<Result<UploadStatus>> {
     if (ownedAt(phase, now())) return fail({ code: "busy" });
-    const next: Held = { ...phase, owner: heldBy(crypto.randomUUID()) };
+    const next = await handedOver(session.id, phase);
     if (!(await compat.updateUpload(session.id, session.revision, next))) return settled(session.id);
     return commit({ ...session, revision: session.revision + 1 }, next);
   }
@@ -212,6 +237,7 @@ export function resumableUploads(
     let revision = session.revision;
     let current: Committing = held;
     const { token } = held.owner;
+    const ids = await commitIdsOf(session.id, token);
     const hashes = createHasher(held.hashState).digest();
     const advance = async (next: Committing) => {
       if (!(await compat.updateUpload(session.id, revision, next))) return false;
@@ -220,13 +246,14 @@ export function resumableUploads(
       return true;
     };
     const handle: UploadCommit = {
-      ...(await commitIdsOf(session.id, token)),
+      ...ids,
       hashes,
       overwritingAssetId: held.overwritingAssetId,
       ownedSince: held.owner.since,
       overwrite: (assetId) => advance({ ...current, overwritingAssetId: assetId }),
       heartbeat: () => advance({ ...current, owner: heldBy(token) }),
       hold: () => ({ id: session.id, revision }),
+      leftovers: () => leftovers(current, ids),
     };
     const release = () => compat.updateUpload(session.id, revision, { ...current, owner: null });
     const body = { stream: stagedStream(storage, held.parts), size: held.size, hashes };
@@ -245,7 +272,10 @@ export function resumableUploads(
       await release();
       return put;
     }
-    if (await compat.updateUpload(session.id, revision, { state: "failed", error: put.error })) await dropStaging(session.id);
+    if (await compat.updateUpload(session.id, revision, { state: "failed", error: put.error })) {
+      await dropStaging(session.id);
+      await reclaim(deps, current);
+    }
     return put;
   }
 
@@ -308,12 +338,14 @@ export function resumableUploads(
       const found = await sessionFor(id, bucket);
       if (!found.ok) return found;
       const { phase, revision } = found.value;
+      if (phase.state === "committed") return { ok: true, value: { kind: "committed", info: phase.result } };
       if (ownedAt(phase, now()) || !(await compat.updateUpload(id as UploadId, revision, GONE))) {
         return fail({ code: "busy" });
       }
       await dropStaging(id as UploadId);
+      await reclaim(deps, phase);
       await compat.deleteUpload(id as UploadId, revision + 1);
-      return { ok: true, value: undefined };
+      return { ok: true, value: { kind: "cancelled" } };
     },
   };
 }
@@ -324,6 +356,7 @@ export async function sweepUploads(deps: Pick<Deps, "compat" | "pendingCleanup">
   for (const session of expired) {
     if (ownedAt(session.phase, now) || !(await deps.compat.updateUpload(session.id, session.revision, GONE))) continue;
     await deps.pendingCleanup.add(stagingPrefix(session.id));
+    await reclaim(deps, session.phase);
     await deps.compat.deleteUpload(session.id, session.revision + 1);
     sessions++;
   }

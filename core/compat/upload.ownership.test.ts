@@ -129,7 +129,7 @@ describe("a commit owner that lost its hold publishes nothing", () => {
     const { deps, c, id } = await seeded(mk, "c.bin");
     const { stalled, release } = await stalledAtPublish(c, deps, id);
     c.clock.now += HOLD_STALE_MS + 1;
-    expect(await c.uploads.cancel(id, BUCKET)).toEqual({ ok: true, value: undefined });
+    expect(await c.uploads.cancel(id, BUCKET)).toEqual({ ok: true, value: { kind: "cancelled" } });
     release();
     expect(await stalled).toMatchObject({ ok: false });
     expect(await live(deps, c, "c.bin")).toBe("ooooo");

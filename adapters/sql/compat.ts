@@ -2,6 +2,7 @@ import type {
   Binding, BindingKind, BucketName, CompatBucket, CompatCredential, CredentialId, ObjectInfo,
   UploadId, UploadPhase, UploadSession,
 } from "../../core/compat/model";
+import { GENERATIONS_PER_MS } from "../../core/compat/model";
 import { base64Of, fromBase64 } from "../../core/compat/hash";
 import {
   newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatPublish, type CompatStore,
@@ -299,10 +300,14 @@ export function compatHolds(publish: CompatPublish, firstParam: number): { sql: 
  * The statements after the row inserts that publish a resumable commit
  * (ADR-019 §3), each under `compatHolds`. The session moves last, so the
  * revision the others check is still the one the commit owns. `generationAt`
- * is the statement whose `last_generation` row is the issued generation.
+ * is the statement whose `last_generation` row is the issued generation: above
+ * the bucket's high mark and above every other version of the asset, which a
+ * REST upload may have created while the commit streamed.
  */
 export function compatPublish(publish: CompatPublish): { statements: SqlStatement[]; generationAt: number } {
   const { hold, record, upload } = publish;
+  const above = (table: string, column: string) =>
+    `COALESCE((SELECT MAX(created_at) FROM ${table} WHERE ${column} = ?3 AND id != ?4), 0) * ?5 + 1`;
   const at = (sql: string, args: SqlValue[], returning = ""): SqlStatement => {
     const holds = compatHolds(publish, args.length + 1);
     return { sql: `${sql} AND ${holds.sql}${returning}`, args: [...args, ...holds.args] };
@@ -317,8 +322,10 @@ export function compatPublish(publish: CompatPublish): { statements: SqlStatemen
     statements: [
       live,
       at(
-        "UPDATE compat_buckets SET last_generation = MAX(last_generation + 1, ?2) WHERE name = ?1",
-        [hold.bucket, record.atLeast],
+        `UPDATE compat_buckets
+           SET last_generation = MAX(last_generation + 1, ?2, ${above("asset_versions", "asset_id")}, ${above("assets", "id")})
+           WHERE name = ?1`,
+        [hold.bucket, record.atLeast, hold.assetId, record.objectRef, GENERATIONS_PER_MS],
         " RETURNING last_generation",
       ),
       at(
@@ -326,6 +333,8 @@ export function compatPublish(publish: CompatPublish): { statements: SqlStatemen
            SELECT ?2, ?3, ${high}, ?4, ?5 WHERE 1`,
         [hold.bucket, record.objectRef, hold.assetId, record.hashes.md5, record.hashes.crc32c],
       ),
+      ...publish.reclaim.map((prefix) =>
+        at("INSERT OR REPLACE INTO cleanup_pending (prefix, created_at) SELECT ?1, ?2 WHERE 1", [prefix, Date.now()])),
       at(
         `UPDATE compat_uploads SET phase = json_set(?2, '$.result.generation', ${high}), revision = revision + 1
            WHERE id = ?3`,

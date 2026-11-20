@@ -1,9 +1,8 @@
 import type { AssetVersion } from "../model";
 import { detectArchiveFormat } from "../model";
-import type { AtomicWrites, FileStorage, MetadataStore } from "../repository";
-import type { CompatPublish } from "../../compat/repository";
+import type { AtomicWrites, FileStorage, MetadataStore, Publishing } from "../repository";
 import type { Job } from "../../job/model";
-import { generateId, versionStorageKey } from "./shared";
+import { dropUnwrittenBytes, generateId, versionStorageKey } from "./shared";
 import { siteUrlFor } from "../../site/url";
 import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
@@ -33,7 +32,7 @@ export async function uploadVersion(
     originalSize?: number;
   },
   baseUrl: string,
-  options?: { extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string; versionId?: string; userMeta?: Record<string, unknown>; publish?: (version: AssetVersion) => CompatPublish },
+  options?: { extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string; versionId?: string; userMeta?: Record<string, unknown>; publish?: Publishing<AssetVersion> },
 ): Promise<UploadVersionResult | null> {
   const asset = await metadata.find(assetId);
   if (!asset) return null;
@@ -97,7 +96,7 @@ export async function uploadVersion(
       version: versionInput,
       job,
       usageScopes: asset.projectId ? options?.usageScopes : [],
-      publish: options?.publish?.(versionInput),
+      publish: options?.publish?.of(versionInput),
     }));
 
     // Enqueue only after the rows are committed: the consumer reads them.
@@ -124,13 +123,7 @@ export async function uploadVersion(
       size: file.size,
     });
   } catch (e) {
-    // Compensation: drop the orphaned R2 object so it doesn't leak forever
-    // if the D1 version row failed to persist.
-    try {
-      await storage.delete(key);
-    } catch (delErr) {
-      console.error("Failed to clean up R2 object after version save failure:", delErr);
-    }
+    await dropUnwrittenBytes(storage, key, e, options?.publish);
     throw e;
   }
 

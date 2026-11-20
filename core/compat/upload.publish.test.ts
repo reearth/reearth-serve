@@ -141,7 +141,7 @@ describe("a commit publishes in one write, so a crash after it leaves nothing to
     expect(await content(deps, c, "o.bin")).toBe("zzz");
   });
 
-  test.each(STORES)("(%s) R4-D1: once the key is deleted the session still answers its commit, and cancels", async (_, mk) => {
+  test.each(STORES)("(%s) R4-D1: once the key is deleted the session still answers its commit, a cancel included", async (_, mk) => {
     const deps = await mk();
     const c = client(deps);
     const { id, info } = await crashedAfterPublish(deps, c, "o.bin");
@@ -150,8 +150,8 @@ describe("a commit publishes in one write, so a crash after it leaves nothing to
     const answer = { ok: true, value: { kind: "committed", info } };
     expect(await c.uploads.status(id, BUCKET)).toEqual(answer);
     expect(await c.uploads.append(id, BUCKET, { start: null, size: 0, total: 10 }, null, NO_HASH)).toEqual(answer);
-    expect(await c.uploads.cancel(id, BUCKET)).toEqual({ ok: true, value: undefined });
-    expect(await c.uploads.status(id, BUCKET)).toEqual({ ok: false, error: { code: "no_such_upload" } });
+    expect(await c.uploads.cancel(id, BUCKET)).toEqual(answer);
+    expect(await c.uploads.status(id, BUCKET)).toEqual(answer);
     expect(await head(c, "o.bin")).toEqual({ ok: false, error: { code: "no_such_key" } });
   });
 

@@ -149,7 +149,7 @@ describe("a cancel of a new-key commit whose owner went stale", () => {
     const pending = c.uploads.append(id, BUCKET, { start: 0, size: 10, total: 10 }, stream(fill(10, "w")), NO_HASH);
     await writing.reached;
     c.clock.now += HOLD_STALE_MS + 1;
-    expect(await c.uploads.cancel(id, BUCKET)).toEqual({ ok: true, value: undefined });
+    expect(await c.uploads.cancel(id, BUCKET)).toEqual({ ok: true, value: { kind: "cancelled" } });
     writing.release();
 
     expect(await pending).toEqual(BUSY);
@@ -165,7 +165,7 @@ describe("a cancel of a new-key commit whose owner went stale", () => {
     const pending = c.uploads.append(id, BUCKET, { start: 0, size: 10, total: 10 }, stream(fill(10, "w")), NO_HASH);
     await copy.reached;
     c.clock.now += HOLD_STALE_MS + 1;
-    expect(await c.uploads.cancel(id, BUCKET)).toEqual({ ok: true, value: undefined });
+    expect(await c.uploads.cancel(id, BUCKET)).toEqual({ ok: true, value: { kind: "cancelled" } });
     copy.release();
 
     expect(await pending).toEqual(BUSY);
@@ -184,7 +184,7 @@ describe("an overwrite owner that went stale before its first read", () => {
     const pending = c.uploads.append(id, BUCKET, { start: 0, size: 10, total: 10 }, stream(fill(10, "w")), NO_HASH);
     await copy.reached;
     c.clock.now += HOLD_STALE_MS + 1;
-    expect(await c.uploads.cancel(id, BUCKET)).toEqual({ ok: true, value: undefined });
+    expect(await c.uploads.cancel(id, BUCKET)).toEqual({ ok: true, value: { kind: "cancelled" } });
     copy.release();
 
     expect(await pending).toEqual(BUSY);
@@ -219,7 +219,7 @@ describe("a cancel during an in-flight chunk", () => {
     const staging = stallFirst(deps.storage, "put");
     const pending = c.uploads.append(id, BUCKET, { start: 0, size: 10, total: null }, stream(fill(10, "k")), NO_HASH);
     await staging.reached;
-    expect(await c.uploads.cancel(id, BUCKET)).toEqual({ ok: true, value: undefined });
+    expect(await c.uploads.cancel(id, BUCKET)).toEqual({ ok: true, value: { kind: "cancelled" } });
     staging.release();
 
     expect(await pending).toEqual({ ok: false, error: { code: "no_such_upload" } });
@@ -240,7 +240,7 @@ describe("a cancelled session", () => {
     expect(await c.uploads.status(id, BUCKET)).toEqual(gone);
     expect(await c.uploads.append(id, BUCKET, { start: 10, size: 10, total: 20 }, stream(fill(10, "b")), NO_HASH)).toEqual(gone);
     expect(await c.uploads.append(id, BUCKET, { start: null, size: 0, total: 10 }, null, NO_HASH)).toEqual(gone);
-    expect(await c.uploads.cancel(id, BUCKET)).toEqual({ ok: true, value: undefined });
+    expect(await c.uploads.cancel(id, BUCKET)).toEqual({ ok: true, value: { kind: "cancelled" } });
     expect(await c.uploads.cancel(id, BUCKET)).toEqual(gone);
     expect(await content(deps, c, "g.bin")).toBeNull();
     expect(await staged(deps)).toEqual([]);

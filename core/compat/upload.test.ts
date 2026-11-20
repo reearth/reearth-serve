@@ -12,7 +12,7 @@ const NO_HASH: DeclaredHashes = { crc32c: null, md5: null };
 
 const OPEN: UploadPhase = { state: "open", received: 100, total: null, hashState: initialHashState, parts: [] };
 const COMMITTING: UploadPhase = {
-  state: "committing", size: 100, hashState: initialHashState, parts: [], owner: null, overwritingAssetId: null,
+  state: "committing", size: 100, hashState: initialHashState, parts: [], owner: null, owners: [], overwritingAssetId: null,
 };
 
 function session(phase: UploadPhase = OPEN): UploadSession {

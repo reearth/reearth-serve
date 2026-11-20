@@ -43,15 +43,18 @@ export type DeleteBucketResult = "deleted" | "absent" | "not_empty";
  * the unfilled claim `token` for a new key, which the write fills with
  * `assetId`, or the lease `token` on the binding that names `assetId` for an
  * overwrite, whose pinned version the write clears. In the same write the
- * bucket's high mark issues the generation, the hash record of `objectRef` is
- * stored at it, and the session moves to committed with `result` at it.
- * Otherwise nothing is written and the write throws `HoldLost`.
+ * generation is issued above the bucket's high mark, `atLeast`, and every
+ * generation `assetId` already has, the hash record of `objectRef` is stored
+ * at it, the `reclaim` prefixes (the bytes of the session's earlier owners)
+ * are queued for cleanup, and the session moves to committed with `result`
+ * at it. Otherwise nothing is written and the write throws `HoldLost`.
  */
 export type CompatPublish = {
   upload: { id: UploadId; revision: number };
   hold: { kind: "claim" | "lease"; bucket: BucketName; key: ObjectKey; token: string; assetId: string };
   record: { objectRef: string; atLeast: number; hashes: ExactHashes };
   result: Omit<ObjectInfo, "generation">;
+  reclaim: string[];
 };
 
 export interface CompatStore {

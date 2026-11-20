@@ -140,7 +140,7 @@ describe("SqlAtomicWrites with a compat publish", () => {
       meta: { contentType: "application/zip", contentEncoding: null, userMeta: {}, ifGenerationMatch: null },
       expiresAt: 10_000, revision: 3, phase: { state: "failed", error: { code: "busy" } },
     });
-    const publish = (revision: number, token: string): CompatPublish => ({
+    const publish = (revision: number, token: string, reclaim: string[] = []): CompatPublish => ({
       upload: { id: "up1" as UploadId, revision },
       hold: { kind: "lease", bucket: media, key, token, assetId: asset.id },
       record: { objectRef: "v9", atLeast: 5000, hashes },
@@ -148,6 +148,7 @@ describe("SqlAtomicWrites with a compat publish", () => {
         bucket: media, key, size: 500, contentType: "application/zip", contentEncoding: null, metageneration: 1, etag: "v9",
         created: new Date(1000), updated: new Date(1000), hashes, userMeta: {},
       },
+      reclaim,
     });
     const write = (p: CompatPublish) =>
       f.writes.createVersion({ version: { ...version, id: "v9" }, job: { ...job, id: "j9", versionId: "v9" }, usageScopes: ["project:p1"], publish: p });
@@ -159,7 +160,7 @@ describe("SqlAtomicWrites with a compat publish", () => {
     ["the lease was taken over", 3, "lease-2"],
   ])("R5: a publish whose %s writes no row", async (_, revision, token) => {
     const { f, compat, publish, write } = await leased();
-    await expect(write(publish(revision, token))).rejects.toBeInstanceOf(HoldLost);
+    await expect(write(publish(revision, token, ["assets/earlier/"]))).rejects.toBeInstanceOf(HoldLost);
 
     expect(await f.versions.find("v9")).toBeNull();
     expect(await f.jobs.find("j9")).toBeNull();
@@ -168,21 +169,33 @@ describe("SqlAtomicWrites with a compat publish", () => {
     expect(await compat.findRecord("v9")).toBeNull();
     expect(await compat.findUpload("up1" as UploadId)).toMatchObject({ revision: 3, phase: { state: "failed" } });
     expect(await compat.nextGeneration(media, 0)).toBe(1);
+    expect(await f.pending.list(10)).toEqual([]);
   });
 
   test("R5: a publish that holds writes every row, at the bucket's next generation", async () => {
     const { f, compat, publish, write } = await leased();
-    expect(await compat.nextGeneration(media, 7000)).toBe(7000);
-    const written = await write(publish(3, "lease-1"));
+    expect(await compat.nextGeneration(media, 2_000_000)).toBe(2_000_000);
+    const written = await write(publish(3, "lease-1", ["assets/earlier/", "assets/a1/v/earlier/"]));
 
-    expect(written).toMatchObject({ id: "v9", version: 1, generation: 7001 });
+    expect(written).toMatchObject({ id: "v9", version: 1, generation: 2_000_001 });
     expect(await f.jobs.find("j9")).not.toBeNull();
     expect(await f.usage.get("project:p1")).toMatchObject({ totalSize: 500 });
     expect((await f.assets.find(asset.id))?.activeVersionId ?? null).toBeNull();
-    expect(await compat.findRecord("v9")).toEqual({ generation: 7001, hashes });
+    expect(await compat.findRecord("v9")).toEqual({ generation: 2_000_001, hashes });
     expect(await compat.findUpload("up1" as UploadId)).toMatchObject({
-      revision: 4, phase: { state: "committed", result: { etag: "v9", generation: 7001, hashes } },
+      revision: 4, phase: { state: "committed", result: { etag: "v9", generation: 2_000_001, hashes } },
     });
+    expect((await f.pending.list(10)).map((p) => p.prefix).sort()).toEqual(["assets/a1/v/earlier/", "assets/earlier/"]);
+  });
+
+  test("R5-7: a publish takes a generation above a version a REST upload added while it streamed", async () => {
+    const { f, compat, publish, write } = await leased();
+    await f.writes.createVersion({ version: { ...version, id: "v8", createdAt: 9000 } });
+    const written = await write(publish(3, "lease-1"));
+
+    expect(written).toMatchObject({ id: "v9", version: 2, generation: 9_000_001 });
+    expect(await compat.findRecord("v9")).toEqual({ generation: 9_000_001, hashes });
+    expect(await compat.findUpload("up1" as UploadId)).toMatchObject({ phase: { state: "committed", result: { generation: 9_000_001 } } });
   });
 });
 

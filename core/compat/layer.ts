@@ -1,6 +1,6 @@
 import type { Deps } from "../types";
 import type { AssetMetadata, AssetVersion } from "../asset/model";
-import { HoldLost } from "../asset/repository";
+import { HoldLost, type Publishing } from "../asset/repository";
 import type { Project } from "../project/model";
 import { authorizeService } from "../auth/access";
 import type { ProjectAction } from "../auth/permissions";
@@ -15,8 +15,8 @@ import { hashingStream, type HashingStream } from "./hash";
 import { listPage, type ListQuery } from "./list";
 import { newLeaseToken, type ClaimToken, type CompatPublish, type LeaseToken, type VersionRecord } from "./repository";
 import {
-  parseBucketName,
-  type Binding, type CompatBucket, type CompatError, type ExactHashes, type ObjectInfo, type ObjectKey,
+  generationFromCreatedAt, parseBucketName,
+  type Binding, type CommitIds, type CompatBucket, type CompatError, type ExactHashes, type ObjectInfo, type ObjectKey,
   type PutMeta, type Result, type SizedBody,
 } from "./model";
 
@@ -29,8 +29,6 @@ export type ObjectLayerDeps = Pick<
 
 export type ListPage = { objects: ObjectInfo[]; prefixes: string[]; nextPageToken: string | null };
 
-export type CommitIds = { assetId: string; versionId: string };
-
 export type UploadCommit = CommitIds & {
   hashes: ExactHashes;
   overwritingAssetId: string | null;
@@ -39,6 +37,8 @@ export type UploadCommit = CommitIds & {
   heartbeat(): Promise<boolean>;
   /** The session revision this commit owns now. */
   hold(): CompatPublish["upload"];
+  /** The storage prefixes of the session's earlier owners, for the publish to reclaim. */
+  leftovers(): string[];
 };
 
 export interface ObjectLayer {
@@ -110,7 +110,7 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
 
   async function writeVersion(
     bucket: CompatBucket, key: ObjectKey, scopes: string[], meta: PutMeta, body: SizedBody, asset: AssetMetadata,
-    held?: { versionId: string; publish: (version: AssetVersion) => CompatPublish; lost(): boolean },
+    held?: { versionId: string; publish: Publishing<AssetVersion>; lost(): boolean },
   ): Promise<Result<ObjectInfo>> {
     const checked = lengthCheckedBody(body);
     let result: UploadVersionResult | null;
@@ -161,7 +161,10 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
         userMeta: meta.userMeta,
         ...(commit && {
           id: commit.assetId,
-          publish: (asset) => publishing(bucket, key, commit, { kind: "claim", token, assetId: asset.id }, asset, null),
+          publish: {
+            of: (asset) => publishing(bucket, key, commit, { kind: "claim", token, assetId: asset.id }, asset, null),
+            applied: async () => (await deps.metadata.find(commit.assetId)) !== null,
+          },
         }),
       });
       const hashes = await checked.digest();
@@ -217,7 +220,10 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
       const beat = beating(body.stream, commit.ownedSince, async () => (await compat.renewLease(bucket.name, key, lease, now())) && commit.heartbeat());
       return writeVersion(bucket, key, scopes, meta, { ...body, stream: beat.stream }, live.asset, {
         versionId: commit.versionId,
-        publish: (version) => publishing(bucket, key, commit, { kind: "lease", token: lease, assetId: live.asset.id }, live.asset, version),
+        publish: {
+          of: (version) => publishing(bucket, key, commit, { kind: "lease", token: lease, assetId: live.asset.id }, live.asset, version),
+          applied: async () => (await deps.versions.find(commit.versionId)) !== null,
+        },
         lost: beat.lost,
       });
     });
@@ -233,6 +239,7 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
       hold: { ...hold, bucket: bucket.name, key },
       record: { objectRef: current.id, atLeast: generationFromCreatedAt(current.createdAt), hashes: commit.hashes },
       result: { ...infoOf(bucket, key, asset, version, null), hashes: commit.hashes },
+      reclaim: commit.leftovers(),
     };
   }
 
@@ -353,8 +360,6 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
   };
 }
 
-const MICROS_PER_MS = 1000;
-
 type LengthChecked = { stream: ReadableStream<Uint8Array>; lengthMismatched(): boolean };
 
 export function lengthChecked(stream: ReadableStream<Uint8Array>, size: number): LengthChecked {
@@ -408,10 +413,6 @@ function stringMeta(meta: Record<string, unknown> | undefined): Record<string, s
   const out: Record<string, string> = {};
   for (const [k, v] of Object.entries(meta ?? {})) out[k] = typeof v === "string" ? v : JSON.stringify(v);
   return out;
-}
-
-function generationFromCreatedAt(createdAt: number): number {
-  return createdAt * MICROS_PER_MS;
 }
 
 function infoOf(

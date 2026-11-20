@@ -19,6 +19,8 @@ import type { Session, SessionStore } from "../../core/session/repository";
 import { CERTIFICATE_RELEASED, type SiteHost, type SiteHostPatch, type SiteHostStore } from "../../core/site/repository";
 import { MemoryFileStorage } from "./storage";
 import { MemoryCompatStore } from "./compat";
+import { generationFromCreatedAt } from "../../core/compat/model";
+import type { CompatPublish } from "../../core/compat/repository";
 import { MemoryKeyValue } from "./memory-kv";
 import { MemoryDnsResolver } from "./dns";
 import { MemoryCustomHostnames } from "./custom-hostnames";
@@ -410,20 +412,32 @@ export async function fixture(overrides?: Partial<Deps>) {
   });
   await storage.put(`assets/${SINGLE_FILE_ID}/data.geojson`, stream(bytes(geojson)), "application/geo+json", geojson.length);
 
+  /** The memory side of `SqlAtomicWrites`' publish batch; see `compatPublish`. */
+  async function published(publish: CompatPublish): Promise<number> {
+    const { assetId } = publish.hold;
+    const { objectRef } = publish.record;
+    const created = [...versions.versions.values()].filter((v) => v.assetId === assetId && v.id !== objectRef).map((v) => v.createdAt);
+    const asset = metadata.assets.get(assetId);
+    if (asset && asset.id !== objectRef) created.push(asset.createdAt);
+    const above = Math.max(0, ...created.map(generationFromCreatedAt));
+    const generation = compat.publish(publish, above);
+    if (generation === null) throw new HoldLost();
+    for (const prefix of publish.reclaim) await deps.pendingCleanup.add(prefix);
+    return generation;
+  }
+
   const deps: Deps = {
     metadata,
     versions,
     storage,
     writes: {
       async createAsset({ asset, publish }) {
-        const generation = publish ? compat.publish(publish) : null;
-        if (publish && generation === null) throw new HoldLost();
+        const generation = publish ? await published(publish) : null;
         metadata.assets.set(asset.id, asset);
         return { generation };
       },
       async createVersion({ version, publish }) {
-        const generation = publish ? compat.publish(publish) : null;
-        if (publish && generation === null) throw new HoldLost();
+        const generation = publish ? await published(publish) : null;
         const parent = publish && metadata.assets.get(version.assetId);
         if (parent) metadata.assets.set(parent.id, { ...parent, activeVersionId: undefined });
         const numbers = [...versions.versions.values()].filter((v) => v.assetId === version.assetId).map((v) => v.version);

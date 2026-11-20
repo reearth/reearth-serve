@@ -104,6 +104,13 @@ export class HoldLost extends Error {
 }
 
 /**
+ * The `CompatPublish` a create write applies for `row`, and a re-read that
+ * tells whether a write that failed some other way than `HoldLost` (a lost
+ * response, say) applied it anyway.
+ */
+export type Publishing<Row> = { of(row: Row): CompatPublish; applied(): Promise<boolean> };
+
+/**
  * Writes that must land together or not at all (ADR-012 §3).
  *
  * The individual stores above each issue one statement; an upload or a job
