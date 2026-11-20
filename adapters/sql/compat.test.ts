@@ -328,20 +328,6 @@ describe.each([
       expect(await s.findUpload("up1" as UploadId)).toEqual(upload({ revision: 1, phase: { state: "committed", result } }));
     });
 
-    test("a bind that carries an upload's move happens with it or not at all", async () => {
-      const s = make();
-      await s.createUpload(upload());
-      const failed: UploadPhase = { state: "failed", error: { code: "busy" } };
-      const token = await claimed(s, key, 1000);
-      expect(await s.bind(media, key, token, "asset-1", { id: "up1" as UploadId, revision: 7, phase: failed })).toBe(false);
-      expect(await s.findBinding(media, key)).toBeNull();
-      expect(await s.bind(media, key, "other" as ClaimToken, "asset-1", { id: "up1" as UploadId, revision: 0, phase: failed })).toBe(false);
-      expect((await s.findUpload("up1" as UploadId))?.revision).toBe(0);
-      expect(await s.bind(media, key, token, "asset-1", { id: "up1" as UploadId, revision: 0, phase: failed })).toBe(true);
-      expect(await s.findBinding(media, key)).toMatchObject({ assetId: "asset-1" });
-      expect(await s.findUpload("up1" as UploadId)).toEqual(upload({ revision: 1, phase: failed }));
-    });
-
     test("expired sessions are listed oldest first, and delete removes one, from its revision when given", async () => {
       const s = make();
       await s.createUpload(upload({ id: "late" as UploadId, expiresAt: 3000 }));

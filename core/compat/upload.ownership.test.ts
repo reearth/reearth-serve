@@ -223,7 +223,7 @@ describe("a replay after the key was bound elsewhere", () => {
     const assetsIn = async () => new Set((await deps.storage.list("assets/")).keys.map((k) => k.split("/")[1]));
     const before = await assetsIn();
     const id = await begin(c, "o.bin");
-    vi.spyOn(deps.compat, "findRecord").mockRejectedValueOnce(new Error("crash"));
+    vi.spyOn(deps.writes, "createAsset").mockRejectedValueOnce(new Error("crash"));
     await expect(c.uploads.append(id, BUCKET, { start: 0, size: 10, total: 10 }, stream(fill(10, "d")), NO_HASH)).rejects.toThrow("crash");
     vi.restoreAllMocks();
     expect(await c.layer.put(BUCKET, "o.bin" as ObjectKey, meta(), { stream: stream(fill(5, "z")), size: 5 })).toMatchObject({ ok: true });

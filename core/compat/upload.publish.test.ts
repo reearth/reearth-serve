@@ -88,44 +88,207 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 
-describe("P3 a cancel or sweep during an overwrite's finishing steps never loses the commit", () => {
-  test.each(STORES)("(%s) cancel answers busy and every replay sees the commit", async (_, mk) => {
+/** The overwrite's publish lands, then its request dies before it answers. */
+async function crashedAfterPublish(deps: Deps, c: Client, key: string) {
+  await c.layer.put(BUCKET, key as ObjectKey, meta(), { stream: stream(fill(5, "o")), size: 5 });
+  const id = await begin(c, key);
+  vi.spyOn(deps.compat, "releaseLease").mockRejectedValueOnce(new Error("crash"));
+  await expect(c.uploads.append(id, BUCKET, { start: 0, size: 10, total: 10 }, stream(fill(10, "w")), NO_HASH)).rejects.toThrow("crash");
+  const session = await deps.compat.findUpload(id as UploadId);
+  if (session?.phase.state !== "committed") throw new Error(JSON.stringify(session?.phase));
+  return { id, info: session.phase.result };
+}
+
+const head = (c: Client, key: string) => c.layer.head(BUCKET, key as ObjectKey);
+
+describe("a commit publishes in one write, so a crash after it leaves nothing to finish", () => {
+  test.each(STORES)("(%s) R4-A: the live object has its hashes and generation, and the sweep only drops the session", async (_, mk) => {
     const deps = await mk();
     const c = client(deps);
-    await c.layer.put(BUCKET, "o.bin" as ObjectKey, meta(), { stream: stream(fill(5, "o")), size: 5 });
-    const id = await begin(c, "o.bin");
-    const finishing = stallFirst(deps.compat, "nextGeneration");
-    const pending = c.uploads.append(id, BUCKET, { start: 0, size: 10, total: 10 }, stream(fill(10, "w")), NO_HASH);
-    await finishing.reached;
-    c.clock.now += HOLD_STALE_MS + 1;
+    const { id, info } = await crashedAfterPublish(deps, c, "o.bin");
+    expect(await head(c, "o.bin")).toEqual({ ok: true, value: info });
+    expect(info.hashes).not.toBeNull();
 
-    expect(await c.uploads.cancel(id, BUCKET)).toEqual({ ok: false, error: { code: "busy" } });
-    finishing.release();
-    const committed = await pending;
-    if (!committed.ok || committed.value.kind !== "committed") throw new Error(JSON.stringify(committed));
-    const replay = await c.uploads.append(id, BUCKET, { start: null, size: 0, total: 10 }, null, NO_HASH);
-    expect(replay).toEqual(committed);
-    expect(await c.uploads.status(id, BUCKET)).toEqual(committed);
-    expect(await c.layer.head(BUCKET, "o.bin" as ObjectKey)).toEqual({ ok: true, value: committed.value.info });
+    c.clock.now += UPLOAD_TTL_MS + 1;
+    expect((await sweepUploads(deps, c.clock.now)).sessions).toBe(1);
+    expect(await c.uploads.status(id, BUCKET)).toEqual({ ok: false, error: { code: "no_such_upload" } });
+    expect(await head(c, "o.bin")).toEqual({ ok: true, value: info });
     expect(await content(deps, c, "o.bin")).toBe("wwwwwwwwww");
   });
 
-  test.each(STORES)("(%s) the sweep drops the expired session and the owner still answers committed", async (_, mk) => {
+  test.each(STORES)("(%s) R4-B1: a later write to another key leaves the object's generation alone", async (_, mk) => {
+    const deps = await mk();
+    const c = client(deps);
+    const { id, info } = await crashedAfterPublish(deps, c, "o.bin");
+    await c.layer.put(BUCKET, "other.bin" as ObjectKey, meta(), { stream: stream(fill(3, "x")), size: 3 });
+    expect(await c.uploads.status(id, BUCKET)).toEqual({ ok: true, value: { kind: "committed", info } });
+    expect(await head(c, "o.bin")).toEqual({ ok: true, value: info });
+    c.clock.now += HOLD_STALE_MS + 1;
+    const match = await c.layer.put(BUCKET, "o.bin" as ObjectKey, meta({ ifGenerationMatch: info.generation }), { stream: stream(fill(2, "m")), size: 2 });
+    expect(match).toMatchObject({ ok: true });
+  });
+
+  test.each(STORES)("(%s) R4-B2: a newer overwrite stays live above the commit's generation", async (_, mk) => {
+    const deps = await mk();
+    const c = client(deps);
+    const { id, info } = await crashedAfterPublish(deps, c, "o.bin");
+    c.clock.now += HOLD_STALE_MS + 1;
+    const newer = await c.layer.put(BUCKET, "o.bin" as ObjectKey, meta(), { stream: stream(fill(3, "z")), size: 3 });
+    if (!newer.ok) throw new Error(JSON.stringify(newer));
+    expect(newer.value.generation).toBeGreaterThan(info.generation);
+    expect(await c.uploads.status(id, BUCKET)).toEqual({ ok: true, value: { kind: "committed", info } });
+    expect(await head(c, "o.bin")).toEqual({ ok: true, value: newer.value });
+    expect(await content(deps, c, "o.bin")).toBe("zzz");
+  });
+
+  test.each(STORES)("(%s) R4-D1: once the key is deleted the session still answers its commit, and cancels", async (_, mk) => {
+    const deps = await mk();
+    const c = client(deps);
+    const { id, info } = await crashedAfterPublish(deps, c, "o.bin");
+    c.clock.now += HOLD_STALE_MS + 1;
+    expect(await c.layer.delete(BUCKET, "o.bin" as ObjectKey)).toEqual({ ok: true, value: undefined });
+    const answer = { ok: true, value: { kind: "committed", info } };
+    expect(await c.uploads.status(id, BUCKET)).toEqual(answer);
+    expect(await c.uploads.append(id, BUCKET, { start: null, size: 0, total: 10 }, null, NO_HASH)).toEqual(answer);
+    expect(await c.uploads.cancel(id, BUCKET)).toEqual({ ok: true, value: undefined });
+    expect(await c.uploads.status(id, BUCKET)).toEqual({ ok: false, error: { code: "no_such_upload" } });
+    expect(await head(c, "o.bin")).toEqual({ ok: false, error: { code: "no_such_key" } });
+  });
+
+  test.each(STORES)("(%s) R4-D2: a key deleted and written again keeps the new object", async (_, mk) => {
+    const deps = await mk();
+    const c = client(deps);
+    const { id, info } = await crashedAfterPublish(deps, c, "o.bin");
+    c.clock.now += HOLD_STALE_MS + 1;
+    await c.layer.delete(BUCKET, "o.bin" as ObjectKey);
+    const again = await c.layer.put(BUCKET, "o.bin" as ObjectKey, meta(), { stream: stream(fill(3, "n")), size: 3 });
+    if (!again.ok) throw new Error(JSON.stringify(again));
+    expect(again.value.generation).toBeGreaterThan(info.generation);
+    expect(await c.uploads.status(id, BUCKET)).toEqual({ ok: true, value: { kind: "committed", info } });
+    expect(await head(c, "o.bin")).toEqual({ ok: true, value: again.value });
+    expect(await content(deps, c, "o.bin")).toBe("nnn");
+  });
+
+  test.each(STORES)("(%s) R4-E1: a REST pin set after the commit stays", async (_, mk) => {
+    const deps = await mk();
+    const c = client(deps);
+    await c.layer.put(BUCKET, "o.bin" as ObjectKey, meta(), { stream: stream(fill(5, "a")), size: 5 });
+    const pinned = await c.layer.put(BUCKET, "o.bin" as ObjectKey, meta(), { stream: stream(fill(5, "b")), size: 5 });
+    if (!pinned.ok) throw new Error(JSON.stringify(pinned));
+    const id = await begin(c, "o.bin");
+    vi.spyOn(deps.compat, "releaseLease").mockRejectedValueOnce(new Error("crash"));
+    await expect(c.uploads.append(id, BUCKET, { start: 0, size: 10, total: 10 }, stream(fill(10, "w")), NO_HASH)).rejects.toThrow("crash");
+    expect(await content(deps, c, "o.bin")).toBe("wwwwwwwwww");
+    const { assetId } = (await deps.compat.findBinding(BUCKET as BucketName, "o.bin" as ObjectKey))!;
+    await deps.metadata.update(assetId, { activeVersionId: pinned.value.etag });
+
+    expect(await c.uploads.status(id, BUCKET)).toMatchObject({ ok: true, value: { kind: "committed" } });
+    expect(await content(deps, c, "o.bin")).toBe("bbbbb");
+    expect((await deps.metadata.find(assetId))?.activeVersionId).toBe(pinned.value.etag);
+  });
+});
+
+describe("a commit stalled at its publish write", () => {
+  test.each(STORES)("(%s) R4-C: a replay waits, and every answer after the write is the one commit", async (_, mk) => {
     const deps = await mk();
     const c = client(deps);
     await c.layer.put(BUCKET, "o.bin" as ObjectKey, meta(), { stream: stream(fill(5, "o")), size: 5 });
     const id = await begin(c, "o.bin");
-    const finishing = stallFirst(deps.compat, "nextGeneration");
+    const writing = stallFirst(deps.writes, "createVersion");
     const pending = c.uploads.append(id, BUCKET, { start: 0, size: 10, total: 10 }, stream(fill(10, "w")), NO_HASH);
-    await finishing.reached;
-    c.clock.now += UPLOAD_TTL_MS + 1;
+    await writing.reached;
+    expect(await c.uploads.append(id, BUCKET, { start: null, size: 0, total: 10 }, null, NO_HASH)).toEqual({ ok: false, error: { code: "busy" } });
+    expect(await c.uploads.status(id, BUCKET)).toEqual({ ok: true, value: { kind: "incomplete", received: 10 } });
+    writing.release();
 
-    expect((await sweepUploads(deps, c.clock.now)).sessions).toBe(1);
-    finishing.release();
     const committed = await pending;
     if (!committed.ok || committed.value.kind !== "committed") throw new Error(JSON.stringify(committed));
-    expect(await c.layer.head(BUCKET, "o.bin" as ObjectKey)).toEqual({ ok: true, value: committed.value.info });
+    expect(await c.uploads.append(id, BUCKET, { start: null, size: 0, total: 10 }, null, NO_HASH)).toEqual(committed);
+    expect(await c.uploads.status(id, BUCKET)).toEqual(committed);
+    expect(await head(c, "o.bin")).toEqual({ ok: true, value: committed.value.info });
+    const { assetId } = (await deps.compat.findBinding(BUCKET as BucketName, "o.bin" as ObjectKey))!;
+    expect(await deps.versions.count(assetId)).toBe(1);
+  });
+
+  test.each(STORES)("(%s) R4-D3: a key deleted under a stale lease gets no version and no orphan hash record", async (_, mk) => {
+    const deps = await mk();
+    const c = client(deps);
+    await c.layer.put(BUCKET, "o.bin" as ObjectKey, meta(), { stream: stream(fill(5, "o")), size: 5 });
+    const { assetId } = (await deps.compat.findBinding(BUCKET as BucketName, "o.bin" as ObjectKey))!;
+    const id = await begin(c, "o.bin");
+    const writing = stallFirst(deps.writes, "createVersion");
+    const pending = c.uploads.append(id, BUCKET, { start: 0, size: 10, total: 10 }, stream(fill(10, "w")), NO_HASH);
+    await writing.reached;
+    c.clock.now += HOLD_STALE_MS + 1;
+    expect(await c.layer.delete(BUCKET, "o.bin" as ObjectKey)).toEqual({ ok: true, value: undefined });
+    writing.release();
+
+    expect(await pending).toEqual({ ok: false, error: { code: "busy" } });
+    expect(await head(c, "o.bin")).toEqual({ ok: false, error: { code: "no_such_key" } });
+    expect(await deps.metadata.find(assetId)).toBeNull();
+    expect(await deps.compat.findRecord(assetId)).toBeNull();
+    expect((await deps.storage.list(`assets/${assetId}/`)).keys).toEqual([]);
+    expect(await c.uploads.append(id, BUCKET, { start: null, size: 0, total: 10 }, null, NO_HASH))
+      .toEqual({ ok: false, error: { code: "precondition_failed" } });
+  });
+
+  test.each(STORES)("(%s) R4-D3: a key deleted while the owner stalls after its write leaves no orphan hash record", async (_, mk) => {
+    const deps = await mk();
+    const c = client(deps);
+    await c.layer.put(BUCKET, "o.bin" as ObjectKey, meta(), { stream: stream(fill(5, "o")), size: 5 });
+    const { assetId } = (await deps.compat.findBinding(BUCKET as BucketName, "o.bin" as ObjectKey))!;
+    const id = await begin(c, "o.bin");
+    const written = gate();
+    const resume = gate();
+    const createVersion = deps.writes.createVersion.bind(deps.writes);
+    vi.spyOn(deps.writes, "createVersion").mockImplementationOnce(async (input) => {
+      const version = await createVersion(input);
+      written.open();
+      await resume.opened;
+      return version;
+    });
+    const pending = c.uploads.append(id, BUCKET, { start: 0, size: 10, total: 10 }, stream(fill(10, "w")), NO_HASH);
+    await written.opened;
+    c.clock.now += HOLD_STALE_MS + 1;
+    expect(await c.layer.delete(BUCKET, "o.bin" as ObjectKey)).toEqual({ ok: true, value: undefined });
+    resume.open();
+
+    const committed = await pending;
+    if (!committed.ok || committed.value.kind !== "committed") throw new Error(JSON.stringify(committed));
+    expect(await deps.compat.findRecord(committed.value.info.etag)).toBeNull();
+    expect(await deps.metadata.find(assetId)).toBeNull();
+    expect(await head(c, "o.bin")).toEqual({ ok: false, error: { code: "no_such_key" } });
+  });
+
+  test.each(STORES)("(%s) P3: a cancel answers busy while the owner is fresh, and the commit lands", async (_, mk) => {
+    const deps = await mk();
+    const c = client(deps);
+    await c.layer.put(BUCKET, "o.bin" as ObjectKey, meta(), { stream: stream(fill(5, "o")), size: 5 });
+    const id = await begin(c, "o.bin");
+    const writing = stallFirst(deps.writes, "createVersion");
+    const pending = c.uploads.append(id, BUCKET, { start: 0, size: 10, total: 10 }, stream(fill(10, "w")), NO_HASH);
+    await writing.reached;
+    expect(await c.uploads.cancel(id, BUCKET)).toEqual({ ok: false, error: { code: "busy" } });
+    writing.release();
+    expect(await pending).toMatchObject({ ok: true, value: { kind: "committed" } });
     expect(await content(deps, c, "o.bin")).toBe("wwwwwwwwww");
+  });
+
+  test.each(STORES)("(%s) P3: a sweep of the expired session leaves the object as it was", async (_, mk) => {
+    const deps = await mk();
+    const c = client(deps);
+    await c.layer.put(BUCKET, "o.bin" as ObjectKey, meta(), { stream: stream(fill(5, "o")), size: 5 });
+    const before = await head(c, "o.bin");
+    const id = await begin(c, "o.bin");
+    const writing = stallFirst(deps.writes, "createVersion");
+    const pending = c.uploads.append(id, BUCKET, { start: 0, size: 10, total: 10 }, stream(fill(10, "w")), NO_HASH);
+    await writing.reached;
+    c.clock.now += UPLOAD_TTL_MS + 1;
+    expect((await sweepUploads(deps, c.clock.now)).sessions).toBe(1);
+    writing.release();
+    expect(await pending).toEqual({ ok: false, error: { code: "busy" } });
+    expect(await head(c, "o.bin")).toEqual(before);
+    expect(await content(deps, c, "o.bin")).toBe("ooooo");
   });
 });
 

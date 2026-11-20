@@ -12,7 +12,7 @@ const NO_HASH: DeclaredHashes = { crc32c: null, md5: null };
 
 const OPEN: UploadPhase = { state: "open", received: 100, total: null, hashState: initialHashState, parts: [] };
 const COMMITTING: UploadPhase = {
-  state: "committing", size: 100, hashState: initialHashState, parts: [], owner: null, ownerTokens: [], overwritingAssetId: null,
+  state: "committing", size: 100, hashState: initialHashState, parts: [], owner: null, overwritingAssetId: null,
 };
 
 function session(phase: UploadPhase = OPEN): UploadSession {
@@ -225,17 +225,18 @@ describe("a commit replayed after a crash", () => {
   type Crash = (f: Fixture) => void;
   const CRASH = new Error("simulated crash");
 
-  test.each<[string, boolean, Crash]>([
-    ["after the asset row, before the binding", false, (f) => { vi.spyOn(f.compat, "bind").mockRejectedValueOnce(CRASH); }],
-    ["after the new version, before its hashes", true, (f) => { vi.spyOn(f.compat, "putRecord").mockRejectedValueOnce(CRASH); }],
-  ])("%s finds one asset and one version at most", async (_, overwrite, crash) => {
+  test.each<[string, boolean, boolean, Crash]>([
+    ["in the publish of a new key", false, false, (f) => { vi.spyOn(f.deps.writes, "createAsset").mockRejectedValueOnce(CRASH); }],
+    ["in the publish of an overwrite", true, false, (f) => { vi.spyOn(f.deps.writes, "createVersion").mockRejectedValueOnce(CRASH); }],
+    ["after the publish of an overwrite", true, true, (f) => { vi.spyOn(f.compat, "releaseLease").mockRejectedValueOnce(CRASH); }],
+  ])("%s finds one asset and one version at most", async (_, overwrite, published, crash) => {
     const f = await uploadFixture();
     if (overwrite) await sendAll(f, await begin(f), bytesOf(CHUNK + 1, 9));
     const data = bytesOf(CHUNK * 2 + 3);
     const id = await begin(f);
     crash(f);
     await expect(sendAll(f, id, data)).rejects.toThrow(CRASH);
-    expect((await f.compat.findUpload(id as UploadId))?.phase).toMatchObject(overwrite ? { state: "published" } : { state: "committing", owner: null });
+    expect((await f.compat.findUpload(id as UploadId))?.phase).toMatchObject(published ? { state: "committed" } : { state: "committing", owner: null });
     vi.restoreAllMocks();
 
     const { uploads } = f.as("cred-a");

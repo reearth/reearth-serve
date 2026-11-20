@@ -1,6 +1,7 @@
 import type { AssetMetadata, AssetUploadResult } from "../model";
 import { detectArchiveFormat } from "../model";
-import type { AtomicWrites, FileStorage, WriteGuard } from "../repository";
+import type { AtomicWrites, FileStorage } from "../repository";
+import type { CompatPublish } from "../../compat/repository";
 import type { Job } from "../../job/model";
 import { generateId, storageKey } from "./shared";
 import { siteUrlFor } from "../../site/url";
@@ -22,8 +23,8 @@ export async function uploadAsset(
   },
   ttlSeconds: number,
   baseUrl: string,
-  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string; id?: string; userMeta?: Record<string, unknown>; guard?: () => WriteGuard },
-): Promise<AssetUploadResult> {
+  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string; id?: string; userMeta?: Record<string, unknown>; publish?: (asset: AssetMetadata) => CompatPublish },
+): Promise<AssetUploadResult & { generation?: number }> {
   const id = options?.id ?? generateId();
   const now = Date.now();
   const contentType = file.type || "application/octet-stream";
@@ -70,11 +71,12 @@ export async function uploadAsset(
     asset.jobId = id;
   }
 
+  let generation: number | null;
   try {
     // Job row, asset row and storage-usage counters in one atomic write, so a
     // failure never leaves an asset without its job or the counters short
     // (ADR-012 §3).
-    await writes.createAsset({ asset, job, usageScopes: options?.usageScopes, guard: options?.guard?.() });
+    ({ generation } = await writes.createAsset({ asset, job, usageScopes: options?.usageScopes, publish: options?.publish?.(asset) }));
 
     // Enqueue only after the rows are committed: the consumer reads them.
     if (job && options?.extractionQueue) {
@@ -122,6 +124,7 @@ export async function uploadAsset(
     asset,
     url: `${baseUrl}/files/${id}/${encodeURIComponent(file.name)}`,
     ...(siteUrl && { siteUrl }),
+    ...(generation !== null && { generation }),
   };
 }
 
@@ -137,7 +140,7 @@ if (import.meta.vitest) {
   function mockWrites() {
     const calls: CreateAssetInput[] = [];
     const writes: AtomicWrites = {
-      createAsset: vi.fn(async (input: CreateAssetInput) => { calls.push(input); }),
+      createAsset: vi.fn(async (input: CreateAssetInput) => { calls.push(input); return { generation: null }; }),
       createVersion: vi.fn(async () => { throw new Error("not used"); }),
       saveJob: vi.fn(async () => { throw new Error("not used"); }),
       deleteAsset: vi.fn(async () => { throw new Error("not used"); }),
@@ -251,7 +254,7 @@ if (import.meta.vitest) {
   test("uploadAsset enqueues extraction only after the rows are committed", async () => {
     const { writes } = mockWrites();
     const order: string[] = [];
-    (writes.createAsset as ReturnType<typeof vi.fn>).mockImplementation(async () => { order.push("write"); });
+    (writes.createAsset as ReturnType<typeof vi.fn>).mockImplementation(async () => { order.push("write"); return { generation: null }; });
     const extractionQueue = { send: vi.fn(async () => { order.push("enqueue"); }) };
 
     await uploadAsset(

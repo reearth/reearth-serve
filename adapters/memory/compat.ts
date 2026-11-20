@@ -3,11 +3,10 @@ import type {
   UploadId, UploadPhase, UploadSession,
 } from "../../core/compat/model";
 import {
-  newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatStore, type DeleteBucketResult,
-  type LeaseToken, type UploadTransition, type VersionRecord,
+  newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatPublish, type CompatStore,
+  type DeleteBucketResult, type LeaseToken, type VersionRecord,
 } from "../../core/compat/repository";
 import { isServiceRole } from "../../core/auth/types";
-import type { WriteGuard } from "../../core/asset/repository";
 
 type Row = {
   bucket: BucketName; key: string; kind: BindingKind; assetId: string | null; claimedAt: number; claimToken: ClaimToken;
@@ -70,10 +69,9 @@ export class MemoryCompatStore implements CompatStore {
     const binding = toBinding(row);
     return binding ? { kind: "bound", binding } : { kind: "busy" };
   }
-  async bind(bucket: BucketName, key: BindingKey, token: ClaimToken, assetId: string, upload?: UploadTransition): Promise<boolean> {
+  async bind(bucket: BucketName, key: BindingKey, token: ClaimToken, assetId: string): Promise<boolean> {
     const row = this.bindings.get(rowKey(bucket, key));
     if (!row || (row.assetId !== assetId && (row.assetId !== null || row.claimToken !== token))) return false;
-    if (upload && !(await this.updateUpload(upload.id, upload.revision, upload.phase))) return false;
     row.assetId = assetId;
     return true;
   }
@@ -194,15 +192,26 @@ export class MemoryCompatStore implements CompatStore {
     return { claims, leases };
   }
 
-  admit(guard: WriteGuard): boolean {
-    const u = this.uploads.get(guard.upload.id);
-    if (u?.revision !== guard.upload.revision) return false;
-    if (guard.lease) {
-      const row = this.bindings.get(rowKey(guard.lease.bucket, guard.lease.key));
-      if (row?.lease?.token !== guard.lease.token || row.assetId !== guard.lease.assetId) return false;
-    }
-    if (guard.publish) this.uploads.set(u.id, { ...u, revision: u.revision + 1, phase: structuredClone(guard.publish) });
-    return true;
+  /**
+   * The compat rows of `publish` (see `SqlAtomicWrites`), synchronously so no
+   * other request runs between the check and the writes. Returns the issued
+   * generation, or null when the publish no longer holds and nothing changed.
+   */
+  publish({ upload, hold, record, result }: CompatPublish): number | null {
+    const session = this.uploads.get(upload.id);
+    const row = this.bindings.get(rowKey(hold.bucket, hold.key));
+    if (session?.revision !== upload.revision || !row) return null;
+    const holds = hold.kind === "lease"
+      ? row.lease?.token === hold.token && row.assetId === hold.assetId
+      : row.claimToken === hold.token && row.assetId === null;
+    if (!holds) return null;
+    if (hold.kind === "claim") row.assetId = hold.assetId;
+    const generation = Math.max((this.generations.get(hold.bucket) ?? 0) + 1, record.atLeast);
+    this.generations.set(hold.bucket, generation);
+    this.hashes.set(record.objectRef, { assetId: hold.assetId, record: { generation, hashes: record.hashes } });
+    const committed = { state: "committed" as const, result: structuredClone({ ...result, generation }) };
+    this.uploads.set(session.id, { ...session, revision: session.revision + 1, phase: committed });
+    return generation;
   }
 
   dropAsset(assetId: string): void {

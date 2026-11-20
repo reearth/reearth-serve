@@ -1,7 +1,7 @@
 import type { AssetMetadata, AssetVersion, StoredFile, UploadSession, UploadPart } from "./model";
 import type { Job } from "../job/model";
 import type { SiteHost } from "../site/repository";
-import type { UploadPhase } from "../compat/model";
+import type { CompatPublish } from "../compat/repository";
 
 export interface ListResult<T> {
   items: T[];
@@ -93,19 +93,10 @@ export interface VersionStore {
   count(assetId: string): Promise<number>;
 }
 
-/**
- * The hold a resumable upload's commit must still own when its asset or
- * version row lands (ADR-019 §3): the upload session at `revision`, and the
- * key's overwrite lease `token` when given. The adapter checks it in the same
- * atomic write; when it no longer holds, nothing is written and the write
- * throws `HoldLost`.
- */
-export type WriteGuard = {
-  upload: { id: string; revision: number };
-  lease?: { bucket: string; key: string; token: string; assetId: string };
-  publish?: UploadPhase;
-};
+/** The generation a `CompatPublish` issued, null without one. */
+export type Published = { generation: number | null };
 
+/** A `CompatPublish` whose session revision or key hold no longer holds: nothing was written. */
 export class HoldLost extends Error {
   constructor() {
     super("the upload commit no longer holds its session or lease");
@@ -125,13 +116,17 @@ export class HoldLost extends Error {
  * the size of the asset or version being written.
  */
 export interface AtomicWrites {
-  /** A new asset, its optional extraction job, and storage-usage increments. */
-  createAsset(input: { asset: AssetMetadata; job?: Job; usageScopes?: string[]; guard?: WriteGuard }): Promise<void>;
+  /**
+   * A new asset, its optional extraction job, and storage-usage increments.
+   * With `publish`, also that publish; returns the generation it issued.
+   */
+  createAsset(input: { asset: AssetMetadata; job?: Job; usageScopes?: string[]; publish?: CompatPublish }): Promise<Published>;
   /**
    * A new version, its optional extraction job, and storage-usage increments.
    * Returns the version with the number the store assigned (see `VersionStore.save`).
+   * With `publish`, also that publish, and the generation it issued.
    */
-  createVersion(input: { version: AssetVersion; job?: Job; usageScopes?: string[]; guard?: WriteGuard }): Promise<AssetVersion>;
+  createVersion(input: { version: AssetVersion; job?: Job; usageScopes?: string[]; publish?: CompatPublish }): Promise<AssetVersion & Published>;
   /**
    * A job row plus the row that mirrors its status: the version for a
    * version's job, the asset otherwise. A version's job may still pass the

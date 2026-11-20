@@ -7,7 +7,7 @@
  */
 import type {
   Binding, BindingKind, BucketName, CompatBucket, CompatCredential, CredentialId,
-  ExactHashes, FolderKey, ObjectKey, UploadId, UploadPhase, UploadSession,
+  ExactHashes, FolderKey, ObjectInfo, ObjectKey, UploadId, UploadPhase, UploadSession,
 } from "./model";
 
 export type BindingKey = ObjectKey | FolderKey;
@@ -36,7 +36,23 @@ export type ClaimResult =
 
 export type DeleteBucketResult = "deleted" | "absent" | "not_empty";
 
-export type UploadTransition = { id: UploadId; revision: number; phase: UploadPhase };
+/**
+ * A resumable commit's publish (ADR-019 §3), applied by `AtomicWrites` in the
+ * same atomic write as the asset or version row it names. The write applies
+ * only while the session is still at `upload.revision` and `hold` still holds:
+ * the unfilled claim `token` for a new key, which the write fills with
+ * `assetId`, or the lease `token` on the binding that names `assetId` for an
+ * overwrite, whose pinned version the write clears. In the same write the
+ * bucket's high mark issues the generation, the hash record of `objectRef` is
+ * stored at it, and the session moves to committed with `result` at it.
+ * Otherwise nothing is written and the write throws `HoldLost`.
+ */
+export type CompatPublish = {
+  upload: { id: UploadId; revision: number };
+  hold: { kind: "claim" | "lease"; bucket: BucketName; key: ObjectKey; token: string; assetId: string };
+  record: { objectRef: string; atLeast: number; hashes: ExactHashes };
+  result: Omit<ObjectInfo, "generation">;
+};
 
 export interface CompatStore {
   findBucket(name: BucketName): Promise<CompatBucket | null>;
@@ -62,10 +78,9 @@ export interface CompatStore {
   /**
    * Fill the claim `token` with `assetId`. True when the row now names
    * `assetId`, including a repeat of the same bind; false when the claim was
-   * lost to a takeover or the key names another asset. With `upload`, the
-   * bind and that transition happen together or not at all.
+   * lost to a takeover or the key names another asset.
    */
-  bind(bucket: BucketName, key: BindingKey, token: ClaimToken, assetId: string, upload?: UploadTransition): Promise<boolean>;
+  bind(bucket: BucketName, key: BindingKey, token: ClaimToken, assetId: string): Promise<boolean>;
   /** Drop the claim `token` this writer failed to fill. No-op once bound or taken over. */
   releaseClaim(bucket: BucketName, key: BindingKey, token: ClaimToken): Promise<void>;
   deleteBinding(bucket: BucketName, key: BindingKey): Promise<void>;

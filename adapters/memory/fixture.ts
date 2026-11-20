@@ -415,14 +415,21 @@ export async function fixture(overrides?: Partial<Deps>) {
     versions,
     storage,
     writes: {
-      async createAsset({ asset, guard }) {
-        if (guard && !compat.admit(guard)) throw new HoldLost();
-        await metadata.save(asset);
+      async createAsset({ asset, publish }) {
+        const generation = publish ? compat.publish(publish) : null;
+        if (publish && generation === null) throw new HoldLost();
+        metadata.assets.set(asset.id, asset);
+        return { generation };
       },
-      async createVersion({ version, guard }) {
-        if (guard && !compat.admit(guard)) throw new HoldLost();
+      async createVersion({ version, publish }) {
+        const generation = publish ? compat.publish(publish) : null;
+        if (publish && generation === null) throw new HoldLost();
+        const parent = publish && metadata.assets.get(version.assetId);
+        if (parent) metadata.assets.set(parent.id, { ...parent, activeVersionId: undefined });
         const numbers = [...versions.versions.values()].filter((v) => v.assetId === version.assetId).map((v) => v.version);
-        return versions.save({ ...version, version: Math.max(0, ...numbers) + 1 });
+        const saved = { ...version, version: Math.max(0, ...numbers) + 1 };
+        versions.versions.set(saved.id, saved);
+        return { ...saved, generation };
       },
       saveJob: () => { throw new Error('fake dependency "writes.saveJob" was called unexpectedly'); },
       async deleteAsset({ asset, releasedAt }) {
