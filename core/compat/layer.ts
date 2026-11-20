@@ -97,7 +97,6 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
     return { binding, ...found };
   }
 
-  /** Each resolved object with its record, storing the missing ones in one store call. Objects whose record is gone with the bucket are left out. */
   async function describeAll(bucket: CompatBucket, objects: Resolved[]): Promise<ObjectInfo[]> {
     const records = await compat.records(bucket.name, objects.map((r) => ({ objectRef: refOf(r), assetId: r.asset.id })));
     return objects.flatMap((r) => {
