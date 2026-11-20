@@ -4,7 +4,7 @@ import type {
 } from "../../core/compat/model";
 import {
   newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatStore, type DeleteBucketResult,
-  type LeaseToken, type VersionRecord,
+  type LeaseToken, type RecordRef, type VersionRecord,
 } from "../../core/compat/repository";
 import type { Row, SqlClient, SqlStatement } from "../../core/sql/port";
 import { queryAll, queryFirst } from "./helpers";
@@ -145,29 +145,44 @@ export class SqlCompatStore implements CompatStore {
     return rows.map(parseBinding);
   }
 
-  async nextGeneration(bucket: BucketName, atLeast: number): Promise<number> {
-    const row = await queryFirst(
-      this.db,
-      "UPDATE compat_buckets SET last_generation = MAX(last_generation + 1, ?2) WHERE name = ?1 RETURNING last_generation",
-      [bucket, atLeast],
-    );
-    return row ? Number(row.last_generation) : atLeast;
-  }
-
-  async findRecord(objectRef: string): Promise<VersionRecord | null> {
-    const row = await queryFirst(
-      this.db,
-      "SELECT generation, md5, crc32c FROM compat_hashes WHERE object_ref = ?1",
-      [objectRef],
-    );
-    return row ? { generation: Number(row.generation), hashes: { md5: toBytes(row.md5), crc32c: Number(row.crc32c) } } : null;
-  }
-
-  async putRecord(objectRef: string, assetId: string, { generation, hashes }: VersionRecord): Promise<void> {
-    await this.db.execute(
-      "INSERT OR REPLACE INTO compat_hashes (object_ref, asset_id, generation, md5, crc32c) VALUES (?1, ?2, ?3, ?4, ?5)",
-      [objectRef, assetId, generation, hashes.md5, hashes.crc32c],
-    );
+  async records(bucket: BucketName, refs: RecordRef[]): Promise<Map<string, VersionRecord>> {
+    const unique = [...new Map(refs.map((r) => [r.objectRef, r])).values()];
+    if (unique.length === 0) return new Map();
+    const wanted = JSON.stringify(unique.map((r) => ({ ref: r.objectRef, asset: r.assetId })));
+    const refIds = JSON.stringify(unique.map((r) => r.objectRef));
+    const results = await this.db.batch([
+      {
+        sql: `INSERT INTO compat_hashes (object_ref, asset_id, generation, md5, crc32c)
+                SELECT json_extract(w.value, '$.ref'), json_extract(w.value, '$.asset'),
+                       b.last_generation + ROW_NUMBER() OVER (ORDER BY w.key), NULL, NULL
+                  FROM json_each(?2) AS w JOIN compat_buckets AS b ON b.name = ?1
+                 WHERE NOT EXISTS (SELECT 1 FROM compat_hashes AS h WHERE h.object_ref = json_extract(w.value, '$.ref'))
+                ON CONFLICT (object_ref) DO NOTHING`,
+        args: [bucket, wanted],
+      },
+      {
+        sql: `UPDATE compat_buckets SET last_generation = MAX(last_generation, COALESCE(
+                (SELECT MAX(generation) FROM compat_hashes WHERE object_ref IN (SELECT value FROM json_each(?2))), 0))
+              WHERE name = ?1`,
+        args: [bucket, refIds],
+      },
+      ...unique.flatMap((r) => r.hashes
+        ? [{
+          sql: "UPDATE compat_hashes SET md5 = ?2, crc32c = ?3 WHERE object_ref = ?1 AND md5 IS NULL",
+          args: [r.objectRef, r.hashes.md5, r.hashes.crc32c],
+        }]
+        : []),
+      {
+        sql: `SELECT h.object_ref, h.generation, h.md5, h.crc32c FROM compat_hashes AS h
+               WHERE h.object_ref IN (SELECT value FROM json_each(?2))
+                 AND EXISTS (SELECT 1 FROM compat_buckets WHERE name = ?1)`,
+        args: [bucket, refIds],
+      },
+    ]);
+    return new Map(results[results.length - 1].rows.map((row) => [row.object_ref as string, {
+      generation: Number(row.generation),
+      hashes: row.md5 === null ? null : { md5: toBytes(row.md5), crc32c: Number(row.crc32c) },
+    }]));
   }
 
   async findCredential(id: CredentialId): Promise<CompatCredential | null> {

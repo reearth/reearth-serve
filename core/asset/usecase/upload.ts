@@ -2,7 +2,7 @@ import type { AssetMetadata, AssetUploadResult } from "../model";
 import { detectArchiveFormat } from "../model";
 import type { AtomicWrites, FileStorage } from "../repository";
 import type { Job } from "../../job/model";
-import { generateId, storageKey } from "./shared";
+import { dropUnwrittenBytes, generateId, storageKey, type Written } from "./shared";
 import { siteUrlFor } from "../../site/url";
 import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
@@ -22,7 +22,7 @@ export async function uploadAsset(
   },
   ttlSeconds: number,
   baseUrl: string,
-  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string; id?: string; userMeta?: Record<string, unknown> },
+  options?: { sessionId?: string | null; projectId?: string | null; extractionQueue?: JobQueue<ExtractionMessage> | null; thumbnailQueue?: JobQueue<ThumbnailMessage> | null; skipExtraction?: boolean; usageScopes?: string[]; siteHostSuffix?: string; id?: string; userMeta?: Record<string, unknown>; written?: Written },
 ): Promise<AssetUploadResult> {
   const id = options?.id ?? generateId();
   const now = Date.now();
@@ -99,15 +99,7 @@ export async function uploadAsset(
       size: file.size,
     });
   } catch (e) {
-    // R2 put already succeeded but D1 metadata write failed. Without
-    // compensation the R2 object is orphaned (cleanup drives off D1 rows),
-    // so try to delete it. Best-effort: a delete failure here is logged
-    // but the original error is what the caller cares about.
-    try {
-      await storage.delete(key);
-    } catch (delErr) {
-      console.error("Failed to clean up R2 object after metadata save failure:", delErr);
-    }
+    await dropUnwrittenBytes(storage, key, options?.written);
     throw e;
   }
 

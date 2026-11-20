@@ -1,3 +1,4 @@
+import type { FileStorage } from "../repository";
 import type { ProjectStore } from "../../project/repository";
 
 export function generateId(): string {
@@ -48,4 +49,21 @@ export async function usageScopesFor(
   const project = await projects.find(projectId);
   if (project?.workspaceId) scopes.push(`workspace:${project.workspaceId}`);
   return scopes;
+}
+
+/** A re-read telling whether a create write that threw applied anyway (a lost response, say). */
+export type Written = { applied(): Promise<boolean> };
+
+/**
+ * After a create write threw, delete the bytes it was to point at, unless
+ * `written` finds its row or cannot rule it out. A leak is cheaper than a
+ * live object without bytes.
+ */
+export async function dropUnwrittenBytes(storage: FileStorage, key: string, written?: Written): Promise<void> {
+  if (written && (await written.applied().catch(() => true))) return;
+  try {
+    await storage.delete(key);
+  } catch (e) {
+    console.error(`Failed to clean up ${key} after its metadata write failed:`, e);
+  }
 }
