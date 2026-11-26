@@ -13,7 +13,7 @@ import { dispositionHeaders } from "./disposition";
 import { handleAuthSubmit } from "../access/form";
 import { AUTH_PATH_SEGMENT, resolveAccess, type AccessDeps } from "../access/resolve";
 import type { BearerDecision } from "../access/restricted";
-import { deliveryPolicy } from "../access/grant";
+import { deliveryPolicy, type ServiceGrant } from "../access/grant";
 import { readDeliveryRequest } from "../access/request";
 import { toUnixSeconds, type AssetPath } from "../access/token";
 import type { VerifiedCaller } from "../auth/types";
@@ -731,6 +731,36 @@ interface ServeOptions extends ReadConditions {
   cacheControl: string;
   storage: FileStorage;
   siteHost: boolean;
+}
+
+export interface DeliveryTarget {
+  resolved: ResolvedAsset;
+  /** The uploaded object's own path: its filename, which `locate` maps to the main file in every layout. */
+  path: string;
+  grant: ServiceGrant;
+}
+
+/**
+ * The `/files` delivery of one asset to a caller that already holds
+ * `read_asset` on it (ADR-019 §6): ETag, `If-None-Match`, `Range` and gzip
+ * passthrough as on `/files`, under the service grant's policy, and none of
+ * the visitor's checks, site rules or fallbacks. The caller authorizes; only
+ * `resolveAccess`, inside `serveRoute`, grants a visitor. Null when the bytes
+ * are gone, for the caller to answer in its own protocol.
+ */
+export async function deliverAsset(storage: FileStorage, request: Request, target: DeliveryTarget): Promise<Response | null> {
+  const located = await locateIn(storage, layoutsOf(target.resolved), target.path);
+  if (!located) return null;
+  const policy = deliveryPolicy(target.grant, toUnixSeconds(Date.now()));
+  const res = await sendLocated(located, {
+    ...conditionsOf(request),
+    cacheControl: cacheControlFor({ pinned: false, contentType: located.contentType }, policy),
+    storage,
+    siteHost: false,
+  });
+  if (res.status === 404) return null;
+  res.headers.set("X-Content-Type-Options", "nosniff");
+  return res;
 }
 
 async function sendLocated(located: Located, opts: ServeOptions): Promise<Response> {

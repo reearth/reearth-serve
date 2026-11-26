@@ -9,7 +9,7 @@
  */
 
 import type { VerifiedCaller } from "../auth/types";
-import type { Grant } from "./grant";
+import type { VisitorGrant } from "./grant";
 import { noStoreHeaders } from "./page";
 import type { TokenCarry } from "./request";
 import type { AssetPath, DeliveryTokenCodec, UnixSeconds } from "./token";
@@ -40,7 +40,7 @@ export interface RestrictedRead {
 }
 
 export type RestrictedResolution =
-  | { kind: "allow"; grant: Grant }
+  | { kind: "allow"; grant: VisitorGrant }
   | { kind: "challenge"; response: Response };
 
 /** The JWT of `Authorization: Bearer <jwt>`; any other scheme counts as absent. */
@@ -59,7 +59,7 @@ export function covers(prefix: AssetPath, path: AssetPath): boolean {
   return path.startsWith(prefix.endsWith("/") ? prefix : `${prefix}/`);
 }
 
-type TokenOutcome = { kind: "absent" } | { kind: "covers"; grant: Grant } | { kind: "out_of_scope" };
+type TokenOutcome = { kind: "absent" } | { kind: "covers"; grant: VisitorGrant } | { kind: "out_of_scope" };
 
 async function checkToken(read: RestrictedRead, tokens: DeliveryTokenCodec | null): Promise<TokenOutcome> {
   if (!tokens || read.carry.kind !== "one") return { kind: "absent" };
