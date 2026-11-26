@@ -6,7 +6,7 @@ import { protect } from "../../../adapters/memory/fixture";
 import { issueCredential, type KeyFile } from "../credential";
 import type { Deps } from "../../types";
 import type { BucketName, CredentialId, ObjectKey } from "../model";
-import { API, API_HOST, accessToken, assertion, bearer, compatFixture, keyFor, onApi, type Fixture } from "./testing";
+import { API, API_HOST, accessToken, assertion, bearer, compatFixture, keyFor, onApi, type Fixture } from "../../../adapters/memory/compat-fixture";
 import { contentRangeOf, declaredHashesOf } from "./app";
 import { canonicalRequest, objectPathOf, parseSignedUrl } from "./signed-url";
 

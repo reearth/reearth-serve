@@ -2,7 +2,7 @@ import { describe, expect, test } from "vitest";
 import { protect, SIGNING_SECRET } from "../../adapters/memory/fixture";
 import { mintAuthCookie, SITE_COOKIE } from "../access/cookie";
 import type { BucketName, ObjectKey } from "./model";
-import { accessToken, bearer, compatFixture, keyFor, onApi, type Fixture } from "./gcs/testing";
+import { accessToken, bearer, compatFixture, keyFor, onApi, type Fixture } from "../../adapters/memory/compat-fixture";
 
 const OBJECTS = "objects.example.test";
 const BODY = "hello, public reader";

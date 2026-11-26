@@ -1,11 +1,11 @@
 import { expect } from "vitest";
 import { SignJWT, importPKCS8 } from "jose";
-import { fixture } from "../../../adapters/memory/fixture";
-import { MemoryProjectStore } from "../../../adapters/memory/site-fixture";
-import type { Deps } from "../../types";
-import type { ServiceRole } from "../../auth/types";
-import { issueCredential, type KeyFile } from "../credential";
-import type { BucketName } from "../model";
+import { fixture } from "./fixture";
+import { MemoryProjectStore } from "./site-fixture";
+import type { Deps } from "../../core/types";
+import type { ServiceRole } from "../../core/auth/types";
+import { issueCredential, type KeyFile } from "../../core/compat/credential";
+import type { BucketName } from "../../core/compat/model";
 
 export const API_HOST = "storage.example.test";
 export const API = `https://${API_HOST}`;
