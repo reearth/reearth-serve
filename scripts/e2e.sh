@@ -86,11 +86,12 @@ fi
   echo 'SITE_DOMAIN_IS_PUBLIC_SUFFIX = "true"'
   echo "COMPAT_GCS_HOST = \"storage.localhost:${PORT}\""
   echo 'COMPAT_SIGNED_PATH_PREFIX = "/gcs-uploads"'
-  echo "COMPAT_OBJECTS_HOST = \"objects.localhost:${PORT}\""
+  echo "COMPAT_OBJECTS_HOST = \"objects.serve-e2e.test:${PORT}\""
 } > .dev.vars
 
 echo "Starting dev server on port ${PORT}..."
-npm run dev -- --port "$PORT" &
+# The objects host may not sit under the localhost apex, so Vite must be told to accept it.
+SERVE_DEV_ALLOWED_HOSTS=".serve-e2e.test" npm run dev -- --port "$PORT" &
 DEV_PID=$!
 
 # Wait for the server to be ready
@@ -118,5 +119,5 @@ E2E_MOCK_OIDC="http://localhost:${MOCK_OIDC_PORT}" \
 E2E_INTERNAL_API_SECRET="${INTERNAL_API_SECRET}" \
 E2E_COMPAT_GCS_HOST="storage.localhost:${PORT}" \
 E2E_COMPAT_SIGNED_PATH_PREFIX="/gcs-uploads" \
-E2E_COMPAT_OBJECTS_HOST="objects.localhost:${PORT}" \
+E2E_COMPAT_OBJECTS_HOST="objects.serve-e2e.test:${PORT}" \
   npm run test:e2e -- "$@"

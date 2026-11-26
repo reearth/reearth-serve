@@ -26,7 +26,7 @@ describe("buildDeps", () => {
   });
 
   test("an objects host under the site-host suffix, the API host or the BASE_URL host is a config error naming the setting", () => {
-    expect(() => buildDeps({ ...env, SITE_HOST_SUFFIX: ".sites.example.net", COMPAT_OBJECTS_HOST: "o.sites.example.net" })).toThrow(/COMPAT_OBJECTS_HOST/);
+    expect(() => buildDeps({ ...env, SITE_HOST_SUFFIX: ".sites.example.net", SITE_REGISTRABLE_DOMAIN: "example.net", COMPAT_OBJECTS_HOST: "o.sites.example.net" })).toThrow(/COMPAT_OBJECTS_HOST/);
     expect(() => buildDeps({ ...env, COMPAT_GCS_HOST: "storage.example.test", COMPAT_OBJECTS_HOST: "objects.storage.example.test" })).toThrow(/COMPAT_OBJECTS_HOST/);
     expect(() => buildDeps({ ...env, COMPAT_OBJECTS_HOST: `objects.${new URL(env.BASE_URL).hostname}` })).toThrow(/COMPAT_OBJECTS_HOST/);
   });

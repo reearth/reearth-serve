@@ -214,7 +214,7 @@ Set via `npx wrangler secret put <NAME>`:
 | `SITE_DNS_RESOLVER_URL` | No | DNS-over-HTTPS endpoint used for the custom-domain TXT check. Default `https://cloudflare-dns.com/dns-query` |
 | `COMPAT_GCS_HOST` | No | Host the GCS-compatible API answers on (ADR-019), e.g. `storage.example.com`. A bare `host[:port]`; a scheme or path refuses to start. Key files name it as their token endpoint. Unset ⇒ the API is off and issuing a compat credential answers 503 |
 | `COMPAT_SIGNED_PATH_PREFIX` | No | Path an application puts in front of a V4 signed URL's path after signing. A signed request is checked against its path as received, then with the prefix removed (ADR-019 §4). Must start with `/` |
-| `COMPAT_OBJECTS_HOST` | No | Read-only public objects host (ADR-019 §6), e.g. `objects.example.com` with `{bucket}.objects.example.com`. A bare `host[:port]`. Needs a wildcard certificate for the virtual-host form |
+| `COMPAT_OBJECTS_HOST` | No | Read-only public objects host (ADR-019 §6), e.g. `objects.example.com` with `{bucket}.objects.example.com`. A bare `host[:port]`. Needs a wildcard certificate for the virtual-host form. May not equal, sit under or sit over the `BASE_URL` host, `COMPAT_GCS_HOST` or the `SITE_HOST_SUFFIX` base |
 | `ACCOUNTS_URL` | No | Optional adapter setting. Takes workspaces, members and decisions from an external accounts service; see [`adapters/accounts/README.md`](./adapters/accounts/README.md). Excludes `CERBOS_ENDPOINT` and needs `OIDC_ISSUER_URL`. An invalid value stops Node at startup; on Workers every `/api/` and `/files` request answers `500`. |
 
 \* Required for presigned URL uploads and archive extraction containers.

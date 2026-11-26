@@ -14,7 +14,30 @@ function hostname(host: string): string {
   return host.trim().toLowerCase().replace(/:\d+$/, "").replace(/\.$/, "");
 }
 
-export function parseCompatHosts(env: { api: string | undefined; objects: string | undefined }, baseUrl: string): CompatHostConfig {
+/** True when one name is the other or sits under it. */
+function overlaps(a: string, b: string): boolean {
+  return a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
+}
+
+/**
+ * The objects host serves every bucket's keys to anonymous visitors, so it
+ * shares a name with no other host: not the apex, the API host or the
+ * site-host suffix's base, neither under one nor over one. Ports are ignored,
+ * as the classifier ignores them.
+ */
+function checkObjectsHost(objects: string, others: { name: string; setting: string }[]): void {
+  const name = hostname(objects);
+  for (const other of others) {
+    if (overlaps(name, hostname(other.name))) {
+      throw new Error(`COMPAT_OBJECTS_HOST "${objects}" overlaps the ${other.setting} host "${other.name}"`);
+    }
+  }
+}
+
+export function parseCompatHosts(
+  env: { api: string | undefined; objects: string | undefined },
+  { baseUrl, siteHostSuffix }: { baseUrl: string; siteHostSuffix: string | undefined },
+): CompatHostConfig {
   const cfg = { api: parseCompatHost(env.api), objects: parseCompatHost(env.objects, "COMPAT_OBJECTS_HOST") };
   const apex = new URL(baseUrl).host;
   if (classifyCompatHost(apex, { api: cfg.api, objects: undefined })) {
@@ -25,6 +48,13 @@ export function parseCompatHosts(env: { api: string | undefined; objects: string
   }
   if (cfg.api && cfg.objects && hostname(cfg.api) === hostname(cfg.objects)) {
     throw new Error(`COMPAT_GCS_HOST "${cfg.api}" is the same host as COMPAT_OBJECTS_HOST "${cfg.objects}"`);
+  }
+  if (cfg.objects) {
+    checkObjectsHost(cfg.objects, [
+      { name: apex, setting: "BASE_URL" },
+      ...(cfg.api ? [{ name: cfg.api, setting: "COMPAT_GCS_HOST" }] : []),
+      ...(siteHostSuffix?.trim() ? [{ name: siteHostSuffix.trim().replace(/^\./, ""), setting: "SITE_HOST_SUFFIX" }] : []),
+    ]);
   }
   return cfg;
 }

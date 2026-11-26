@@ -91,7 +91,7 @@ export function loadConfig(env: Env): NodeConfig {
   const port = intOr(env.PORT, DEFAULT_PORT);
   const isolation = checkSiteIsolation(env);
   const baseUrl = env.BASE_URL || `http://localhost:${port}`;
-  const compatHosts = parseCompatHosts({ api: env.COMPAT_GCS_HOST, objects: env.COMPAT_OBJECTS_HOST }, baseUrl);
+  const compatHosts = parseCompatHosts({ api: env.COMPAT_GCS_HOST, objects: env.COMPAT_OBJECTS_HOST }, { baseUrl, siteHostSuffix: env.SITE_HOST_SUFFIX });
   return {
     port,
     baseUrl,

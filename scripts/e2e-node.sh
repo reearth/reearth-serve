@@ -28,7 +28,8 @@ DELIVERY_TOKEN_KEYS="${DELIVERY_TOKEN_KEYS:-$E2E_DELIVERY_TOKEN_KEYS}"
 SITE_HOST_SUFFIX="${SITE_HOST_SUFFIX:-.localhost:${PORT}}"
 COMPAT_GCS_HOST="${COMPAT_GCS_HOST:-storage.localhost:${PORT}}"
 COMPAT_SIGNED_PATH_PREFIX="${COMPAT_SIGNED_PATH_PREFIX:-/gcs-uploads}"
-COMPAT_OBJECTS_HOST="${COMPAT_OBJECTS_HOST:-objects.localhost:${PORT}}"
+# Not under localhost: the objects host may share a name with no other host.
+COMPAT_OBJECTS_HOST="${COMPAT_OBJECTS_HOST:-objects.serve-e2e.test:${PORT}}"
 
 cleanup() {
   if [ -n "${SERVER_PID:-}" ]; then
