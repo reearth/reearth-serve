@@ -50,7 +50,7 @@ directories and a wrangler 4.73 local D1:
 | Directives | A file starting with `-- atlas:nolint` passes lint with a `DROP TABLE` in it (exit 0; exit 1 without the directive). |
 | Atlas as applier | Refuses an existing database without `--baseline` and keeps its own `atlas_schema_revisions` table. |
 | Duplicate numbers | Two `0008_*.sql` files pass hash, validate and lint. |
-| Install | Community binaries are only at `atlasbinaries.com`, with a `.sha256` beside each. `ariga/setup-atlas` installs the non-community build. There is no `go install` path for v1.x. Old binaries are deleted after about six months. |
+| Install | Community binaries are only at `atlasbinaries.com`, with a `.sha256` beside each. `ariga/setup-atlas` installs the non-community build. There is no `go install` path for v1.x. Upstream may remove old builds. |
 
 ## Decision
 
@@ -81,16 +81,21 @@ so no Docker is needed.
 
 `npm run db:check` runs, for both environments:
 
-1. a sequence check (`scripts/migration-sequence.ts`): prefixes are four
-   digits and unique, every file on the base branch is byte-identical, every
+1. a sequence check (`scripts/migration-sequence.ts`): every entry in a
+   directory except `atlas.sum`, dotfiles and subdirectories included, is a
+   file named `NNNN_name.sql` (wrangler applies every `*.sql`, dotfiles
+   too), prefixes are unique, every file on the base branch is byte-identical, every
    new file sorts after the base branch's highest prefix, no file carries a
    bare `atlas:nolint` directive (it silences every lint check), and the two
    directories share no file name;
 2. `atlas migrate validate`: `atlas.sum` matches and the files replay;
 3. `atlas migrate lint --git-base <base>`: destructive changes fail. An
    intended one, such as a table rebuild that drops and recreates a table,
-   names the check it waives on the line before it, as in
-   `-- atlas:nolint DS102`, so the waiver shows in review.
+   carries an `-- atlas:nolint DS102` directive that names the check it
+   waives, so the waiver shows in review. Atlas reads the directive in two
+   forms. Directly above a statement, with no blank line between, it waives
+   that statement only. At the top of the file, followed by a blank line, it
+   waives the whole file. Use the statement form.
 
 The sequence check covers the collision Atlas does not catch. It fails the
 second of two PRs that both add `0008`, which then renumbers.
@@ -116,8 +121,11 @@ it against the lock (not against the `.sha256` on the same server), caches it
 in `.cache/atlas/<version>/`, re-checks the cached copy on every call, and
 runs it with the update notifier off. A wrong hash, a failed download or an
 unlisted platform stops it before the binary runs. CI caches the binary
-keyed on the lock file, so the job keeps working if upstream deletes the
-pinned version. A version bump is a PR that changes the lock.
+keyed on the lock file to skip the download. The cache is not a fallback:
+GitHub evicts a cache that no run used for 7 days. If upstream removes the
+pinned binary and the cache is gone, the `migrations` job fails and blocks
+deploy until a PR bumps `tools/atlas.lock`: the version and all four sha256
+lines, each checked against a download of that binary.
 
 No step calls `atlas login` or Atlas Cloud.
 
@@ -140,6 +148,8 @@ refused with a message to recreate it.
   fails CI before it can deploy.
 - Contributors need network access the first time they run `db:check`. They
   need no account.
+- Upstream may remove old builds. When the pinned one is gone and no cache
+  holds it, CI fails and deploy waits for a PR that bumps `tools/atlas.lock`.
 - Atlas applies nothing anywhere. A bug in Atlas can block a merge, never
   change a database.
 - Changes made to remote D1 outside migrations stay undetected. Catching them
