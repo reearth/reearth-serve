@@ -1,6 +1,26 @@
 import type { Context } from "hono";
 import type { AppEnv } from "../../types";
 import { accessCtx, authorizeProject } from "../../auth/access";
+import { storedMediaType } from "../../file/media-type";
+import type { AssetMetadata, AssetVersion } from "../model";
+
+/**
+ * A version as the API sends it. Rows written before uploads were parsed may
+ * hold any string, control characters included, and clients print this field,
+ * so it goes out normalized like every other Content-Type (ADR-013 A4).
+ */
+export function versionView(version: AssetVersion): AssetVersion {
+  return { ...version, contentType: storedMediaType(version.contentType) };
+}
+
+/** An asset as the API sends it, its current version included; see {@link versionView}. */
+export function assetView(asset: AssetMetadata): AssetMetadata {
+  return {
+    ...asset,
+    contentType: storedMediaType(asset.contentType),
+    ...(asset.currentVersion && { currentVersion: versionView(asset.currentVersion) }),
+  };
+}
 
 /**
  * Block uploads from unauthenticated callers when anonymous uploads are

@@ -182,7 +182,9 @@ client that sends one still gets its bytes stored and served safely.
 Delivery parses the stored value again and sends only the normalized type,
 never the stored string. A stored value that does not parse, which rows
 written before this change may hold, is sent as octet-stream and on the
-apex as a sandboxed attachment.
+apex as a sandboxed attachment. The asset and version API responses and the
+`/files` NDJSON listing report the same normalized type, so a stored value
+with control characters never reaches a client that prints it.
 
 ## Part B — Site hosts (B1–B5 implemented; B6 apart from its event log; B7's `password` mode implemented, `members` deferred)
 

@@ -6,6 +6,7 @@ import { getAssetMetadata, getVersion } from "../usecase";
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { versionResponseSchema, versionParamSchema } from "../../../shared/openapi";
 import { jsonError, jsonResponse } from "../../openapi";
+import { versionView } from "./shared";
 
 export function registerGetVersionRoute(app: Hono<AppEnv>) {
   app.get("/:id/versions/:versionId",
@@ -32,7 +33,7 @@ export function registerGetVersionRoute(app: Hono<AppEnv>) {
         return c.json({ error: "Version not found" }, 404);
       }
 
-      return c.json({ version });
+      return c.json({ version: versionView(version) });
     },
   );
 }
