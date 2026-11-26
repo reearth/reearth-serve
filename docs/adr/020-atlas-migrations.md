@@ -46,7 +46,8 @@ directories and a wrangler 4.73 local D1:
 | Integrity | `atlas migrate hash` writes `atlas.sum`. `migrate validate` fails with `0003_add_cleanup_pending.sql was edited` after an edit. |
 | Does wrangler mind `atlas.sum`? | No. With 0001..0007 in `d1_migrations`, `wrangler d1 migrations list --local` shows only a new `.sql` file as pending. |
 | Lint | `migrate lint` runs in the community build. A `DROP COLUMN` file gets `DS103` and exit code 1. |
-| Declarative `migrate diff` | Unsafe. Diffing the directory against an identical schema writes `DROP INDEX asset_versions_asset_id_version` and `CREATE UNIQUE INDEX` (the inline `UNIQUE` in 0002). wrangler fails on that file with `no such index`. Files are named by timestamp, not `NNNN`. |
+| Declarative `migrate diff` | Unsafe. Diffing the directory against an identical schema writes `DROP INDEX` and `CREATE UNIQUE INDEX` for each inline `UNIQUE` (`asset_versions_asset_id_version` from 0002, `compat_credentials_client_email` from 0008). wrangler fails on that file with `no such index`. Files are named by timestamp, not `NNNN`. |
+| Directives | A file starting with `-- atlas:nolint` passes lint with a `DROP TABLE` in it (exit 0; exit 1 without the directive). |
 | Atlas as applier | Refuses an existing database without `--baseline` and keeps its own `atlas_schema_revisions` table. |
 | Duplicate numbers | Two `0008_*.sql` files pass hash, validate and lint. |
 | Install | Community binaries are only at `atlasbinaries.com`, with a `.sha256` beside each. `ariga/setup-atlas` installs the non-community build. There is no `go install` path for v1.x. Old binaries are deleted after about six months. |
@@ -82,8 +83,9 @@ so no Docker is needed.
 
 1. a sequence check (`scripts/migration-sequence.ts`): prefixes are four
    digits and unique, every file on the base branch is byte-identical, every
-   new file sorts after the base branch's highest prefix, and the two
-   directories share no file name;
+   new file sorts after the base branch's highest prefix, no file carries an
+   `atlas:nolint` directive (it silences the destructive-change lint), and
+   the two directories share no file name;
 2. `atlas migrate validate`: `atlas.sum` matches and the files replay;
 3. `atlas migrate lint --git-base <base>`: destructive changes fail.
 
@@ -93,6 +95,15 @@ second of two PRs that both add `0008`, which then renumbers.
 A `migrations` CI job runs `npm run db:check` with the PR's base branch. It
 has `contents: read` and no secrets. `deploy` needs it, so a failing gate
 blocks a deploy. The deploy job itself never downloads Atlas.
+
+The job must stay secretless. `migrate validate` and `migrate lint` replay
+the PR's SQL in a real SQLite, and SQL such as `ATTACH DATABASE` can write
+files on the runner.
+
+The gate catches mistakes, not a hostile author. The checks, `atlas.sum` and
+the workflow all live in the PR, so a PR can change them along with a
+migration. Lint also ignores data changes such as `DELETE` or `UPDATE`.
+Review of the migration files stays the control for what reaches production.
 
 ### 3. A pinned binary, verified from the repository
 
