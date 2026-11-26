@@ -137,6 +137,8 @@ export type Deps = ContextDeps & {
   serviceAuthorizer: Authorizer;
 };
 
+export type DeliveryHost = "apex" | "site" | "objects";
+
 export type AppEnv = {
   Variables: ContextDeps & {
     caller: VerifiedCaller | null;
@@ -144,18 +146,12 @@ export type AppEnv = {
     user: AuthUser | null;
     tenancy: TenantScope;
     sessionId: string | null;
-    /**
-     * True when the request arrived on a site host and was rewritten into
-     * `/files/…` (ADR-013 B1). The file handler uses it to mark pinned
-     * (version-ID) hosts `noindex`.
-     */
-    siteHost: boolean;
+    deliveryHost: DeliveryHost;
     /**
      * Verifies an OIDC bearer for a `restricted` file read (ADR-014 §5). Null
      * when no issuer is configured, and always null on a site host, which
      * accepts no bearer.
      */
     bearerVerifier: BearerVerifier | null;
-    objectsHost: boolean;
   };
 };

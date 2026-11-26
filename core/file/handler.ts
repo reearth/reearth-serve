@@ -1,6 +1,6 @@
 import { Hono, type Context } from "hono";
 import { describeRoute, resolver } from "hono-openapi";
-import type { AppEnv } from "../types";
+import type { AppEnv, DeliveryHost } from "../types";
 import { decompressStream } from "../asset/compression";
 import type { AssetMetadata, AssetVersion, StoredFile } from "../asset/model";
 import type { FileStorage } from "../asset/repository";
@@ -13,10 +13,10 @@ import { cacheControlFor, etagMatches, representationEtag, thumbnailCacheControl
 import { addVary, applyCors, preflightResponse, type CorsPolicy } from "./cors";
 import { dispositionHeaders } from "./disposition";
 import { handleAuthSubmit } from "../access/form";
-import { accessModeOf, AUTH_PATH_SEGMENT, resolveAccess, type AccessDeps } from "../access/resolve";
+import { accessModeOf, AUTH_PATH_SEGMENT, resolveAccess, type AccessDeps, type AccessResolution } from "../access/resolve";
 import { decoyPasswordCheck } from "../access/password";
 import type { BearerDecision } from "../access/restricted";
-import { deliveryPolicy, type ServiceGrant } from "../access/grant";
+import { deliveryPolicy, type ServiceGrant, type VisitorGrant } from "../access/grant";
 import { readDeliveryRequest } from "../access/request";
 import { toUnixSeconds, type AssetPath } from "../access/token";
 import type { VerifiedCaller } from "../auth/types";
@@ -290,6 +290,33 @@ function serve404Page(located: Located, siteHost: boolean): Response {
 // belongs in `core/access/`, behind `resolveAccess`, not inline below.
 export const fileRoutes = new Hono<AppEnv>();
 
+interface HostRules {
+  siteAccess: boolean;
+  requestOrigin: boolean;
+  siteDisposition: boolean;
+  siteFeatures: boolean;
+  noindexPreviews: boolean;
+  path: "request" | "own-file";
+  refusals: "as-resolved" | "missing-object";
+}
+
+const HOST_RULES: Record<DeliveryHost, HostRules> = {
+  apex: {
+    siteAccess: false, requestOrigin: false, siteDisposition: false, siteFeatures: true, noindexPreviews: false,
+    path: "request", refusals: "as-resolved",
+  },
+  site: {
+    siteAccess: true, requestOrigin: true, siteDisposition: true, siteFeatures: true, noindexPreviews: true,
+    path: "request", refusals: "as-resolved",
+  },
+  objects: {
+    siteAccess: true, requestOrigin: true, siteDisposition: false, siteFeatures: false, noindexPreviews: false,
+    path: "own-file", refusals: "missing-object",
+  },
+};
+
+const hostRules = (c: Context<AppEnv>): HostRules => HOST_RULES[c.get("deliveryHost")];
+
 // Last on the way out, so no `_headers` rule and no branch below can drop it.
 fileRoutes.use("*", async (c, next) => {
   await next();
@@ -304,7 +331,7 @@ function accessDeps(c: Context<AppEnv>, asset: AssetMetadata): AccessDeps {
     signingSecret: c.get("signingSecret"),
     // Set by the composition root when it builds the file-only site router, not
     // read from a header: a visitor cannot claim to be on a site host.
-    siteHost: c.get("siteHost"),
+    siteHost: hostRules(c).siteAccess,
     verifyBearer: c.get("bearerVerifier"),
     tokens: c.get("deliveryTokens"),
     authorize: (caller) => authorizeBearer(c, asset, caller),
@@ -367,7 +394,7 @@ function trustedOrigins(c: Context<AppEnv>): string[] {
   } catch {
     return [...c.get("credentialedOrigins")];
   }
-  const own = c.get("siteHost")
+  const own = hostRules(c).requestOrigin
     ? `${base.protocol}//${(c.req.header("Host") ?? new URL(c.req.url).host).toLowerCase()}`
     : base.origin;
   return [own, ...c.get("credentialedOrigins")];
@@ -405,10 +432,10 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     return res;
   };
   if (delivery.path === null) return refuse(c.json({ error: "Invalid path" }, 400));
-  let filePath: AssetPath = delivery.path;
+  const rules = hostRules(c);
 
   // Thumbnail dispatch (query parameter or _thumbs/ path).
-  const thumb = detectThumbRequest(filePath, delivery.url.searchParams.get("thumb") ?? undefined);
+  const thumb = detectThumbRequest(delivery.path, delivery.url.searchParams.get("thumb") ?? undefined);
   if (thumb === "invalid") return refuse(c.json({ error: "Invalid thumbnail size" }, 400));
 
   // Resolve asset + version
@@ -416,7 +443,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
   if (!resolved) return refuse(c.json({ error: "File not found" }, 404));
 
   const { asset, version } = resolved;
-  if (c.get("objectsHost")) filePath = (version?.filename ?? asset.filename) as AssetPath;
+  const filePath: AssetPath = rules.path === "own-file" ? (version?.filename ?? asset.filename) as AssetPath : delivery.path;
 
   // The access check (ADR-013 B7, ADR-014 §5), before any storage I/O and
   // before the thumbnail branch: a protected asset's thumbnail is as much of a
@@ -431,23 +458,15 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     // are single validated segments, so the name is already an asset path.
     matchPath: thumb ? (version?.filename ?? asset.filename) as AssetPath : filePath,
   }, accessDeps(c, asset));
-  const access = c.get("objectsHost")
-    ? await check().catch((err: unknown) => {
-      console.error(err);
-      return null;
-    })
-    : await check();
-  if (access === null || (access.kind === "challenge" && c.get("objectsHost"))) {
-    const verified = accessModeOf(asset) === "password" && access?.kind === "challenge" && access.response.status === 401;
-    if (!verified) await decoyPasswordCheck(c.req.header("Authorization") ?? null);
-    return missingObjectResponse();
-  }
-  if (access.kind === "challenge") return refuse(access.response);
-  const policy = deliveryPolicy(access.grant, toUnixSeconds(Date.now()));
+  const granted = rules.refusals === "missing-object"
+    ? await grantOrMissingObject(c, asset, check)
+    : await grantOrRefusal(check, refuse);
+  if (granted instanceof Response) return granted;
+  const policy = deliveryPolicy(granted, toUnixSeconds(Date.now()));
   const cors = corsPolicy(c, policy.proof);
   // Redirects Serve builds inside the asset keep a query token, so the next
   // request carries the same proof (ADR-014 §4 Response).
-  const redirectSearch = access.grant.proof === "token" ? delivery.sentSearch : delivery.url.search;
+  const redirectSearch = granted.proof === "token" ? delivery.sentSearch : delivery.url.search;
 
   /** Everything that leaves this route goes through here. */
   const decorate = (res: Response): Response => {
@@ -474,7 +493,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
   }
 
   const layouts = layoutsWithLegacyFallback(resolved);
-  const site = !c.get("objectsHost") && layouts.some((l) => l.archive);
+  const site = rules.siteFeatures && layouts.some((l) => l.archive);
 
   // `_headers` / `_redirects` (ADR-013 C3). The rules were parsed once, at
   // extraction time; this is all the request pays for them.
@@ -544,7 +563,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     if (!fallback) return decorate(c.json({ error: "File not found" }, 404));
     if (fallback.kind === "notFound") {
       return decorate(applySiteHeaders(
-        serve404Page(fallback.located, c.get("siteHost")), hosting, servePath, c.get("siteHost"),
+        serve404Page(fallback.located, rules.siteDisposition), hosting, servePath, rules.siteDisposition,
       ));
     }
     // The SPA case rejoins the normal path below, so the index is served by
@@ -558,23 +577,49 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     ...conditionsOf(c.req.raw),
     cacheControl: cacheControlFor({ pinned, contentType: located.contentType }, policy),
     storage,
-    siteHost: c.get("siteHost") && !c.get("objectsHost"),
+    siteHost: rules.siteDisposition,
     storedEncoding: "omit",
   });
 
   // `_headers` rules go on first, so everything the handler sets below — and
   // everything `sendLocated` already set — wins over a rule that named the same
   // header (ADR-013 C3).
-  applySiteHeaders(res, hosting, servePath, c.get("siteHost"));
+  applySiteHeaders(res, hosting, servePath, rules.siteDisposition);
 
   // A preview host serves the same pages as the production name: same content,
   // several URLs, only one of which should be indexed (ADR-013 B4). That covers
   // the version-ID host (pinned), `v{n}--name` and `latest--name` — the last of
   // which is not pinned and so needs saying separately. Asset-ID hosts and the
   // `/files/…` path form are unaffected.
-  if (c.get("siteHost") && (pinned || preview)) res.headers.set("X-Robots-Tag", "noindex");
+  if (rules.noindexPreviews && (pinned || preview)) res.headers.set("X-Robots-Tag", "noindex");
 
   return decorate(res);
+}
+
+async function grantOrRefusal(
+  check: () => Promise<AccessResolution>,
+  refuse: (res: Response) => Response,
+): Promise<VisitorGrant | Response> {
+  const access = await check();
+  return access.kind === "allow" ? access.grant : refuse(access.response);
+}
+
+async function grantOrMissingObject(
+  c: Context<AppEnv>,
+  asset: AssetMetadata,
+  check: () => Promise<AccessResolution>,
+): Promise<VisitorGrant | Response> {
+  const access = await check().catch((err: unknown) => {
+    console.error(err);
+    return null;
+  });
+  if (access?.kind === "allow") return access.grant;
+  if (!passwordCheckRan(asset, access)) await decoyPasswordCheck(c.req.header("Authorization") ?? null);
+  return missingObjectResponse();
+}
+
+function passwordCheckRan(asset: AssetMetadata, access: AccessResolution | null): boolean {
+  return accessModeOf(asset) === "password" && access?.kind === "challenge" && access.response.status === 401;
 }
 
 const stringHeader = (description: string) => ({ description, schema: { type: "string" as const } });

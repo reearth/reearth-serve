@@ -13,7 +13,7 @@ import { sessionMiddleware } from "./session/middleware";
 import { normalizeSiteHostSuffix, siteHostMiddleware } from "./site/middleware";
 import { composeSiteHostResolver } from "./site/resolver";
 import { bindsCaller, tenancyErrorResponse, tenancyMiddleware, TENANCY_RETRY_AFTER_SECONDS } from "./tenancy/middleware";
-import type { AppEnv, Deps } from "./types";
+import type { AppEnv, DeliveryHost, Deps } from "./types";
 import type { BearerVerifier } from "./access/restricted";
 import { buildSpec, jsonError, jsonResponse } from "./openapi";
 import { compatHostMiddleware, type CompatHost } from "./compat/hosts";
@@ -112,7 +112,7 @@ export function createApp(deps: Deps) {
   const bearerVerifier: BearerVerifier | null = deps.auth.issuer
     ? (jwt) => verifyAccessToken(jwt, deps.auth)
     : null;
-  app.use("*", injectDeps(deps, { siteHost: false, bearerVerifier, objectsHost: false }));
+  app.use("*", injectDeps(deps, { deliveryHost: "apex", bearerVerifier }));
 
   // Public API (versioned)
   app.get("/api/v1/health",
@@ -217,14 +217,14 @@ function siteApp(deps: Deps) {
   // delivery, and the handlers below read neither `user` nor `sessionId`. No
   // bearer verifier either: a restricted asset on a site host accepts only a
   // delivery token (ADR-014 §5).
-  app.use("*", injectDeps(deps, { siteHost: true, bearerVerifier: null, objectsHost: false }));
+  app.use("*", injectDeps(deps, { deliveryHost: "site", bearerVerifier: null }));
   app.route("/files", fileRoutes);
   return app;
 }
 
 function objectsApp(deps: Deps) {
   const app = new Hono<AppEnv>();
-  app.use("*", injectDeps(deps, { siteHost: true, bearerVerifier: null, objectsHost: true }));
+  app.use("*", injectDeps(deps, { deliveryHost: "objects", bearerVerifier: null }));
   app.route("/files", fileRoutes);
   return app;
 }
@@ -253,7 +253,7 @@ function compatDispatch(
 /** Request-independent collaborators, read off the context by every handler. */
 function injectDeps(
   deps: Deps,
-  opts: { siteHost: boolean; bearerVerifier: BearerVerifier | null; objectsHost: boolean },
+  opts: { deliveryHost: DeliveryHost; bearerVerifier: BearerVerifier | null },
 ): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     c.set("metadata", deps.metadata);
@@ -282,9 +282,8 @@ function injectDeps(
     c.set("deliveryTokens", deps.deliveryTokens);
     c.set("compat", deps.compat);
     c.set("compatApiHost", deps.compatApiHost);
-    c.set("siteHost", opts.siteHost);
+    c.set("deliveryHost", opts.deliveryHost);
     c.set("bearerVerifier", opts.bearerVerifier);
-    c.set("objectsHost", opts.objectsHost);
     await next();
   };
 }
