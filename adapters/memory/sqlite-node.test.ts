@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { DatabaseSync } from "node:sqlite";
+import { spawn } from "node:child_process";
 import { appendFileSync, cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   DOMAIN_MIGRATIONS, MigrationDrift, NODE_MIGRATIONS, NodeSqlClient, UnledgeredDatabase,
   createSqliteClient, type MigrationSource,
@@ -145,7 +147,7 @@ describe("createSqliteClient migration ledger", () => {
     expect(error).toMatchObject({ set: "domain", file: "0003_add_cleanup_pending.sql" });
   });
 
-  test("a file that fails halfway leaves no ledger row and no partial table", async () => {
+  test("a run that fails halfway leaves nothing behind, and a rerun converges", async () => {
     const path = join(tempDir(), "serve.sqlite");
     const dir = tempDir();
     writeFileSync(join(dir, "0001_good.sql"), "CREATE TABLE good (id TEXT);");
@@ -153,11 +155,44 @@ describe("createSqliteClient migration ledger", () => {
     const source: MigrationSource = { set: "node", dir };
 
     expect(() => createSqliteClient(path, [source])).toThrow(/missing/);
+    expect(await tables(new NodeSqlClient(new DatabaseSync(path)))).toEqual([]);
 
-    const sql = new NodeSqlClient(new DatabaseSync(path));
-    expect(await tables(sql)).toEqual(["_serve_migrations", "good"]);
-    expect(await ledger(sql)).toEqual(["node/0001_good.sql"]);
+    writeFileSync(join(dir, "0002_bad.sql"), "CREATE TABLE half (id TEXT);");
+    const sql = createSqliteClient(path, [source]);
+    expect(await tables(sql)).toEqual(["_serve_migrations", "good", "half"]);
+    expect(await ledger(sql)).toEqual(["node/0001_good.sql", "node/0002_bad.sql"]);
   });
+
+  test("processes opening the same fresh file at once all start, and each file is applied once", async () => {
+    const path = join(tempDir(), "serve.sqlite");
+    const module = fileURLToPath(new URL("./sqlite-node.ts", import.meta.url));
+    const script =
+      `import { createSqliteClient, DOMAIN_MIGRATIONS, NODE_MIGRATIONS } from ${JSON.stringify(module)};` +
+      `createSqliteClient(${JSON.stringify(path)}, [DOMAIN_MIGRATIONS, NODE_MIGRATIONS]);`;
+
+    const exits = await Promise.all(
+      Array.from({ length: 6 }, () =>
+        new Promise<{ code: number | null; stderr: string }>((resolve) => {
+          const child = spawn(
+            process.execPath,
+            ["--experimental-sqlite", "--no-warnings", "--import", "tsx", "--input-type=module", "-e", script],
+            { stdio: ["ignore", "ignore", "pipe"] },
+          );
+          let stderr = "";
+          child.stderr.on("data", (chunk) => (stderr += chunk));
+          child.on("close", (code) => resolve({ code, stderr }));
+        }),
+      ),
+    );
+
+    expect(exits).toEqual(exits.map(() => ({ code: 0, stderr: "" })));
+    const sql = new NodeSqlClient(new DatabaseSync(path));
+    const { rows } = await sql.execute(
+      "SELECT COUNT(*) AS rows, COUNT(DISTINCT set_name || '/' || name) AS files FROM _serve_migrations",
+    );
+    expect(rows[0].rows).toBe(rows[0].files);
+    expect(await ledger(sql)).toEqual(await ledger(createSqliteClient(":memory:", [DOMAIN_MIGRATIONS, NODE_MIGRATIONS])));
+  }, 30000);
 
   test("a database with tables but no ledger is refused", () => {
     const path = join(tempDir(), "serve.sqlite");

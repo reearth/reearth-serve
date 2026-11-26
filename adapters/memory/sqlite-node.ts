@@ -106,6 +106,17 @@ function hasUserTables(db: DatabaseSync): boolean {
 }
 
 function applyMigrations(db: DatabaseSync, sources: MigrationSource[]): void {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    applyPending(db, sources);
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
+}
+
+function applyPending(db: DatabaseSync, sources: MigrationSource[]): void {
   if (!hasTable(db, LEDGER)) {
     if (hasUserTables(db)) throw new UnledgeredDatabase();
     db.exec(`CREATE TABLE ${LEDGER} (
@@ -131,15 +142,8 @@ function applyMigrations(db: DatabaseSync, sources: MigrationSource[]): void {
 
   const record = db.prepare(`INSERT INTO ${LEDGER} (set_name, name, sha256, applied_at) VALUES (?, ?, ?, ?)`);
   for (const { source, file, sql, sha256 } of pending) {
-    db.exec("BEGIN");
-    try {
-      db.exec(sql);
-      record.run(source.set, file, sha256, Date.now());
-      db.exec("COMMIT");
-    } catch (e) {
-      db.exec("ROLLBACK");
-      throw e;
-    }
+    db.exec(sql);
+    record.run(source.set, file, sha256, Date.now());
   }
 }
 
@@ -168,6 +172,7 @@ export function createSqliteClient(
   migrations: MigrationSource[] = [DOMAIN_MIGRATIONS],
 ): NodeSqlClient {
   const db = new DatabaseSync(path);
+  db.exec("PRAGMA busy_timeout = 5000");
   db.exec("PRAGMA foreign_keys = ON");
   applyMigrations(db, migrations);
   return new NodeSqlClient(db);
