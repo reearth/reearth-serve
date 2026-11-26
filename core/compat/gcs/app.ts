@@ -51,14 +51,8 @@ function listQueryOf(c: Context<GcsEnv>): ListQuery | null {
 
 const UNSUPPORTED_PRECONDITIONS = ["ifGenerationNotMatch", "ifMetagenerationMatch", "ifMetagenerationNotMatch"];
 
-function generationMatchOf(c: Context<GcsEnv>): { ok: true; value: number | null } | { ok: false } {
-  const raw = queryOf(c, "ifGenerationMatch");
-  if (raw === null) return { ok: true, value: null };
-  return /^\d+$/.test(raw) ? { ok: true, value: Number(raw) } : { ok: false };
-}
-
-function generationOf(c: Context<GcsEnv>): { ok: true; value: number | null } | { ok: false } {
-  const raw = queryOf(c, "generation");
+function generationQuery(c: Context<GcsEnv>, name: "ifGenerationMatch" | "generation"): { ok: true; value: number | null } | { ok: false } {
+  const raw = queryOf(c, name);
   if (raw === null) return { ok: true, value: null };
   return /^\d+$/.test(raw) ? { ok: true, value: Number(raw) } : { ok: false };
 }
@@ -121,7 +115,7 @@ export function gcsApp(deps: GcsDeps, apiOrigin: string) {
   });
 
   async function readObject(c: Context<GcsEnv>, surface: GcsSurface, bucket: string, key: ObjectKey): Promise<Response> {
-    const generation = generationOf(c);
+    const generation = generationQuery(c, "generation");
     if (!generation.ok) return gcsError(surface, "invalid", "Invalid generation.");
     const opened = await layerOf(c).open(bucket, key);
     if (!opened.ok) return compatErrorResponse(surface, opened.error, `${bucket}/${key}`);
@@ -192,7 +186,7 @@ export function gcsApp(deps: GcsDeps, apiOrigin: string) {
     if (UNSUPPORTED_PRECONDITIONS.some((name) => queryOf(c, name) !== null)) {
       return compatErrorResponse("json", { code: "not_implemented", what: "metageneration and not-match preconditions" });
     }
-    const generationMatch = generationMatchOf(c);
+    const generationMatch = generationQuery(c, "ifGenerationMatch");
     if (!generationMatch.ok) return gcsError("json", "invalid", "Invalid ifGenerationMatch.");
     if (uploadType === "resumable") {
       const begun = await beginUpload(c);
