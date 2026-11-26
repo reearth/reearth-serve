@@ -5,11 +5,6 @@ import type { AssetMetadata, AssetVersion } from "../asset/model";
 import type { AtomicWrites } from "../asset/repository";
 import { createApp } from "../app";
 
-// A browser reads a Content-Type the Fetch way: split on commas outside quotes
-// and take the last valid type. A stored value that this server reads as one
-// harmless type but a browser reads as text/html must never reach the apex
-// inline, and the raw stored string must never be echoed back.
-
 const SANDBOXED = { type: "application/octet-stream", disposition: /^attachment; /, csp: "sandbox" };
 
 const cases: Array<[name: string, stored: string | undefined, sent: string, inline: boolean]> = [
@@ -180,7 +175,6 @@ describe("the API reports a stored Content-Type normalized", () => {
   });
 });
 
-// Each of these took the old media-type regex into catastrophic backtracking.
 const PATHOLOGICAL: Array<[string, string]> = [
   ["unterminated quote after many empty parameters", "a/b" + "; ".repeat(5000) + '"'],
   ["many empty parameters", "text/plain" + ";  ".repeat(5000)],

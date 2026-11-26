@@ -3,33 +3,21 @@
  *
  * A browser reads a Content-Type the Fetch way: it splits the value on commas
  * outside quoted strings and keeps the last type it can parse, so
- * `text/plain;x=,text/html` renders as HTML. Any looser reading here, such as
- * taking the text before the first `;`, lets a value mean one type to this
- * server and another to the browser. So a value is accepted only when it is
- * exactly one RFC 9110 `media-type` with no comma anywhere, and it is sent on
- * only in the normalized form this module builds, never as stored.
- *
- * The normalized form keeps `charset` alone among the parameters: text
- * rendering depends on it, nothing else this server serves reads the others,
- * and every byte kept is a byte some other parser might read differently.
+ * `text/plain;x=,text/html` renders as HTML. So a value is accepted only when
+ * it is exactly one RFC 9110 `media-type` with no comma anywhere, and it is
+ * sent on only in the normalized form this module builds, never as stored.
  */
 
 import { MAX_CONTENT_TYPE_LENGTH } from "../../shared/api";
 
-/** A Content-Type in normalized form: lowercase `type/subtype`, then at most `; charset=<token>`. */
 export type MediaType = string & { readonly __mediaType: unique symbol };
+
+export type StoredType = { kind: "parsed"; type: MediaType } | { kind: "unparsed" };
 
 export const OCTET_STREAM = "application/octet-stream" as MediaType;
 
 const VISIBLE = /^[\t\x20-\x7e]*$/;
 
-/**
- * The normalized type, or `null` when `raw` is not exactly one media type.
- *
- * A single left-to-right scan, so the cost is linear in the input: a regex
- * over the optional-whitespace parameter grammar backtracks catastrophically
- * on long runs of `; `, and this runs on every upload and every file read.
- */
 export function parseMediaType(raw: string | null | undefined): MediaType | null {
   if (raw == null || raw.length > MAX_CONTENT_TYPE_LENGTH || !VISIBLE.test(raw) || raw.includes(",")) return null;
   let i = 0;
@@ -39,7 +27,6 @@ export function parseMediaType(raw: string | null | undefined): MediaType | null
     while (i < raw.length && isTokenChar(raw[i])) i++;
     return raw.slice(start, i);
   };
-  /** The unescaped content of the quoted-string at `i`, or `null` when it is not closed. */
   const quoted = () => {
     let value = "";
     for (i++; i < raw.length; i++) {
@@ -56,8 +43,7 @@ export function parseMediaType(raw: string | null | undefined): MediaType | null
   const subtype = token();
   if (!subtype) return null;
 
-  let charset: string | null = null;
-  let charsetSeen = false;
+  let charset: string | null | undefined;
   for (;;) {
     skipWhitespace();
     if (i === raw.length) break;
@@ -68,8 +54,7 @@ export function parseMediaType(raw: string | null | undefined): MediaType | null
     if (!name || raw[i++] !== "=") return null;
     const value = raw[i] === '"' ? quoted() : token() || null;
     if (value === null) return null;
-    if (!charsetSeen && name.toLowerCase() === "charset") {
-      charsetSeen = true;
+    if (charset === undefined && name.toLowerCase() === "charset") {
       charset = isToken(value) ? value.toLowerCase() : null;
     }
   }
@@ -89,12 +74,19 @@ function isToken(value: string): boolean {
   return value.length > 0 && [...value].every(isTokenChar);
 }
 
-/** The Content-Type to store for an upload: the normalized type, or octet-stream when there is none. */
 export function storedMediaType(raw: string | null | undefined): MediaType {
   return parseMediaType(raw) ?? OCTET_STREAM;
 }
 
-/** `type/subtype` without parameters. */
+export function readStoredType(raw: string | null | undefined): StoredType {
+  const type = parseMediaType(raw);
+  return type ? { kind: "parsed", type } : { kind: "unparsed" };
+}
+
+export function sentMediaType(stored: StoredType): MediaType {
+  return stored.kind === "parsed" ? stored.type : OCTET_STREAM;
+}
+
 export function essenceOf(type: MediaType): string {
   return type.split(";")[0];
 }

@@ -392,10 +392,6 @@ export const fileEntrySchema = component("FileEntry", z.object({
 // client-side abuse (each part triggers an HMAC-SHA256 signature on the Worker).
 export const MAX_UPLOAD_PARTS = 10000;
 
-/**
- * Longest Content-Type an upload may name. Real types are far shorter, and the
- * cap bounds the work of parsing a stored value on every read (ADR-013 A4).
- */
 export const MAX_CONTENT_TYPE_LENGTH = 256;
 
 export const createUploadSessionBodySchema = component("CreateUploadSessionRequest", z.object({
