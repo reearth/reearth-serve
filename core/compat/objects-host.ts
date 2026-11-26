@@ -5,7 +5,7 @@ import { TOKEN_QUERY } from "../access/request";
 import { SITE_PREVIEW_HEADER } from "../site/middleware";
 import { missingObjectResponse } from "../file/missing-object";
 
-export type ObjectsHost = Extract<CompatHost, { kind: "objects-path-style" | "objects-virtual-host" }>;
+export type ObjectsHost = Extract<CompatHost, { kind: "objects-path-style" | "objects-virtual-host" | "objects-no-bucket" }>;
 
 const ALLOW = "GET, HEAD";
 
@@ -30,6 +30,7 @@ export function objectsHost(reader: ObjectReader, deliver: (request: Request) =>
 }
 
 function targetOf(host: ObjectsHost, rawPath: string): { bucket: string; key: ObjectKey } | null {
+  if (host.kind === "objects-no-bucket") return null;
   let path: string;
   try {
     path = decodeURIComponent(rawPath).slice(1);

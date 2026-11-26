@@ -253,6 +253,7 @@ function compatDispatch(
         return gcsError("xml", "not_implemented", `Not implemented: virtual-hosted-style URLs. Use path-style URLs on ${deps.compatApiHost}.`);
       case "objects-path-style":
       case "objects-virtual-host":
+      case "objects-no-bucket":
         return objects(host, req);
     }
   };

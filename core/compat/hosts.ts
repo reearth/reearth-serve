@@ -7,7 +7,8 @@ export type CompatHost =
   | { kind: "gcs-api" }
   | { kind: "gcs-api-virtual-host" }
   | { kind: "objects-path-style" }
-  | { kind: "objects-virtual-host"; bucket: BucketName };
+  | { kind: "objects-virtual-host"; bucket: BucketName }
+  | { kind: "objects-no-bucket" };
 
 function hostname(host: string): string {
   return host.trim().toLowerCase().replace(/:\d+$/, "").replace(/\.$/, "");
@@ -37,7 +38,7 @@ export function classifyCompatHost(host: string | null | undefined, cfg: CompatH
   if (objects && name === objects) return { kind: "objects-path-style" };
   if (objects && name.endsWith(`.${objects}`)) {
     const bucket = parseBucketName(name.slice(0, -objects.length - 1));
-    return bucket ? { kind: "objects-virtual-host", bucket } : null;
+    return bucket ? { kind: "objects-virtual-host", bucket } : { kind: "objects-no-bucket" };
   }
   if (api && name.endsWith(`.${api}`) && parseBucketName(name.slice(0, -api.length - 1))) return { kind: "gcs-api-virtual-host" };
   return null;
