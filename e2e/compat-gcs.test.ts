@@ -102,12 +102,13 @@ describe.runIf(COMPAT_HOST)("GCS API bearer auth", () => {
 
 describe.runIf(COMPAT_HOST)("GCS API object reads", () => {
   const BODY = "hello, compat reader";
+  const EMPTY_ZIP = String.fromCharCode(0x50, 0x4b, 0x05, 0x06, ...new Array(18).fill(0));
 
-  async function written() {
+  async function written(name = "r.txt", body = BODY, contentType = "text/plain") {
     const issued = await issuedKeyFile();
     const auth = { Authorization: await selfSignedBearer(issued.keyFile) };
-    const path = `/${issued.bucket}/read/r.txt`;
-    const put = await onCompatHost(path, { ...auth, "Content-Type": "text/plain", "Content-Length": String(BODY.length) }, "PUT", BODY);
+    const path = `/${issued.bucket}/read/${name}`;
+    const put = await onCompatHost(path, { ...auth, "Content-Type": contentType, "Content-Length": String(body.length) }, "PUT", body);
     expect(put.status).toBe(200);
     const listed = await api(issued.admin, "GET", `/assets?projectId=${issued.projectId}`);
     const [asset] = (await listed.json() as { assets: { id: string }[] }).assets;
@@ -141,13 +142,15 @@ describe.runIf(COMPAT_HOST)("GCS API object reads", () => {
     expect(again.headers["x-goog-hash"]).toBeUndefined();
   });
 
-  test("a password asset reads through the API while /files without a cookie still challenges", async () => {
-    const { admin, auth, path, assetId } = await written();
+  test("a password site reads through the API while /files without a cookie still challenges", async () => {
+    const { admin, auth, path, assetId } = await written("site.zip", EMPTY_ZIP, "application/zip");
     await setAccess(admin, assetId, { access: "password", password: "e2e-compat-read" });
     const read = await onCompatHost(path, auth);
     expect(read.status).toBe(200);
-    expect(read.body).toBe(BODY);
-    expect((await fetch(`${BASE}/files/${assetId}/r.txt`)).status).toBe(401);
+    expect(read.body).toBe(EMPTY_ZIP);
+    const challenged = await fetch(`${BASE}/files/${assetId}/site.zip`);
+    expect(challenged.status).toBe(401);
+    expect(challenged.headers.get("WWW-Authenticate")).toContain("Basic");
   });
 
   test("a restricted asset reads through the API while /files without a proof is 401", async () => {
