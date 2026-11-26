@@ -1,9 +1,7 @@
 /**
  * `SqlClient` over Node's built-in SQLite (`node:sqlite`).
  *
- * This is the provider-independent implementation used by unit tests and by the
- * Node runtime (ADR-012 §5 step 7). It never runs inside the
- * Worker bundle — `node:sqlite` is not available there.
+ * It never runs inside the Worker bundle: `node:sqlite` is not available there.
  *
  * Node 22 hides `node:sqlite` behind `--experimental-sqlite`; the vitest config
  * passes that flag so the same code runs on Node 22 (CI) and Node 24+ (local).
@@ -76,10 +74,8 @@ export class NodeSqlClient implements SqlClient {
 
 export type MigrationSet = "domain" | "node";
 
-/** A directory of `NNNN_name.sql` files, recorded in the ledger under `set`. */
 export type MigrationSource = { set: MigrationSet; dir: string };
 
-/** An applied migration file whose bytes no longer match its ledger row. */
 export class MigrationDrift extends Error {
   constructor(readonly set: MigrationSet, readonly file: string) {
     super(`migration ${set}/${file} was edited after it was applied`);
@@ -87,7 +83,6 @@ export class MigrationDrift extends Error {
   }
 }
 
-/** A database file with tables but no ledger: written by the pre-ledger applier. */
 export class UnledgeredDatabase extends Error {
   constructor() {
     super(
@@ -110,12 +105,7 @@ function hasUserTables(db: DatabaseSync): boolean {
   return db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT GLOB 'sqlite_*'").get() !== undefined;
 }
 
-/**
- * Bring `db` up to date with `sources` (ADR-020 §4): verify every applied file
- * against its recorded sha256, then run each pending file together with its
- * ledger row in one transaction.
- */
-export function applyMigrations(db: DatabaseSync, sources: MigrationSource[]): void {
+function applyMigrations(db: DatabaseSync, sources: MigrationSource[]): void {
   if (!hasTable(db, LEDGER)) {
     if (hasUserTables(db)) throw new UnledgeredDatabase();
     db.exec(`CREATE TABLE ${LEDGER} (
@@ -159,21 +149,12 @@ export const DOMAIN_MIGRATIONS: MigrationSource = {
   dir: fileURLToPath(new URL("../cloudflare/migrations", import.meta.url)),
 };
 
-/**
- * Tables that only exist where Cloudflare KV and Queues do not: `kv` and
- * `queue_messages`. Kept out of the D1 migrations on purpose; see the
- * migration file's header.
- */
 export const NODE_MIGRATIONS: MigrationSource = {
   set: "node",
   dir: fileURLToPath(new URL("../sql/migrations", import.meta.url)),
 };
 
 /**
- * A database with the given migration sources applied, in order: the
- * repository layer's test fixture, and the Node runtime's database with a file
- * path instead of `:memory:`.
- *
  * Defaults to the domain schema only, so a test that wants `SqlKeyValue` or
  * `SqlJobQueue` asks for `NODE_MIGRATIONS` explicitly.
  */
