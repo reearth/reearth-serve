@@ -1,9 +1,7 @@
-/** One `bytes` range as sent, before the representation's size is known (RFC 9110 §14.1.2). */
 export type RangeRequest =
   | { kind: "from"; first: number; last: number | null }
   | { kind: "suffix"; length: number };
 
-/** What a range means against a representation of a known size. */
 export type ResolvedRange =
   | { kind: "whole" }
   | { kind: "part"; offset: number; length: number }

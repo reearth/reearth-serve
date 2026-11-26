@@ -1,13 +1,12 @@
 /**
  * What a read was allowed on, and the response policy that follows from it
- * (ADR-013 B7, ADR-014 §4 Response, §5, ADR-019 §6). The proof is the one fact
- * every protected response header depends on, so it keys one table instead of
- * a boolean per header.
+ * (ADR-013 B7, ADR-014 §4 Response, §5). The proof is the one fact every
+ * protected response header depends on, so it keys one table instead of a
+ * boolean per header.
  */
 
 import type { UnixSeconds } from "./token";
 
-/** What `resolveAccess` grants a visitor. */
 export type VisitorGrant =
   | { proof: "none" }
   | { proof: "cookie" }

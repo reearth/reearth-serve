@@ -10,7 +10,7 @@ import { exchangeAssertion, gcsAuth, type GcsEnv, type TokenError } from "./auth
 import { boundaryOf, MULTIPART_MAX_BYTES, parseRelated, readCapped } from "./multipart";
 import { objectPathOf, USER_META_PREFIX, WRITE_HEADERS } from "./signed-url";
 import {
-  compatErrorResponse, etagHeader, gcsError, listResource, objectResource, surfaceOf, withReadHeaders, xmlObjectHeaders, type GcsSurface,
+  compatErrorResponse, etagHeader, gcsError, listResource, objectResource, surfaceOf, withReadHeaders, xmlWriteHeaders, type GcsSurface,
 } from "./wire";
 
 export type GcsDeps = ObjectLayerDeps & Pick<Deps, "signingSecret" | "credentialedOrigins" | "compatSignedPathPrefix">;
@@ -225,7 +225,7 @@ export function gcsApp(deps: GcsDeps, apiOrigin: string) {
       throw e;
     }
     if (!result.ok) return compatErrorResponse("xml", result.error, `${target.bucket}/${target.key}`);
-    return c.body(null, 200, xmlObjectHeaders(result.value));
+    return c.body(null, 200, xmlWriteHeaders(result.value));
   });
 
   app.get("*", (c) => {

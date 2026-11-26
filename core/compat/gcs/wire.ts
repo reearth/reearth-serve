@@ -125,11 +125,9 @@ function storedHeaders(info: ObjectInfo): Record<string, string> {
 
 const hashHeader = (hashes: ExactHashes) => `crc32c=${crc32cBase64(hashes.crc32c)},md5=${base64Of(hashes.md5)}`;
 
-/** The `ETag` header of an object on every surface; the JSON resource's `etag` is its value unquoted. */
 export const etagHeader = (info: ObjectInfo) => `"${info.etag}"`;
 
-/** The headers a GCS XML API write answers with. */
-export function xmlObjectHeaders(info: ObjectInfo): Record<string, string> {
+export function xmlWriteHeaders(info: ObjectInfo): Record<string, string> {
   return { ETag: etagHeader(info), ...storedHeaders(info), ...(info.hashes && { "x-goog-hash": hashHeader(info.hashes) }) };
 }
 
