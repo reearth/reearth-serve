@@ -81,7 +81,7 @@ A **compat bucket** is a name that belongs to one project. Its objects
 are that project's assets; there is no second store.
 
 ```sql
-compat_buckets(name PRIMARY KEY, project_id, mount_rule, upstream)
+compat_buckets(name PRIMARY KEY, project_id, mount_rule, upstream, last_generation)
 compat_bindings(bucket, key, binding, asset_id, PRIMARY KEY (bucket, key))
 ```
 
@@ -182,15 +182,37 @@ a field for it, and nothing otherwise.
 number: Serve numbers versions from the highest remaining one, so a
 deleted version or a deleted and recreated asset would hand its number
 to different bytes, and a version pinned over the REST API would make
-the generation go backwards. A write through the layer stores its
-version, then takes
-`max(created_at in microseconds, bucket's last generation + 1)` in one
-statement that also raises the bucket's high mark, and keeps it next to
-the version's hashes. The high mark is per bucket, so it survives the
-deletion of every object in it. An object written outside the layer
-reads its creation time in microseconds. A write through the layer also
-makes its version the live one, clearing a pin set over the REST API, so
-`objects.get` always answers the generation the write returned.
+the generation go backwards. Nor is it a creation time, because a REST
+version that lands after a write through the layer could then be live at
+a lower generation, or share one with it. Every generation comes from
+the bucket's high mark, `compat_buckets.last_generation`, which survives
+the deletion of every object in the bucket, so a generation is unique in
+its bucket. A new bucket's high mark starts at the clock in
+microseconds, and each generation after it is the high mark plus one.
+Deleting a bucket drops its high mark, but a bucket recreated under the
+same name still never reissues a generation: to reach the new bucket's
+starting value, the deleted bucket would have had to issue more than one
+generation per microsecond of its lifetime. Generations are therefore
+16-digit numbers, as in Cloud Storage. A version written outside the
+layer, by a REST upload or a REST version upload, has no record until
+the layer first observes it in `head`, `list`, `open` or a precondition
+check. Records are stored in version order: storing the record of any
+version, by an observation or by a write through the layer, first stores
+one for the asset's original upload and every older version of that
+asset that has none, oldest first, each at the next generation above the
+high mark, in one atomic write that raises the high mark and keeps every
+record already there. Concurrent observers therefore answer the first
+record, and a writer whose version an observer recorded first answers
+that stored generation, with its hashes added. A listing stores the
+missing records of its whole page in one such write. The raise writes
+nothing when every record was already stored, so a `head`, `list` or
+`open` of recorded objects is a read only. Because a version's
+generation is always above that of every older version recorded with it
+or before it, a newer live version is always above every generation
+observed before it. A write through the layer also makes its version the
+live one, clearing a pin set over the REST API, so `objects.get` answers
+the generation the write returned until another version becomes live. A
+REST pin to an older version answers that version's stored generation.
 
 **Writes to one key are serialized.** A writer to a new key inserts the
 binding row with no asset (a claim) before it writes any byte, so two
@@ -199,8 +221,14 @@ key first takes a lease on its binding row in one conditional update,
 and checks `ifGenerationMatch` only while it holds the lease. A second
 writer, or a delete during a write, gets a retryable `503`, so two
 writers with the same precondition cannot both succeed and a write never
-completes onto a deleted asset. A claim or lease whose holder crashed is
-taken over after a fixed age, and a sweep removes old claims.
+completes onto a deleted asset. A writer renews its claim or lease while
+it copies, and only while it still holds it. One that went silent for a
+fixed age is taken over, its old holder can never renew it again, and a
+sweep removes old claims. A commit publishes only while it still holds
+its session revision and, on an overwrite, the lease on a binding that
+still names the asset it writes. A swept or cancelled session is marked
+gone before its staged chunks are queued for cleanup, so a failed
+cleanup is retried on the next sweep.
 
 **Resumable uploads are staged, then committed once.** The Go client
 uploads anything at or above its 16 MiB chunk size as a resumable
@@ -225,18 +253,55 @@ one is refused. The final chunk is staged too, so the client's
 `X-Goog-Hash` is checked before any asset exists.
 
 A commit has one owner. The move to committing records a random owner
-token; any other request gets a retryable `503` until the owner finishes
-or has been silent for a fixed time, and a takeover is another
-compare-and-set. Each owner writes under asset or version ids derived
-from its own token, so no two owners can collide on one row or delete
-each other's bytes. The bind of a new key and the move to committed land
-in one batch, and an overwrite records its target asset first, so a
-replay after any crash either returns the recorded result or finishes
-the single commit, and never writes an object again after it was
-deleted. A precondition that fails at the commit ends the session with
-that error and drops its staged chunks at once. `DELETE` on the session
-URI cancels it (`499`). Expired sessions and their staged chunks are
-swept.
+token and the ids derived from it; any other request gets a retryable
+`503` until the owner finishes or has been silent for a fixed time, and
+a takeover is another compare-and-set that records the new owner's ids
+beside the earlier ones. While it copies staged bytes, the owner
+refreshes its timestamp and its claim or key lease at a quarter of that
+time, so a slow but live owner is never displaced. The owner streams the
+staged chunks into the object's storage key under asset or version ids
+derived from its own token, so no two owners can collide on one row or
+delete each other's bytes. It then publishes in one atomic, guarded
+write: the create-asset or create-version write takes an optional
+publish, and the adapter applies it in the same batch that inserts the
+row, its job and its usage increments. That one write fills the key's
+claim with the new asset, or on an overwrite clears the asset's pinned
+version so the new version is live; records, in version order, every
+older version of the asset that has none, then takes the next generation
+from the bucket's high mark, so every older version, including one a
+REST upload added while the commit streamed, ranks below the published
+one; stores the hash record at that generation; queues the storage
+prefixes of the session's earlier owners for cleanup; and moves the
+session to committed with its result. It applies only while the session
+is at the owner's revision and the key is still held: by the owner's
+unfilled claim for a new key, or by the owner's lease on a binding that
+still names the asset for an overwrite. For SQL, every statement of the
+batch selects or updates only under that condition. If the hold is lost,
+nothing is written, the owner deletes only the bytes it streamed, and
+the request answers `503`. If the write fails any other way, its outcome
+is unknown, so the owner re-reads the row it wrote. The owner deletes
+its bytes only when that row is absent, and keeps them when the row is
+present or the re-read fails. A leaked object costs less than a live
+object without bytes. A takeover, a cancel or the expiry sweep therefore
+also stops any later publish by the old owner. Nothing about publishing
+happens after that write, so a crash, sweep, cancel, REST pin or newer
+write never sees a half-published object: the session is either still
+committing, and a replay takes it over once the owner is stale, or
+committed, and every replay, status query or cancel answers from the
+recorded result. The publish is an additive, optional input to
+`AtomicWrites`; the storage ports do not change. A commit's heartbeat
+clock starts at the owner's last refresh, and a staged chunk that has
+disappeared counts as a lost hold (`503`). An overwrite records its
+target asset before it writes, so a replay after the key was deleted
+answers `412` and never writes the object again. A precondition that
+fails at the commit ends the session with that error and drops its
+staged chunks at once. `DELETE` on the session URI cancels an unfinished
+session (`499`); on a committed session it answers the object, and the
+session stays until the sweep. Expired sessions and their staged chunks
+are swept. When a cancel, a failed commit or the sweep ends a session
+that never committed, each recorded owner's prefixes are queued for
+cleanup too. None of them can hold the published object, because every
+owner writes under ids of its own.
 
 Operations outside this table (bucket policies, lifecycle, object lock,
 customer-supplied encryption, tagging, compose) answer the protocol's
@@ -303,6 +368,23 @@ path with a configured prefix removed, never against the host it
 received. With Serve as the endpoint the signed host is already Serve,
 so CMS must turn `replaceUploadURL` off: its `publicBase` becomes the
 read-only host of §6, and a rewritten URL would send the `PUT` there.
+
+When a path prefix is configured, the front end reads a signed request's
+path twice: as received, then with the prefix removed. It writes the
+object named by the reading whose signature verifies. The signature
+covers the path, so at most one reading verifies, and a bucket named
+like the prefix's first segment keeps working. The XML write applies
+`Content-MD5` (`400 BadDigest` on a mismatch, before the object becomes
+visible), `x-goog-content-length-range`, `x-goog-if-generation-match`
+and `x-goog-meta-*` from the request, for a bearer and a signed URL
+alike. A URL that signs any other `x-goog-*` header is refused with
+`501` rather than verified and ignored. Query keys are ordered by their
+UTF-8 bytes, as the Go signer orders them, and a signed URL with more
+than 64 query parameters is refused before any credential lookup. Both
+runtimes resolve `.` and `..` path segments before Serve reads the path,
+so such keys verify only when their slashes are sent as `%2F`. A
+virtual-hosted-style URL answers `501`; the Go client signs path style
+by default.
 
 ### 5. How an application connects
 
