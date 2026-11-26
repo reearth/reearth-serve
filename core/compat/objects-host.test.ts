@@ -1,20 +1,22 @@
 import { describe, expect, test } from "vitest";
 import { protect, SIGNING_SECRET } from "../../adapters/memory/fixture";
 import { mintAuthCookie, SITE_COOKIE } from "../access/cookie";
+import { parseHeaders, parseRedirects } from "../site/rules";
 import type { BucketName, ObjectKey } from "./model";
 import { accessToken, bearer, compatFixture, keyFor, onApi, type Fixture } from "../../adapters/memory/compat-fixture";
 
 const OBJECTS = "objects.example.test";
 const BODY = "hello, public reader";
+const EMPTY_ZIP = String.fromCharCode(0x50, 0x4b, 0x05, 0x06, ...new Array(18).fill(0));
 
-async function written(keys: Record<string, string[]> = { media: ["assets/ab/r.txt"] }) {
+async function written(keys: Record<string, string[]> = { media: ["assets/ab/r.txt"] }, body = BODY, contentType = "text/plain") {
   const f = await compatFixture();
   const ids: Record<string, string> = {};
   for (const [bucket, names] of Object.entries(keys)) {
     const auth = bearer(await accessToken(f, await keyFor(f, "editor", bucket)));
     for (const key of names) {
       const put = await onApi(f, `/${bucket}/${key}`, {
-        method: "PUT", headers: { ...auth, "Content-Type": "text/plain", "Content-Length": String(BODY.length) }, body: BODY,
+        method: "PUT", headers: { ...auth, "Content-Type": contentType, "Content-Length": String(body.length) }, body,
       });
       expect(put.status).toBe(200);
       const binding = await f.compat.findBinding(bucket as BucketName, key as ObjectKey);
@@ -102,6 +104,26 @@ describe("objects host", () => {
       expect(res.headers.get("WWW-Authenticate")).toBe("ServeToken");
       expect(res.headers.get("Cache-Control")).toBe("no-store");
       expect(await res.text()).not.toContain(BODY);
+    }
+  });
+
+  test("an archive serves the object itself, whatever its _redirects, _headers and SPA settings say", async () => {
+    const { f, ids } = await written({ media: ["sites/site.zip"] }, EMPTY_ZIP, "application/zip");
+    const id = ids["media/sites/site.zip"];
+    const asset = f.metadata.assets.get(id)!;
+    const h = parseHeaders("/*\n  X-Site-Rule: applied");
+    const r = parseRedirects("/site.zip /moved 301!\n/* /index.html 200");
+    f.metadata.assets.set(id, { ...asset, type: "archive", spa: true, hosting: { headers: h.rules, redirects: r.rules, warnings: [] } });
+    await f.storage.put(`assets/${id}/files/index.html`, new Blob(["<!doctype html>"]).stream(), "text/html", 15);
+    const files = await f.app.request(`http://localhost/files/${id}/site.zip`);
+    expect(files.status).toBe(301);
+    for (const read of [virtual, pathStyle]) {
+      const res = await read(f, "/sites/site.zip");
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Location")).toBeNull();
+      expect(res.headers.get("X-Site-Rule")).toBeNull();
+      expect(res.headers.get("Content-Type")).toBe("application/zip");
+      expect(await res.text()).toBe(EMPTY_ZIP);
     }
   });
 

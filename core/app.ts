@@ -47,9 +47,10 @@ export function createApp(deps: Deps) {
   });
 
   const site = siteApp(deps);
+  const objects = objectsApp(deps);
   app.use("*", compatHostMiddleware(
     { api: deps.compatApiHost, objects: deps.compatObjectsHost },
-    compatDispatch(deps, (req) => site.fetch(req)),
+    compatDispatch(deps, (req) => objects.fetch(req)),
   ));
 
   // Site hosts (ADR-013 B1). First of the remaining middlewares and ahead of every
@@ -111,7 +112,7 @@ export function createApp(deps: Deps) {
   const bearerVerifier: BearerVerifier | null = deps.auth.issuer
     ? (jwt) => verifyAccessToken(jwt, deps.auth)
     : null;
-  app.use("*", injectDeps(deps, { siteHost: false, bearerVerifier }));
+  app.use("*", injectDeps(deps, { siteHost: false, bearerVerifier, wholeObject: false }));
 
   // Public API (versioned)
   app.get("/api/v1/health",
@@ -216,22 +217,30 @@ function siteApp(deps: Deps) {
   // delivery, and the handlers below read neither `user` nor `sessionId`. No
   // bearer verifier either: a restricted asset on a site host accepts only a
   // delivery token (ADR-014 §5).
-  app.use("*", injectDeps(deps, { siteHost: true, bearerVerifier: null }));
+  app.use("*", injectDeps(deps, { siteHost: true, bearerVerifier: null, wholeObject: false }));
+  app.route("/files", fileRoutes);
+  return app;
+}
+
+/** The site-host router with each archive read as one object: the objects host serves keys, not sites. */
+function objectsApp(deps: Deps) {
+  const app = new Hono<AppEnv>();
+  app.use("*", injectDeps(deps, { siteHost: true, bearerVerifier: null, wholeObject: true }));
   app.route("/files", fileRoutes);
   return app;
 }
 
 /**
- * The objects host is delivered by the site-host router: a visitor there is
- * anonymous, with no OIDC bearer and no session, like a site-host visitor.
+ * The objects host is delivered like a site host: a visitor there is
+ * anonymous, with no OIDC bearer and no session.
  */
 function compatDispatch(
   deps: Deps,
-  siteFetch: (req: Request) => Response | Promise<Response>,
+  objectsFetch: (req: Request) => Response | Promise<Response>,
 ): (host: CompatHost, req: Request) => Response | Promise<Response> {
   const apiOrigin = compatApiOrigin(deps.compatApiHost, deps.baseUrl);
   const gcs = apiOrigin ? gcsApp(deps, apiOrigin) : null;
-  const objects = objectsHost(objectReader(deps), siteFetch);
+  const objects = objectsHost(objectReader(deps), objectsFetch);
   return (host, req) => {
     switch (host.kind) {
       case "gcs-api":
@@ -248,7 +257,7 @@ function compatDispatch(
 /** Request-independent collaborators, read off the context by every handler. */
 function injectDeps(
   deps: Deps,
-  opts: { siteHost: boolean; bearerVerifier: BearerVerifier | null },
+  opts: { siteHost: boolean; bearerVerifier: BearerVerifier | null; wholeObject: boolean },
 ): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     c.set("metadata", deps.metadata);
@@ -279,6 +288,7 @@ function injectDeps(
     c.set("compatApiHost", deps.compatApiHost);
     c.set("siteHost", opts.siteHost);
     c.set("bearerVerifier", opts.bearerVerifier);
+    c.set("wholeObject", opts.wholeObject);
     await next();
   };
 }

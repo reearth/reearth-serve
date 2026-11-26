@@ -460,16 +460,16 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
   }
 
   const layouts = layoutsWithLegacyFallback(resolved);
-  const isArchive = layouts.some((l) => l.archive);
+  const site = !c.get("wholeObject") && layouts.some((l) => l.archive);
 
   // `_headers` / `_redirects` (ADR-013 C3). The rules were parsed once, at
   // extraction time; this is all the request pays for them.
-  const hosting = isArchive ? hostingFor(asset, version) : null;
+  const hosting = site ? hostingFor(asset, version) : null;
 
   // The control files are the site's configuration, not its content. They are
   // answered as a miss so an archive cannot publish its own rule set — and
   // nothing else changes, including the file list API, which is tooling.
-  if (isArchive && isControlFile(filePath)) {
+  if (site && isControlFile(filePath)) {
     return decorate(c.json({ error: "File not found" }, 404));
   }
 
@@ -513,6 +513,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     }
   }
 
+  if (!located && !site) return decorate(c.json({ error: "File not found" }, 404));
   if (!located) {
     // `/files/:id/docs` where `docs/index.html` exists: redirect to the slash
     // form so relative links inside the page resolve against the directory.

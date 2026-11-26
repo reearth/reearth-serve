@@ -156,5 +156,11 @@ export type AppEnv = {
      * accepts no bearer.
      */
     bearerVerifier: BearerVerifier | null;
+    /**
+     * True on the objects host (ADR-019 §6): the path names the asset's own
+     * file, so an archive's hosting rules, entries, directory redirect and
+     * fallbacks do not apply.
+     */
+    wholeObject: boolean;
   };
 };
