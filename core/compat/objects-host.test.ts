@@ -1,4 +1,4 @@
-import { describe, expect, test } from "vitest";
+import { describe, expect, test, vi } from "vitest";
 import { protect, SIGNING_SECRET } from "../../adapters/memory/fixture";
 import { mintAuthCookie, SITE_COOKIE } from "../access/cookie";
 import { parseHeaders, parseRedirects } from "../site/rules";
@@ -151,6 +151,14 @@ describe("objects host", () => {
         expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
       }
     }
+  });
+
+  test("a storage failure stays a 5xx rather than reading as a missing key", async () => {
+    const { f } = await written();
+    const get = vi.spyOn(f.storage, "get").mockRejectedValue(new Error("storage down"));
+    for (const read of [virtual, pathStyle]) expect((await read(f, "/assets/ab/r.txt")).status).toBe(500);
+    get.mockRestore();
+    expect((await virtual(f, "/assets/ab/r.txt")).status).toBe(200);
   });
 
   test("an archive serves the object itself, whatever its _redirects, _headers and SPA settings say", async () => {
