@@ -113,6 +113,15 @@ export function parseOnOff(value: string, flag: string): boolean {
   throw new Error(`${flag} takes on or off`);
 }
 
+const DURATION_UNITS: Record<string, number> = { s: 1, m: 60, h: 3600, d: 86400 };
+
+/** `90`, `90s`, `30m`, `24h` or `7d`, in seconds. */
+export function parseDuration(value: string, flag: string): number {
+  const match = /^(\d+)([smhd]?)$/.exec(value.trim());
+  if (!match) throw new Error(`${flag} takes a duration such as 3600, 30m, 24h or 7d`);
+  return Number(match[1]) * DURATION_UNITS[match[2] || "s"];
+}
+
 // --- HTTP helpers ---
 
 const TOKEN_REFRESH_BUFFER_MS = 60 * 1000; // refresh 60s before expiry

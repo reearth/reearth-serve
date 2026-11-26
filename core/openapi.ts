@@ -161,6 +161,19 @@ const OPENAPI_DOCUMENTATION: GenerateSpecOptions["documentation"] = {
         name: "X-Session-Id",
         description: "Anonymous (demo-mode) session. Malformed ID → 401; unknown ID → a new session is minted and returned in the X-Session-Id response header. Ignored when bearerAuth is present.",
       },
+      // Delivery tokens (ADR-014 §4), read by `/files` on restricted assets only.
+      serveTokenQuery: {
+        type: "apiKey",
+        in: "query",
+        name: "serve_token",
+        description: "Delivery token from `POST /api/v1/assets/{id}/signed-urls`. Needs no preflight; stripped from the query before any other use.",
+      },
+      serveTokenHeader: {
+        type: "apiKey",
+        in: "header",
+        name: "X-Serve-Token",
+        description: "Delivery token from `POST /api/v1/assets/{id}/signed-urls`, kept out of URLs and logs.",
+      },
     },
   },
   security: [{ bearerAuth: [] }, { sessionId: [] }, {}],
