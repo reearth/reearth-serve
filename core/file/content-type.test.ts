@@ -1,6 +1,6 @@
 import { describe, expect, test } from "vitest";
 import { ASSET_ID, fixture, MemoryVersionStore, seedEntry, SINGLE_FILE_ID, VERSION_ID } from "../../adapters/memory/fixture";
-import { siteFixture, SUFFIX } from "../../adapters/memory/site-fixture";
+import { PROJECT_ID, siteFixture, SUFFIX } from "../../adapters/memory/site-fixture";
 import type { AssetMetadata, AssetVersion } from "../asset/model";
 import type { AtomicWrites } from "../asset/repository";
 import { createApp } from "../app";
@@ -139,5 +139,39 @@ describe("uploading a version's Content-Type through the API", () => {
     const { version } = await res.json() as { version: AssetVersion };
     expect(version.contentType).toBe(stored);
     expect(f.versions.versions.get(version.id)?.contentType).toBe(stored);
+  });
+});
+
+describe("the API reports a stored Content-Type normalized", () => {
+  test.each([
+    ["terminal escape after CR LF", "text/plain\r\n\u001b[31mX", "application/octet-stream"],
+    ["OSC title escape", "\u001b]0;pwned\u0007", "application/octet-stream"],
+    ["empty parameter before a comma", "image/png;,text/html", "application/octet-stream"],
+    ["uppercase with extra parameters", "TEXT/PLAIN; Charset=UTF-8; x=y", "text/plain; charset=utf-8"],
+  ])("%s", async (_name, stored, sent) => {
+    const f = await siteFixture();
+    for (const id of [ASSET_ID, SINGLE_FILE_ID]) {
+      f.metadata.assets.set(id, { ...f.metadata.assets.get(id)!, contentType: stored });
+    }
+    f.versions.versions.set(VERSION_ID, { ...f.versions.versions.get(VERSION_ID)!, contentType: stored });
+    const get = async (path: string) => {
+      const res = await f.app.request(path, { headers: f.auth });
+      expect(res.status, path).toBe(200);
+      return res;
+    };
+
+    const single = (await (await get(`/api/v1/assets/${SINGLE_FILE_ID}`)).json()) as { asset: AssetMetadata };
+    expect(single.asset.contentType).toBe(sent);
+    const archive = (await (await get(`/api/v1/assets/${ASSET_ID}`)).json()) as { asset: AssetMetadata };
+    expect(archive.asset.contentType).toBe(sent);
+    expect(archive.asset.currentVersion?.contentType).toBe(sent);
+    const list = (await (await get(`/api/v1/assets?projectId=${PROJECT_ID}`)).json()) as { assets: AssetMetadata[] };
+    expect(list.assets.map((a) => a.contentType)).toEqual([sent, sent]);
+    const versions = (await (await get(`/api/v1/assets/${ASSET_ID}/versions`)).json()) as { versions: AssetVersion[] };
+    expect(versions.versions.map((v) => v.contentType)).toEqual([sent]);
+    const version = (await (await get(`/api/v1/assets/${ASSET_ID}/versions/${VERSION_ID}`)).json()) as { version: AssetVersion };
+    expect(version.version.contentType).toBe(sent);
+    const files = (await (await get(`/api/v1/assets/${SINGLE_FILE_ID}/files`)).text()).trim().split("\n");
+    expect(files.map((line) => (JSON.parse(line) as { contentType: string }).contentType)).toEqual([sent]);
   });
 });
