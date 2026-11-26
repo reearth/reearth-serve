@@ -126,8 +126,10 @@ No step calls `atlas login` or Atlas Cloud.
 The Node runtime has no Atlas binary at runtime. It applies pending files
 in-process and records each in
 `_serve_migrations(set_name, name, sha256, applied_at)`, where `set_name` is
-`domain` or `node`. Each file and its row commit together, so a crash leaves
-neither. A second boot applies nothing. An applied file whose sha256 changed
+`domain` or `node`. One `BEGIN IMMEDIATE` transaction covers the ledger check
+and every pending file with its row, so a failure leaves nothing behind and a
+second process opening the same file waits, then applies only what is still
+pending. A second boot applies nothing. An applied file whose sha256 changed
 raises an error instead of running. A database file that has tables but no
 ledger came from the old loop, which never survived a second boot, so it is
 refused with a message to recreate it.
