@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { ASSET_ID, fixture, seedEntry, SINGLE_FILE_ID } from "../../adapters/memory/fixture";
+import { ASSET_ID, fixture, seedEntry, SINGLE_FILE_ID, VERSION_ID } from "../../adapters/memory/fixture";
 import { siteFixture, SUFFIX } from "../../adapters/memory/site-fixture";
 import type { AssetMetadata } from "../asset/model";
 import type { AtomicWrites } from "../asset/repository";
@@ -48,7 +48,8 @@ describe("apex delivery of a stored Content-Type (ADR-013 A4)", () => {
 
   test.each(cases)("archive entry whose stored object says %s", async (name, stored, sent, inline) => {
     const { app, storage } = await fixture();
-    await seedEntry(storage, "entry.bin", "<script>parent.x=1</script>", stored as string);
+    const body = "<script>parent.x=1</script>";
+    await storage.put(`assets/${ASSET_ID}/v/${VERSION_ID}/files/entry.bin`, new Blob([body]).stream(), stored as string, body.length);
     expectServedAs(await app.request(`/files/${ASSET_ID}/entry.bin`), sent, inline, name);
   });
 
