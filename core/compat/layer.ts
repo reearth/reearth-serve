@@ -99,7 +99,6 @@ async function resolveBound(deps: BindingDeps, bucket: CompatBucket, key: Object
 }
 
 export interface ObjectReader {
-  /** The id of the asset an exact key is bound to. No authorization: the visitor's access checks run in delivery. */
   locate(bucket: string, key: ObjectKey): Promise<string | null>;
 }
 

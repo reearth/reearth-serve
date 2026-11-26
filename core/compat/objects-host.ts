@@ -10,12 +10,6 @@ export type ObjectsHost = Extract<CompatHost, { kind: "objects-path-style" | "ob
 
 const ALLOW = "GET, HEAD";
 
-/**
- * The read-only public objects host (ADR-019 §6). A key is resolved to its
- * asset, then the request is handed to `/files/{asset}` on the
- * objects-host router, so a visitor here meets the access checks and caching
- * of `/files`, with the apex's disposition.
- */
 export function objectsHost(reader: ObjectReader, deliver: (request: Request) => Response | Promise<Response>) {
   return async (host: ObjectsHost, request: Request): Promise<Response> => {
     if (request.method !== "GET" && request.method !== "HEAD") return methodNotAllowed();
@@ -51,7 +45,6 @@ function targetOf(host: ObjectsHost, rawPath: string): { bucket: string; key: Ob
   return bucket && key ? { bucket, key } : null;
 }
 
-/** Only a delivery token travels in the query; every other parameter is the objects host's to ignore. */
 function filesRequest(request: Request, url: URL, assetId: string): Request {
   const files = new URL(`/files/${encodeURIComponent(assetId)}`, url);
   for (const token of url.searchParams.getAll(TOKEN_QUERY)) files.searchParams.append(TOKEN_QUERY, token);

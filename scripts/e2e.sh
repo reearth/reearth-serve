@@ -90,7 +90,6 @@ fi
 } > .dev.vars
 
 echo "Starting dev server on port ${PORT}..."
-# The objects host may not sit under the localhost apex, so Vite must be told to accept it.
 SERVE_DEV_ALLOWED_HOSTS=".serve-e2e.test" npm run dev -- --port "$PORT" &
 DEV_PID=$!
 

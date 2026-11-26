@@ -416,7 +416,6 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
   if (!resolved) return refuse(c.json({ error: "File not found" }, 404));
 
   const { asset, version } = resolved;
-  // The objects host names the asset, not a path in it: the read is the asset's own file, whatever its name holds.
   if (c.get("objectsHost")) filePath = (version?.filename ?? asset.filename) as AssetPath;
 
   // The access check (ADR-013 B7, ADR-014 §5), before any storage I/O and
@@ -432,9 +431,6 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     // are single validated segments, so the name is already an asset path.
     matchPath: thumb ? (version?.filename ?? asset.filename) as AssetPath : filePath,
   }, accessDeps(c, asset));
-  // On the objects host a key is a name, not a capability: a challenge, or an
-  // access check that could not run, would confirm a protected object exists,
-  // so every one fails closed as a missing key.
   const access = c.get("objectsHost")
     ? await check().catch((err: unknown) => {
       console.error(err);

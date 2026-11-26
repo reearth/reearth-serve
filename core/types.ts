@@ -156,12 +156,6 @@ export type AppEnv = {
      * accepts no bearer.
      */
     bearerVerifier: BearerVerifier | null;
-    /**
-     * True on the objects host (ADR-019 §6). The path names the asset's own
-     * file, so an archive's hosting rules, entries, directory redirect and
-     * fallbacks do not apply, and active types download as on the apex: every
-     * bucket shares the host, so nothing there may run script.
-     */
     objectsHost: boolean;
   };
 };

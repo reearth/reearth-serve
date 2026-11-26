@@ -14,17 +14,10 @@ function hostname(host: string): string {
   return host.trim().toLowerCase().replace(/:\d+$/, "").replace(/\.$/, "");
 }
 
-/** True when one name is the other or sits under it. */
 function overlaps(a: string, b: string): boolean {
   return a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
 }
 
-/**
- * The objects host serves every bucket's keys to anonymous visitors, so it
- * shares a name with no other host: not the apex, the API host or the
- * site-host suffix's base, neither under one nor over one. Ports are ignored,
- * as the classifier ignores them.
- */
 function checkObjectsHost(objects: string, others: { name: string; setting: string }[]): void {
   const name = hostname(objects);
   for (const other of others) {

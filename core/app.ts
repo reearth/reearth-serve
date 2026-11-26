@@ -222,11 +222,6 @@ function siteApp(deps: Deps) {
   return app;
 }
 
-/**
- * The objects host's router: a site host's access rules (no bearer, a
- * host-only cookie), but each asset read as one object with the apex's
- * disposition, since the host serves keys, not sites.
- */
 function objectsApp(deps: Deps) {
   const app = new Hono<AppEnv>();
   app.use("*", injectDeps(deps, { siteHost: true, bearerVerifier: null, objectsHost: true }));
@@ -234,10 +229,6 @@ function objectsApp(deps: Deps) {
   return app;
 }
 
-/**
- * The objects host is delivered like a site host: a visitor there is
- * anonymous, with no OIDC bearer and no session.
- */
 function compatDispatch(
   deps: Deps,
   objectsFetch: (req: Request) => Response | Promise<Response>,

@@ -147,10 +147,6 @@ export function constantTimeEqual(a: string, b: string): boolean {
 
 const DECOY_SALT = new Uint8Array(16);
 
-/**
- * One PBKDF2 at the stored cost for a Basic password no row will check, so a
- * refusal takes as long whether or not a password object stood behind it.
- */
 export async function decoyPasswordCheck(authorization: string | null): Promise<void> {
   const password = basicPassword(authorization);
   if (password !== null) await derive(password, DECOY_SALT, DEFAULT_ITERATIONS);
