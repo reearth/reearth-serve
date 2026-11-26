@@ -90,14 +90,14 @@ export function describeViolation(v: Violation): string {
   return (DESCRIBE[v.kind] as (v: Violation) => string)(v);
 }
 
-function isMigrationEntry(name: string): boolean {
-  return !IGNORED.has(name) && !name.startsWith(".");
-}
-
-function readHead(dir: string): MigrationFile[] {
-  return readdirSync(dir)
-    .filter(isMigrationEntry)
-    .map((name) => migrationFile(name, readFileSync(join(dir, name))));
+export function readHead(dir: string): MigrationFile[] {
+  return readdirSync(dir, { withFileTypes: true })
+    .filter((entry) => !IGNORED.has(entry.name))
+    .map((entry) =>
+      entry.isFile()
+        ? migrationFile(entry.name, readFileSync(join(dir, entry.name)))
+        : migrationFile(`${entry.name}/`, new Uint8Array()),
+    );
 }
 
 function git(args: string[]): Buffer {
@@ -110,7 +110,7 @@ function readBase(ref: string, dir: string): MigrationFile[] {
     .split("\0")
     .filter(Boolean)
     .map((path) => ({ path, name: path.slice(dir.length + 1) }))
-    .filter(({ name }) => isMigrationEntry(name))
+    .filter(({ name }) => !IGNORED.has(name))
     .map(({ path, name }) => migrationFile(name, git(["show", `${ref}:${path}`])));
 }
 

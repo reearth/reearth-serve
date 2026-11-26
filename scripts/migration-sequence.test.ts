@@ -1,5 +1,8 @@
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { describe, expect, test } from "vitest";
-import { checkMigrations, describeViolation, migrationFile, type MigrationFile } from "./migration-sequence";
+import { checkMigrations, describeViolation, migrationFile, readHead, type MigrationFile } from "./migration-sequence";
 
 const sql = (name: string, text = `CREATE TABLE ${name.split(".")[0].slice(5)} (id TEXT);\n`) =>
   migrationFile(name, new TextEncoder().encode(text));
@@ -72,5 +75,29 @@ describe("checkMigrations", () => {
       ["bare-nolint", "base-changed", "base-missing", "duplicate-prefix", "not-after-base", "shared-name"].sort(),
     );
     for (const v of violations) expect(describeViolation(v)).toMatch(/0001|0002/);
+  });
+});
+
+describe("readHead", () => {
+  test("reports dotfiles and subdirectories as bad names and skips only atlas.sum", () => {
+    const dir = mkdtempSync(join(tmpdir(), "migrations-"));
+    try {
+      writeFileSync(join(dir, "0001_init.sql"), "CREATE TABLE init (id TEXT);\n");
+      writeFileSync(join(dir, "atlas.sum"), "h1:x\n");
+      writeFileSync(join(dir, ".0009_drop.sql"), "DROP TABLE IF EXISTS assets;\n");
+      mkdirSync(join(dir, "0010_nested.sql"));
+
+      expect(checkMigrations({ base: [], head: readHead(dir), otherDirNames: new Set() })).toEqual(
+        expect.arrayContaining([
+          { kind: "bad-name", name: ".0009_drop.sql" },
+          { kind: "bad-name", name: "0010_nested.sql/" },
+        ]),
+      );
+      expect(readHead(dir).map((file) => file.name).sort()).toEqual(
+        [".0009_drop.sql", "0001_init.sql", "0010_nested.sql/"].sort(),
+      );
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
