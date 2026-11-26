@@ -1,4 +1,4 @@
-import type { CompatError, ExactHashes, ObjectInfo } from "../model";
+import { JSON_API_PATH_PREFIXES, type CompatError, type ExactHashes, type ObjectInfo } from "../model";
 import type { ListPage } from "../layer";
 import { base64Of, crc32cBase64 } from "../hash";
 
@@ -50,8 +50,12 @@ const ERRORS: Record<GcsErrorCode, ErrorSpec> = {
 
 export type GcsSurface = "json" | "xml";
 
+const JSON_API_PATH = new RegExp(
+  `^/(${JSON_API_PATH_PREFIXES.map((prefix) => (prefix === "storage" ? prefix : `${prefix}/storage`)).join("|")})/v1(/|$)`,
+);
+
 export function surfaceOf(path: string): GcsSurface {
-  return /^\/(storage|upload\/storage|download\/storage|batch\/storage)\/v1(\/|$)/.test(path) ? "json" : "xml";
+  return JSON_API_PATH.test(path) ? "json" : "xml";
 }
 
 function escapeXml(text: string): string {

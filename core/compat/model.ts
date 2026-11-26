@@ -22,18 +22,11 @@ export function parseBucketName(raw: string): BucketName | null {
   return raw as BucketName;
 }
 
-/**
- * The first path segments of the GCS JSON API. A bucket named like one would
- * have its XML path-style reads routed as JSON API calls, so no new bucket may
- * take one. Lookups still accept them, so a bucket made before this rule keeps
- * its other routes.
- */
-const API_PATH_PREFIXES: ReadonlySet<string> = new Set(["storage", "upload", "download", "batch"]);
+export const JSON_API_PATH_PREFIXES = ["storage", "upload", "download", "batch"] as const;
 
-/** A name a new bucket may take: a valid name that no API path claims. */
 export function parseNewBucketName(raw: string): BucketName | null {
   const name = parseBucketName(raw);
-  return name && !API_PATH_PREFIXES.has(name) ? name : null;
+  return name && !(JSON_API_PATH_PREFIXES as readonly string[]).includes(name) ? name : null;
 }
 
 export type MountRule = z.infer<typeof compatMountRuleSchema>;
