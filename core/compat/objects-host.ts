@@ -11,8 +11,8 @@ const ALLOW = "GET, HEAD";
 /**
  * The read-only public objects host (ADR-019 §6). A key is resolved to its
  * asset, then the request is handed to `/files/{asset}/{filename}` on the
- * site-host router, so a visitor here meets exactly the access checks,
- * caching and disposition a site-host visitor of that asset meets.
+ * objects-host router, so a visitor here meets the access checks and caching
+ * of `/files`, with the apex's disposition.
  */
 export function objectsHost(reader: ObjectReader, deliver: (request: Request) => Response | Promise<Response>) {
   return async (host: ObjectsHost, request: Request): Promise<Response> => {
@@ -21,9 +21,19 @@ export function objectsHost(reader: ObjectReader, deliver: (request: Request) =>
     const target = targetOf(host, url.pathname);
     const located = target && await reader.locate(target.bucket, target.key);
     if (!located) return notFound();
-    return deliver(filesRequest(request, url, located));
+    const res = await deliver(filesRequest(request, url, located));
+    if (!refused(res.status)) return res;
+    await res.body?.cancel().catch(() => {});
+    return notFound();
   };
 }
+
+/**
+ * Keys are names, not capabilities, so a challenge or a refusal would confirm
+ * that a protected object exists. Every one reads as a missing key; a 416
+ * comes only after access was granted.
+ */
+const refused = (status: number) => status >= 400 && status !== 416;
 
 function targetOf(host: ObjectsHost, rawPath: string): { bucket: string; key: ObjectKey } | null {
   let path: string;
@@ -58,7 +68,7 @@ function methodNotAllowed(): Response {
   });
 }
 
-/** One answer for an unknown bucket and an unknown key, and `no-store`, since the key may be written a moment later. */
+/** One answer for an unknown bucket, an unknown key and every refusal, and `no-store`, since the key may be written a moment later. */
 function notFound(): Response {
   return new Response(JSON.stringify({ error: "File not found" }), {
     status: 404,
