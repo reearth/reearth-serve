@@ -131,16 +131,17 @@ export function xmlWriteHeaders(info: ObjectInfo): Record<string, string> {
   return { ETag: etagHeader(info), ...storedHeaders(info), ...(info.hashes && { "x-goog-hash": hashHeader(info.hashes) }) };
 }
 
-export type SentRead = { status: number; sentEncoding: string | null; storedEncoding: string | null; hashes: ExactHashes | null };
+type SentRead = { status: number; sentEncoding: string | null; storedEncoding: string | null; hashes: ExactHashes | null };
+
+const encodingOf = (value: string | null) => (value === null || value === "identity" ? null : value);
 
 /**
  * A client checks `x-goog-hash` against the bytes it received (ADR-019 §3), so
  * it goes only on a whole object sent in its stored encoding.
  */
-export function readHashHeader(read: SentRead): string | null {
-  const encoding = (value: string | null) => (value === null || value === "identity" ? null : value);
+function readHashHeader(read: SentRead): string | null {
   if (read.status !== 200 || !read.hashes) return null;
-  return encoding(read.sentEncoding) === encoding(read.storedEncoding) ? hashHeader(read.hashes) : null;
+  return encodingOf(read.sentEncoding) === encodingOf(read.storedEncoding) ? hashHeader(read.hashes) : null;
 }
 
 export function withReadHeaders(res: Response, info: ObjectInfo): Response {

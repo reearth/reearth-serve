@@ -181,9 +181,10 @@ func revoke(ctx context.Context, cfg config) error {
 	return nil
 }
 
-func write(ctx context.Context, obj *storage.ObjectHandle, contentType string, metadata map[string]string, data []byte) (*storage.ObjectAttrs, error) {
+func write(ctx context.Context, obj *storage.ObjectHandle, contentType, contentEncoding string, metadata map[string]string, data []byte) (*storage.ObjectAttrs, error) {
 	w := obj.NewWriter(ctx)
 	w.ContentType = contentType
+	w.ContentEncoding = contentEncoding
 	w.Metadata = metadata
 	if _, err := w.Write(data); err != nil {
 		_ = w.Close()
@@ -211,7 +212,7 @@ func writeAttrsListDelete(ctx context.Context, client *storage.Client, cfg confi
 	bucket := client.Bucket(cfg.bucket)
 	obj := bucket.Object("assets/ab/cdef/a.txt")
 	first := []byte("small body")
-	if _, err := write(ctx, obj, "text/plain", map[string]string{"k": "v"}, first); err != nil {
+	if _, err := write(ctx, obj, "text/plain", "", map[string]string{"k": "v"}, first); err != nil {
 		return fmt.Errorf("write: %w", err)
 	}
 	attrs, err := obj.Attrs(ctx)
@@ -227,7 +228,7 @@ func writeAttrsListDelete(ctx context.Context, client *storage.Client, cfg confi
 	firstGeneration := attrs.Generation
 
 	second := []byte("second, longer body")
-	if _, err := write(ctx, obj, "text/plain", nil, second); err != nil {
+	if _, err := write(ctx, obj, "text/plain", "", nil, second); err != nil {
 		return fmt.Errorf("overwrite: %w", err)
 	}
 	attrs, err = obj.Attrs(ctx)
@@ -243,7 +244,7 @@ func writeAttrsListDelete(ctx context.Context, client *storage.Client, cfg confi
 	fmt.Println("overwrite: generation increased")
 	lastGeneration := attrs.Generation
 
-	if _, err := write(ctx, bucket.Object("assets/ab/cdef/sub/b.txt"), "text/plain", nil, []byte("b")); err != nil {
+	if _, err := write(ctx, bucket.Object("assets/ab/cdef/sub/b.txt"), "text/plain", "", nil, []byte("b")); err != nil {
 		return fmt.Errorf("write sub/b.txt: %w", err)
 	}
 	var objects, prefixes []string
@@ -277,7 +278,7 @@ func writeAttrsListDelete(ctx context.Context, client *storage.Client, cfg confi
 		return fmt.Errorf("attrs after delete: want ErrObjectNotExist, got %v", err)
 	}
 
-	recreated, err := write(ctx, obj, "text/plain", nil, first)
+	recreated, err := write(ctx, obj, "text/plain", "", nil, first)
 	if err != nil {
 		return fmt.Errorf("recreate: %w", err)
 	}
@@ -303,7 +304,7 @@ func paging(ctx context.Context, client *storage.Client, cfg config) error {
 		go func() {
 			defer wg.Done()
 			for name := range names {
-				if _, err := write(ctx, bucket.Object(name), "text/plain", nil, []byte(name)); err != nil {
+				if _, err := write(ctx, bucket.Object(name), "text/plain", "", nil, []byte(name)); err != nil {
 					errs <- fmt.Errorf("write %s: %w", name, err)
 				}
 			}
@@ -356,7 +357,7 @@ func race(ctx context.Context, client *storage.Client, cfg config) error {
 		go func() {
 			defer wg.Done()
 			<-start
-			written[i], errs[i] = write(ctx, obj, "text/plain", nil, []byte(fmt.Sprintf("writer %d", i)))
+			written[i], errs[i] = write(ctx, obj, "text/plain", "", nil, []byte(fmt.Sprintf("writer %d", i)))
 		}()
 	}
 	close(start)
@@ -394,7 +395,7 @@ func read(ctx context.Context, client *storage.Client, cfg config) error {
 	bucket := client.Bucket(cfg.bucket)
 	plain := bucket.Object("read/plain.bin")
 	data := pattern(256*1024, 7)
-	if _, err := write(ctx, plain, "application/octet-stream", nil, data); err != nil {
+	if _, err := write(ctx, plain, "application/octet-stream", "", nil, data); err != nil {
 		return fmt.Errorf("write: %w", err)
 	}
 	defer func() { _ = plain.Delete(ctx) }()
@@ -457,14 +458,7 @@ func readGzip(ctx context.Context, bucket *storage.BucketHandle) error {
 	if err := zw.Close(); err != nil {
 		return err
 	}
-	w := obj.NewWriter(ctx)
-	w.ContentType = "application/json"
-	w.ContentEncoding = "gzip"
-	if _, err := w.Write(packed.Bytes()); err != nil {
-		_ = w.Close()
-		return fmt.Errorf("gzip write: %w", err)
-	}
-	if err := w.Close(); err != nil {
+	if _, err := write(ctx, obj, "application/json", "gzip", nil, packed.Bytes()); err != nil {
 		return fmt.Errorf("gzip write: %w", err)
 	}
 	defer func() { _ = obj.Delete(ctx) }()

@@ -117,11 +117,11 @@ export function gcsApp(deps: GcsDeps, apiOrigin: string) {
     if (!generation.ok) return gcsError(surface, "invalid", "Invalid generation.");
     const opened = await layerOf(c).open(bucket, key);
     if (!opened.ok) return compatErrorResponse(surface, opened.error, `${bucket}/${key}`);
+    const object = opened.value;
     const missing = () => compatErrorResponse(surface, { code: "no_such_key" }, `${bucket}/${key}`);
-    if (generation.value !== null && generation.value !== opened.value.info.generation) return missing();
-    const { info } = opened.value;
-    const res = await deliverAsset(deps.storage, c.req.raw, { object: opened.value, quotedEtag: etagHeader(info) });
-    return res ? withReadHeaders(res, info) : missing();
+    if (generation.value !== null && generation.value !== object.info.generation) return missing();
+    const res = await deliverAsset(deps.storage, c.req.raw, { object, quotedEtag: etagHeader(object.info) });
+    return res ? withReadHeaders(res, object.info) : missing();
   }
 
   app.get("/download/storage/v1/b/:bucket/o/:object", (c) => {
@@ -209,7 +209,7 @@ export function gcsApp(deps: GcsDeps, apiOrigin: string) {
 
   app.put("*", async (c) => {
     if (surfaceOf(c.req.path) === "json") return gcsError("json", "not_implemented");
-    const target = xmlObjectOf(c.get("signedObjectPath") ?? objectPathOf(new URL(c.req.url).pathname));
+    const target = xmlObjectOf(xmlPathOf(c));
     if (!target) return gcsError("xml", "invalid", "Invalid object name.");
     const length = c.req.header("Content-Length");
     if (length === undefined || !/^\d+$/.test(length)) return gcsError("xml", "length_required");
@@ -230,7 +230,7 @@ export function gcsApp(deps: GcsDeps, apiOrigin: string) {
 
   app.get("*", (c) => {
     if (surfaceOf(c.req.path) === "json") return gcsError("json", "not_implemented");
-    const path = c.get("signedObjectPath") ?? objectPathOf(new URL(c.req.url).pathname);
+    const path = xmlPathOf(c);
     if (path !== null && !path.includes("/")) return gcsError("xml", "not_implemented");
     if (XML_OBJECT_SUBRESOURCES.some((name) => c.req.query(name) !== undefined)) return gcsError("xml", "not_implemented");
     const target = xmlObjectOf(path);
@@ -240,6 +240,10 @@ export function gcsApp(deps: GcsDeps, apiOrigin: string) {
 
   app.all("*", (c) => gcsError(surfaceOf(c.req.path), "not_implemented"));
   return app;
+}
+
+function xmlPathOf(c: Context<GcsEnv>): string | null {
+  return c.get("signedObjectPath") ?? objectPathOf(new URL(c.req.url).pathname);
 }
 
 function xmlObjectOf(path: string | null): { bucket: string; key: ObjectKey } | null {

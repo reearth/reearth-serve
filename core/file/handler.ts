@@ -756,9 +756,8 @@ export async function deliverAsset(storage: FileStorage, request: Request, { obj
   const located = await locate(storage, layout, layout.filename);
   if (!located) return null;
   const policy = deliveryPolicy(SERVICE_GRANT, toUnixSeconds(Date.now()));
-  const conditions = conditionsOf(request);
   const res = await sendLocated(located, {
-    ...conditions,
+    ...conditionsOf(request),
     // GCS answers a gzip object whole whatever the Range (decompressive transcoding), and its clients expect that.
     ...(located.contentEncoding === "gzip" && { range: null, rangeHeader: undefined }),
     cacheControl: cacheControlFor({ pinned: false, contentType: located.contentType }, policy),
