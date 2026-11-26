@@ -205,6 +205,9 @@ describe("objects host", () => {
       await onObjects(f, OBJECTS, "/nobucket/assets/ab/r.txt"),
       await onObjects(f, OBJECTS, "/media"),
       await virtual(f, "/"),
+      await onObjects(f, `ab.${OBJECTS}`, "/assets/ab/r.txt"),
+      await onObjects(f, `goog-x.${OBJECTS}`, "/assets/ab/r.txt"),
+      await onObjects(f, `a.b.${OBJECTS}`, "/assets/ab/r.txt"),
     ];
     const answers = await Promise.all(misses.map(async (res) => ({
       status: res.status, body: await res.text(), headers: Object.fromEntries(res.headers),
