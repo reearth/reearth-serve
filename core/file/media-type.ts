@@ -144,6 +144,11 @@ if (import.meta.vitest) {
       'text/plain; charset="utf-8',
     ];
     for (const raw of invalid) expect(parseMediaType(raw), JSON.stringify(raw)).toBeNull();
+  });
+
+  test("parseMediaType rejects the essence */*, which Fetch reads as no type", () => {
+    for (const raw of ["*/*", " */* ", "*/*; charset=utf-8"]) expect(parseMediaType(raw), raw).toBeNull();
+    expect(parseMediaType("text/*")).toBe("text/*");
     expect(parseMediaType(undefined)).toBeNull();
     expect(parseMediaType(null)).toBeNull();
   });

@@ -19,6 +19,7 @@ const cases: Array<[name: string, stored: string | undefined, sent: string, inli
   ["empty parameter before a comma", "image/png;,text/html", SANDBOXED.type, false],
   ["bare comma list", "text/plain,text/html", SANDBOXED.type, false],
   ["lone comma", ",", SANDBOXED.type, false],
+  ["wildcard essence", "*/*; charset=utf-8", SANDBOXED.type, false],
   ["uppercase active type", "TEXT/HTML", "text/html", false],
   ["padded inline type", " \ttext/plain\t ", "text/plain", true],
   ["active type with charset", "text/html;charset=utf-8", "text/html; charset=utf-8", false],
