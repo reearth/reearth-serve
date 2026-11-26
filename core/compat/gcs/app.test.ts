@@ -555,13 +555,6 @@ describe("routes not built yet", () => {
     expect(xml.status).toBe(501);
     expect(await xml.text()).toContain("<Code>NotImplemented</Code>");
   });
-
-  test("the objects host answers 501 in XML for now", async () => {
-    const f = await compatFixture();
-    const res = await f.app.request("https://media.objects.example.test/k", { headers: { Host: "media.objects.example.test" } });
-    expect(res.status).toBe(501);
-    expect(await res.text()).toContain("<Code>NotImplemented</Code>");
-  });
 });
 
 describe("hosts", () => {

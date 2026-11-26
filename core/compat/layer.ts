@@ -85,20 +85,42 @@ export async function authorizeBucket(
   return { ok: true, value: { bucket, project: decision.value } };
 }
 
+type BindingDeps = Pick<ObjectLayerDeps, "compat" | "metadata" | "versions">;
+
+async function loadBound(deps: BindingDeps, bucket: CompatBucket, binding: Extract<Binding, { kind: "object" }>): Promise<Resolved | null> {
+  const found = await resolveAssetVersion(deps.metadata, deps.versions, binding.assetId);
+  if (!found || found.asset.id !== binding.assetId || found.asset.projectId !== bucket.projectId) return null;
+  return { binding, ...found };
+}
+
+async function resolveBound(deps: BindingDeps, bucket: CompatBucket, key: ObjectKey): Promise<Resolved | null> {
+  const binding = await deps.compat.findBinding(bucket.name, key);
+  return binding?.kind === "object" ? loadBound(deps, bucket, binding) : null;
+}
+
+export type LocatedObject = { assetId: string; filename: string };
+
+export interface ObjectReader {
+  /** The asset an exact key is bound to. No authorization: the visitor's access checks run in delivery. */
+  locate(bucket: string, key: ObjectKey): Promise<LocatedObject | null>;
+}
+
+export function objectReader(deps: BindingDeps): ObjectReader {
+  return {
+    async locate(raw, key) {
+      const name = parseBucketName(raw);
+      const bucket = name ? await deps.compat.findBucket(name) : null;
+      const r = bucket && await resolveBound(deps, bucket, key);
+      return r ? { assetId: r.asset.id, filename: r.version?.filename ?? r.asset.filename } : null;
+    },
+  };
+}
+
 export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, now: () => number = Date.now): ObjectLayer {
   const { compat } = deps;
   const authorized = (raw: string, action: ProjectAction) => authorizeBucket(deps, service, raw, action);
-
-  async function resolve(bucket: CompatBucket, key: ObjectKey): Promise<Resolved | null> {
-    const binding = await compat.findBinding(bucket.name, key);
-    return binding?.kind === "object" ? load(bucket, binding) : null;
-  }
-
-  async function load(bucket: CompatBucket, binding: Extract<Binding, { kind: "object" }>): Promise<Resolved | null> {
-    const found = await resolveAssetVersion(deps.metadata, deps.versions, binding.assetId);
-    if (!found || found.asset.id !== binding.assetId || found.asset.projectId !== bucket.projectId) return null;
-    return { binding, ...found };
-  }
+  const resolve = (bucket: CompatBucket, key: ObjectKey) => resolveBound(deps, bucket, key);
+  const load = (bucket: CompatBucket, binding: Extract<Binding, { kind: "object" }>) => loadBound(deps, bucket, binding);
 
   async function describeAll(bucket: CompatBucket, objects: Resolved[]): Promise<ObjectInfo[]> {
     const records = await compat.records(bucket.name, objects.map((r) => ({ objectRef: refOf(r), assetId: r.asset.id })));

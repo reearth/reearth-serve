@@ -20,6 +20,8 @@ import { compatHostMiddleware, type CompatHost } from "./compat/hosts";
 import { compatApiOrigin } from "./compat/handler";
 import { gcsApp } from "./compat/gcs/app";
 import { gcsError } from "./compat/gcs/wire";
+import { objectReader } from "./compat/layer";
+import { objectsHost } from "./compat/objects-host";
 import { healthExamples } from "./openapi-examples";
 import { healthResponseSchema } from "../shared/openapi";
 
@@ -44,9 +46,10 @@ export function createApp(deps: Deps) {
     return c.text("Internal Server Error", 500);
   });
 
+  const site = siteApp(deps);
   app.use("*", compatHostMiddleware(
     { api: deps.compatApiHost, objects: deps.compatObjectsHost },
-    compatDispatch(deps),
+    compatDispatch(deps, (req) => site.fetch(req)),
   ));
 
   // Site hosts (ADR-013 B1). First of the remaining middlewares and ahead of every
@@ -56,7 +59,6 @@ export function createApp(deps: Deps) {
   // OIDC and session tracking — a hosted page is pure file delivery, and
   // minting an anonymous session per page view would burn a KV write for an
   // identity nothing reads.
-  const site = siteApp(deps);
   // The resolver decides ID hosts, preview hosts and named hosts in that order
   // (ADR-013 B6). It needs the normalised suffix to rebuild the full hostname
   // a `site_hosts` row is keyed by; when site hosts are off the middleware
@@ -219,15 +221,27 @@ function siteApp(deps: Deps) {
   return app;
 }
 
-function compatDispatch(deps: Deps): (host: CompatHost, req: Request) => Response | Promise<Response> {
+/**
+ * The objects host is delivered by the site-host router: a visitor there is
+ * anonymous, with no OIDC bearer and no session, like a site-host visitor.
+ */
+function compatDispatch(
+  deps: Deps,
+  siteFetch: (req: Request) => Response | Promise<Response>,
+): (host: CompatHost, req: Request) => Response | Promise<Response> {
   const apiOrigin = compatApiOrigin(deps.compatApiHost, deps.baseUrl);
   const gcs = apiOrigin ? gcsApp(deps, apiOrigin) : null;
+  const objects = objectsHost(objectReader(deps), siteFetch);
   return (host, req) => {
-    if (host.kind === "gcs-api" && gcs) return gcs.fetch(req);
-    if (host.kind === "gcs-api-virtual-host") {
-      return gcsError("xml", "not_implemented", `Not implemented: virtual-hosted-style URLs. Use path-style URLs on ${deps.compatApiHost}.`);
+    switch (host.kind) {
+      case "gcs-api":
+        return gcs ? gcs.fetch(req) : gcsError("xml", "not_implemented");
+      case "gcs-api-virtual-host":
+        return gcsError("xml", "not_implemented", `Not implemented: virtual-hosted-style URLs. Use path-style URLs on ${deps.compatApiHost}.`);
+      case "objects-path-style":
+      case "objects-virtual-host":
+        return objects(host, req);
     }
-    return gcsError("xml", "not_implemented");
   };
 }
 
