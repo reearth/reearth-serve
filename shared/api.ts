@@ -40,7 +40,7 @@ export function component<T extends z.ZodType>(ref: string, schema: T, meta: Rec
  * type name (`RoleOwner`, `ArchiveFormatTarGz`); oapi-codegen otherwise emits
  * bare `Owner` / `Pending` constants unless two enums happen to collide.
  */
-function enumComponent<T extends z.ZodEnum>(ref: string, schema: T): T {
+export function enumComponent<T extends z.ZodEnum>(ref: string, schema: T): T {
   const varnames = schema.options.map((value) =>
     ref + String(value).split(/[^A-Za-z0-9]+/).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(""),
   );
@@ -76,11 +76,13 @@ export const roleSchema = enumComponent("Role", z.enum(["owner", "admin", "edito
 
 // --- Workspace ---
 
+const directoryTimestamp = z.number().optional().describe("Milliseconds since the epoch. Absent when an external directory keeps no timestamp.");
+
 export const workspaceSchema = component("Workspace", z.object({
   id: z.string(),
   name: z.string(),
-  createdAt: z.number(),
-  updatedAt: z.number(),
+  createdAt: directoryTimestamp,
+  updatedAt: directoryTimestamp,
 }));
 
 export const createWorkspaceBodySchema = component("CreateWorkspaceRequest", z.object({
@@ -93,8 +95,8 @@ export const memberSchema = component("Member", z.object({
   workspaceId: z.string(),
   userId: z.string(),
   role: roleSchema,
-  createdAt: z.number(),
-  updatedAt: z.number(),
+  createdAt: directoryTimestamp,
+  updatedAt: directoryTimestamp,
 }));
 
 export const addMemberBodySchema = component("AddMemberRequest", z.object({

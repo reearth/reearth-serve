@@ -20,6 +20,7 @@ interface Env {
   JWKS_CACHE_TTL_SECONDS?: string;
   // Authorization
   CERBOS_ENDPOINT?: string;
+  ACCOUNTS_URL?: string;
   // Shared secret for /api/internal/* (container ↔ worker callbacks).
   // Required in production; without it the internal API rejects every request.
   INTERNAL_API_SECRET?: string;
@@ -62,6 +63,10 @@ interface Env {
   // Delivery token key ring (ADR-014 §4), a wrangler secret:
   // {"active":"<kid>","keys":{"<kid>":"<base64 secret>"}}. Unset ⇒ tokens are off.
   DELIVERY_TOKEN_KEYS?: string;
+  // Host the GCS-compatible API answers on (ADR-019), a bare host[:port]. Unset ⇒ compat
+  // credentials cannot be issued.
+  COMPAT_GCS_HOST?: string;
+  COMPAT_OBJECTS_HOST?: string;
   // Cloudflare Containers
   ARCHIVE_EXTRACTOR?: DurableObjectNamespace;
   THUMBNAIL_GENERATOR?: DurableObjectNamespace;

@@ -6,9 +6,10 @@ import {
   SqlCleanupPendingStore, SqlJobStore, SqlMetadataStore,
   SqlProjectStore, SqlStorageUsageStore, SqlVersionStore,
 } from "../../adapters/sql/stores";
-import { buildTenancy } from "../../adapters/tenancy";
+import { buildTenancy, serviceAuthorizer } from "../../adapters/tenancy";
 import { SqlAtomicWrites } from "../../adapters/sql/writes";
 import { SqlSiteHostStore } from "../../adapters/sql/site-hosts";
+import { SqlCompatStore } from "../../adapters/sql/compat";
 import { DohDnsResolver } from "../../adapters/doh/dns";
 import { NoopProvisioner } from "../../core/site/provisioner";
 import { apexHost } from "../../core/site/middleware";
@@ -107,12 +108,16 @@ export function buildNodeRuntime(env: Env = process.env): NodeRuntime {
     internalApiSecret: config.internalApiSecret,
     signingSecret: config.signingSecret,
     credentialedOrigins: config.credentialedOrigins,
+    compat: new SqlCompatStore(sql),
+    compatApiHost: config.compatApiHost,
+    compatObjectsHost: config.compatObjectsHost,
+    serviceAuthorizer: serviceAuthorizer(config.tenancy),
     auth: {
       issuer: config.oidcIssuerUrl,
       audience: config.oidcAudience,
       jwksCache: kv,
     },
-    tenancy: buildTenancy(config.tenancy, { sql }),
+    tenancy: buildTenancy(config.tenancy, { sql, kv }),
     containers: new UnavailableContainerLauncher(),
     extractionStuckThresholdMs: STUCK_THRESHOLD_MS,
     limits: { subrequestBudget: CLEANUP_SUBREQUEST_BUDGET },

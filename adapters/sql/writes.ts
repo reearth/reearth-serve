@@ -9,6 +9,7 @@ import {
   CLEANUP_PENDING_ADD_SQL,
 } from "./stores";
 import { parseSiteHost, SITE_HOSTS_RELEASE_BY_ASSET_SQL } from "./site-hosts";
+import { compatDeleteByAsset } from "./compat";
 
 // Runs before the version and asset rows are deleted in the same batch: it
 // reads their sizes, and the EXISTS guard skips it once the asset is gone.
@@ -59,6 +60,7 @@ export class SqlAtomicWrites implements AtomicWrites {
     const releaseIndex = statements.length;
     statements.push(
       { sql: SITE_HOSTS_RELEASE_BY_ASSET_SQL, args: [asset.id, releasedAt ?? now] },
+      ...compatDeleteByAsset(asset.id),
       { sql: "DELETE FROM asset_versions WHERE asset_id = ?1", args: [asset.id] },
       { sql: "DELETE FROM assets WHERE id = ?1", args: [asset.id] },
       { sql: CLEANUP_PENDING_ADD_SQL, args: [cleanupPrefix, now] },
