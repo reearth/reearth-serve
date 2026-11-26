@@ -56,8 +56,7 @@ function generationQuery(c: Context<GcsEnv>, name: "ifGenerationMatch" | "genera
   return /^\d+$/.test(raw) ? { ok: true, value: Number(raw) } : { ok: false };
 }
 
-/** XML subresources of an object that a plain read must not answer with its bytes. */
-const XML_OBJECT_SUBRESOURCES = ["acl", "uploadId", "tagging"];
+const XML_OBJECT_SUBRESOURCES = ["acl", "uploadId", "encryption", "retention", "legalHold"];
 
 type ObjectResource = {
   name?: unknown; contentType?: unknown; contentEncoding?: unknown; metadata?: unknown; crc32c?: unknown; md5Hash?: unknown;

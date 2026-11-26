@@ -588,9 +588,11 @@ describe("object reads", () => {
     expect(await res.json()).toMatchObject({ error: { code: 401 } });
   });
 
-  test.each(["acl", "uploadId"])("an XML GET with ?%s does not answer with the bytes", async (name) => {
+  test.each(["acl", "uploadId", "encryption", "retention", "legalHold"])("an XML GET with ?%s answers 501 and not the bytes", async (name) => {
     const { f, auth } = await written();
-    expect((await onApi(f, `/media/assets/ab/r.txt?${name}`, { headers: auth })).status).toBe(501);
+    const res = await onApi(f, `/media/assets/ab/r.txt?${name}`, { headers: auth });
+    expect(res.status).toBe(501);
+    expect(await res.text()).not.toContain(BODY);
   });
 });
 
