@@ -404,7 +404,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     return res;
   };
   if (delivery.path === null) return refuse(c.json({ error: "Invalid path" }, 400));
-  const filePath: AssetPath = delivery.path;
+  let filePath: AssetPath = delivery.path;
 
   // Thumbnail dispatch (query parameter or _thumbs/ path).
   const thumb = detectThumbRequest(filePath, delivery.url.searchParams.get("thumb") ?? undefined);
@@ -415,6 +415,8 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
   if (!resolved) return refuse(c.json({ error: "File not found" }, 404));
 
   const { asset, version } = resolved;
+  // The objects host names the asset, not a path in it: the read is the asset's own file, whatever its name holds.
+  if (c.get("objectsHost")) filePath = (version?.filename ?? asset.filename) as AssetPath;
 
   // The access check (ADR-013 B7, ADR-014 §5), before any storage I/O and
   // before the thumbnail branch: a protected asset's thumbnail is as much of a

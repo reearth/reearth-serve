@@ -1,5 +1,5 @@
 import type { CompatHost } from "./hosts";
-import type { LocatedObject, ObjectReader } from "./layer";
+import type { ObjectReader } from "./layer";
 import { parseBucketName, parseObjectKey, type ObjectKey } from "./model";
 import { TOKEN_QUERY } from "../access/request";
 import { SITE_PREVIEW_HEADER } from "../site/middleware";
@@ -11,7 +11,7 @@ const ALLOW = "GET, HEAD";
 
 /**
  * The read-only public objects host (ADR-019 §6). A key is resolved to its
- * asset, then the request is handed to `/files/{asset}/{filename}` on the
+ * asset, then the request is handed to `/files/{asset}` on the
  * objects-host router, so a visitor here meets the access checks and caching
  * of `/files`, with the apex's disposition.
  */
@@ -20,9 +20,9 @@ export function objectsHost(reader: ObjectReader, deliver: (request: Request) =>
     if (request.method !== "GET" && request.method !== "HEAD") return methodNotAllowed();
     const url = new URL(request.url);
     const target = targetOf(host, url.pathname);
-    const located = target && await reader.locate(target.bucket, target.key);
-    if (!located) return missingObjectResponse();
-    const res = await deliver(filesRequest(request, url, located));
+    const assetId = target && await reader.locate(target.bucket, target.key);
+    if (!assetId) return missingObjectResponse();
+    const res = await deliver(filesRequest(request, url, assetId));
     if (res.status !== 404) return res;
     await res.body?.cancel().catch(() => {});
     return missingObjectResponse();
@@ -47,8 +47,8 @@ function targetOf(host: ObjectsHost, rawPath: string): { bucket: string; key: Ob
 }
 
 /** Only a delivery token travels in the query; every other parameter is the objects host's to ignore. */
-function filesRequest(request: Request, url: URL, { assetId, filename }: LocatedObject): Request {
-  const files = new URL(`/files/${encodeURIComponent(assetId)}/${encodeURIComponent(filename)}`, url);
+function filesRequest(request: Request, url: URL, assetId: string): Request {
+  const files = new URL(`/files/${encodeURIComponent(assetId)}`, url);
   for (const token of url.searchParams.getAll(TOKEN_QUERY)) files.searchParams.append(TOKEN_QUERY, token);
   const headers = new Headers(request.headers);
   headers.delete(SITE_PREVIEW_HEADER);

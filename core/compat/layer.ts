@@ -98,11 +98,9 @@ async function resolveBound(deps: BindingDeps, bucket: CompatBucket, key: Object
   return binding?.kind === "object" ? loadBound(deps, bucket, binding) : null;
 }
 
-export type LocatedObject = { assetId: string; filename: string };
-
 export interface ObjectReader {
-  /** The asset an exact key is bound to. No authorization: the visitor's access checks run in delivery. */
-  locate(bucket: string, key: ObjectKey): Promise<LocatedObject | null>;
+  /** The id of the asset an exact key is bound to. No authorization: the visitor's access checks run in delivery. */
+  locate(bucket: string, key: ObjectKey): Promise<string | null>;
 }
 
 export function objectReader(deps: BindingDeps): ObjectReader {
@@ -111,7 +109,7 @@ export function objectReader(deps: BindingDeps): ObjectReader {
       const name = parseBucketName(raw);
       const bucket = name ? await deps.compat.findBucket(name) : null;
       const r = bucket && await resolveBound(deps, bucket, key);
-      return r ? { assetId: r.asset.id, filename: r.version?.filename ?? r.asset.filename } : null;
+      return r?.asset.id ?? null;
     },
   };
 }
