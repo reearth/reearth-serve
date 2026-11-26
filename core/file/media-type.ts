@@ -14,27 +14,78 @@
  * and every byte kept is a byte some other parser might read differently.
  */
 
+import { MAX_CONTENT_TYPE_LENGTH } from "../../shared/api";
+
 /** A Content-Type in normalized form: lowercase `type/subtype`, then at most `; charset=<token>`. */
 export type MediaType = string & { readonly __mediaType: unique symbol };
 
 export const OCTET_STREAM = "application/octet-stream" as MediaType;
 
-const TOKEN = "[!#$%&'*+.^_`|~0-9A-Za-z-]+";
-const QUOTED = '"(?:[^"\\\\]|\\\\.)*"';
-const PARAMETER = `(${TOKEN})=(${TOKEN}|${QUOTED})`;
-const MEDIA_TYPE = new RegExp(`^(${TOKEN})/(${TOKEN})((?:[ \\t]*;[ \\t]*(?:${TOKEN}=(?:${TOKEN}|${QUOTED}))?)*)$`);
-const TOKEN_ONLY = new RegExp(`^${TOKEN}$`);
 const VISIBLE = /^[\t\x20-\x7e]*$/;
 
-/** The normalized type, or `null` when `raw` is not exactly one media type. */
+/**
+ * The normalized type, or `null` when `raw` is not exactly one media type.
+ *
+ * A single left-to-right scan, so the cost is linear in the input: a regex
+ * over the optional-whitespace parameter grammar backtracks catastrophically
+ * on long runs of `; `, and this runs on every upload and every file read.
+ */
 export function parseMediaType(raw: string | null | undefined): MediaType | null {
-  if (raw == null || !VISIBLE.test(raw) || raw.includes(",")) return null;
-  const match = MEDIA_TYPE.exec(raw.replace(/^[ \t]+|[ \t]+$/g, ""));
-  if (!match) return null;
-  const [, type, subtype, parameters] = match;
+  if (raw == null || raw.length > MAX_CONTENT_TYPE_LENGTH || !VISIBLE.test(raw) || raw.includes(",")) return null;
+  let i = 0;
+  const skipWhitespace = () => { while (raw[i] === " " || raw[i] === "\t") i++; };
+  const token = () => {
+    const start = i;
+    while (i < raw.length && isTokenChar(raw[i])) i++;
+    return raw.slice(start, i);
+  };
+  /** The unescaped content of the quoted-string at `i`, or `null` when it is not closed. */
+  const quoted = () => {
+    let value = "";
+    for (i++; i < raw.length; i++) {
+      if (raw[i] === '"') { i++; return value; }
+      if (raw[i] === "\\") i++;
+      if (i < raw.length) value += raw[i];
+    }
+    return null;
+  };
+
+  skipWhitespace();
+  const type = token();
+  if (!type || raw[i++] !== "/") return null;
+  const subtype = token();
+  if (!subtype) return null;
+
+  let charset: string | null = null;
+  let charsetSeen = false;
+  for (;;) {
+    skipWhitespace();
+    if (i === raw.length) break;
+    if (raw[i++] !== ";") return null;
+    skipWhitespace();
+    if (i === raw.length || raw[i] === ";") continue;
+    const name = token();
+    if (!name || raw[i++] !== "=") return null;
+    const value = raw[i] === '"' ? quoted() : token() || null;
+    if (value === null) return null;
+    if (!charsetSeen && name.toLowerCase() === "charset") {
+      charsetSeen = true;
+      charset = isToken(value) ? value.toLowerCase() : null;
+    }
+  }
+
   const essence = `${type}/${subtype}`.toLowerCase();
-  const charset = charsetOf(parameters);
   return (charset ? `${essence}; charset=${charset}` : essence) as MediaType;
+}
+
+const TOKEN_CHARS = new Set("!#$%&'*+-.^_`|~0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz");
+
+function isTokenChar(char: string): boolean {
+  return TOKEN_CHARS.has(char);
+}
+
+function isToken(value: string): boolean {
+  return value.length > 0 && [...value].every(isTokenChar);
 }
 
 /** The Content-Type to store for an upload: the normalized type, or octet-stream when there is none. */
@@ -45,15 +96,6 @@ export function storedMediaType(raw: string | null | undefined): MediaType {
 /** `type/subtype` without parameters. */
 export function essenceOf(type: MediaType): string {
   return type.split(";")[0];
-}
-
-function charsetOf(parameters: string): string | undefined {
-  for (const [, name, value] of parameters.matchAll(new RegExp(PARAMETER, "g"))) {
-    if (name.toLowerCase() !== "charset") continue;
-    const unquoted = value.startsWith('"') ? value.slice(1, -1).replace(/\\(.)/g, "$1") : value;
-    return TOKEN_ONLY.test(unquoted) ? unquoted.toLowerCase() : undefined;
-  }
-  return undefined;
 }
 
 if (import.meta.vitest) {
