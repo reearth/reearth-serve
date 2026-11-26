@@ -11,6 +11,7 @@
 //	E2E_GCS_REVOKE_URL    (revoked) the REST URL that revokes the credential
 //	E2E_GCS_REVOKE_TOKEN  (revoked) an admin bearer token for that URL
 //	E2E_COMPAT_SIGNED_PATH_PREFIX  (signed-put) COMPAT_SIGNED_PATH_PREFIX of that server, if set
+//	E2E_GZIP_PASSTHROUGH  (read) "false" where a proxy decodes gzip in front of Serve, as the Vite dev server does
 //
 // The compat host is a Host header on the e2e server's port, and its name
 // need not resolve. Every connection is dialled to E2E_ENDPOINT's address
@@ -454,14 +455,18 @@ func readGzip(ctx context.Context, bucket *storage.BucketHandle) error {
 	}
 	defer func() { _ = obj.Delete(ctx) }()
 
-	stored, attrs, err := readAll(obj.ReadCompressed(true).NewReader(ctx))
-	if err != nil {
-		return fmt.Errorf("ReadCompressed(true): %w", err)
+	if os.Getenv("E2E_GZIP_PASSTHROUGH") == "false" {
+		fmt.Println("gzip passthrough: not checked behind a decoding proxy")
+	} else {
+		stored, attrs, err := readAll(obj.ReadCompressed(true).NewReader(ctx))
+		if err != nil {
+			return fmt.Errorf("ReadCompressed(true): %w", err)
+		}
+		if !bytes.Equal(stored, packed.Bytes()) || attrs.Decompressed {
+			return fmt.Errorf("ReadCompressed(true): got %d bytes (decompressed %v), want the %d stored gzip bytes", len(stored), attrs.Decompressed, packed.Len())
+		}
+		fmt.Printf("gzip passthrough: %d stored bytes, Decompressed false\n", len(stored))
 	}
-	if !bytes.Equal(stored, packed.Bytes()) || attrs.Decompressed {
-		return fmt.Errorf("ReadCompressed(true): got %d bytes (decompressed %v), want the %d stored gzip bytes", len(stored), attrs.Decompressed, packed.Len())
-	}
-	fmt.Printf("gzip passthrough: %d stored bytes, Decompressed false\n", len(stored))
 
 	plain, _, err := readAll(obj.ReadCompressed(false).NewReader(ctx))
 	if err != nil {

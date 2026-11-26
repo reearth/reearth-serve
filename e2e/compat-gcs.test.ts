@@ -12,6 +12,8 @@ const run = promisify(execFile);
 const COMPAT_HOST = process.env.E2E_COMPAT_GCS_HOST;
 const SIGNED_PATH_PREFIX = process.env.E2E_COMPAT_SIGNED_PATH_PREFIX;
 const GO = await run("go", ["version"]).then(() => true, () => false);
+// Under wrangler dev the Vite dev server decodes gzip in front of the Worker (see e2e/compression.test.ts).
+const NODE_RUNTIME = process.env.E2E_NODE_RUNTIME === "true";
 
 if (COMPAT_HOST && !GO) {
   console.warn("compat-gcs: `go` is not on PATH, so the Go client scenarios are skipped. Install Go 1.26 to run them.");
@@ -287,12 +289,14 @@ describe.runIf(COMPAT_HOST && GO)("Go storage client v1.69 (e2e/compat-gcs)", ()
 
   test("read: a full read with its CRC32C checked, a 5-byte range, gzip passthrough and decompression, and a missing key", async () => {
     const { bucket, path } = await keyFileOnDisk();
-    const { stdout } = await scenario("read", { E2E_GCS_KEY_FILE: path, E2E_GCS_BUCKET: bucket });
+    const { stdout } = await scenario("read", { E2E_GCS_KEY_FILE: path, E2E_GCS_BUCKET: bucket, E2E_GZIP_PASSTHROUGH: String(NODE_RUNTIME) });
     const lines = stdout.trim().split("\n");
     expect(lines[0]).toMatch(/^read: 262144 bytes, CRC32C [0-9a-f]{8} checked$/);
     expect(lines.slice(1)).toEqual([
       expect.stringMatching(/^range: [0-9a-f]{10}$/),
-      expect.stringMatching(/^gzip passthrough: \d+ stored bytes, Decompressed false$/),
+      NODE_RUNTIME
+        ? expect.stringMatching(/^gzip passthrough: \d+ stored bytes, Decompressed false$/)
+        : "gzip passthrough: not checked behind a decoding proxy",
       "gzip decompressed: 17408 bytes",
       "missing: ErrObjectNotExist",
     ]);
