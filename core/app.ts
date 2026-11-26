@@ -112,7 +112,7 @@ export function createApp(deps: Deps) {
   const bearerVerifier: BearerVerifier | null = deps.auth.issuer
     ? (jwt) => verifyAccessToken(jwt, deps.auth)
     : null;
-  app.use("*", injectDeps(deps, { siteHost: false, bearerVerifier, wholeObject: false }));
+  app.use("*", injectDeps(deps, { siteHost: false, bearerVerifier, objectsHost: false }));
 
   // Public API (versioned)
   app.get("/api/v1/health",
@@ -217,15 +217,19 @@ function siteApp(deps: Deps) {
   // delivery, and the handlers below read neither `user` nor `sessionId`. No
   // bearer verifier either: a restricted asset on a site host accepts only a
   // delivery token (ADR-014 §5).
-  app.use("*", injectDeps(deps, { siteHost: true, bearerVerifier: null, wholeObject: false }));
+  app.use("*", injectDeps(deps, { siteHost: true, bearerVerifier: null, objectsHost: false }));
   app.route("/files", fileRoutes);
   return app;
 }
 
-/** The site-host router with each archive read as one object: the objects host serves keys, not sites. */
+/**
+ * The objects host's router: a site host's access rules (no bearer, a
+ * host-only cookie), but each asset read as one object with the apex's
+ * disposition, since the host serves keys, not sites.
+ */
 function objectsApp(deps: Deps) {
   const app = new Hono<AppEnv>();
-  app.use("*", injectDeps(deps, { siteHost: true, bearerVerifier: null, wholeObject: true }));
+  app.use("*", injectDeps(deps, { siteHost: true, bearerVerifier: null, objectsHost: true }));
   app.route("/files", fileRoutes);
   return app;
 }
@@ -257,7 +261,7 @@ function compatDispatch(
 /** Request-independent collaborators, read off the context by every handler. */
 function injectDeps(
   deps: Deps,
-  opts: { siteHost: boolean; bearerVerifier: BearerVerifier | null; wholeObject: boolean },
+  opts: { siteHost: boolean; bearerVerifier: BearerVerifier | null; objectsHost: boolean },
 ): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     c.set("metadata", deps.metadata);
@@ -288,7 +292,7 @@ function injectDeps(
     c.set("compatApiHost", deps.compatApiHost);
     c.set("siteHost", opts.siteHost);
     c.set("bearerVerifier", opts.bearerVerifier);
-    c.set("wholeObject", opts.wholeObject);
+    c.set("objectsHost", opts.objectsHost);
     await next();
   };
 }

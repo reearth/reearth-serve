@@ -460,7 +460,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
   }
 
   const layouts = layoutsWithLegacyFallback(resolved);
-  const site = !c.get("wholeObject") && layouts.some((l) => l.archive);
+  const site = !c.get("objectsHost") && layouts.some((l) => l.archive);
 
   // `_headers` / `_redirects` (ADR-013 C3). The rules were parsed once, at
   // extraction time; this is all the request pays for them.
@@ -544,7 +544,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     ...conditionsOf(c.req.raw),
     cacheControl: cacheControlFor({ pinned, contentType: located.contentType }, policy),
     storage,
-    siteHost: c.get("siteHost"),
+    siteHost: c.get("siteHost") && !c.get("objectsHost"),
     storedEncoding: "omit",
   });
 
