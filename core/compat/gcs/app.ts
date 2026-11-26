@@ -11,7 +11,7 @@ import { exchangeAssertion, gcsAuth, type GcsEnv, type TokenError } from "./auth
 import { boundaryOf, MULTIPART_MAX_BYTES, parseRelated, readCapped } from "./multipart";
 import { objectPathOf, USER_META_PREFIX, WRITE_HEADERS } from "./signed-url";
 import {
-  compatErrorResponse, gcsError, listResource, objectResource, surfaceOf, withReadHeaders, xmlObjectHeaders, type GcsSurface,
+  compatErrorResponse, etagHeader, gcsError, listResource, objectResource, surfaceOf, withReadHeaders, xmlObjectHeaders, type GcsSurface,
 } from "./wire";
 
 export type GcsDeps = ObjectLayerDeps & Pick<Deps, "signingSecret" | "credentialedOrigins" | "compatSignedPathPrefix">;
@@ -121,8 +121,9 @@ export function gcsApp(deps: GcsDeps, apiOrigin: string) {
     if (!opened.ok) return compatErrorResponse(surface, opened.error, `${bucket}/${key}`);
     const missing = () => compatErrorResponse(surface, { code: "no_such_key" }, `${bucket}/${key}`);
     if (generation.value !== null && generation.value !== opened.value.info.generation) return missing();
-    const res = await deliverAsset(deps.storage, c.req.raw, { resolved: opened.value.resolved, path: opened.value.path, grant: SERVICE_GRANT });
-    return res ? withReadHeaders(res, opened.value.info) : missing();
+    const { resolved, path, info } = opened.value;
+    const res = await deliverAsset(deps.storage, c.req.raw, { resolved, path, grant: SERVICE_GRANT, etag: etagHeader(info) });
+    return res ? withReadHeaders(res, info) : missing();
   }
 
   app.get("/download/storage/v1/b/:bucket/o/:object", (c) => {
@@ -322,7 +323,10 @@ function browserCors(origins: readonly string[]): MiddlewareHandler<GcsEnv> {
       if (requested) headers.set("Access-Control-Allow-Headers", requested);
       headers.set("Access-Control-Max-Age", "3600");
     } else {
-      headers.set("Access-Control-Expose-Headers", "ETag, x-goog-generation, x-goog-hash");
+      headers.set("Access-Control-Expose-Headers", [
+        "ETag", "Content-Length", "Content-Range", "x-goog-generation", "x-goog-metageneration", "x-goog-hash",
+        "x-goog-stored-content-length", "x-goog-stored-content-encoding",
+      ].join(", "));
     }
   };
 }

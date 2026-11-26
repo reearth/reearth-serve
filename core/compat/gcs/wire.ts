@@ -51,7 +51,7 @@ const ERRORS: Record<GcsErrorCode, ErrorSpec> = {
 export type GcsSurface = "json" | "xml";
 
 export function surfaceOf(path: string): GcsSurface {
-  return /^\/(storage|upload\/storage|batch\/storage)\/v1(\/|$)/.test(path) ? "json" : "xml";
+  return /^\/(storage|upload\/storage|download\/storage|batch\/storage)\/v1(\/|$)/.test(path) ? "json" : "xml";
 }
 
 function escapeXml(text: string): string {
@@ -121,9 +121,12 @@ function storedHeaders(info: ObjectInfo): Record<string, string> {
 
 const hashHeader = (hashes: ExactHashes) => `crc32c=${crc32cBase64(hashes.crc32c)},md5=${base64Of(hashes.md5)}`;
 
+/** The `ETag` header of an object on every surface; the JSON resource's `etag` is its value unquoted. */
+export const etagHeader = (info: ObjectInfo) => `"${info.etag}"`;
+
 /** The headers a GCS XML API write answers with. */
 export function xmlObjectHeaders(info: ObjectInfo): Record<string, string> {
-  return { ETag: info.etag, ...storedHeaders(info), ...(info.hashes && { "x-goog-hash": hashHeader(info.hashes) }) };
+  return { ETag: etagHeader(info), ...storedHeaders(info), ...(info.hashes && { "x-goog-hash": hashHeader(info.hashes) }) };
 }
 
 export type SentRead = { status: number; sentEncoding: string | null; storedEncoding: string | null; hashes: ExactHashes | null };
@@ -163,6 +166,7 @@ if (import.meta.vitest) {
     ["/storage/v1/b/media/o/k", "json"],
     ["/upload/storage/v1/b/media/o", "json"],
     ["/batch/storage/v1", "json"],
+    ["/download/storage/v1/b/media/o/k", "json"],
     ["/media/assets/a.txt", "xml"],
     ["/storage", "xml"],
     ["/storage/v10/b", "xml"],

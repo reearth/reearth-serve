@@ -527,6 +527,67 @@ describe("object reads", () => {
     expect((await f.app.request(`http://localhost/files/${assetId}/r.txt`)).status).toBe(401);
   });
 
+  test("a Range on a gzip object is ignored, as GCS does under decompressive transcoding", async () => {
+    const gz = gzipSync(Buffer.from(BODY));
+    const { f, auth } = await written("/media/assets/ab/r.txt.gz", gz, { "Content-Encoding": "gzip" });
+    for (const range of ["bytes=0-4", "bytes=10-", "bytes=-3"]) {
+      const plain = await onApi(f, "/media/assets/ab/r.txt.gz", { headers: { ...auth, Range: range, "Accept-Encoding": "identity" } });
+      expect(plain.status).toBe(200);
+      expect(plain.headers.get("Content-Range")).toBeNull();
+      expect(await plain.text()).toBe(BODY);
+      const stored = await onApi(f, "/media/assets/ab/r.txt.gz", { headers: { ...auth, Range: range, "Accept-Encoding": "gzip" } });
+      expect(stored.status).toBe(200);
+      expect(stored.headers.get("Content-Encoding")).toBe("gzip");
+      expect(Buffer.from(await stored.arrayBuffer()).equals(gz)).toBe(true);
+    }
+  });
+
+  test("a version whose own bytes are gone reads as missing, never as the original upload's bytes", async () => {
+    const { f, auth } = await written();
+    const editor = bearer(await accessToken(f, await keyFor(f, "editor")));
+    const again = await onApi(f, "/media/assets/ab/r.txt", {
+      method: "PUT", headers: { ...editor, "Content-Type": "text/plain", "Content-Length": "3" }, body: "two",
+    });
+    expect(again.status).toBe(200);
+    const binding = await f.compat.findBinding("media" as BucketName, "assets/ab/r.txt" as ObjectKey);
+    const assetId = binding?.kind === "object" ? binding.assetId : "";
+    const [version] = [...f.versions.versions.values()].filter((v) => v.assetId === assetId);
+    await f.storage.delete(`assets/${assetId}/v/${version.id}/r.txt`);
+    const res = await onApi(f, "/media/assets/ab/r.txt", { headers: auth });
+    expect(res.status).toBe(404);
+    expect(await res.text()).toContain("<Code>NoSuchKey</Code>");
+  });
+
+  test("an object stored br is sent as stored, labelled br, with its hash", async () => {
+    const packed = Buffer.from([0x0b, 0x02, 0x80, 0x68, 0x69, 0x03]);
+    const { f, auth } = await written("/media/assets/ab/r.br", packed, { "Content-Encoding": "br" });
+    const res = await onApi(f, "/media/assets/ab/r.br", { headers: { ...auth, "Accept-Encoding": "br" } });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Encoding")).toBe("br");
+    expect(Buffer.from(await res.arrayBuffer()).equals(packed)).toBe(true);
+    expect(res.headers.get("x-goog-hash")).toContain(`md5=${createHash("md5").update(packed).digest("base64")}`);
+  });
+
+  test("one ETag names the object on PUT, XML GET and HEAD, and the JSON resource, and If-None-Match compares against it", async () => {
+    const f = await compatFixture();
+    const auth = bearer(await accessToken(f, await keyFor(f, "editor")));
+    const put = await onApi(f, "/media/e.txt", { method: "PUT", headers: { ...auth, "Content-Length": "3" }, body: "abc" });
+    const resource = await (await onApi(f, "/storage/v1/b/media/o/e.txt", { headers: auth })).json() as { etag: string };
+    const etag = `"${resource.etag}"`;
+    expect(put.headers.get("ETag")).toBe(etag);
+    expect((await onApi(f, "/media/e.txt", { headers: auth })).headers.get("ETag")).toBe(etag);
+    expect((await onApi(f, "/media/e.txt", { method: "HEAD", headers: auth })).headers.get("ETag")).toBe(etag);
+    expect((await onApi(f, "/media/e.txt", { headers: { ...auth, "If-None-Match": etag } })).status).toBe(304);
+    expect((await onApi(f, "/storage/v1/b/media/o/e.txt?alt=media", { headers: { ...auth, "If-None-Match": etag } })).status).toBe(304);
+  });
+
+  test("the mediaLink path answers errors in the JSON shape", async () => {
+    const f = await compatFixture();
+    const res = await onApi(f, "/download/storage/v1/b/media/o/e.txt?alt=media");
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ error: { code: 401 } });
+  });
+
   test.each(["acl", "uploadId"])("an XML GET with ?%s does not answer with the bytes", async (name) => {
     const { f, auth } = await written();
     expect((await onApi(f, `/media/assets/ab/r.txt?${name}`, { headers: auth })).status).toBe(501);
@@ -851,6 +912,11 @@ describe("V4 signed URLs", () => {
       const res = await put(f, url, "abc", { ...cmsHeaders, Origin: ORIGIN });
       expect(res.status).toBe(200);
       expect(res.headers.get("Access-Control-Allow-Origin")).toBe(ORIGIN);
+      const exposed = res.headers.get("Access-Control-Expose-Headers")!.split(", ");
+      expect(exposed).toEqual(expect.arrayContaining([
+        "ETag", "x-goog-generation", "x-goog-hash", "Content-Range", "Content-Length",
+        "x-goog-stored-content-length", "x-goog-stored-content-encoding", "x-goog-metageneration",
+      ]));
     });
 
     test("another origin gets no CORS headers", async () => {

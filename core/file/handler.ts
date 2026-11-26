@@ -733,6 +733,10 @@ interface ServeOptions extends ReadConditions {
   cacheControl: string;
   storage: FileStorage;
   siteHost: boolean;
+  /** In place of the stored object's tag, quoted. */
+  etag?: string;
+  /** Send an encoding other than gzip as stored, labelled with it, rather than unlabelled. */
+  labelStoredEncoding?: boolean;
 }
 
 export interface DeliveryTarget {
@@ -740,6 +744,8 @@ export interface DeliveryTarget {
   /** The uploaded object's own path: its filename, which `locate` maps to the main file in every layout. */
   path: string;
   grant: ServiceGrant;
+  /** The caller's ETag for the object, quoted; `If-None-Match` compares against it. */
+  etag: string;
 }
 
 /**
@@ -751,14 +757,21 @@ export interface DeliveryTarget {
  * are gone, for the caller to answer in its own protocol.
  */
 export async function deliverAsset(storage: FileStorage, request: Request, target: DeliveryTarget): Promise<Response | null> {
-  const located = await locateIn(storage, layoutsOf(target.resolved), target.path);
+  const { asset, version } = target.resolved;
+  // Only the layout of the version the caller described, so its headers never name other bytes.
+  const located = await locate(storage, version ? versionedLayout(asset, version) : legacyLayout(asset), target.path);
   if (!located) return null;
   const policy = deliveryPolicy(target.grant, toUnixSeconds(Date.now()));
+  const conditions = conditionsOf(request);
   const res = await sendLocated(located, {
-    ...conditionsOf(request),
+    ...conditions,
+    // GCS answers a gzip object whole whatever the Range (decompressive transcoding), and its clients expect that.
+    ...(located.contentEncoding === "gzip" && { range: null, rangeHeader: undefined }),
     cacheControl: cacheControlFor({ pinned: false, contentType: located.contentType }, policy),
     storage,
     siteHost: false,
+    etag: target.etag,
+    labelStoredEncoding: true,
   });
   if (res.status === 404) return null;
   res.headers.set("X-Content-Type-Options", "nosniff");
@@ -773,7 +786,7 @@ async function sendLocated(located: Located, opts: ServeOptions): Promise<Respon
   // them and asked for the whole file; every other path decodes.
   const passthrough = isGzipStored && clientAcceptsGzip && !rangeHeader;
 
-  const etag = representationEtag(file.etag, { transformed: isGzipStored && !passthrough });
+  const etag = opts.etag ?? representationEtag(file.etag, { transformed: isGzipStored && !passthrough });
 
   const common: Record<string, string> = {
     "Content-Type": contentType,
@@ -797,6 +810,11 @@ async function sendLocated(located: Located, opts: ServeOptions): Promise<Respon
   // --- Non-gzip file ---
   if (!isGzipStored) {
     const headers: Record<string, string> = { ...common, "Accept-Ranges": "bytes" };
+    const labelled = opts.labelStoredEncoding && contentEncoding !== undefined && contentEncoding !== "identity";
+    if (labelled) headers["Content-Encoding"] = contentEncoding;
+    // The body is already in that encoding; see the passthrough below.
+    const asStored = (body: ReadableStream<Uint8Array> | null, status: number) =>
+      new Response(body, { status, headers, ...(labelled && { encodeBody: "manual" }) } as ResponseInit);
     const part = resolveRange(range, file.size);
     if (part.kind === "unsatisfiable") return unsatisfiable(file.size);
     if (part.kind === "part") {
@@ -814,13 +832,13 @@ async function sendLocated(located: Located, opts: ServeOptions): Promise<Respon
         const { offset, length, totalSize } = rangedFile.range;
         headers["Content-Range"] = `bytes ${offset}-${offset + length - 1}/${totalSize}`;
         headers["Content-Length"] = String(length);
-        return new Response(rangedFile.body, { status: 206, headers });
+        return asStored(rangedFile.body, 206);
       }
-      return new Response(rangedFile.body, { status: 200, headers });
+      return asStored(rangedFile.body, 200);
     }
 
     headers["Content-Length"] = String(file.size);
-    return new Response(file.body, { status: 200, headers });
+    return asStored(file.body, 200);
   }
 
   // --- Gzip-stored + client accepts gzip + no range → pass through ---
