@@ -67,8 +67,8 @@ export function contentHeaders(
 if (import.meta.vitest) {
   const { test, expect } = import.meta.vitest;
 
-  const disposition = (stored: string | undefined, siteHost = false) =>
-    contentHeaders(parseMediaType(stored), "f", siteHost)["Content-Disposition"].split(";")[0];
+  const disposition = (stored: string | undefined) =>
+    contentHeaders(parseMediaType(stored), "f", false)["Content-Disposition"].split(";")[0];
 
   test("the parsed type decides, ignoring parameters and case", () => {
     expect(disposition("text/plain; charset=utf-8")).toBe("inline");
