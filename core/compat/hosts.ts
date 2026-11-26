@@ -98,13 +98,26 @@ if (import.meta.vitest) {
     ["https://media.objects.example.com", undefined, "objects.example.com", "COMPAT_OBJECTS_HOST"],
     ["https://example.com", "storage.example.com", "storage.example.com:8443", "COMPAT_OBJECTS_HOST"],
   ])("BASE_URL %s with COMPAT_GCS_HOST %s and COMPAT_OBJECTS_HOST %s is a config error naming %s", (baseUrl, api, objects, setting) => {
-    expect(() => parseCompatHosts({ api, objects }, baseUrl)).toThrow(setting);
+    expect(() => parseCompatHosts({ api, objects }, { baseUrl, siteHostSuffix: undefined })).toThrow(setting);
+  });
+
+  test.each<[string, string | undefined, string | undefined, string, string]>([
+    ["https://serve.example.com", undefined, ".sites.example.com", "objects.sites.example.com", "under the site-host suffix"],
+    ["https://serve.example.com", undefined, ".sites.example.com", "sites.example.com", "the site-host suffix's base"],
+    ["https://serve.example.com", undefined, ".a.objects.example.com", "objects.example.com", "over the site-host suffix"],
+    ["https://serve.example.com", undefined, undefined, "objects.serve.example.com", "under the BASE_URL host"],
+    ["https://serve.example.com", "storage.example.com", undefined, "objects.storage.example.com", "under the API host"],
+    ["https://serve.example.com", "media.objects.example.com", undefined, "objects.example.com", "over the API host"],
+    ["http://localhost:8788", "storage.localhost:8788", ".localhost:8788", "objects.localhost:8788", "under the BASE_URL host"],
+  ])("BASE_URL %s, COMPAT_GCS_HOST %s and SITE_HOST_SUFFIX %s refuse COMPAT_OBJECTS_HOST %s (%s)", (baseUrl, api, siteHostSuffix, objects) => {
+    expect(() => parseCompatHosts({ api, objects }, { baseUrl, siteHostSuffix })).toThrow("COMPAT_OBJECTS_HOST");
   });
 
   test("distinct compat hosts beside the apex parse", () => {
-    expect(parseCompatHosts({ api: "storage.example.com", objects: "objects.example.com" }, "https://example.com"))
-      .toEqual({ api: "storage.example.com", objects: "objects.example.com" });
-    expect(parseCompatHosts({ api: undefined, objects: undefined }, "https://example.com")).toEqual({ api: undefined, objects: undefined });
+    const site = { baseUrl: "https://serve.example.com", siteHostSuffix: ".sites.example.com" };
+    expect(parseCompatHosts({ api: "storage.example.com", objects: "objects.example.net" }, site))
+      .toEqual({ api: "storage.example.com", objects: "objects.example.net" });
+    expect(parseCompatHosts({ api: undefined, objects: undefined }, site)).toEqual({ api: undefined, objects: undefined });
   });
 
   test("a site host stays a site host, and the compat host is not taken for one only because it is checked first", () => {
