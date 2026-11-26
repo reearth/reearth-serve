@@ -221,7 +221,8 @@ asset
   });
 
 /**
- * `asset protect <id> --password | --off` (ADR-013 B7).
+ * `asset protect <id> --password | --restricted | --off` (ADR-013 B7,
+ * ADR-014 §6).
  *
  * The password is only ever read from a prompt, twice, without echo. Not from
  * an argument: a command line is visible in `ps`, in shell history and in CI
@@ -230,11 +231,12 @@ asset
  */
 asset
   .command("protect")
-  .description("Password-protect a site (archive) asset, or remove the protection")
+  .description("Password-protect a site (archive) asset, restrict an asset to project members, or remove the protection")
   .argument("<id>", "Asset ID")
   .option("--password", "Prompt for a new password (never pass it on the command line)")
-  .option("--off", "Remove the protection: the site becomes public again")
-  .action(async (id: string, cmdOpts: { password?: boolean | string; off?: boolean }) => {
+  .option("--restricted", "Only project members who send their login token may read the files")
+  .option("--off", "Remove the protection: the asset becomes public again")
+  .action(async (id: string, cmdOpts: { password?: boolean | string; restricted?: boolean; off?: boolean }) => {
     const opts = program.opts<{ endpoint: string; json: boolean }>();
 
     if (typeof cmdOpts.password === "string") {
@@ -244,20 +246,24 @@ asset
       );
       process.exit(1);
     }
-    if (!!cmdOpts.password === !!cmdOpts.off) {
-      console.error("Error: pass exactly one of --password or --off");
+    if ([cmdOpts.password, cmdOpts.restricted, cmdOpts.off].filter(Boolean).length !== 1) {
+      console.error("Error: pass exactly one of --password, --restricted or --off");
       process.exit(1);
     }
 
     const body = cmdOpts.off
       ? { access: "public" as const }
-      : { access: "password" as const, password: await promptPasswordTwice() };
+      : cmdOpts.restricted
+        ? { access: "restricted" as const }
+        : { access: "password" as const, password: await promptPasswordTwice() };
 
     const data = await apiPatch<{ asset: AssetMetadata }>(opts.endpoint, PATHS.asset(id), body);
     if (opts.json) {
       output(data, true);
     } else if (cmdOpts.off) {
       console.log("Protection removed: the asset is public again.");
+    } else if (cmdOpts.restricted) {
+      console.log("Restricted. Project members read it with their login token; everyone else gets 401 or 404.");
     } else {
       console.log("Protected. Visitors now get a password page; tools can send HTTP Basic.");
       console.log("Changing the password signs every existing visitor out.");
