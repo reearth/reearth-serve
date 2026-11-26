@@ -5,6 +5,7 @@ import { decompressStream } from "../asset/compression";
 import type { AssetMetadata, AssetVersion, StoredFile } from "../asset/model";
 import type { FileStorage } from "../asset/repository";
 import { resolveAssetVersion } from "../asset/usecase";
+import type { ResolvedAsset } from "../asset/usecase/resolve-version";
 import { legacyThumbKey, versionThumbKey } from "../asset/usecase/shared";
 import { cacheControlFor, etagMatches, representationEtag, thumbnailCacheControl, type CachePolicy } from "./caching";
 import { addVary, applyCors, preflightResponse, type CorsPolicy } from "./cors";
@@ -182,6 +183,24 @@ async function locate(storage: FileStorage, layout: Layout, filePath: string): P
     contentEncoding: file.contentEncoding,
     displayName: entryPath.split("/").pop() || entryPath,
   };
+}
+
+/**
+ * Versioned layout first; assets from before ADR-005 have no version row and
+ * live under the legacy prefix, which is also the fallback when the versioned
+ * key is missing.
+ */
+function layoutsOf({ asset, version }: ResolvedAsset): Layout[] {
+  return version ? [versionedLayout(asset, version), legacyLayout(asset)] : [legacyLayout(asset)];
+}
+
+/** The first layout that holds `path`. */
+async function locateIn(storage: FileStorage, layouts: Layout[], path: string): Promise<Located | null> {
+  for (const layout of layouts) {
+    const located = await locate(storage, layout, path);
+    if (located) return located;
+  }
+  return null;
 }
 
 /** True when `path` names a directory that has an index file, in any layout. */
@@ -365,10 +384,6 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
   const versions = c.get("versions");
   const storage = c.get("storage");
   const id = c.req.param("id");
-  const rangeHeader = c.req.header("Range");
-  const acceptEncoding = c.req.header("Accept-Encoding") ?? "";
-  const clientAcceptsGzip = acceptEncoding.includes("gzip");
-  const range = parseRange(rangeHeader);
 
   // `serve_token` leaves the query here, before anything reads it, and the
   // storage key is built from the same parsed path a token is matched on
@@ -439,10 +454,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     return decorate(await serveThumbnail(storage, asset, version, thumb, pinned, policy));
   }
 
-  // Versioned layout first; assets from before ADR-005 have no version row and
-  // live under the legacy prefix, which is also the fallback when the
-  // versioned key is missing.
-  const layouts = version ? [versionedLayout(asset, version), legacyLayout(asset)] : [legacyLayout(asset)];
+  const layouts = layoutsOf(resolved);
   const isArchive = layouts.some((l) => l.archive);
 
   // `_headers` / `_redirects` (ADR-013 C3). The rules were parsed once, at
@@ -475,11 +487,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     }
   }
 
-  let located: Located | null = null;
-  for (const layout of layouts) {
-    located = await locate(storage, layout, servePath);
-    if (located) break;
-  }
+  let located = await locateIn(storage, layouts, servePath);
 
   // Plain rules apply only to a path that is not a file — Netlify's shadowing
   // semantics — so they are consulted here, after the lookup missed and before
@@ -496,10 +504,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     if (fallbackRule && !rewritten) {
       servePath = targetFilePath(fallbackRule.to);
       rewritten = true;
-      for (const layout of layouts) {
-        located = await locate(storage, layout, servePath);
-        if (located) break;
-      }
+      located = await locateIn(storage, layouts, servePath);
     }
   }
 
@@ -529,18 +534,15 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     located = fallback.located;
   }
 
-  const res = await serveFile(located, {
-    range,
-    rangeHeader,
-    clientAcceptsGzip,
-    ifNoneMatch: c.req.header("If-None-Match"),
+  const res = await sendLocated(located, {
+    ...conditionsOf(c.req.raw),
     cacheControl: cacheControlFor({ pinned, contentType: located.contentType }, policy),
     storage,
     siteHost: c.get("siteHost"),
   });
 
   // `_headers` rules go on first, so everything the handler sets below — and
-  // everything `serveFile` already set — wins over a rule that named the same
+  // everything `sendLocated` already set — wins over a rule that named the same
   // header (ADR-013 C3).
   applySiteHeaders(res, hosting, servePath, c.get("siteHost"));
 
@@ -707,17 +709,31 @@ async function serveThumbnail(
   });
 }
 
-interface ServeOptions {
+/** What a read asks of the bytes: a range, an encoding, a revalidation. */
+interface ReadConditions {
   range: { offset: number; length: number } | null;
   rangeHeader: string | undefined;
   clientAcceptsGzip: boolean;
   ifNoneMatch: string | undefined;
+}
+
+function conditionsOf(request: Request): ReadConditions {
+  const rangeHeader = request.headers.get("Range") ?? undefined;
+  return {
+    range: parseRange(rangeHeader),
+    rangeHeader,
+    clientAcceptsGzip: (request.headers.get("Accept-Encoding") ?? "").includes("gzip"),
+    ifNoneMatch: request.headers.get("If-None-Match") ?? undefined,
+  };
+}
+
+interface ServeOptions extends ReadConditions {
   cacheControl: string;
   storage: FileStorage;
   siteHost: boolean;
 }
 
-async function serveFile(located: Located, opts: ServeOptions): Promise<Response> {
+async function sendLocated(located: Located, opts: ServeOptions): Promise<Response> {
   const { file, key, contentType, contentEncoding, displayName, originalSize } = located;
   const { range, rangeHeader, clientAcceptsGzip, storage } = opts;
   const isGzipStored = contentEncoding === "gzip";
