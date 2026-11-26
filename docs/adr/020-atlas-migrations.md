@@ -83,11 +83,14 @@ so no Docker is needed.
 
 1. a sequence check (`scripts/migration-sequence.ts`): prefixes are four
    digits and unique, every file on the base branch is byte-identical, every
-   new file sorts after the base branch's highest prefix, no file carries an
-   `atlas:nolint` directive (it silences the destructive-change lint), and
-   the two directories share no file name;
+   new file sorts after the base branch's highest prefix, no file carries a
+   bare `atlas:nolint` directive (it silences every lint check), and the two
+   directories share no file name;
 2. `atlas migrate validate`: `atlas.sum` matches and the files replay;
-3. `atlas migrate lint --git-base <base>`: destructive changes fail.
+3. `atlas migrate lint --git-base <base>`: destructive changes fail. An
+   intended one, such as a table rebuild that drops and recreates a table,
+   names the check it waives on the line before it, as in
+   `-- atlas:nolint DS102`, so the waiver shows in review.
 
 The sequence check covers the collision Atlas does not catch. It fails the
 second of two PRs that both add `0008`, which then renumbers.
