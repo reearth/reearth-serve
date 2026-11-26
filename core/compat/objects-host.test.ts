@@ -2,6 +2,8 @@ import { describe, expect, test } from "vitest";
 import { protect, SIGNING_SECRET } from "../../adapters/memory/fixture";
 import { mintAuthCookie, SITE_COOKIE } from "../access/cookie";
 import { parseHeaders, parseRedirects } from "../site/rules";
+import { WebCryptoDeliveryTokenCodec } from "../../adapters/webcrypto/delivery-token";
+import { parseDeliveryTokenKeys, toUnixSeconds, type AssetPath, type UnixSeconds } from "../access/token";
 import type { BucketName, ObjectKey } from "./model";
 import { accessToken, bearer, compatFixture, keyFor, onApi, type Fixture } from "../../adapters/memory/compat-fixture";
 
@@ -9,8 +11,10 @@ const OBJECTS = "objects.example.test";
 const BODY = "hello, public reader";
 const EMPTY_ZIP = String.fromCharCode(0x50, 0x4b, 0x05, 0x06, ...new Array(18).fill(0));
 
+const CODEC = new WebCryptoDeliveryTokenCodec(parseDeliveryTokenKeys(JSON.stringify({ active: "k1", keys: { k1: btoa("a".repeat(32)) } })));
+
 async function written(keys: Record<string, string[]> = { media: ["assets/ab/r.txt"] }, body = BODY, contentType = "text/plain") {
-  const f = await compatFixture();
+  const f = await compatFixture({ deliveryTokens: CODEC });
   const ids: Record<string, string> = {};
   for (const [bucket, names] of Object.entries(keys)) {
     const auth = bearer(await accessToken(f, await keyFor(f, "editor", bucket)));
@@ -32,6 +36,14 @@ function onObjects(f: Fixture, host: string, path: string, init: RequestInit = {
 
 const virtual = (f: Fixture, path: string, init?: RequestInit) => onObjects(f, `media.${OBJECTS}`, path, init);
 const pathStyle = (f: Fixture, path: string, init?: RequestInit) => onObjects(f, OBJECTS, `/media${path}`, init);
+
+async function answer(res: Response) {
+  return { status: res.status, body: await res.text(), headers: Object.fromEntries(res.headers) };
+}
+
+async function missingKey(f: Fixture) {
+  return answer(await virtual(f, "/assets/ab/none.txt"));
+}
 
 function googHeaders(res: Response): string[] {
   return [...res.headers.keys()].filter((name) => name.startsWith("x-goog-"));
@@ -65,20 +77,19 @@ describe("objects host", () => {
     expect(again.status).toBe(304);
   });
 
-  test("a password object answers the challenge /files answers, and Basic opens it", async () => {
+  test("a password object answers anonymously and to a wrong password exactly as a missing key, and Basic sent up front opens it", async () => {
     const { f, ids } = await written();
-    const id = ids["media/assets/ab/r.txt"];
-    await protect(f.metadata, id, "pw");
-    const files = await f.app.request(`http://localhost/files/${id}/r.txt`);
-    const res = await virtual(f, "/assets/ab/r.txt");
-    expect(res.status).toBe(401);
-    expect(res.status).toBe(files.status);
-    expect(res.headers.get("WWW-Authenticate")).toBe(files.headers.get("WWW-Authenticate"));
-    expect(await res.json()).toEqual(await files.json());
-    const basic = await virtual(f, "/assets/ab/r.txt", { headers: { Authorization: `Basic ${btoa("x:pw")}` } });
-    expect(basic.status).toBe(200);
-    expect(await basic.text()).toBe(BODY);
-    expect(basic.headers.get("Cache-Control")).toMatch(/^private/);
+    await protect(f.metadata, ids["media/assets/ab/r.txt"], "pw");
+    const miss = await missingKey(f);
+    for (const read of [virtual, pathStyle]) {
+      for (const headers of [{}, { Authorization: `Basic ${btoa("x:wrong")}` }, { Accept: "text/html" }] as Record<string, string>[]) {
+        expect(await answer(await read(f, "/assets/ab/r.txt", { headers }))).toEqual(miss);
+      }
+      const basic = await read(f, "/assets/ab/r.txt", { headers: { Authorization: `Basic ${btoa("x:pw")}` } });
+      expect(basic.status).toBe(200);
+      expect(await basic.text()).toBe(BODY);
+      expect(basic.headers.get("Cache-Control")).toMatch(/^private/);
+    }
   });
 
   test("a password cookie opens only the asset it names, whichever bucket host carries it", async () => {
@@ -91,19 +102,54 @@ describe("objects host", () => {
     const headers = { Cookie: `${SITE_COOKIE}=${cookie}` };
     expect((await onObjects(f, `media.${OBJECTS}`, "/a.txt", { headers })).status).toBe(200);
     expect((await onObjects(f, OBJECTS, "/media/a.txt", { headers })).status).toBe(200);
-    expect((await onObjects(f, `other.${OBJECTS}`, "/b.txt", { headers })).status).toBe(401);
-    expect((await onObjects(f, OBJECTS, "/other/b.txt", { headers })).status).toBe(401);
+    expect((await onObjects(f, `other.${OBJECTS}`, "/b.txt", { headers })).status).toBe(404);
+    expect((await onObjects(f, OBJECTS, "/other/b.txt", { headers })).status).toBe(404);
   });
 
-  test("a restricted object is refused as on a site host, and an OIDC-style bearer is not a proof here", async () => {
-    const { f, ids } = await written();
-    await f.metadata.setProtection(ids["media/assets/ab/r.txt"], { access: "restricted" });
-    for (const headers of [{}, { Authorization: "Bearer not-a-delivery-token" }] as Record<string, string>[]) {
-      const res = await virtual(f, "/assets/ab/r.txt", { headers });
-      expect(res.status).toBe(401);
-      expect(res.headers.get("WWW-Authenticate")).toBe("ServeToken");
-      expect(res.headers.get("Cache-Control")).toBe("no-store");
-      expect(await res.text()).not.toContain(BODY);
+  test("a restricted object refuses every missing or wrong proof exactly as a missing key, and a delivery token reads it", async () => {
+    const { f, ids } = await written({ media: ["assets/ab/r.txt", "assets/ab/s.txt"] });
+    const id = ids["media/assets/ab/r.txt"];
+    await f.metadata.setProtection(id, { access: "restricted" });
+    const now = toUnixSeconds(Date.now());
+    const sign = (assetId: string, prefix = "") => CODEC.sign({ assetId, versionId: null, prefix: prefix as AssetPath, exp: (now + 600) as UnixSeconds }, now);
+    const own = await sign(id);
+    const other = await sign(ids["media/assets/ab/s.txt"]);
+    const uncovering = await sign(id, "elsewhere/");
+    const miss = await missingKey(f);
+    for (const read of [virtual, pathStyle]) {
+      for (const [query, headers] of [
+        ["", {}],
+        ["", { Authorization: "Bearer not-a-delivery-token" }],
+        [`?serve_token=${encodeURIComponent(other)}`, {}],
+        [`?serve_token=${encodeURIComponent(uncovering)}`, {}],
+        [`?serve_token=${encodeURIComponent(own)}`, { "X-Serve-Token": other }],
+      ] as [string, Record<string, string>][]) {
+        expect(await answer(await read(f, `/assets/ab/r.txt${query}`, { headers }))).toEqual(miss);
+      }
+      for (const [query, headers] of [[`?serve_token=${encodeURIComponent(own)}`, {}], ["", { "X-Serve-Token": own }]] as [string, Record<string, string>][]) {
+        const res = await read(f, `/assets/ab/r.txt${query}`, { headers });
+        expect(res.status).toBe(200);
+        expect(await res.text()).toBe(BODY);
+      }
+    }
+  });
+
+  test("active content downloads as an attachment in a sandbox, as on the apex /files", async () => {
+    const types: Record<string, string> = {
+      "page.html": "text/html", "image.svg": "image/svg+xml", "page.xhtml": "application/xhtml+xml",
+      "data.xml": "application/xml", "app.js": "text/javascript",
+    };
+    for (const [name, type] of Object.entries(types)) {
+      const { f, ids } = await written({ media: [`active/${name}`] }, "<b>x</b>", type);
+      const apex = await f.app.request(`http://localhost/files/${ids[`media/active/${name}`]}/${name}`);
+      expect(apex.headers.get("Content-Disposition")).toMatch(/^attachment/);
+      for (const read of [virtual, pathStyle]) {
+        const res = await read(f, `/active/${name}`);
+        expect(res.status).toBe(200);
+        expect(res.headers.get("Content-Disposition")).toBe(apex.headers.get("Content-Disposition"));
+        expect(res.headers.get("Content-Security-Policy")).toBe("sandbox");
+        expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
+      }
     }
   });
 
