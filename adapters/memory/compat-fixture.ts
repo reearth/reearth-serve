@@ -1,4 +1,3 @@
-import { expect } from "vitest";
 import { SignJWT, importPKCS8 } from "jose";
 import { fixture } from "./fixture";
 import { MemoryProjectStore } from "./site-fixture";
@@ -50,9 +49,10 @@ export async function accessToken(f: Fixture, keyFile: KeyFile): Promise<string>
     headers: { "Content-Type": "application/x-www-form-urlencoded" },
     body: new URLSearchParams({ grant_type: "urn:ietf:params:oauth:grant-type:jwt-bearer", assertion: await assertion(keyFile) }),
   });
-  expect(res.status).toBe(200);
-  const body = await res.json() as { access_token: string; token_type: string; expires_in: number };
-  expect(body).toMatchObject({ token_type: "Bearer", expires_in: 3600 });
+  const body = await res.json() as { access_token?: string; token_type?: string; expires_in?: number };
+  if (res.status !== 200 || body.token_type !== "Bearer" || body.expires_in !== 3600 || !body.access_token) {
+    throw new Error(`/token answered ${res.status} ${JSON.stringify(body)}`);
+  }
   return body.access_token;
 }
 

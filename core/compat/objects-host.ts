@@ -3,6 +3,7 @@ import type { LocatedObject, ObjectReader } from "./layer";
 import { parseBucketName, parseObjectKey, type ObjectKey } from "./model";
 import { TOKEN_QUERY } from "../access/request";
 import { SITE_PREVIEW_HEADER } from "../site/middleware";
+import { missingObjectResponse } from "../file/missing-object";
 
 export type ObjectsHost = Extract<CompatHost, { kind: "objects-path-style" | "objects-virtual-host" }>;
 
@@ -58,22 +59,5 @@ function methodNotAllowed(): Response {
   return new Response(JSON.stringify({ error: "Method not allowed" }), {
     status: 405,
     headers: { Allow: ALLOW, "Content-Type": "application/json", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },
-  });
-}
-
-/**
- * One answer for an unknown bucket, an unknown key and an access refusal, and
- * `no-store`, since the key may be written a moment later.
- */
-export function missingObjectResponse(): Response {
-  return new Response(JSON.stringify({ error: "File not found" }), {
-    status: 404,
-    headers: {
-      "Content-Type": "application/json",
-      "Cache-Control": "no-store",
-      "X-Content-Type-Options": "nosniff",
-      "Access-Control-Allow-Origin": "*",
-      "Access-Control-Expose-Headers": "WWW-Authenticate, Retry-After",
-    },
   });
 }

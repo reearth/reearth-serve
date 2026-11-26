@@ -7,7 +7,7 @@ import type { FileStorage } from "../asset/repository";
 import { resolveAssetVersion } from "../asset/usecase";
 import type { ResolvedAsset } from "../asset/usecase/resolve-version";
 import type { OpenObject } from "../compat/layer";
-import { missingObjectResponse } from "../compat/objects-host";
+import { missingObjectResponse } from "./missing-object";
 import { legacyThumbKey, versionThumbKey } from "../asset/usecase/shared";
 import { cacheControlFor, etagMatches, representationEtag, thumbnailCacheControl, type CachePolicy } from "./caching";
 import { addVary, applyCors, preflightResponse, type CorsPolicy } from "./cors";
