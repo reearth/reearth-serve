@@ -130,8 +130,13 @@ interface Located {
   contentType: string;
   contentEncoding?: string;
   displayName: string;
-  originalSize?: number;
+  originalSize: OriginalSize;
 }
+
+/** The decompressed size of a gzip-stored file, which a file extracted from an archive never records. */
+type OriginalSize = number | "unknown";
+
+const originalSizeOf = (recorded: number | undefined): OriginalSize => recorded || "unknown";
 
 /**
  * Map a request path onto an object in one layout.
@@ -156,7 +161,7 @@ async function locate(storage: FileStorage, layout: Layout, filePath: string): P
       contentType: layout.contentType,
       contentEncoding: layout.contentEncoding,
       displayName: layout.filename,
-      originalSize: layout.originalSize,
+      originalSize: originalSizeOf(layout.originalSize),
     };
   }
 
@@ -169,7 +174,7 @@ async function locate(storage: FileStorage, layout: Layout, filePath: string): P
       contentType: layout.contentType,
       contentEncoding: layout.contentEncoding,
       displayName: layout.filename,
-      originalSize: layout.originalSize,
+      originalSize: originalSizeOf(layout.originalSize),
     };
   }
 
@@ -183,16 +188,16 @@ async function locate(storage: FileStorage, layout: Layout, filePath: string): P
     contentType: file.contentType,
     contentEncoding: file.contentEncoding,
     displayName: entryPath.split("/").pop() || entryPath,
+    originalSize: "unknown",
   };
 }
 
-/**
- * Versioned layout first; assets from before ADR-005 have no version row and
- * live under the legacy prefix, which is also the fallback when the versioned
- * key is missing.
- */
-function layoutsOf({ asset, version }: ResolvedAsset): Layout[] {
+function layoutsWithLegacyFallback({ asset, version }: ResolvedAsset): Layout[] {
   return version ? [versionedLayout(asset, version), legacyLayout(asset)] : [legacyLayout(asset)];
+}
+
+function exactLayoutOf({ asset, version }: ResolvedAsset): Layout {
+  return version ? versionedLayout(asset, version) : legacyLayout(asset);
 }
 
 async function locateIn(storage: FileStorage, layouts: Layout[], path: string): Promise<Located | null> {
@@ -454,7 +459,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     return decorate(await serveThumbnail(storage, asset, version, thumb, pinned, policy));
   }
 
-  const layouts = layoutsOf(resolved);
+  const layouts = layoutsWithLegacyFallback(resolved);
   const isArchive = layouts.some((l) => l.archive);
 
   // `_headers` / `_redirects` (ADR-013 C3). The rules were parsed once, at
@@ -539,6 +544,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     cacheControl: cacheControlFor({ pinned, contentType: located.contentType }, policy),
     storage,
     siteHost: c.get("siteHost"),
+    storedEncoding: "omit",
   });
 
   // `_headers` rules go on first, so everything the handler sets below — and
@@ -735,8 +741,7 @@ interface ServeOptions extends ReadConditions {
   storage: FileStorage;
   siteHost: boolean;
   quotedEtag?: string;
-  /** Send an encoding other than gzip as stored, labelled with it, rather than unlabelled. */
-  labelStoredEncoding?: boolean;
+  storedEncoding: "label" | "omit";
 }
 
 const SERVICE_GRANT: ServiceGrant = { proof: "service" };
@@ -747,9 +752,7 @@ export interface DeliveryTarget {
 }
 
 export async function deliverAsset(storage: FileStorage, request: Request, { object, quotedEtag }: DeliveryTarget): Promise<Response | null> {
-  const { asset, version } = object.resolved;
-  // Only the layout of the version the caller described, so its headers never name other bytes.
-  const layout = version ? versionedLayout(asset, version) : legacyLayout(asset);
+  const layout = exactLayoutOf(object.resolved);
   const located = await locate(storage, layout, layout.filename);
   if (!located) return null;
   const policy = deliveryPolicy(SERVICE_GRANT, toUnixSeconds(Date.now()));
@@ -762,7 +765,7 @@ export async function deliverAsset(storage: FileStorage, request: Request, { obj
     storage,
     siteHost: false,
     quotedEtag,
-    labelStoredEncoding: true,
+    storedEncoding: "label",
   });
   if (res.status === 404) return null;
   res.headers.set("X-Content-Type-Options", "nosniff");
@@ -801,7 +804,7 @@ async function sendLocated(located: Located, opts: ServeOptions): Promise<Respon
   // --- Non-gzip file ---
   if (!isGzipStored) {
     const headers: Record<string, string> = { ...common, "Accept-Ranges": "bytes" };
-    const labelled = opts.labelStoredEncoding && contentEncoding !== undefined && contentEncoding !== "identity";
+    const labelled = opts.storedEncoding === "label" && contentEncoding !== undefined && contentEncoding !== "identity";
     if (labelled) headers["Content-Encoding"] = contentEncoding;
     // The body is already in that encoding; see the passthrough below.
     const asStored = (body: ReadableStream<Uint8Array> | null, status: number) =>
@@ -852,15 +855,14 @@ async function sendLocated(located: Located, opts: ServeOptions): Promise<Respon
   }
 
   // --- Gzip-stored: decompress ---
-  // A range is a range of the decompressed bytes, so it needs their total; an
-  // entry whose original size was never recorded is sent whole instead.
-  const part = originalSize ? resolveRange(range, originalSize) : { kind: "whole" as const };
-  if (part.kind === "unsatisfiable") return unsatisfiable(originalSize!);
-  const decompressed = decompressStream(file.body);
   const headers: Record<string, string> = { ...common, "Accept-Ranges": "bytes" };
+  if (originalSize === "unknown") return new Response(decompressStream(file.body), { status: 200, headers });
+  const part = resolveRange(range, originalSize);
+  if (part.kind === "unsatisfiable") return unsatisfiable(originalSize);
+  const decompressed = decompressStream(file.body);
 
   if (part.kind === "whole") {
-    if (originalSize) headers["Content-Length"] = String(originalSize);
+    headers["Content-Length"] = String(originalSize);
     return new Response(decompressed, { status: 200, headers });
   }
 
