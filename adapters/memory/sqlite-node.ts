@@ -1,14 +1,13 @@
 /**
  * `SqlClient` over Node's built-in SQLite (`node:sqlite`).
  *
- * This is the provider-independent implementation used by unit tests today and
- * by the Node runtime later (ADR-012 §5 step 7). It never runs inside the
- * Worker bundle — `node:sqlite` is not available there.
+ * It never runs inside the Worker bundle: `node:sqlite` is not available there.
  *
  * Node 22 hides `node:sqlite` behind `--experimental-sqlite`; the vitest config
  * passes that flag so the same code runs on Node 22 (CI) and Node 24+ (local).
  */
 import { DatabaseSync } from "node:sqlite";
+import { createHash } from "node:crypto";
 import { readdirSync, readFileSync } from "node:fs";
 import { join } from "node:path";
 import { fileURLToPath } from "node:url";
@@ -73,43 +72,108 @@ export class NodeSqlClient implements SqlClient {
   }
 }
 
-/** Apply every `*.sql` file in `dir`, in filename order. */
-export function applyMigrations(db: DatabaseSync, dir: string): void {
-  for (const file of readdirSync(dir).filter((f) => f.endsWith(".sql")).sort()) {
-    db.exec(readFileSync(join(dir, file), "utf8"));
+export type MigrationSet = "domain" | "node";
+
+export type MigrationSource = { set: MigrationSet; dir: string };
+
+export class MigrationDrift extends Error {
+  constructor(readonly set: MigrationSet, readonly file: string) {
+    super(`migration ${set}/${file} was edited after it was applied`);
+    this.name = "MigrationDrift";
+  }
+}
+
+export class UnledgeredDatabase extends Error {
+  constructor() {
+    super(
+      "SQLite database has tables but no _serve_migrations ledger; it predates ADR-020 " +
+        "and cannot be upgraded in place. Delete it (or point SQLITE_PATH at a new file) and restart.",
+    );
+    this.name = "UnledgeredDatabase";
+  }
+}
+
+const LEDGER = "_serve_migrations";
+
+type Pending = { source: MigrationSource; file: string; sql: string; sha256: string };
+
+function hasTable(db: DatabaseSync, name: string): boolean {
+  return db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?").get(name) !== undefined;
+}
+
+function hasUserTables(db: DatabaseSync): boolean {
+  return db.prepare("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name NOT GLOB 'sqlite_*'").get() !== undefined;
+}
+
+function applyMigrations(db: DatabaseSync, sources: MigrationSource[]): void {
+  db.exec("BEGIN IMMEDIATE");
+  try {
+    applyPending(db, sources);
+    db.exec("COMMIT");
+  } catch (e) {
+    db.exec("ROLLBACK");
+    throw e;
+  }
+}
+
+function applyPending(db: DatabaseSync, sources: MigrationSource[]): void {
+  if (!hasTable(db, LEDGER)) {
+    if (hasUserTables(db)) throw new UnledgeredDatabase();
+    db.exec(`CREATE TABLE ${LEDGER} (
+      set_name   TEXT NOT NULL,
+      name       TEXT NOT NULL,
+      sha256     TEXT NOT NULL,
+      applied_at INTEGER NOT NULL,
+      PRIMARY KEY (set_name, name)
+    )`);
+  }
+
+  const applied = db.prepare(`SELECT sha256 FROM ${LEDGER} WHERE set_name = ? AND name = ?`);
+  const pending: Pending[] = [];
+  for (const source of sources) {
+    for (const file of readdirSync(source.dir).filter((f) => f.endsWith(".sql")).sort()) {
+      const bytes = readFileSync(join(source.dir, file));
+      const sha256 = createHash("sha256").update(bytes).digest("hex");
+      const row = applied.get(source.set, file) as { sha256: string } | undefined;
+      if (row === undefined) pending.push({ source, file, sql: bytes.toString("utf8"), sha256 });
+      else if (row.sha256 !== sha256) throw new MigrationDrift(source.set, file);
+    }
+  }
+
+  const record = db.prepare(`INSERT INTO ${LEDGER} (set_name, name, sha256, applied_at) VALUES (?, ?, ?, ?)`);
+  for (const { source, file, sql, sha256 } of pending) {
+    db.exec(sql);
+    record.run(source.set, file, sha256, Date.now());
   }
 }
 
 /** The domain schema every backend shares (D1 applies it via wrangler). */
-export const DOMAIN_MIGRATIONS_DIR = fileURLToPath(
-  new URL("../cloudflare/migrations", import.meta.url),
-);
+export const DOMAIN_MIGRATIONS: MigrationSource = {
+  set: "domain",
+  dir: fileURLToPath(new URL("../cloudflare/migrations", import.meta.url)),
+};
 
 /**
  * Tables that only exist where Cloudflare KV and Queues do not: `kv` and
- * `queue_messages`. Kept out of the D1 migrations on purpose — see the
+ * `queue_messages`. Kept out of the D1 migrations on purpose; see the
  * migration file's header.
  */
-export const SQL_ADAPTER_MIGRATIONS_DIR = fileURLToPath(
-  new URL("../sql/migrations", import.meta.url),
-);
+export const NODE_MIGRATIONS: MigrationSource = {
+  set: "node",
+  dir: fileURLToPath(new URL("../sql/migrations", import.meta.url)),
+};
 
 /**
- * A database with the given migration directories applied, in order — the
- * repository layer's test fixture, and the shape the Node runtime uses with a
- * file path instead of `:memory:`.
- *
  * Defaults to the domain schema only, so a test that wants `SqlKeyValue` or
- * `SqlJobQueue` asks for `SQL_ADAPTER_MIGRATIONS_DIR` explicitly.
+ * `SqlJobQueue` asks for `NODE_MIGRATIONS` explicitly.
  */
 export function createSqliteClient(
   path = ":memory:",
-  migrations: string | string[] = DOMAIN_MIGRATIONS_DIR,
+  migrations: MigrationSource[] = [DOMAIN_MIGRATIONS],
 ): NodeSqlClient {
   const db = new DatabaseSync(path);
+  db.exec("PRAGMA busy_timeout = 5000");
   db.exec("PRAGMA foreign_keys = ON");
-  for (const dir of typeof migrations === "string" ? [migrations] : migrations) {
-    applyMigrations(db, dir);
-  }
+  applyMigrations(db, migrations);
   return new NodeSqlClient(db);
 }

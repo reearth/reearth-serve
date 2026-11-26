@@ -154,7 +154,7 @@ describe.runIf(accountsUp && serveUp && PHASE === "fresh")("Serve with ACCOUNTS_
     const before = (await accountsRequestLines()).length;
     expect((await upload("will", teamProject)).status).toBe(201);
     const lines = (await accountsRequestLines()).slice(before);
-    expect(lines.sort()).toEqual(["<-- GET /api/workspaces", "<-- POST /api/permissions/check"]);
+    expect(lines.sort()).toEqual(["GET /api/workspaces", "POST /api/permissions/check"]);
   });
 
   test("manage_hosts: a writer passes authorization and meets the site hosts switch, a reader gets 404", async () => {
@@ -168,7 +168,7 @@ describe.runIf(accountsUp && serveUp && PHASE === "fresh")("Serve with ACCOUNTS_
     const before = (await accountsRequestLines()).length;
     expect((await claimHost("will", id)).status).toBe(503);
     const lines = (await accountsRequestLines()).slice(before);
-    expect(lines.sort()).toEqual(["<-- GET /api/workspaces", "<-- POST /api/permissions/check"]);
+    expect(lines.sort()).toEqual(["GET /api/workspaces", "POST /api/permissions/check"]);
   });
 
   test("a member removed in accounts loses access on the next request", async () => {

@@ -1,6 +1,6 @@
 import type {
   AssetMetadata, AssetUploadResult, CompleteUploadBody, CreateUploadSessionBody,
-  FileEntry, MultipartUploadResult, PresignedUploadResult,
+  FileEntry, MultipartUploadResult, PresignedUploadResult, SignedUrl,
 } from "../shared/api";
 
 // Request / response examples for the OpenAPI document (`describeRoute`
@@ -137,6 +137,17 @@ export const fileListExamples = {
   },
 } satisfies Record<string, Example<string>>;
 
+// --- Signed URLs (POST /api/v1/assets/{id}/signed-urls) ---
+
+const TOKEN = "eyJ2IjoxLCJraWQiOiJrMSIsImFzc2V0SWQiOiI4ZjNhMmMxZDliN2U0ZjYwIn0.c2lnbmF0dXJlLWJ5dGVzLWhlcmUtMzItYnl0ZXMtbG9uZw";
+
+export const signedUrlExamples = {
+  asset: {
+    summary: "Follows the asset",
+    value: { token: TOKEN, expiresAt: EXPIRES_AT, urlTemplate: `${BASE}/files/8f3a2c1d9b7e4f60/{path}?serve_token=${TOKEN}` },
+  },
+} satisfies Record<string, Example<SignedUrl>>;
+
 // --- Health (GET /api/v1/health) ---
 
 export const healthExamples = {
@@ -146,6 +157,7 @@ export const healthExamples = {
 if (import.meta.vitest) {
   const { test, expect } = import.meta.vitest;
   const schemas = await import("../shared/openapi");
+  const api = await import("../shared/api");
 
   // tsc checks the shapes; this also runs refinements (e.g. filename rules,
   // partCount bounds) and NDJSON framing.
@@ -155,6 +167,7 @@ if (import.meta.vitest) {
     ["complete upload", schemas.completeUploadBodySchema, completeUploadExamples],
     ["asset upload result", schemas.uploadResultResponseSchema, assetUploadResultExamples],
     ["health", schemas.healthResponseSchema, healthExamples],
+    ["signed URL", api.signedUrlSchema, signedUrlExamples],
   ] as const)("%s examples parse with their schema", (_, schema, examples) => {
     for (const [name, { value }] of Object.entries(examples)) {
       expect(schema.safeParse(value).success, name).toBe(true);
