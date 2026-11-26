@@ -810,7 +810,7 @@ func cmsURL(ctx context.Context, client *storage.Client, cfg config) error {
 		if res.StatusCode != http.StatusOK || !bytes.Equal(got, data) {
 			return fmt.Errorf("GET %s: want 200 and the written bytes, got %d %q", u, res.StatusCode, got)
 		}
-		fmt.Printf("cms url %s: bytes match\n", strings.Replace(u, uuid[2:], "{uuid[2:]}", 1)[strings.Index(u, "://")+3:])
+		fmt.Printf("cms url %s: bytes match\n", strings.TrimPrefix(strings.Replace(u, uuid[2:], "{uuid[2:]}", 1), base.Scheme+"://"))
 	}
 	return nil
 }

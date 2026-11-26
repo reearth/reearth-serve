@@ -8,8 +8,6 @@ import { missingObjectResponse } from "../file/missing-object";
 
 export type ObjectsHost = Extract<CompatHost, { kind: "objects-path-style" | "objects-virtual-host" | "objects-no-bucket" }>;
 
-const ALLOW = "GET, HEAD";
-
 export function objectsHost(reader: ObjectReader, deliver: (request: Request) => Response | Promise<Response>) {
   return async (host: ObjectsHost, request: Request): Promise<Response> => {
     if (request.method !== "GET" && request.method !== "HEAD") return methodNotAllowed();
@@ -56,6 +54,6 @@ function filesRequest(request: Request, url: URL, { assetId }: UnauthorizedLooku
 function methodNotAllowed(): Response {
   return new Response(JSON.stringify({ error: "Method not allowed" }), {
     status: 405,
-    headers: { Allow: ALLOW, "Content-Type": "application/json", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },
+    headers: { Allow: "GET, HEAD", "Content-Type": "application/json", "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff" },
   });
 }
