@@ -1,0 +1,4806 @@
+{
+ "public apex GET /files/3f9a1c2b4d5e6f70/ anonymous": {
+  "status": 200,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "content-disposition": "attachment; filename=\"index.html\"",
+   "content-length": "34",
+   "content-security-policy": "sandbox",
+   "content-type": "text/html; charset=utf-8",
+   "etag": "\"bfb0365601eb971399cc005028aa5ffa\"",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "34 03cc7f4f9eb09298"
+ },
+ "public apex GET /files/3f9a1c2b4d5e6f70/ gzip": {
+  "status": 200,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "content-disposition": "attachment; filename=\"index.html\"",
+   "content-length": "34",
+   "content-security-policy": "sandbox",
+   "content-type": "text/html; charset=utf-8",
+   "etag": "\"bfb0365601eb971399cc005028aa5ffa\"",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "34 03cc7f4f9eb09298"
+ },
+ "public apex GET /files/3f9a1c2b4d5e6f70/ range": {
+  "status": 206,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "content-disposition": "attachment; filename=\"index.html\"",
+   "content-length": "4",
+   "content-range": "bytes 0-3/34",
+   "content-security-policy": "sandbox",
+   "content-type": "text/html; charset=utf-8",
+   "etag": "\"bfb0365601eb971399cc005028aa5ffa\"",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "4 496018bf78b59cd9"
+ },
+ "public apex GET /files/3f9a1c2b4d5e6f70/docs anonymous": {
+  "status": 301,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "location": "/files/3f9a1c2b4d5e6f70/docs/",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public apex GET /files/3f9a1c2b4d5e6f70/docs gzip": {
+  "status": 301,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "location": "/files/3f9a1c2b4d5e6f70/docs/",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public apex GET /files/3f9a1c2b4d5e6f70/docs range": {
+  "status": 301,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "location": "/files/3f9a1c2b4d5e6f70/docs/",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public apex GET /files/3f9a1c2b4d5e6f70/nope anonymous": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "attachment; filename=\"404.html\"",
+   "content-length": "46",
+   "content-security-policy": "sandbox",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public apex GET /files/3f9a1c2b4d5e6f70/nope gzip": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "attachment; filename=\"404.html\"",
+   "content-length": "46",
+   "content-security-policy": "sandbox",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public apex GET /files/3f9a1c2b4d5e6f70/nope range": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "attachment; filename=\"404.html\"",
+   "content-length": "46",
+   "content-security-policy": "sandbox",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public apex GET /files/3f9a1c2b4d5e6f70/_headers anonymous": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "content-type": "application/json",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "26 811de0d1fef7c9e0"
+ },
+ "public apex GET /files/3f9a1c2b4d5e6f70/_headers gzip": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "content-type": "application/json",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "26 811de0d1fef7c9e0"
+ },
+ "public apex GET /files/3f9a1c2b4d5e6f70/_headers range": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "content-type": "application/json",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "26 811de0d1fef7c9e0"
+ },
+ "public apex GET /files/3f9a1c2b4d5e6f70/_redirects anonymous": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "content-type": "application/json",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "26 811de0d1fef7c9e0"
+ },
+ "public apex GET /files/3f9a1c2b4d5e6f70/_redirects gzip": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "content-type": "application/json",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "26 811de0d1fef7c9e0"
+ },
+ "public apex GET /files/3f9a1c2b4d5e6f70/_redirects range": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "content-type": "application/json",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "26 811de0d1fef7c9e0"
+ },
+ "public apex GET /files/3f9a1c2b4d5e6f70/old anonymous": {
+  "status": 301,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "location": "/files/3f9a1c2b4d5e6f70/index.html",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public apex GET /files/3f9a1c2b4d5e6f70/old gzip": {
+  "status": 301,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "location": "/files/3f9a1c2b4d5e6f70/index.html",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public apex GET /files/3f9a1c2b4d5e6f70/old range": {
+  "status": 301,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "location": "/files/3f9a1c2b4d5e6f70/index.html",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public apex GET /files/3f9a1c2b4d5e6f70/assets/app.js anonymous": {
+  "status": 200,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "content-disposition": "attachment; filename=\"app.js\"",
+   "content-security-policy": "sandbox",
+   "content-type": "text/javascript",
+   "etag": "W/\"ae463952262514c9bc2c6cc589e1165b\"",
+   "vary": "Accept-Encoding",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "64 085aded0640919ef"
+ },
+ "public apex GET /files/3f9a1c2b4d5e6f70/assets/app.js gzip": {
+  "status": 200,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "content-disposition": "attachment; filename=\"app.js\"",
+   "content-encoding": "gzip",
+   "content-length": "76",
+   "content-security-policy": "sandbox",
+   "content-type": "text/javascript",
+   "etag": "\"ae463952262514c9bc2c6cc589e1165b\"",
+   "vary": "Accept-Encoding",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "76 f4befc6408b6d503"
+ },
+ "public apex GET /files/3f9a1c2b4d5e6f70/assets/app.js range": {
+  "status": 200,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "content-disposition": "attachment; filename=\"app.js\"",
+   "content-security-policy": "sandbox",
+   "content-type": "text/javascript",
+   "etag": "W/\"ae463952262514c9bc2c6cc589e1165b\"",
+   "vary": "Accept-Encoding",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "64 085aded0640919ef"
+ },
+ "public apex HEAD /files/3f9a1c2b4d5e6f70/index.html anonymous": {
+  "status": 200,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "content-disposition": "attachment; filename=\"index.html\"",
+   "content-length": "34",
+   "content-security-policy": "sandbox",
+   "content-type": "text/html; charset=utf-8",
+   "etag": "\"bfb0365601eb971399cc005028aa5ffa\"",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public apex HEAD /files/3f9a1c2b4d5e6f70/index.html gzip": {
+  "status": 200,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "content-disposition": "attachment; filename=\"index.html\"",
+   "content-length": "34",
+   "content-security-policy": "sandbox",
+   "content-type": "text/html; charset=utf-8",
+   "etag": "\"bfb0365601eb971399cc005028aa5ffa\"",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public apex HEAD /files/3f9a1c2b4d5e6f70/index.html range": {
+  "status": 206,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "content-disposition": "attachment; filename=\"index.html\"",
+   "content-length": "4",
+   "content-range": "bytes 0-3/34",
+   "content-security-policy": "sandbox",
+   "content-type": "text/html; charset=utf-8",
+   "etag": "\"bfb0365601eb971399cc005028aa5ffa\"",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public apex OPTIONS /files/3f9a1c2b4d5e6f70/index.html anonymous": {
+  "status": 204,
+  "headers": {
+   "access-control-allow-headers": "range, if-none-match, if-modified-since, authorization, x-serve-token",
+   "access-control-allow-methods": "GET, HEAD, OPTIONS",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "access-control-max-age": "86400",
+   "vary": "Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public apex OPTIONS /files/3f9a1c2b4d5e6f70/index.html gzip": {
+  "status": 204,
+  "headers": {
+   "access-control-allow-headers": "range, if-none-match, if-modified-since, authorization, x-serve-token",
+   "access-control-allow-methods": "GET, HEAD, OPTIONS",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "access-control-max-age": "86400",
+   "vary": "Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public apex OPTIONS /files/3f9a1c2b4d5e6f70/index.html range": {
+  "status": 204,
+  "headers": {
+   "access-control-allow-headers": "range, if-none-match, if-modified-since, authorization, x-serve-token",
+   "access-control-allow-methods": "GET, HEAD, OPTIONS",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "access-control-max-age": "86400",
+   "vary": "Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public apex GET /files/fedcba9876543210/data.geojson anonymous": {
+  "status": 200,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "content-disposition": "inline; filename=\"data.geojson\"",
+   "content-length": "42",
+   "content-type": "application/geo+json",
+   "etag": "\"bbaae5134a5ccb0be47990ad4fbfe6c1\"",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "42 ed778c73ea51338d"
+ },
+ "public apex GET /files/fedcba9876543210/data.geojson gzip": {
+  "status": 200,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "content-disposition": "inline; filename=\"data.geojson\"",
+   "content-length": "42",
+   "content-type": "application/geo+json",
+   "etag": "\"bbaae5134a5ccb0be47990ad4fbfe6c1\"",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "42 ed778c73ea51338d"
+ },
+ "public apex GET /files/fedcba9876543210/data.geojson range": {
+  "status": 206,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "content-disposition": "inline; filename=\"data.geojson\"",
+   "content-length": "4",
+   "content-range": "bytes 0-3/42",
+   "content-type": "application/geo+json",
+   "etag": "\"bbaae5134a5ccb0be47990ad4fbfe6c1\"",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "4 9800e0460b652e6d"
+ },
+ "public apex GET /files/fedcba9876543210/docs anonymous": {
+  "status": 200,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "content-disposition": "inline; filename=\"data.geojson\"",
+   "content-length": "42",
+   "content-type": "application/geo+json",
+   "etag": "\"bbaae5134a5ccb0be47990ad4fbfe6c1\"",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "42 ed778c73ea51338d"
+ },
+ "public apex GET /files/fedcba9876543210/docs gzip": {
+  "status": 200,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "content-disposition": "inline; filename=\"data.geojson\"",
+   "content-length": "42",
+   "content-type": "application/geo+json",
+   "etag": "\"bbaae5134a5ccb0be47990ad4fbfe6c1\"",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "42 ed778c73ea51338d"
+ },
+ "public apex GET /files/fedcba9876543210/docs range": {
+  "status": 206,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "content-disposition": "inline; filename=\"data.geojson\"",
+   "content-length": "4",
+   "content-range": "bytes 0-3/42",
+   "content-type": "application/geo+json",
+   "etag": "\"bbaae5134a5ccb0be47990ad4fbfe6c1\"",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "4 9800e0460b652e6d"
+ },
+ "public apex GET /files/0000000000000000/x anonymous": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "26 811de0d1fef7c9e0"
+ },
+ "public apex GET /files/0000000000000000/x gzip": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "26 811de0d1fef7c9e0"
+ },
+ "public apex GET /files/0000000000000000/x range": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "26 811de0d1fef7c9e0"
+ },
+ "public apex GET / anonymous": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "public apex GET / gzip": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "public apex GET / range": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "public apex GET /docs anonymous": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "public apex GET /docs gzip": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "public apex GET /docs range": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "public apex GET /nope anonymous": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "public apex GET /nope gzip": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "public apex GET /nope range": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "public apex GET /old anonymous": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "public apex GET /old gzip": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "public apex GET /old range": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "public apex GET /assets/app.js anonymous": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "public apex GET /assets/app.js gzip": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "public apex GET /assets/app.js range": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "public apex HEAD /index.html anonymous": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public apex HEAD /index.html gzip": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public apex HEAD /index.html range": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public apex OPTIONS /index.html anonymous": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "public apex OPTIONS /index.html gzip": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "public apex OPTIONS /index.html range": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "public assetSite GET /files/3f9a1c2b4d5e6f70/ anonymous": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/3f9a1c2b4d5e6f70/ gzip": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/3f9a1c2b4d5e6f70/ range": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/3f9a1c2b4d5e6f70/docs anonymous": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/3f9a1c2b4d5e6f70/docs gzip": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/3f9a1c2b4d5e6f70/docs range": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/3f9a1c2b4d5e6f70/nope anonymous": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/3f9a1c2b4d5e6f70/nope gzip": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/3f9a1c2b4d5e6f70/nope range": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/3f9a1c2b4d5e6f70/_headers anonymous": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/3f9a1c2b4d5e6f70/_headers gzip": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/3f9a1c2b4d5e6f70/_headers range": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/3f9a1c2b4d5e6f70/_redirects anonymous": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/3f9a1c2b4d5e6f70/_redirects gzip": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/3f9a1c2b4d5e6f70/_redirects range": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/3f9a1c2b4d5e6f70/old anonymous": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/3f9a1c2b4d5e6f70/old gzip": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/3f9a1c2b4d5e6f70/old range": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/3f9a1c2b4d5e6f70/assets/app.js anonymous": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/3f9a1c2b4d5e6f70/assets/app.js gzip": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/3f9a1c2b4d5e6f70/assets/app.js range": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite HEAD /files/3f9a1c2b4d5e6f70/index.html anonymous": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public assetSite HEAD /files/3f9a1c2b4d5e6f70/index.html gzip": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public assetSite HEAD /files/3f9a1c2b4d5e6f70/index.html range": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public assetSite OPTIONS /files/3f9a1c2b4d5e6f70/index.html anonymous": {
+  "status": 204,
+  "headers": {
+   "access-control-allow-headers": "range, if-none-match, if-modified-since, authorization, x-serve-token",
+   "access-control-allow-methods": "GET, HEAD, OPTIONS",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "access-control-max-age": "86400",
+   "vary": "Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public assetSite OPTIONS /files/3f9a1c2b4d5e6f70/index.html gzip": {
+  "status": 204,
+  "headers": {
+   "access-control-allow-headers": "range, if-none-match, if-modified-since, authorization, x-serve-token",
+   "access-control-allow-methods": "GET, HEAD, OPTIONS",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "access-control-max-age": "86400",
+   "vary": "Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public assetSite OPTIONS /files/3f9a1c2b4d5e6f70/index.html range": {
+  "status": 204,
+  "headers": {
+   "access-control-allow-headers": "range, if-none-match, if-modified-since, authorization, x-serve-token",
+   "access-control-allow-methods": "GET, HEAD, OPTIONS",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "access-control-max-age": "86400",
+   "vary": "Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public assetSite GET /files/fedcba9876543210/data.geojson anonymous": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/fedcba9876543210/data.geojson gzip": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/fedcba9876543210/data.geojson range": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/fedcba9876543210/docs anonymous": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/fedcba9876543210/docs gzip": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/fedcba9876543210/docs range": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/0000000000000000/x anonymous": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/0000000000000000/x gzip": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /files/0000000000000000/x range": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET / anonymous": {
+  "status": 200,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "content-disposition": "inline; filename=\"index.html\"",
+   "content-length": "34",
+   "content-type": "text/html; charset=utf-8",
+   "etag": "\"bfb0365601eb971399cc005028aa5ffa\"",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "34 03cc7f4f9eb09298"
+ },
+ "public assetSite GET / gzip": {
+  "status": 200,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "content-disposition": "inline; filename=\"index.html\"",
+   "content-length": "34",
+   "content-type": "text/html; charset=utf-8",
+   "etag": "\"bfb0365601eb971399cc005028aa5ffa\"",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "34 03cc7f4f9eb09298"
+ },
+ "public assetSite GET / range": {
+  "status": 206,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "content-disposition": "inline; filename=\"index.html\"",
+   "content-length": "4",
+   "content-range": "bytes 0-3/34",
+   "content-type": "text/html; charset=utf-8",
+   "etag": "\"bfb0365601eb971399cc005028aa5ffa\"",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "4 496018bf78b59cd9"
+ },
+ "public assetSite GET /docs anonymous": {
+  "status": 301,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "location": "/docs/",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public assetSite GET /docs gzip": {
+  "status": 301,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "location": "/docs/",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public assetSite GET /docs range": {
+  "status": 301,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "location": "/docs/",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public assetSite GET /nope anonymous": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /nope gzip": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /nope range": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "public assetSite GET /old anonymous": {
+  "status": 301,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "location": "/index.html",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public assetSite GET /old gzip": {
+  "status": 301,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "location": "/index.html",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public assetSite GET /old range": {
+  "status": 301,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "location": "/index.html",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public assetSite GET /assets/app.js anonymous": {
+  "status": 200,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "content-disposition": "inline; filename=\"app.js\"",
+   "content-type": "text/javascript",
+   "etag": "W/\"ae463952262514c9bc2c6cc589e1165b\"",
+   "vary": "Accept-Encoding",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "64 085aded0640919ef"
+ },
+ "public assetSite GET /assets/app.js gzip": {
+  "status": 200,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "content-disposition": "inline; filename=\"app.js\"",
+   "content-encoding": "gzip",
+   "content-length": "76",
+   "content-type": "text/javascript",
+   "etag": "\"ae463952262514c9bc2c6cc589e1165b\"",
+   "vary": "Accept-Encoding",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "76 f4befc6408b6d503"
+ },
+ "public assetSite GET /assets/app.js range": {
+  "status": 200,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "content-disposition": "inline; filename=\"app.js\"",
+   "content-type": "text/javascript",
+   "etag": "W/\"ae463952262514c9bc2c6cc589e1165b\"",
+   "vary": "Accept-Encoding",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "64 085aded0640919ef"
+ },
+ "public assetSite HEAD /index.html anonymous": {
+  "status": 200,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "content-disposition": "inline; filename=\"index.html\"",
+   "content-length": "34",
+   "content-type": "text/html; charset=utf-8",
+   "etag": "\"bfb0365601eb971399cc005028aa5ffa\"",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public assetSite HEAD /index.html gzip": {
+  "status": 200,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "content-disposition": "inline; filename=\"index.html\"",
+   "content-length": "34",
+   "content-type": "text/html; charset=utf-8",
+   "etag": "\"bfb0365601eb971399cc005028aa5ffa\"",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public assetSite HEAD /index.html range": {
+  "status": 206,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "public, max-age=0, must-revalidate",
+   "content-disposition": "inline; filename=\"index.html\"",
+   "content-length": "4",
+   "content-range": "bytes 0-3/34",
+   "content-type": "text/html; charset=utf-8",
+   "etag": "\"bfb0365601eb971399cc005028aa5ffa\"",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public assetSite OPTIONS /index.html anonymous": {
+  "status": 204,
+  "headers": {
+   "access-control-allow-headers": "range, if-none-match, if-modified-since, authorization, x-serve-token",
+   "access-control-allow-methods": "GET, HEAD, OPTIONS",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "access-control-max-age": "86400",
+   "vary": "Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public assetSite OPTIONS /index.html gzip": {
+  "status": 204,
+  "headers": {
+   "access-control-allow-headers": "range, if-none-match, if-modified-since, authorization, x-serve-token",
+   "access-control-allow-methods": "GET, HEAD, OPTIONS",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "access-control-max-age": "86400",
+   "vary": "Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public assetSite OPTIONS /index.html range": {
+  "status": 204,
+  "headers": {
+   "access-control-allow-headers": "range, if-none-match, if-modified-since, authorization, x-serve-token",
+   "access-control-allow-methods": "GET, HEAD, OPTIONS",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "access-control-max-age": "86400",
+   "vary": "Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public unknownSite GET /files/3f9a1c2b4d5e6f70/ anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/3f9a1c2b4d5e6f70/ gzip": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/3f9a1c2b4d5e6f70/ range": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/3f9a1c2b4d5e6f70/docs anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/3f9a1c2b4d5e6f70/docs gzip": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/3f9a1c2b4d5e6f70/docs range": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/3f9a1c2b4d5e6f70/nope anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/3f9a1c2b4d5e6f70/nope gzip": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/3f9a1c2b4d5e6f70/nope range": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/3f9a1c2b4d5e6f70/_headers anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/3f9a1c2b4d5e6f70/_headers gzip": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/3f9a1c2b4d5e6f70/_headers range": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/3f9a1c2b4d5e6f70/_redirects anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/3f9a1c2b4d5e6f70/_redirects gzip": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/3f9a1c2b4d5e6f70/_redirects range": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/3f9a1c2b4d5e6f70/old anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/3f9a1c2b4d5e6f70/old gzip": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/3f9a1c2b4d5e6f70/old range": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/3f9a1c2b4d5e6f70/assets/app.js anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/3f9a1c2b4d5e6f70/assets/app.js gzip": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/3f9a1c2b4d5e6f70/assets/app.js range": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite HEAD /files/3f9a1c2b4d5e6f70/index.html anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public unknownSite HEAD /files/3f9a1c2b4d5e6f70/index.html gzip": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public unknownSite HEAD /files/3f9a1c2b4d5e6f70/index.html range": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public unknownSite OPTIONS /files/3f9a1c2b4d5e6f70/index.html anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite OPTIONS /files/3f9a1c2b4d5e6f70/index.html gzip": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite OPTIONS /files/3f9a1c2b4d5e6f70/index.html range": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/fedcba9876543210/data.geojson anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/fedcba9876543210/data.geojson gzip": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/fedcba9876543210/data.geojson range": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/fedcba9876543210/docs anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/fedcba9876543210/docs gzip": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/fedcba9876543210/docs range": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/0000000000000000/x anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/0000000000000000/x gzip": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /files/0000000000000000/x range": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET / anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET / gzip": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET / range": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /docs anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /docs gzip": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /docs range": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /nope anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /nope gzip": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /nope range": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /old anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /old gzip": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /old range": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /assets/app.js anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /assets/app.js gzip": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite GET /assets/app.js range": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite HEAD /index.html anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public unknownSite HEAD /index.html gzip": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public unknownSite HEAD /index.html range": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public unknownSite OPTIONS /index.html anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite OPTIONS /index.html gzip": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public unknownSite OPTIONS /index.html range": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "public api GET /files/3f9a1c2b4d5e6f70/ anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/3f9a1c2b4d5e6f70/ gzip": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/3f9a1c2b4d5e6f70/ range": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/3f9a1c2b4d5e6f70/docs anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/3f9a1c2b4d5e6f70/docs gzip": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/3f9a1c2b4d5e6f70/docs range": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/3f9a1c2b4d5e6f70/nope anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/3f9a1c2b4d5e6f70/nope gzip": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/3f9a1c2b4d5e6f70/nope range": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/3f9a1c2b4d5e6f70/_headers anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/3f9a1c2b4d5e6f70/_headers gzip": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/3f9a1c2b4d5e6f70/_headers range": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/3f9a1c2b4d5e6f70/_redirects anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/3f9a1c2b4d5e6f70/_redirects gzip": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/3f9a1c2b4d5e6f70/_redirects range": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/3f9a1c2b4d5e6f70/old anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/3f9a1c2b4d5e6f70/old gzip": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/3f9a1c2b4d5e6f70/old range": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/3f9a1c2b4d5e6f70/assets/app.js anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/3f9a1c2b4d5e6f70/assets/app.js gzip": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/3f9a1c2b4d5e6f70/assets/app.js range": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api HEAD /files/3f9a1c2b4d5e6f70/index.html anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public api HEAD /files/3f9a1c2b4d5e6f70/index.html gzip": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public api HEAD /files/3f9a1c2b4d5e6f70/index.html range": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public api OPTIONS /files/3f9a1c2b4d5e6f70/index.html anonymous": {
+  "status": 204,
+  "headers": {},
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public api OPTIONS /files/3f9a1c2b4d5e6f70/index.html gzip": {
+  "status": 204,
+  "headers": {},
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public api OPTIONS /files/3f9a1c2b4d5e6f70/index.html range": {
+  "status": 204,
+  "headers": {},
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public api GET /files/fedcba9876543210/data.geojson anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/fedcba9876543210/data.geojson gzip": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/fedcba9876543210/data.geojson range": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/fedcba9876543210/docs anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/fedcba9876543210/docs gzip": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/fedcba9876543210/docs range": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/0000000000000000/x anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/0000000000000000/x gzip": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /files/0000000000000000/x range": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET / anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET / gzip": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET / range": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /docs anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /docs gzip": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /docs range": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /nope anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /nope gzip": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /nope range": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /old anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /old gzip": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /old range": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /assets/app.js anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /assets/app.js gzip": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api GET /assets/app.js range": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "public api HEAD /index.html anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public api HEAD /index.html gzip": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public api HEAD /index.html range": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public api OPTIONS /index.html anonymous": {
+  "status": 204,
+  "headers": {},
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public api OPTIONS /index.html gzip": {
+  "status": 204,
+  "headers": {},
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "public api OPTIONS /index.html range": {
+  "status": 204,
+  "headers": {},
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password apex GET /files/3f9a1c2b4d5e6f70/ anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "password apex GET /files/3f9a1c2b4d5e6f70/ basic": {
+  "status": 200,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "private, max-age=0, must-revalidate",
+   "content-disposition": "attachment; filename=\"index.html\"",
+   "content-length": "34",
+   "content-security-policy": "sandbox",
+   "content-type": "text/html; charset=utf-8",
+   "etag": "\"bfb0365601eb971399cc005028aa5ffa\"",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "34 03cc7f4f9eb09298"
+ },
+ "password apex GET /files/3f9a1c2b4d5e6f70/docs anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "password apex GET /files/3f9a1c2b4d5e6f70/docs basic": {
+  "status": 301,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "location": "/files/3f9a1c2b4d5e6f70/docs/",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password apex GET /files/3f9a1c2b4d5e6f70/nope anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "password apex GET /files/3f9a1c2b4d5e6f70/nope basic": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "attachment; filename=\"404.html\"",
+   "content-length": "46",
+   "content-security-policy": "sandbox",
+   "content-type": "text/html; charset=utf-8",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "password apex GET /files/3f9a1c2b4d5e6f70/_headers anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "password apex GET /files/3f9a1c2b4d5e6f70/_headers basic": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "content-type": "application/json",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "26 811de0d1fef7c9e0"
+ },
+ "password apex GET /files/3f9a1c2b4d5e6f70/_redirects anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "password apex GET /files/3f9a1c2b4d5e6f70/_redirects basic": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "content-type": "application/json",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "26 811de0d1fef7c9e0"
+ },
+ "password apex GET /files/3f9a1c2b4d5e6f70/old anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "password apex GET /files/3f9a1c2b4d5e6f70/old basic": {
+  "status": 301,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "location": "/files/3f9a1c2b4d5e6f70/index.html",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password apex GET /files/3f9a1c2b4d5e6f70/assets/app.js anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "password apex GET /files/3f9a1c2b4d5e6f70/assets/app.js basic": {
+  "status": 200,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "private, max-age=0, must-revalidate",
+   "content-disposition": "attachment; filename=\"app.js\"",
+   "content-security-policy": "sandbox",
+   "content-type": "text/javascript",
+   "etag": "W/\"ae463952262514c9bc2c6cc589e1165b\"",
+   "vary": "Accept-Encoding, Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "64 085aded0640919ef"
+ },
+ "password apex HEAD /files/3f9a1c2b4d5e6f70/index.html anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password apex HEAD /files/3f9a1c2b4d5e6f70/index.html basic": {
+  "status": 200,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "private, max-age=0, must-revalidate",
+   "content-disposition": "attachment; filename=\"index.html\"",
+   "content-length": "34",
+   "content-security-policy": "sandbox",
+   "content-type": "text/html; charset=utf-8",
+   "etag": "\"bfb0365601eb971399cc005028aa5ffa\"",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password apex OPTIONS /files/3f9a1c2b4d5e6f70/index.html anonymous": {
+  "status": 204,
+  "headers": {
+   "access-control-allow-headers": "range, if-none-match, if-modified-since, authorization, x-serve-token",
+   "access-control-allow-methods": "GET, HEAD, OPTIONS",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "access-control-max-age": "86400",
+   "vary": "Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password apex OPTIONS /files/3f9a1c2b4d5e6f70/index.html basic": {
+  "status": 204,
+  "headers": {
+   "access-control-allow-headers": "range, if-none-match, if-modified-since, authorization, x-serve-token",
+   "access-control-allow-methods": "GET, HEAD, OPTIONS",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "access-control-max-age": "86400",
+   "vary": "Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password apex GET /files/fedcba9876543210/data.geojson anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "password apex GET /files/fedcba9876543210/data.geojson basic": {
+  "status": 200,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "private, max-age=0, must-revalidate",
+   "content-disposition": "inline; filename=\"data.geojson\"",
+   "content-length": "42",
+   "content-type": "application/geo+json",
+   "etag": "\"bbaae5134a5ccb0be47990ad4fbfe6c1\"",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "42 ed778c73ea51338d"
+ },
+ "password apex GET /files/fedcba9876543210/docs anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "password apex GET /files/fedcba9876543210/docs basic": {
+  "status": 200,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "private, max-age=0, must-revalidate",
+   "content-disposition": "inline; filename=\"data.geojson\"",
+   "content-length": "42",
+   "content-type": "application/geo+json",
+   "etag": "\"bbaae5134a5ccb0be47990ad4fbfe6c1\"",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "42 ed778c73ea51338d"
+ },
+ "password apex GET /files/0000000000000000/x anonymous": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "26 811de0d1fef7c9e0"
+ },
+ "password apex GET /files/0000000000000000/x basic": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "26 811de0d1fef7c9e0"
+ },
+ "password apex GET / anonymous": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "password apex GET / basic": {
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "body": "73 26b788f4884ea0da"
+ },
+ "password apex GET /docs anonymous": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "password apex GET /docs basic": {
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "body": "73 26b788f4884ea0da"
+ },
+ "password apex GET /nope anonymous": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "password apex GET /nope basic": {
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "body": "73 26b788f4884ea0da"
+ },
+ "password apex GET /old anonymous": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "password apex GET /old basic": {
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "body": "73 26b788f4884ea0da"
+ },
+ "password apex GET /assets/app.js anonymous": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "password apex GET /assets/app.js basic": {
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "body": "73 26b788f4884ea0da"
+ },
+ "password apex HEAD /index.html anonymous": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password apex HEAD /index.html basic": {
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password apex OPTIONS /index.html anonymous": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "password apex OPTIONS /index.html basic": {
+  "status": 401,
+  "headers": {
+   "content-type": "application/json"
+  },
+  "body": "73 26b788f4884ea0da"
+ },
+ "password assetSite GET /files/3f9a1c2b4d5e6f70/ anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "password assetSite GET /files/3f9a1c2b4d5e6f70/ basic": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "password assetSite GET /files/3f9a1c2b4d5e6f70/docs anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "password assetSite GET /files/3f9a1c2b4d5e6f70/docs basic": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "password assetSite GET /files/3f9a1c2b4d5e6f70/nope anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "password assetSite GET /files/3f9a1c2b4d5e6f70/nope basic": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "password assetSite GET /files/3f9a1c2b4d5e6f70/_headers anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "password assetSite GET /files/3f9a1c2b4d5e6f70/_headers basic": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "password assetSite GET /files/3f9a1c2b4d5e6f70/_redirects anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "password assetSite GET /files/3f9a1c2b4d5e6f70/_redirects basic": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "password assetSite GET /files/3f9a1c2b4d5e6f70/old anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "password assetSite GET /files/3f9a1c2b4d5e6f70/old basic": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "password assetSite GET /files/3f9a1c2b4d5e6f70/assets/app.js anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "password assetSite GET /files/3f9a1c2b4d5e6f70/assets/app.js basic": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "password assetSite HEAD /files/3f9a1c2b4d5e6f70/index.html anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password assetSite HEAD /files/3f9a1c2b4d5e6f70/index.html basic": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password assetSite OPTIONS /files/3f9a1c2b4d5e6f70/index.html anonymous": {
+  "status": 204,
+  "headers": {
+   "access-control-allow-headers": "range, if-none-match, if-modified-since, authorization, x-serve-token",
+   "access-control-allow-methods": "GET, HEAD, OPTIONS",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "access-control-max-age": "86400",
+   "vary": "Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password assetSite OPTIONS /files/3f9a1c2b4d5e6f70/index.html basic": {
+  "status": 204,
+  "headers": {
+   "access-control-allow-headers": "range, if-none-match, if-modified-since, authorization, x-serve-token",
+   "access-control-allow-methods": "GET, HEAD, OPTIONS",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "access-control-max-age": "86400",
+   "vary": "Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password assetSite GET /files/fedcba9876543210/data.geojson anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "password assetSite GET /files/fedcba9876543210/data.geojson basic": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "password assetSite GET /files/fedcba9876543210/docs anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "password assetSite GET /files/fedcba9876543210/docs basic": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "password assetSite GET /files/0000000000000000/x anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "password assetSite GET /files/0000000000000000/x basic": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "password assetSite GET / anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "password assetSite GET / basic": {
+  "status": 200,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "private, max-age=0, must-revalidate",
+   "content-disposition": "inline; filename=\"index.html\"",
+   "content-length": "34",
+   "content-type": "text/html; charset=utf-8",
+   "etag": "\"bfb0365601eb971399cc005028aa5ffa\"",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "34 03cc7f4f9eb09298"
+ },
+ "password assetSite GET /docs anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "password assetSite GET /docs basic": {
+  "status": 301,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "location": "/docs/",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password assetSite GET /nope anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "password assetSite GET /nope basic": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-disposition": "inline; filename=\"404.html\"",
+   "content-length": "46",
+   "content-type": "text/html; charset=utf-8",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "46 60ba5aca09e3960e"
+ },
+ "password assetSite GET /old anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "password assetSite GET /old basic": {
+  "status": 301,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "location": "/index.html",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password assetSite GET /assets/app.js anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "password assetSite GET /assets/app.js basic": {
+  "status": 200,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "private, max-age=0, must-revalidate",
+   "content-disposition": "inline; filename=\"app.js\"",
+   "content-type": "text/javascript",
+   "etag": "W/\"ae463952262514c9bc2c6cc589e1165b\"",
+   "vary": "Accept-Encoding, Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "64 085aded0640919ef"
+ },
+ "password assetSite HEAD /index.html anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Basic realm=\"reearth-serve\", charset=\"UTF-8\"",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password assetSite HEAD /index.html basic": {
+  "status": 200,
+  "headers": {
+   "accept-ranges": "bytes",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "private, max-age=0, must-revalidate",
+   "content-disposition": "inline; filename=\"index.html\"",
+   "content-length": "34",
+   "content-type": "text/html; charset=utf-8",
+   "etag": "\"bfb0365601eb971399cc005028aa5ffa\"",
+   "vary": "Cookie, Authorization, Origin",
+   "x-content-type-options": "nosniff",
+   "x-from-rules": "yes"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password assetSite OPTIONS /index.html anonymous": {
+  "status": 204,
+  "headers": {
+   "access-control-allow-headers": "range, if-none-match, if-modified-since, authorization, x-serve-token",
+   "access-control-allow-methods": "GET, HEAD, OPTIONS",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "access-control-max-age": "86400",
+   "vary": "Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password assetSite OPTIONS /index.html basic": {
+  "status": 204,
+  "headers": {
+   "access-control-allow-headers": "range, if-none-match, if-modified-since, authorization, x-serve-token",
+   "access-control-allow-methods": "GET, HEAD, OPTIONS",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "access-control-max-age": "86400",
+   "vary": "Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password unknownSite GET /files/3f9a1c2b4d5e6f70/ anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /files/3f9a1c2b4d5e6f70/ basic": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /files/3f9a1c2b4d5e6f70/docs anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /files/3f9a1c2b4d5e6f70/docs basic": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /files/3f9a1c2b4d5e6f70/nope anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /files/3f9a1c2b4d5e6f70/nope basic": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /files/3f9a1c2b4d5e6f70/_headers anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /files/3f9a1c2b4d5e6f70/_headers basic": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /files/3f9a1c2b4d5e6f70/_redirects anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /files/3f9a1c2b4d5e6f70/_redirects basic": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /files/3f9a1c2b4d5e6f70/old anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /files/3f9a1c2b4d5e6f70/old basic": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /files/3f9a1c2b4d5e6f70/assets/app.js anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /files/3f9a1c2b4d5e6f70/assets/app.js basic": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite HEAD /files/3f9a1c2b4d5e6f70/index.html anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password unknownSite HEAD /files/3f9a1c2b4d5e6f70/index.html basic": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password unknownSite OPTIONS /files/3f9a1c2b4d5e6f70/index.html anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite OPTIONS /files/3f9a1c2b4d5e6f70/index.html basic": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /files/fedcba9876543210/data.geojson anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /files/fedcba9876543210/data.geojson basic": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /files/fedcba9876543210/docs anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /files/fedcba9876543210/docs basic": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /files/0000000000000000/x anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /files/0000000000000000/x basic": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET / anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET / basic": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /docs anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /docs basic": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /nope anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /nope basic": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /old anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /old basic": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /assets/app.js anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite GET /assets/app.js basic": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite HEAD /index.html anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password unknownSite HEAD /index.html basic": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password unknownSite OPTIONS /index.html anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password unknownSite OPTIONS /index.html basic": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "password api GET /files/3f9a1c2b4d5e6f70/ anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /files/3f9a1c2b4d5e6f70/ basic": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /files/3f9a1c2b4d5e6f70/docs anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /files/3f9a1c2b4d5e6f70/docs basic": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /files/3f9a1c2b4d5e6f70/nope anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /files/3f9a1c2b4d5e6f70/nope basic": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /files/3f9a1c2b4d5e6f70/_headers anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /files/3f9a1c2b4d5e6f70/_headers basic": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /files/3f9a1c2b4d5e6f70/_redirects anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /files/3f9a1c2b4d5e6f70/_redirects basic": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /files/3f9a1c2b4d5e6f70/old anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /files/3f9a1c2b4d5e6f70/old basic": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /files/3f9a1c2b4d5e6f70/assets/app.js anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /files/3f9a1c2b4d5e6f70/assets/app.js basic": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api HEAD /files/3f9a1c2b4d5e6f70/index.html anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password api HEAD /files/3f9a1c2b4d5e6f70/index.html basic": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password api OPTIONS /files/3f9a1c2b4d5e6f70/index.html anonymous": {
+  "status": 204,
+  "headers": {},
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password api OPTIONS /files/3f9a1c2b4d5e6f70/index.html basic": {
+  "status": 204,
+  "headers": {},
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password api GET /files/fedcba9876543210/data.geojson anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /files/fedcba9876543210/data.geojson basic": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /files/fedcba9876543210/docs anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /files/fedcba9876543210/docs basic": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /files/0000000000000000/x anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /files/0000000000000000/x basic": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET / anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET / basic": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /docs anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /docs basic": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /nope anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /nope basic": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /old anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /old basic": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /assets/app.js anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api GET /assets/app.js basic": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "password api HEAD /index.html anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password api HEAD /index.html basic": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password api OPTIONS /index.html anonymous": {
+  "status": 204,
+  "headers": {},
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "password api OPTIONS /index.html basic": {
+  "status": 204,
+  "headers": {},
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "restricted apex GET /files/3f9a1c2b4d5e6f70/ anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Bearer, ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "restricted apex GET /files/3f9a1c2b4d5e6f70/docs anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Bearer, ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "restricted apex GET /files/3f9a1c2b4d5e6f70/nope anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Bearer, ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "restricted apex GET /files/3f9a1c2b4d5e6f70/_headers anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Bearer, ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "restricted apex GET /files/3f9a1c2b4d5e6f70/_redirects anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Bearer, ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "restricted apex GET /files/3f9a1c2b4d5e6f70/old anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Bearer, ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "restricted apex GET /files/3f9a1c2b4d5e6f70/assets/app.js anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Bearer, ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "restricted apex HEAD /files/3f9a1c2b4d5e6f70/index.html anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Bearer, ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "restricted apex OPTIONS /files/3f9a1c2b4d5e6f70/index.html anonymous": {
+  "status": 204,
+  "headers": {
+   "access-control-allow-headers": "range, if-none-match, if-modified-since, authorization, x-serve-token",
+   "access-control-allow-methods": "GET, HEAD, OPTIONS",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "access-control-max-age": "86400",
+   "vary": "Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "restricted apex GET /files/fedcba9876543210/data.geojson anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Bearer, ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "restricted apex GET /files/fedcba9876543210/docs anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "Bearer, ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "restricted apex GET /files/0000000000000000/x anonymous": {
+  "status": 404,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "26 811de0d1fef7c9e0"
+ },
+ "restricted apex GET / anonymous": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "restricted apex GET /docs anonymous": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "restricted apex GET /nope anonymous": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "restricted apex GET /old anonymous": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "restricted apex GET /assets/app.js anonymous": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "restricted apex HEAD /index.html anonymous": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "restricted apex OPTIONS /index.html anonymous": {
+  "status": 404,
+  "headers": {
+   "content-type": "text/plain; charset=UTF-8",
+   "x-session-id": "<session>"
+  },
+  "body": "13 7d04f7431bbfa41a"
+ },
+ "restricted assetSite GET /files/3f9a1c2b4d5e6f70/ anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "restricted assetSite GET /files/3f9a1c2b4d5e6f70/docs anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "restricted assetSite GET /files/3f9a1c2b4d5e6f70/nope anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "restricted assetSite GET /files/3f9a1c2b4d5e6f70/_headers anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "restricted assetSite GET /files/3f9a1c2b4d5e6f70/_redirects anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "restricted assetSite GET /files/3f9a1c2b4d5e6f70/old anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "restricted assetSite GET /files/3f9a1c2b4d5e6f70/assets/app.js anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "restricted assetSite HEAD /files/3f9a1c2b4d5e6f70/index.html anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "restricted assetSite OPTIONS /files/3f9a1c2b4d5e6f70/index.html anonymous": {
+  "status": 204,
+  "headers": {
+   "access-control-allow-headers": "range, if-none-match, if-modified-since, authorization, x-serve-token",
+   "access-control-allow-methods": "GET, HEAD, OPTIONS",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "access-control-max-age": "86400",
+   "vary": "Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "restricted assetSite GET /files/fedcba9876543210/data.geojson anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "restricted assetSite GET /files/fedcba9876543210/docs anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "restricted assetSite GET /files/0000000000000000/x anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "restricted assetSite GET / anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "restricted assetSite GET /docs anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "restricted assetSite GET /nope anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "restricted assetSite GET /old anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "restricted assetSite GET /assets/app.js anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "35 261f7d57777ec45a"
+ },
+ "restricted assetSite HEAD /index.html anonymous": {
+  "status": 401,
+  "headers": {
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "cache-control": "no-store",
+   "content-type": "application/json",
+   "vary": "Origin",
+   "www-authenticate": "ServeToken",
+   "x-content-type-options": "nosniff",
+   "x-robots-tag": "noindex"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "restricted assetSite OPTIONS /index.html anonymous": {
+  "status": 204,
+  "headers": {
+   "access-control-allow-headers": "range, if-none-match, if-modified-since, authorization, x-serve-token",
+   "access-control-allow-methods": "GET, HEAD, OPTIONS",
+   "access-control-allow-origin": "*",
+   "access-control-expose-headers": "WWW-Authenticate, Retry-After",
+   "access-control-max-age": "86400",
+   "vary": "Origin",
+   "x-content-type-options": "nosniff"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "restricted unknownSite GET /files/3f9a1c2b4d5e6f70/ anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "restricted unknownSite GET /files/3f9a1c2b4d5e6f70/docs anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "restricted unknownSite GET /files/3f9a1c2b4d5e6f70/nope anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "restricted unknownSite GET /files/3f9a1c2b4d5e6f70/_headers anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "restricted unknownSite GET /files/3f9a1c2b4d5e6f70/_redirects anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "restricted unknownSite GET /files/3f9a1c2b4d5e6f70/old anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "restricted unknownSite GET /files/3f9a1c2b4d5e6f70/assets/app.js anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "restricted unknownSite HEAD /files/3f9a1c2b4d5e6f70/index.html anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "restricted unknownSite OPTIONS /files/3f9a1c2b4d5e6f70/index.html anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "restricted unknownSite GET /files/fedcba9876543210/data.geojson anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "restricted unknownSite GET /files/fedcba9876543210/docs anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "restricted unknownSite GET /files/0000000000000000/x anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "restricted unknownSite GET / anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "restricted unknownSite GET /docs anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "restricted unknownSite GET /nope anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "restricted unknownSite GET /old anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "restricted unknownSite GET /assets/app.js anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "restricted unknownSite HEAD /index.html anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "restricted unknownSite OPTIONS /index.html anonymous": {
+  "status": 404,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "text/plain; charset=utf-8"
+  },
+  "body": "9 e3ebaa16dd9d9b9f"
+ },
+ "restricted api GET /files/3f9a1c2b4d5e6f70/ anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "restricted api GET /files/3f9a1c2b4d5e6f70/docs anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "restricted api GET /files/3f9a1c2b4d5e6f70/nope anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "restricted api GET /files/3f9a1c2b4d5e6f70/_headers anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "restricted api GET /files/3f9a1c2b4d5e6f70/_redirects anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "restricted api GET /files/3f9a1c2b4d5e6f70/old anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "restricted api GET /files/3f9a1c2b4d5e6f70/assets/app.js anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "restricted api HEAD /files/3f9a1c2b4d5e6f70/index.html anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "restricted api OPTIONS /files/3f9a1c2b4d5e6f70/index.html anonymous": {
+  "status": 204,
+  "headers": {},
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "restricted api GET /files/fedcba9876543210/data.geojson anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "restricted api GET /files/fedcba9876543210/docs anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "restricted api GET /files/0000000000000000/x anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "restricted api GET / anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "restricted api GET /docs anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "restricted api GET /nope anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "restricted api GET /old anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "restricted api GET /assets/app.js anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "126 9febc511f0df8660"
+ },
+ "restricted api HEAD /index.html anonymous": {
+  "status": 401,
+  "headers": {
+   "cache-control": "no-store",
+   "content-type": "application/xml; charset=UTF-8",
+   "www-authenticate": "Bearer realm=\"storage\""
+  },
+  "body": "0 e3b0c44298fc1c14"
+ },
+ "restricted api OPTIONS /index.html anonymous": {
+  "status": 204,
+  "headers": {},
+  "body": "0 e3b0c44298fc1c14"
+ }
+}
