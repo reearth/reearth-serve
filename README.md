@@ -122,7 +122,7 @@ SSR on Node is out of scope, and any other path returns 404 saying so.
 |----------|---------|-------------|
 | `PORT` | `8788` | Listen port |
 | `BASE_URL` | `http://localhost:$PORT` | Public base URL used in generated file links |
-| `SQLITE_PATH` | `:memory:` | SQLite database file; in-memory by default |
+| `SQLITE_PATH` | `:memory:` | SQLite database file; in-memory by default. A file survives restarts: each boot applies only pending migrations and refuses to start if an applied one was edited (ADR-020). A file created before the ledger is refused; recreate it |
 | `INTERNAL_API_SECRET` | (unset) | Shared secret for `/api/internal/*` and `POST /internal/cron`; unset ⇒ both refuse every request |
 | `SIGNING_SECRET` | (unset) | HMAC key for the password cookie of protected sites (ADR-013 B7); unset ⇒ protected assets answer 503 and protecting one is refused |
 | `CREDENTIALED_ORIGINS` | (unset) | Comma-separated exact origins, besides Serve's own, whose pages may read a protected file with the visitor's cookie; an entry with a path, a wildcard or `null` fails at startup |
@@ -153,9 +153,8 @@ curl -X POST -H "Authorization: Bearer $INTERNAL_API_SECRET" \
 
 Not available on this runtime: presigned uploads (no S3 adapter), archive
 extraction (no container launcher), and thumbnail generation (the jSquash wasm
-codecs need a bundler). File storage is in-process, so everything is lost when
-the process exits unless `SQLITE_PATH` is set — and even then, the file bytes are
-not persisted.
+codecs need a bundler). File storage is in-process, so file bytes are lost when
+the process exits. Metadata is lost too unless `SQLITE_PATH` names a file.
 
 ## API
 
