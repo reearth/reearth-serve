@@ -64,7 +64,7 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
       return c.json({ error: "Missing request body" }, 400);
     }
 
-    const contentType = c.req.header("Content-Type") || "application/octet-stream";
+    const contentType = c.req.header("Content-Type");
     const contentEncoding = c.req.header("Content-Encoding") || undefined;
     const originalSizeHeader = c.req.header("X-Original-Size");
     const originalSize = originalSizeHeader ? parseInt(originalSizeHeader, 10) : undefined;

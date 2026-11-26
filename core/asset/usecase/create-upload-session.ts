@@ -2,6 +2,7 @@ import type { MultipartUploadResult, PresignedUploadResult, UploadSession } from
 import type { PresignedUrlGenerator, UploadSessionStore } from "../repository";
 import { shouldCompress } from "../compression";
 import { generateId, storageKey } from "./shared";
+import { storedMediaType } from "../../file/media-type";
 
 // Upload window: scale with declared size so multi-GB archives uploaded over
 // slow links don't have their presigned URLs (and the KV session that the
@@ -22,14 +23,14 @@ export function uploadExpirySeconds(size: number): number {
 export async function createUploadSession(
   sessions: UploadSessionStore,
   presignedUrls: PresignedUrlGenerator,
-  params: { filename: string; contentType: string; size: number; partCount?: number },
+  params: { filename: string; contentType?: string; size: number; partCount?: number },
   _ttlSeconds: number,
   options?: { sessionId?: string | null; projectId?: string | null; skipExtraction?: boolean },
 ): Promise<PresignedUploadResult | MultipartUploadResult> {
   const id = generateId();
   const now = Date.now();
   const urlExpirySeconds = uploadExpirySeconds(params.size);
-  const contentType = params.contentType || "application/octet-stream";
+  const contentType = storedMediaType(params.contentType);
   const key = storageKey(id, params.filename);
   const compress = shouldCompress(params.filename, params.size);
   const encodingOpts = compress ? { contentEncoding: "gzip" as const } : undefined;
@@ -179,6 +180,33 @@ if (import.meta.vitest) {
     const multi = result as MultipartUploadResult;
     expect(multi.parts).toHaveLength(3);
     expect(multi.contentEncoding).toBeUndefined(); // tar is not compressible
+  });
+
+  test("createUploadSession signs, returns and stores only the normalized Content-Type", async () => {
+    const cases: Array<[string | undefined, string]> = [
+      ["text/plain;x=,text/html", "application/octet-stream"],
+      ["text/plain\r\nX-Injected: 1", "application/octet-stream"],
+      ["text/plain\0text/html", "application/octet-stream"],
+      ["", "application/octet-stream"],
+      [undefined, "application/octet-stream"],
+      ["TEXT/PLAIN; Charset=UTF-8; x=y", "text/plain; charset=utf-8"],
+    ];
+    for (const [contentType, stored] of cases) {
+      const sessions = mockSessions();
+      const presigned = mockPresignedUrls();
+      const single = await createUploadSession(
+        sessions, presigned, { filename: "a.bin", contentType, size: 10 }, 3600,
+      ) as PresignedUploadResult;
+      expect(presigned.generatePutUrl, JSON.stringify(contentType)).toHaveBeenCalledWith(expect.any(String), stored, expect.any(Number), undefined);
+      expect(single.headers["Content-Type"], JSON.stringify(contentType)).toBe(stored);
+      expect((await sessions.find(single.uploadId))?.contentType, JSON.stringify(contentType)).toBe(stored);
+
+      const multi = await createUploadSession(
+        sessions, presigned, { filename: "a.bin", contentType, size: 10, partCount: 2 }, 3600,
+      ) as MultipartUploadResult;
+      expect(presigned.createMultipartUpload, JSON.stringify(contentType)).toHaveBeenLastCalledWith(expect.any(String), stored, undefined);
+      expect((await sessions.find(multi.uploadId))?.contentType, JSON.stringify(contentType)).toBe(stored);
+    }
   });
 
   test("createUploadSession multipart with compressible file", async () => {

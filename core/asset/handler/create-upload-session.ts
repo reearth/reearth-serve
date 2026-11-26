@@ -55,7 +55,7 @@ export function registerCreateUploadSessionRoute(app: Hono<AppEnv>) {
 
       const result = await createUploadSession(sessions, presignedUrls, {
         filename: body.filename,
-        contentType: body.contentType || "application/octet-stream",
+        contentType: body.contentType,
         size: body.size,
         partCount: body.partCount,
       }, ttlSeconds, { sessionId, projectId: projectResult.projectId });

@@ -8,13 +8,14 @@ import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
 import type { JobQueue } from "../../queue/port";
 import type { ExtractionMessage } from "../../extraction/handler";
+import { storedMediaType } from "../../file/media-type";
 
 export async function uploadAsset(
   writes: AtomicWrites,
   storage: FileStorage,
   file: {
     name: string;
-    type: string;
+    type?: string;
     body: ReadableStream<Uint8Array>;
     size: number;
     contentEncoding?: string;
@@ -26,7 +27,7 @@ export async function uploadAsset(
 ): Promise<AssetUploadResult> {
   const id = generateId();
   const now = Date.now();
-  const contentType = file.type || "application/octet-stream";
+  const contentType = storedMediaType(file.type);
   const key = storageKey(id, file.name);
 
   await storage.put(key, file.body, contentType, file.size,

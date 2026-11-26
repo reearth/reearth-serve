@@ -82,7 +82,7 @@ export function registerUploadVersionRoute(app: Hono<AppEnv>) {
 
       const result = await uploadVersion(
         metadata, writes, storage, id,
-        { name: filename, type: c.req.header("Content-Type") || "application/octet-stream", body, size, contentEncoding, originalSize },
+        { name: filename, type: c.req.header("Content-Type"), body, size, contentEncoding, originalSize },
         baseUrl,
         { extractionQueue, thumbnailQueue, skipExtraction, usageScopes: scopes, siteHostSuffix: c.get("siteHostSuffix") },
       ).catch((e: unknown) => {
