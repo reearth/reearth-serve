@@ -1,7 +1,7 @@
 import { describe, expect, test } from "vitest";
-import { ASSET_ID, fixture, seedEntry, SINGLE_FILE_ID, VERSION_ID } from "../../adapters/memory/fixture";
+import { ASSET_ID, fixture, MemoryVersionStore, seedEntry, SINGLE_FILE_ID, VERSION_ID } from "../../adapters/memory/fixture";
 import { siteFixture, SUFFIX } from "../../adapters/memory/site-fixture";
-import type { AssetMetadata } from "../asset/model";
+import type { AssetMetadata, AssetVersion } from "../asset/model";
 import type { AtomicWrites } from "../asset/repository";
 import { createApp } from "../app";
 
@@ -106,5 +106,32 @@ describe("uploading a Content-Type through the API", () => {
     const served = await app.request(`/files/${asset.id}/data.geojson`);
     expect(served.headers.get("Content-Type"), name).toBe(stored);
     expect(served.headers.get("Content-Disposition"), name).toMatch(/^inline; /);
+  });
+});
+
+describe("uploading a version's Content-Type through the API", () => {
+  test.each([
+    ["text/plain;x=,text/html", "application/octet-stream"],
+    ["Image/PNG; x=y", "image/png"],
+  ])("POST /api/v1/assets/:id with %s", async (header, stored) => {
+    const holder: { versions?: MemoryVersionStore } = {};
+    const f = await siteFixture({
+      deps: {
+        writes: {
+          async createVersion({ version }: { version: AssetVersion }) { return holder.versions!.save(version); },
+        } as unknown as AtomicWrites,
+      },
+    });
+    holder.versions = f.versions;
+    const body = "<script>parent.x=1</script>";
+    const res = await f.app.request(`/api/v1/assets/${SINGLE_FILE_ID}`, {
+      method: "POST",
+      headers: { ...f.auth, "X-Filename": "data.geojson", "Content-Length": String(body.length), "Content-Type": header },
+      body,
+    });
+    expect(res.status).toBe(201);
+    const { version } = await res.json() as { version: AssetVersion };
+    expect(version.contentType).toBe(stored);
+    expect(f.versions.versions.get(version.id)?.contentType).toBe(stored);
   });
 });
