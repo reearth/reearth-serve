@@ -168,6 +168,22 @@ hosts stay `inline`, because a static site needs its HTML to render. A deny
 list of active types was rejected, because it leaves every unlisted type
 inline.
 
+**One reading of a Content-Type.** A browser reads a Content-Type the
+Fetch way: it splits the value on commas outside quoted strings and keeps
+the last type it can parse, so `text/plain;x=,text/html` renders as HTML.
+Comparing the text before the first `;` read that value as `text/plain`
+and served it inline. `parseMediaType` (`core/file/media-type.ts`) is now
+the only reader. It accepts exactly one RFC 9110 media type with no comma,
+control character or non-ASCII byte, and returns lowercase `type/subtype`
+with at most a token `charset`, the one parameter text rendering needs.
+Every upload stores that normalized type, or `application/octet-stream`
+when the value does not parse; an invalid type is not a 400, because a
+client that sends one still gets its bytes stored and served safely.
+Delivery parses the stored value again and sends only the normalized type,
+never the stored string. A stored value that does not parse, which rows
+written before this change may hold, is sent as octet-stream and on the
+apex as a sandboxed attachment.
+
 ## Part B — Site hosts (B1–B5 implemented; B6 apart from its event log; B7's `password` mode implemented, `members` deferred)
 
 Part B introduces one new concept, the **site host**: a hostname under the

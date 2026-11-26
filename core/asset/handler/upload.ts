@@ -24,7 +24,7 @@ export function registerUploadRoute(app: Hono<AppEnv>) {
       ],
       requestBody: {
         required: true,
-        description: "Raw file bytes. Any Content-Type is accepted and stored as the asset's content type (default application/octet-stream).",
+        description: "Raw file bytes. The Content-Type is stored as the asset's content type, lowercased with only its charset parameter kept; a missing value, or one that is not exactly one media type, is stored as application/octet-stream.",
         content: { "*/*": { schema: { type: "string", format: "binary" } } },
       },
       responses: {
