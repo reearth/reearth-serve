@@ -423,7 +423,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
   // leak as its index page. Every refusal comes back as the resolution's own
   // response; only the CORS headers are added to it, so a browser fetch can
   // read the 401 rather than seeing an opaque network error.
-  const access = await resolveAccess(asset, {
+  const check = () => resolveAccess(asset, {
     request: delivery.request,
     carry: delivery.carry,
     versionId: version?.id ?? null,
@@ -431,11 +431,17 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     // are single validated segments, so the name is already an asset path.
     matchPath: thumb ? (version?.filename ?? asset.filename) as AssetPath : filePath,
   }, accessDeps(c, asset));
-  if (access.kind === "challenge") {
-    // On the objects host a key is a name, not a capability, so a challenge would confirm that a protected object exists.
-    if (c.get("objectsHost") && access.response.status < 500) return missingObjectResponse();
-    return refuse(access.response);
-  }
+  // On the objects host a key is a name, not a capability: a challenge, or an
+  // access check that could not run, would confirm a protected object exists,
+  // so every one fails closed as a missing key.
+  const access = c.get("objectsHost")
+    ? await check().catch((err: unknown) => {
+      console.error(err);
+      return null;
+    })
+    : await check();
+  if (access === null || (access.kind === "challenge" && c.get("objectsHost"))) return missingObjectResponse();
+  if (access.kind === "challenge") return refuse(access.response);
   const policy = deliveryPolicy(access.grant, toUnixSeconds(Date.now()));
   const cors = corsPolicy(c, policy.proof);
   // Redirects Serve builds inside the asset keep a query token, so the next
