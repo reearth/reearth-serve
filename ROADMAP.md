@@ -207,8 +207,8 @@ Municipal and enterprise users increasingly generate frontend apps with AI but h
 
 **Part B — site hosts**
 
-- [x] B1 Per-asset origin — `https://<id>.serve.reearth.land/` so root-relative paths resolve and hosted pages are origin-isolated from the API and from each other; site hosts serve nothing but files. Enabled by `SITE_HOST_SUFFIX`; the zone-side wildcard DNS record, certificate and Worker route are an ops step, so the variable stays commented out in `wrangler.toml` until they exist
-- [x] B2 Named sites — `https://<name>.serve.reearth.land/` via a `site_hosts` table: DNS-label validation, no `--`, not ID-shaped, reserved list, editor-only, project assets only (archives only), per-project quota of 20. `custom` (B5) is rejected with 400 until that lands
+- [x] B1 Per-asset origin — `https://<id>.sites.example.net/` so root-relative paths resolve and hosted pages are origin-isolated from the API and from each other; site hosts serve nothing but files. Enabled by `SITE_HOST_SUFFIX`; the zone-side wildcard DNS record, certificate and Worker route are an ops step, so the variable stays commented out in `wrangler.toml` until they exist
+- [x] B2 Named sites — `https://<name>.sites.example.net/` via a `site_hosts` table: DNS-label validation, no `--`, not ID-shaped, reserved list, editor-only, project assets only (archives only), per-project quota of 20. `custom` (B5) is rejected with 400 until that lands
 - [x] B3 Publish state — enabled / disabled / released. Disable answers `503` with a "temporarily unavailable" page (`no-store`, `noindex`, `Retry-After: 3600`) and keeps the name held; release answers `410` for 30 days against takeover, is purged by the cleanup cron, and asset deletion releases rather than cascades. `PATCH …/hosts/:hostname` and `asset host disable|enable <id> <name>|--all`; a released name cannot be patched (409)
 - [x] B4 Preview hosts — `v<n>--<name>` (resolves to the version ID: pinned, immutable) and `latest--<name>` (newest version, but revalidating because the host moves), both `noindex`; per-name `previews` flag, **off by default**, toggled with `PATCH …/hosts/:hostname {previews}` / `asset host update <id> <name> --previews on|off`
 - [x] B5 Custom domains — the `custom` kind of `site_hosts`. Registration issues a token and returns the `TXT _reearth-serve-verify.<host>` record plus the CNAME target; the hostname answers `404` until `POST …/hosts/:hostname/verify` finds the record over DNS-over-HTTPS, which then starts certificate issuance and makes it resolve. No previews (`PATCH {previews: true}` is a `400`); authorization, quota, disable and the 30-day release cooldown are shared with B2–B3, and releasing a verified domain deprovisions its certificate. `asset host add --custom|verify|show`. **Ops:** Cloudflare for SaaS must be enabled on the zone and `CF_API_TOKEN` + `CF_ZONE_ID` set (both or neither) for certificates to be issued at all, with `SITE_FALLBACK_ORIGIN` set to the zone's fallback origin so customers CNAME somewhere stable; without them the no-op provisioner treats a verified hostname as live and the operator terminates TLS — which is what the Node runtime always does. Migration `0005_site_hosts_verification.sql` must be applied
@@ -474,7 +474,7 @@ classDiagram
 
 # Upload without logging in → demo mode (ephemeral, 1-hour TTL, no project)
 <cli> upload myfile.geojson
-# → https://serve.reearth.land/d/abc123/myfile.geojson  (expires in 1 hour)
+# → https://api.example.com/d/abc123/myfile.geojson  (expires in 1 hour)
 ```
 
 - `login` stores credentials locally (`~/.config/reearth-serve/`).
@@ -607,7 +607,7 @@ Operate on asset contents using familiar filesystem-style commands. Asset paths 
 
 # Quiet — print only IDs or URLs (for piping)
 <cli> asset create myfile.tif --quiet
-# → https://serve.reearth.land/p/proj1/a/xyz123/myfile.tif
+# → https://api.example.com/p/proj1/a/xyz123/myfile.tif
 ```
 
 ### Error Messages
