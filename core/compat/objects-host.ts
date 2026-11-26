@@ -1,6 +1,7 @@
 import type { CompatHost } from "./hosts";
 import type { ObjectReader } from "./layer";
 import { parseBucketName, parseObjectKey, type ObjectKey } from "./model";
+import { decoyPasswordCheck } from "../access/password";
 import { TOKEN_QUERY } from "../access/request";
 import { SITE_PREVIEW_HEADER } from "../site/middleware";
 import { missingObjectResponse } from "../file/missing-object";
@@ -21,7 +22,10 @@ export function objectsHost(reader: ObjectReader, deliver: (request: Request) =>
     const url = new URL(request.url);
     const target = targetOf(host, url.pathname);
     const assetId = target && await reader.locate(target.bucket, target.key);
-    if (!assetId) return missingObjectResponse();
+    if (!assetId) {
+      await decoyPasswordCheck(request.headers.get("Authorization"));
+      return missingObjectResponse();
+    }
     const res = await deliver(filesRequest(request, url, assetId));
     if (res.status !== 404) return res;
     await res.body?.cancel().catch(() => {});

@@ -13,7 +13,8 @@ import { cacheControlFor, etagMatches, representationEtag, thumbnailCacheControl
 import { addVary, applyCors, preflightResponse, type CorsPolicy } from "./cors";
 import { dispositionHeaders } from "./disposition";
 import { handleAuthSubmit } from "../access/form";
-import { AUTH_PATH_SEGMENT, resolveAccess, type AccessDeps } from "../access/resolve";
+import { accessModeOf, AUTH_PATH_SEGMENT, resolveAccess, type AccessDeps } from "../access/resolve";
+import { decoyPasswordCheck } from "../access/password";
 import type { BearerDecision } from "../access/restricted";
 import { deliveryPolicy, type ServiceGrant } from "../access/grant";
 import { readDeliveryRequest } from "../access/request";
@@ -440,7 +441,11 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
       return null;
     })
     : await check();
-  if (access === null || (access.kind === "challenge" && c.get("objectsHost"))) return missingObjectResponse();
+  if (access === null || (access.kind === "challenge" && c.get("objectsHost"))) {
+    const verified = accessModeOf(asset) === "password" && access?.kind === "challenge" && access.response.status === 401;
+    if (!verified) await decoyPasswordCheck(c.req.header("Authorization") ?? null);
+    return missingObjectResponse();
+  }
   if (access.kind === "challenge") return refuse(access.response);
   const policy = deliveryPolicy(access.grant, toUnixSeconds(Date.now()));
   const cors = corsPolicy(c, policy.proof);
