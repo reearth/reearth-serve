@@ -416,7 +416,7 @@ describe("object reads", () => {
     const f = await compatFixture();
     const auth = bearer(await accessToken(f, await keyFor(f, "editor")));
     const put = await onApi(f, path, {
-      method: "PUT", headers: { ...auth, "Content-Type": "text/plain", "Content-Length": String(body.length), ...headers }, body,
+      method: "PUT", headers: { ...auth, "Content-Type": "text/plain", "Content-Length": String(body.length), ...headers }, body: body as BodyInit,
     });
     expect(put.status).toBe(200);
     const viewer = bearer(await accessToken(f, await keyFor(f, "viewer")));
