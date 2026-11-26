@@ -29,6 +29,8 @@ export function docOnlyDeps(): Deps {
       auth: {},
       anonymousUploadEnabled: false,
       siteHostSuffix: undefined,
+      compatApiHost: undefined,
+      compatObjectsHost: undefined,
       tenancy: { enter: async () => ({ user: null, scope: unused as TenantScope }) },
     } as Partial<Deps>,
     { get: (target, key: string) => (key in target ? target[key as keyof Deps] : unused) },

@@ -16,6 +16,10 @@ import { bindsCaller, tenancyErrorResponse, tenancyMiddleware, TENANCY_RETRY_AFT
 import type { AppEnv, Deps } from "./types";
 import type { BearerVerifier } from "./access/restricted";
 import { buildSpec, jsonError, jsonResponse } from "./openapi";
+import { compatHostMiddleware, type CompatHost } from "./compat/hosts";
+import { compatApiOrigin } from "./compat/handler";
+import { gcsApp } from "./compat/gcs/app";
+import { gcsError } from "./compat/gcs/wire";
 import { healthExamples } from "./openapi-examples";
 import { healthResponseSchema } from "../shared/openapi";
 
@@ -40,7 +44,12 @@ export function createApp(deps: Deps) {
     return c.text("Internal Server Error", 500);
   });
 
-  // Site hosts (ADR-013 B1). First of all the middlewares and ahead of every
+  app.use("*", compatHostMiddleware(
+    { api: deps.compatApiHost, objects: deps.compatObjectsHost },
+    compatDispatch(deps),
+  ));
+
+  // Site hosts (ADR-013 B1). First of the remaining middlewares and ahead of every
   // route: a request whose Host is `{id}{SITE_HOST_SUFFIX}` must resolve
   // through file delivery and nothing else, so it is dispatched into a
   // file-only app instead of continuing down this router. It also runs before
@@ -210,6 +219,12 @@ function siteApp(deps: Deps) {
   return app;
 }
 
+function compatDispatch(deps: Deps): (host: CompatHost, req: Request) => Response | Promise<Response> {
+  const apiOrigin = compatApiOrigin(deps.compatApiHost, deps.baseUrl);
+  const gcs = apiOrigin ? gcsApp(deps, apiOrigin) : null;
+  return (host, req) => (host.kind === "gcs-api" && gcs ? gcs.fetch(req) : gcsError("xml", "not_implemented"));
+}
+
 /** Request-independent collaborators, read off the context by every handler. */
 function injectDeps(
   deps: Deps,
@@ -240,6 +255,8 @@ function injectDeps(
     c.set("signingSecret", deps.signingSecret);
     c.set("credentialedOrigins", deps.credentialedOrigins);
     c.set("deliveryTokens", deps.deliveryTokens);
+    c.set("compat", deps.compat);
+    c.set("compatApiHost", deps.compatApiHost);
     c.set("siteHost", opts.siteHost);
     c.set("bearerVerifier", opts.bearerVerifier);
     await next();

@@ -71,6 +71,10 @@ Point the CLI at a deployment with `REEARTH_SERVE_ENDPOINT=https://api.example.c
 | UI | React Router (SSR) + Tailwind CSS |
 | CLI | Commander.js + tsx |
 
+### Optional adapters
+
+- [Accounts](./adapters/accounts/README.md). Set `ACCOUNTS_URL` to take workspaces, members and decisions from an external accounts service.
+
 ### Project Structure
 
 | Directory | Description |
@@ -132,6 +136,8 @@ SSR on Node is out of scope, and any other path returns 404 saying so.
 | `SITE_DOMAIN_IS_PUBLIC_SUFFIX` | (unset) | `"true"` skips that check, for a domain on the Public Suffix List (and for `localhost`); logged at startup |
 | `SITE_DNS_RESOLVER_URL` | `https://cloudflare-dns.com/dns-query` | DNS-over-HTTPS endpoint the custom-domain TXT check is asked of |
 | `SITE_FALLBACK_ORIGIN` | (unset) | What a customer CNAMEs their domain at; unset ⇒ the host of `BASE_URL` |
+| `COMPAT_GCS_HOST` | (unset) | Host the GCS-compatible API answers on (ADR-019), e.g. `storage.example.com`; a bare `host[:port]`, and a scheme or path refuses to start; key files name `<scheme of BASE_URL>://<host>/token` as their token endpoint. Unset ⇒ the API is off and issuing a credential answers 503 |
+| `COMPAT_OBJECTS_HOST` | (unset) | Read-only public objects host of ADR-019 §6, e.g. `objects.example.com` (with `{bucket}.objects.example.com`); a bare `host[:port]` like `COMPAT_GCS_HOST`. Reserved: every request there answers 501 until it is built |
 | `CERBOS_ENDPOINT` | (unset) | Cerbos PDP base URL (http or https); unset ⇒ the built-in policy table decides (see [Authorization](#authorization)). Any other value fails at startup |
 | `OBJECT_STORE_*` | (unset) | Reserved for the future S3 adapter; until then storage is in-process |
 | `CONTAINER_LAUNCHER` | `none` | Only `none` is implemented; any other value fails at startup |
@@ -189,6 +195,12 @@ not persisted.
 | `GET` | `/api/v1/projects/:id` | Get project |
 | `DELETE` | `/api/v1/projects/:id` | Delete project |
 | `GET` | `/api/v1/projects/:id/hosts` | List every site host in the project |
+| `GET` | `/api/v1/projects/:id/compat/buckets` | List the project's storage compatibility buckets (ADR-019) |
+| `POST` | `/api/v1/projects/:id/compat/buckets` | Create a bucket (`{ name, mount? }`); names are unique across the server |
+| `DELETE` | `/api/v1/projects/:id/compat/buckets/:bucket` | Delete an empty bucket and revoke its credentials (409 while it maps a key) |
+| `GET` | `/api/v1/projects/:id/compat/credentials` | List credentials, revoked ones included; never the private key |
+| `POST` | `/api/v1/projects/:id/compat/credentials` | Issue a key file for one bucket (`{ bucket, role, label? }`, role `viewer` or `editor`); shown once |
+| `DELETE` | `/api/v1/projects/:id/compat/credentials/:credentialId` | Revoke a credential |
 | `POST` | `/api/v1/workspaces` | Create workspace |
 | `GET` | `/api/v1/workspaces/:id` | Get workspace |
 | `DELETE` | `/api/v1/workspaces/:id` | Delete workspace |
@@ -209,6 +221,17 @@ The OpenAPI document also covers file delivery (`/files/{id}/{path}`, marked `se
 | `GET` | `/api/internal/assets/:id/exists` | Container → Worker asset existence check |
 
 These endpoints require `Authorization: Bearer $INTERNAL_API_SECRET` — set it via `wrangler secret put INTERNAL_API_SECRET` in production. Without the secret configured the Worker rejects every internal-API request and the extraction container will not be launched.
+
+### GCS compatibility API (ADR-019)
+
+With `COMPAT_GCS_HOST` set, Serve answers part of the Google Cloud Storage JSON and XML APIs on that host, over the assets of the project a bucket belongs to. An application points the Go client at it with `option.WithEndpoint("https://<host>/storage/v1/")` and a key file a project admin issues through `POST /api/v1/projects/{id}/compat/credentials`. The host is recognised before site hosts, and no other route answers on it.
+
+| Method | Path | Description |
+|--------|------|-------------|
+| `POST` | `/token` | OAuth jwt-bearer grant: an RS256 assertion signed with the key file, `aud` the key file's `token_uri`, at most one hour long. Answers an access token valid for one hour |
+| `GET` | `/storage/v1/b/{bucket}/o/{key}` | Object metadata. A missing key answers 404, which the client reads as `ErrObjectNotExist` |
+
+Every call except `/token` takes `Authorization: Bearer` with that access token or with a self-signed RS256 JWT whose `kid` is the credential id. The credential is read on every request, so revoking it stops its tokens at once. An unknown bucket answers 404, a bucket outside the credential's grant 403, and every operation not built yet 501 in the GCS error shape. The access token is signed with `SIGNING_SECRET`; without it `/token` answers 503.
 
 ### File Delivery
 
@@ -387,8 +410,9 @@ One policy table, `POLICY` in `core/auth/permissions.ts`, gives each action on a
 | `project` | `read_job` | ✓ | ✓ | ✓ | ✓ |
 | `project` | `retry_job` |  | ✓ | ✓ | ✓ |
 | `project` | `manage_webhooks` |  |  | ✓ | ✓ |
+| `project` | `manage_compat` |  |  | ✓ | ✓ |
 
-A denied caller gets 404 on asset, job, upload and project routes, so the answer does not confirm that the target exists. Project create, workspace delete and the member routes answer 403 to a member who lacks the role. Nobody can grant, change or remove a role above their own. Deleting a workspace that still has projects answers 409. Delete its projects first. No route uses `manage_webhooks` yet.
+A denied caller gets 404 on asset, job, upload and project routes, so the answer does not confirm that the target exists. Project create, workspace delete, the member routes and the storage compatibility routes that change state answer 403 to a member who lacks the role. Nobody can grant, change or remove a role above their own. Deleting a workspace that still has projects answers 409. Delete its projects first. No route uses `manage_webhooks` yet.
 
 Set `CERBOS_ENDPOINT` to send each decision to your own Cerbos PDP. Serve sends resource kind `workspace` or `project`, the workspace or project id as the resource id, `attr.workspaceId`, and the caller's workspace role as its one principal role. Serve refuses a role below the table's minimum without asking Cerbos, so a policy can deny more than the table but never allow more. A policy that denies one project does not hide that project's rows from the workspace-scoped or unscoped lists. [`docs/examples/cerbos/`](./docs/examples/cerbos/) holds policies that mirror the table, and `npm run check` fails if they drift from it. To run them:
 
