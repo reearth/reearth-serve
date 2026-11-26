@@ -17,4 +17,11 @@ describe("buildDeps", () => {
       expect(() => buildDeps({ ...env, COMPAT_GCS_HOST: bad })).toThrow(/COMPAT_GCS_HOST/);
     }
   });
+
+  test("a compat host on the BASE_URL host, or one host for both, is a config error naming the setting", () => {
+    expect(() => buildDeps({ ...env, COMPAT_GCS_HOST: "api.example.test" })).toThrow(/COMPAT_GCS_HOST/);
+    expect(() => buildDeps({ ...env, COMPAT_OBJECTS_HOST: "example.test" })).toThrow(/COMPAT_OBJECTS_HOST/);
+    expect(() => buildDeps({ ...env, COMPAT_GCS_HOST: "storage.example.test", COMPAT_OBJECTS_HOST: "storage.example.test" }))
+      .toThrow(/COMPAT_OBJECTS_HOST/);
+  });
 });

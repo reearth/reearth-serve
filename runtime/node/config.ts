@@ -7,7 +7,7 @@ import { parseDeliveryTokenKeys, type DeliveryKeyRing } from "../../core/access/
 import { parseTenancyConfig, type TenancyConfig } from "../../adapters/tenancy";
 
 import { parseCredentialedOrigins } from "../../core/file/cors";
-import { parseCompatApiHost } from "../../core/compat/model";
+import { parseCompatHosts } from "../../core/compat/hosts";
 import { checkSiteIsolation } from "../../core/site/isolation";
 
 export type ContainerLauncherKind = "none";
@@ -77,6 +77,7 @@ export type NodeConfig = {
   containerLauncher: ContainerLauncherKind;
   deliveryTokenKeys: DeliveryKeyRing | null;
   compatApiHost: string | undefined;
+  compatObjectsHost: string | undefined;
 };
 
 const DEFAULT_PORT = 8788;
@@ -87,9 +88,11 @@ export type Env = Record<string, string | undefined>;
 export function loadConfig(env: Env): NodeConfig {
   const port = intOr(env.PORT, DEFAULT_PORT);
   const isolation = checkSiteIsolation(env);
+  const baseUrl = env.BASE_URL || `http://localhost:${port}`;
+  const compatHosts = parseCompatHosts({ api: env.COMPAT_GCS_HOST, objects: env.COMPAT_OBJECTS_HOST }, baseUrl);
   return {
     port,
-    baseUrl: env.BASE_URL || `http://localhost:${port}`,
+    baseUrl,
     // ":memory:" is the default on purpose: an unconfigured run is a scratch
     // run, and a stray SQLite file in the working directory is worse than
     // losing state on restart.
@@ -111,7 +114,8 @@ export function loadConfig(env: Env): NodeConfig {
     objectStore: objectStore(env),
     containerLauncher: containerLauncher(env.CONTAINER_LAUNCHER),
     deliveryTokenKeys: env.DELIVERY_TOKEN_KEYS ? parseDeliveryTokenKeys(env.DELIVERY_TOKEN_KEYS) : null,
-    compatApiHost: parseCompatApiHost(env.COMPAT_GCS_HOST),
+    compatApiHost: compatHosts.api,
+    compatObjectsHost: compatHosts.objects,
   };
 }
 

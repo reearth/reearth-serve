@@ -6,7 +6,7 @@ import {
   SqlCleanupPendingStore, SqlJobStore, SqlMetadataStore,
   SqlProjectStore, SqlStorageUsageStore, SqlVersionStore,
 } from "../../adapters/sql/stores";
-import { buildTenancy } from "../../adapters/tenancy";
+import { buildTenancy, serviceAuthorizer } from "../../adapters/tenancy";
 import { SqlAtomicWrites } from "../../adapters/sql/writes";
 import { SqlSiteHostStore } from "../../adapters/sql/site-hosts";
 import { SqlCompatStore } from "../../adapters/sql/compat";
@@ -110,6 +110,8 @@ export function buildNodeRuntime(env: Env = process.env): NodeRuntime {
     credentialedOrigins: config.credentialedOrigins,
     compat: new SqlCompatStore(sql),
     compatApiHost: config.compatApiHost,
+    compatObjectsHost: config.compatObjectsHost,
+    serviceAuthorizer: serviceAuthorizer(config.tenancy),
     auth: {
       issuer: config.oidcIssuerUrl,
       audience: config.oidcAudience,

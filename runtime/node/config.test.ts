@@ -128,7 +128,7 @@ describe("loadConfig", () => {
 
   test("COMPAT_GCS_HOST takes a bare host[:port], and anything else refuses to start", () => {
     expect(loadConfig({}).compatApiHost).toBeUndefined();
-    for (const good of ["storage.example.test", "storage.localhost:8788", "localhost"]) {
+    for (const good of ["storage.example.test", "storage.localhost:8788", "storage"]) {
       expect(loadConfig({ COMPAT_GCS_HOST: good }).compatApiHost).toBe(good);
     }
     for (const bad of [
@@ -137,6 +137,13 @@ describe("loadConfig", () => {
     ]) {
       expect(() => loadConfig({ COMPAT_GCS_HOST: bad })).toThrow(/COMPAT_GCS_HOST/);
     }
+  });
+
+  test("a compat host on the BASE_URL host, or one host for both, refuses to start", () => {
+    expect(() => loadConfig({ COMPAT_GCS_HOST: "localhost:8788" })).toThrow(/COMPAT_GCS_HOST/);
+    expect(() => loadConfig({ BASE_URL: "https://serve.example.test", COMPAT_OBJECTS_HOST: "serve.example.test" })).toThrow(/COMPAT_OBJECTS_HOST/);
+    expect(() => loadConfig({ COMPAT_GCS_HOST: "storage.example.test", COMPAT_OBJECTS_HOST: "storage.example.test" }))
+      .toThrow(/COMPAT_OBJECTS_HOST/);
   });
 
   test("site hosts refuse to start on the API's own registrable domain", () => {
