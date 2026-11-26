@@ -19,7 +19,7 @@ async function written(keys: Record<string, string[]> = { media: ["assets/ab/r.t
   for (const [bucket, names] of Object.entries(keys)) {
     const auth = bearer(await accessToken(f, await keyFor(f, "editor", bucket)));
     for (const key of names) {
-      const put = await onApi(f, `/${bucket}/${key}`, {
+      const put = await onApi(f, `/${bucket}/${key.split("/").map(encodeURIComponent).join("/")}`, {
         method: "PUT", headers: { ...auth, "Content-Type": contentType, "Content-Length": String(body.length) }, body,
       });
       expect(put.status).toBe(200);
@@ -61,6 +61,21 @@ describe("objects host", () => {
       expect(res.headers.get("Cache-Control")).toBe("public, max-age=0, must-revalidate");
       expect(res.headers.get("Content-Disposition")).toBe('inline; filename="r.txt"');
       expect(googHeaders(res)).toEqual([]);
+    }
+  });
+
+  test("a key whose last segment holds an escaped slash or a backslash reads, and refuses as a missing key when restricted", async () => {
+    const keys = { "assets/a%2Fb.txt": "/assets/a%252Fb.txt", "assets/a\\b.txt": "/assets/a%5Cb.txt" };
+    for (const [key, path] of Object.entries(keys)) {
+      const { f, ids } = await written({ media: [key] });
+      for (const read of [virtual, pathStyle]) {
+        const res = await read(f, path);
+        expect(res.status).toBe(200);
+        expect(await res.text()).toBe(BODY);
+      }
+      await f.metadata.setProtection(ids[`media/${key}`], { access: "restricted" });
+      const miss = await missingKey(f);
+      for (const read of [virtual, pathStyle]) expect(await answer(await read(f, path))).toEqual(miss);
     }
   });
 
