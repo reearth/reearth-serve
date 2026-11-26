@@ -98,8 +98,12 @@ async function resolveBound(deps: BindingDeps, bucket: CompatBucket, key: Object
   return binding?.kind === "object" ? loadBound(deps, bucket, binding) : null;
 }
 
+declare const locatedWithoutAuthorization: unique symbol;
+
+export type UnauthorizedLookup = { readonly assetId: string; readonly [locatedWithoutAuthorization]: true };
+
 export interface ObjectReader {
-  locate(bucket: string, key: ObjectKey): Promise<string | null>;
+  locate(bucket: string, key: ObjectKey): Promise<UnauthorizedLookup | null>;
 }
 
 export function objectReader(deps: BindingDeps): ObjectReader {
@@ -108,7 +112,7 @@ export function objectReader(deps: BindingDeps): ObjectReader {
       const name = parseBucketName(raw);
       const bucket = name ? await deps.compat.findBucket(name) : null;
       const r = bucket && await resolveBound(deps, bucket, key);
-      return r?.asset.id ?? null;
+      return r ? { assetId: r.asset.id } as UnauthorizedLookup : null;
     },
   };
 }

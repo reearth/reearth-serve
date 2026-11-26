@@ -5,6 +5,8 @@ import { parseHeaders, parseRedirects } from "../site/rules";
 import { WebCryptoDeliveryTokenCodec } from "../../adapters/webcrypto/delivery-token";
 import { parseDeliveryTokenKeys, toUnixSeconds, type AssetPath, type UnixSeconds } from "../access/token";
 import type { BucketName, ObjectKey } from "./model";
+import type { UnauthorizedLookup } from "./layer";
+import { deliverAsset } from "../file/handler";
 import { accessToken, bearer, compatFixture, keyFor, onApi, type Fixture } from "../../adapters/memory/compat-fixture";
 
 const OBJECTS = "objects.example.test";
@@ -292,5 +294,12 @@ describe("objects host", () => {
     const res = await virtual(f, "/assets/ab/r.txt?thumb=xs");
     expect(res.status).toBe(200);
     expect(await res.text()).toBe(BODY);
+  });
+
+  test("an unauthorized lookup cannot be delivered as an object the layer opened", () => {
+    const deliverLookup = (f: Fixture, located: UnauthorizedLookup) =>
+      // @ts-expect-error a lookup made without a principal is not an OpenObject
+      deliverAsset(f.storage, new Request("http://localhost/"), { object: located, quotedEtag: "" });
+    expect(typeof deliverLookup).toBe("function");
   });
 });

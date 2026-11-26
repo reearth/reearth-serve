@@ -1,5 +1,5 @@
 import type { CompatHost } from "./hosts";
-import type { ObjectReader } from "./layer";
+import type { ObjectReader, UnauthorizedLookup } from "./layer";
 import { parseBucketName, parseObjectKey, type ObjectKey } from "./model";
 import { decoyPasswordCheck } from "../access/password";
 import { TOKEN_QUERY } from "../access/request";
@@ -15,12 +15,12 @@ export function objectsHost(reader: ObjectReader, deliver: (request: Request) =>
     if (request.method !== "GET" && request.method !== "HEAD") return methodNotAllowed();
     const url = new URL(request.url);
     const target = targetOf(host, url.pathname);
-    const assetId = target && await reader.locate(target.bucket, target.key);
-    if (!assetId) {
+    const located = target && await reader.locate(target.bucket, target.key);
+    if (!located) {
       await decoyPasswordCheck(request.headers.get("Authorization"));
       return missingObjectResponse();
     }
-    const res = await deliver(filesRequest(request, url, assetId));
+    const res = await deliver(filesRequest(request, url, located));
     if (res.status !== 404) return res;
     await res.body?.cancel().catch(() => {});
     return missingObjectResponse();
@@ -45,7 +45,7 @@ function targetOf(host: ObjectsHost, rawPath: string): { bucket: string; key: Ob
   return bucket && key ? { bucket, key } : null;
 }
 
-function filesRequest(request: Request, url: URL, assetId: string): Request {
+function filesRequest(request: Request, url: URL, { assetId }: UnauthorizedLookup): Request {
   const files = new URL(`/files/${encodeURIComponent(assetId)}`, url);
   for (const token of url.searchParams.getAll(TOKEN_QUERY)) files.searchParams.append(TOKEN_QUERY, token);
   const headers = new Headers(request.headers);
