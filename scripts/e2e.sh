@@ -84,6 +84,7 @@ fi
   echo "SITE_HOST_SUFFIX = \".localhost:${PORT}\""
   echo 'SITE_REGISTRABLE_DOMAIN = "localhost"'
   echo 'SITE_DOMAIN_IS_PUBLIC_SUFFIX = "true"'
+  echo "COMPAT_GCS_HOST = \"storage.localhost:${PORT}\""
 } > .dev.vars
 
 echo "Starting dev server on port ${PORT}..."
@@ -113,4 +114,5 @@ echo "Running E2E tests..."
 E2E_ENDPOINT="${ENDPOINT}" \
 E2E_MOCK_OIDC="http://localhost:${MOCK_OIDC_PORT}" \
 E2E_INTERNAL_API_SECRET="${INTERNAL_API_SECRET}" \
+E2E_COMPAT_GCS_HOST="storage.localhost:${PORT}" \
   npm run test:e2e -- "$@"

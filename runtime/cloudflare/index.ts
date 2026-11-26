@@ -2,6 +2,7 @@ import { createRequestHandler } from "react-router";
 import { createApp } from "../../core/app";
 import { buildDeps } from "../../adapters/cloudflare/cloudflare-deps";
 import { isSiteHost } from "../../core/site/middleware";
+import { classifyCompatHost } from "../../core/compat/hosts";
 import { handleScheduled } from "../../core/cleanup/handler";
 import { handleQueue } from "../../core/extraction/handler";
 import { handleThumbnailQueue } from "../../core/thumbnail/handler";
@@ -39,13 +40,12 @@ export default {
     // plain-text 404 instead of the UI, which is the right answer anyway: a
     // domain somebody pointed at us must not serve the dashboard. The UI, the
     // API, the docs and the health check remain reachable on the apex only.
+    const host = request.headers.get("Host") ?? url.host;
     if (
       url.pathname.startsWith("/api/") ||
       url.pathname.startsWith("/files") ||
-      isSiteHost(request.headers.get("Host") ?? url.host, {
-        baseUrl: env.BASE_URL,
-        suffix: env.SITE_HOST_SUFFIX,
-      })
+      classifyCompatHost(host, { api: env.COMPAT_GCS_HOST, objects: env.COMPAT_OBJECTS_HOST }) ||
+      isSiteHost(host, { baseUrl: env.BASE_URL, suffix: env.SITE_HOST_SUFFIX })
     ) {
       let deps;
       try {

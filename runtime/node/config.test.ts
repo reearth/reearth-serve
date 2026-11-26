@@ -33,6 +33,51 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ CERBOS_ENDPOINT: "not a url" })).toThrow(/CERBOS_ENDPOINT/);
   });
 
+  test("ACCOUNTS_URL selects the accounts directory, over plain http only on a loopback host", () => {
+    const issuer = { OIDC_ISSUER_URL: "https://idp.example.test/" };
+    expect(loadConfig({ ...issuer, ACCOUNTS_URL: "https://accounts.example.test" }).tenancy).toEqual({
+      kind: "accounts",
+      baseUrl: "https://accounts.example.test",
+    });
+    expect(loadConfig({ ...issuer, ACCOUNTS_URL: "http://localhost:8100" }).tenancy).toEqual({
+      kind: "accounts",
+      baseUrl: "http://localhost:8100",
+    });
+    expect(loadConfig({ ...issuer, ACCOUNTS_URL: "http://127.0.0.1:8100" }).tenancy.kind).toBe("accounts");
+    expect(loadConfig({ ...issuer, ACCOUNTS_URL: "http://[::1]:8100/" }).tenancy).toEqual({
+      kind: "accounts",
+      baseUrl: "http://[::1]:8100",
+    });
+  });
+
+  test.each([
+    [
+      "both backends",
+      { ACCOUNTS_URL: "https://a.test", CERBOS_ENDPOINT: "http://pdp:3592", OIDC_ISSUER_URL: "https://idp.test/" },
+      "Set at most one of ACCOUNTS_URL and CERBOS_ENDPOINT",
+    ],
+    ["ACCOUNTS_URL without an issuer", { ACCOUNTS_URL: "https://a.test" }, /^ACCOUNTS_URL needs OIDC_ISSUER_URL/],
+    [
+      "plain http to a remote host",
+      { ACCOUNTS_URL: "http://accounts.example.test", OIDC_ISSUER_URL: "https://idp.test/" },
+      "ACCOUNTS_URL must use https unless its host is localhost, 127.0.0.1 or [::1]",
+    ],
+    [
+      "an ACCOUNTS_URL that is not a URL",
+      { ACCOUNTS_URL: "accounts.example.test", OIDC_ISSUER_URL: "https://idp.test/" },
+      "ACCOUNTS_URL must be an http or https URL",
+    ],
+  ])("%s fails at startup naming the setting", (_, env, message) => {
+    expect(() => loadConfig(env)).toThrow(message);
+  });
+
+  test.each([
+    "https://a.test/api", "https://a.test/?x=1", "https://a.test/?", "https://a.test/#f", "https://u:p@a.test", "https://u@a.test",
+  ])("ACCOUNTS_URL %s fails at startup, because only an origin is accepted", (url) => {
+    expect(() => loadConfig({ ACCOUNTS_URL: url, OIDC_ISSUER_URL: "https://idp.test/" }))
+      .toThrow("ACCOUNTS_URL must be an origin, with no userinfo, path, query or fragment");
+  });
+
   test("BASE_URL defaults to the configured port, not the default one", () => {
     expect(loadConfig({ PORT: "9000" }).baseUrl).toBe("http://localhost:9000");
     expect(loadConfig({ PORT: "9000", BASE_URL: "https://x.test" }).baseUrl).toBe("https://x.test");
@@ -79,6 +124,26 @@ describe("loadConfig", () => {
     expect(loadConfig({ CREDENTIALED_ORIGINS: "https://a.example.com,https://b.example.net" }).credentialedOrigins)
       .toEqual(["https://a.example.com", "https://b.example.net"]);
     expect(() => loadConfig({ CREDENTIALED_ORIGINS: "https://a.example.com/app" })).toThrow(/CREDENTIALED_ORIGINS/);
+  });
+
+  test("COMPAT_GCS_HOST takes a bare host[:port], and anything else refuses to start", () => {
+    expect(loadConfig({}).compatApiHost).toBeUndefined();
+    for (const good of ["storage.example.test", "storage.localhost:8788", "storage"]) {
+      expect(loadConfig({ COMPAT_GCS_HOST: good }).compatApiHost).toBe(good);
+    }
+    for (const bad of [
+      "https://storage.example.test", "storage.example.test/", "storage.example.test/gcs", "Storage.example.test",
+      "user@storage.example.test", "storage.example.test:99999", "storage..example.test", " storage.example.test",
+    ]) {
+      expect(() => loadConfig({ COMPAT_GCS_HOST: bad })).toThrow(/COMPAT_GCS_HOST/);
+    }
+  });
+
+  test("a compat host on the BASE_URL host, or one host for both, refuses to start", () => {
+    expect(() => loadConfig({ COMPAT_GCS_HOST: "localhost:8788" })).toThrow(/COMPAT_GCS_HOST/);
+    expect(() => loadConfig({ BASE_URL: "https://serve.example.test", COMPAT_OBJECTS_HOST: "serve.example.test" })).toThrow(/COMPAT_OBJECTS_HOST/);
+    expect(() => loadConfig({ COMPAT_GCS_HOST: "storage.example.test", COMPAT_OBJECTS_HOST: "storage.example.test" }))
+      .toThrow(/COMPAT_OBJECTS_HOST/);
   });
 
   test("site hosts refuse to start on the API's own registrable domain", () => {
