@@ -66,7 +66,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      ACCOUNTS_SHA: b7d5685eacfc4976d7e62a583506bb1186f18d55
+      ACCOUNTS_SHA: ede96ba38b666b6be1e009ec9d14e1764d9948e7
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
