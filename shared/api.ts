@@ -326,7 +326,7 @@ export const presignedUploadResultSchema = component("PresignedUploadSession", z
   uploadId: z.string(),
   url: z.string(),
   method: z.literal("PUT"),
-  headers: z.record(z.string(), z.string()),
+  headers: z.record(z.string(), z.string()).describe("Send exactly these headers on the PUT, no more and no fewer. The URL is signed for them, so a different Content-Type or Content-Encoding is refused by storage."),
   contentEncoding: z.string().optional(),
   expiresAt: z.number(),
 }));

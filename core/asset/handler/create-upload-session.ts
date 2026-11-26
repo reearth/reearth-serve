@@ -19,7 +19,7 @@ export function registerCreateUploadSessionRoute(app: Hono<AppEnv>) {
     describeRoute({
       tags: ["Assets"],
       summary: "Create upload session with presigned URL",
-      description: "Step 1 of a presigned upload. Without `partCount` (or with 1) the response is a single presigned PUT URL; with `partCount` > 1 it is one URL per part (multipart). Upload the bytes straight to storage, then call `POST /api/v1/assets/uploads/{id}/complete`.",
+      description: "Step 1 of a presigned upload. Without `partCount` (or with 1) the response is a single presigned PUT URL; with `partCount` > 1 it is one URL per part (multipart). On the single PUT, send exactly the returned `headers`: the URL is signed for them, and the `Content-Type` among them is the normalized form of the requested `contentType`, which can differ from what was sent. Upload the bytes straight to storage, then call `POST /api/v1/assets/uploads/{id}/complete`.",
       parameters: [projectIdHeaderParam],
       requestBody: {
         required: true,

@@ -176,13 +176,16 @@ and served it inline. `parseMediaType` (`core/file/media-type.ts`) is now
 the only reader. It accepts exactly one RFC 9110 media type with no comma,
 control character or non-ASCII byte, and returns lowercase `type/subtype`
 with at most a token `charset`, the one parameter text rendering needs.
-Every upload stores that normalized type, or `application/octet-stream`
-when the value does not parse; an invalid type is not a 400, because a
-client that sends one still gets its bytes stored and served safely.
-Delivery parses the stored value again and sends only the normalized type,
-never the stored string. A stored value that does not parse, which rows
-written before this change may hold, is sent as octet-stream and on the
-apex as a sandboxed attachment. The asset and version API responses and the
+A value longer than 256 characters is invalid, and parsing is a single
+linear scan, because it runs on every upload and every read of a stored row.
+Every upload stores the normalized type. A fresh upload whose type does not
+parse is stored as `application/octet-stream` rather than refused with a
+400, so the client still gets its bytes stored; octet-stream is on the
+inline list, and with `nosniff` a browser downloads it instead of rendering
+it. Delivery parses the stored value again and sends only the normalized
+type, never the stored string. A stored value that does not parse, which
+only rows written before this change can hold, is sent as octet-stream and,
+on the apex, as an attachment with `Content-Security-Policy: sandbox`. The asset and version API responses and the
 `/files` NDJSON listing report the same normalized type, so a stored value
 with control characters never reaches a client that prints it.
 
