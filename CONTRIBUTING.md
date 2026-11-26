@@ -90,7 +90,8 @@ them (see [ADR-020](./docs/adr/020-atlas-migrations.md)). Each directory has an
 `atlas.sum`, and `npm run db:check` runs these checks against `origin/main`
 (set `DB_CHECK_BASE` to compare with another ref):
 
-- file names are `NNNN_name.sql`, and no two files share a prefix;
+- every entry except `atlas.sum`, dotfiles and subdirectories included, is a
+  file named `NNNN_name.sql`, and no two files share a prefix;
 - a file on the base branch is unchanged;
 - a new file sorts after the base branch's highest prefix;
 - `atlas.sum` matches the files, and the files replay on SQLite;
@@ -99,6 +100,12 @@ them (see [ADR-020](./docs/adr/020-atlas-migrations.md)). Each directory has an
 CI runs the same command, and deploy waits for it. The first run downloads the
 Atlas binary pinned in `tools/atlas.lock`, so it needs network access. It needs
 no Atlas account.
+
+Upstream may remove old Atlas builds. CI caches the binary, but GitHub evicts
+a cache that no run used for 7 days. If the pinned binary is gone upstream and
+the cache is gone too, the `migrations` job fails and blocks deploy. Fix it
+with a PR that bumps `tools/atlas.lock`: the version and all four sha256 lines,
+each checked against a download of that binary.
 
 To add a domain migration:
 
@@ -123,8 +130,11 @@ Rules:
 - **Waive a destructive change only on purpose.** A table rebuild (create a new
   table, copy, drop the old one) trips the lint. Put a
   `-- atlas:nolint <code>` line that names each analyzer it waives, such as
-  `DS102` for a dropped table, with a comment line beside it that says why. A
-  bare `-- atlas:nolint` waives every analyzer and fails `db:check`.
+  `DS102` for a dropped table, directly above the statement with no blank line
+  between, and a comment line above it that says why. That waives the one
+  statement. The same directive at the top of the file, followed by a blank
+  line, waives the whole file; do not use that form. A bare
+  `-- atlas:nolint` waives every analyzer and fails `db:check`.
 
 ```sql
 -- Rebuild assets to change a column type; the data is copied above.
