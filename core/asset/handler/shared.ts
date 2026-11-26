@@ -1,6 +1,28 @@
 import type { Context } from "hono";
 import type { AppEnv } from "../../types";
 import { accessCtx, authorizeProject } from "../../auth/access";
+import { storedMediaType, type MediaType } from "../../file/media-type";
+import type { AssetMetadata, AssetVersion } from "../model";
+
+export type VersionView = Omit<AssetVersion, "contentType"> & { contentType: MediaType };
+
+export type AssetView = Omit<AssetMetadata, "contentType" | "currentVersion"> & {
+  contentType: MediaType;
+  currentVersion?: VersionView;
+};
+
+export function versionView(version: AssetVersion): VersionView {
+  return { ...version, contentType: storedMediaType(version.contentType) };
+}
+
+export function assetView(asset: AssetMetadata): AssetView {
+  const { currentVersion, ...rest } = asset;
+  return {
+    ...rest,
+    contentType: storedMediaType(asset.contentType),
+    ...(currentVersion && { currentVersion: versionView(currentVersion) }),
+  };
+}
 
 /**
  * Block uploads from unauthenticated callers when anonymous uploads are

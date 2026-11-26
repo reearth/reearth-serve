@@ -6,6 +6,7 @@ import { enrichAssetWithVersion } from "../usecase";
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { assetResponseSchema, idParamSchema } from "../../../shared/openapi";
 import { jsonError, jsonResponse } from "../../openapi";
+import { assetView } from "./shared";
 
 export function registerGetRoute(app: Hono<AppEnv>) {
   app.get("/:id",
@@ -27,7 +28,7 @@ export function registerGetRoute(app: Hono<AppEnv>) {
       if (!access.ok) return deniedResponse(c, access, { notFound: "Asset not found" });
       const asset = access.value;
 
-      return c.json({ asset });
+      return c.json({ asset: assetView(asset) });
     },
   );
 }

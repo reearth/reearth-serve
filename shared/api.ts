@@ -326,7 +326,7 @@ export const presignedUploadResultSchema = component("PresignedUploadSession", z
   uploadId: z.string(),
   url: z.string(),
   method: z.literal("PUT"),
-  headers: z.record(z.string(), z.string()),
+  headers: z.record(z.string(), z.string()).describe("Send exactly these headers on the PUT, no more and no fewer. The URL is signed for them, so a different Content-Type or Content-Encoding is refused by storage."),
   contentEncoding: z.string().optional(),
   expiresAt: z.number(),
 }));
@@ -392,9 +392,11 @@ export const fileEntrySchema = component("FileEntry", z.object({
 // client-side abuse (each part triggers an HMAC-SHA256 signature on the Worker).
 export const MAX_UPLOAD_PARTS = 10000;
 
+export const MAX_CONTENT_TYPE_LENGTH = 256;
+
 export const createUploadSessionBodySchema = component("CreateUploadSessionRequest", z.object({
   filename: filenameSchema,
-  contentType: z.string().optional(),
+  contentType: z.string().max(MAX_CONTENT_TYPE_LENGTH).optional(),
   size: z.number(),
   partCount: z.number().int().positive().max(MAX_UPLOAD_PARTS).optional(),
 }));
