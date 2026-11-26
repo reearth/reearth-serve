@@ -3,6 +3,7 @@ import { describeRoute } from "hono-openapi";
 import { validator as zValidator } from "hono-openapi";
 import type { AppEnv } from "../../types";
 import { getAssetMetadata, updateAsset, setAssetAccess, checkSpaChange, enrichAssetWithVersion } from "../usecase";
+import type { SetAccessInput } from "../usecase/set-access";
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { assetResponseSchema, idParamSchema, updateAssetBodySchema } from "../../../shared/openapi";
 import { jsonError, jsonResponse } from "../../openapi";
@@ -14,16 +15,18 @@ export function registerUpdateAssetRoute(app: Hono<AppEnv>) {
       summary: "Update asset metadata",
       description:
         "Update mutable asset fields: description, userMeta, activeVersionId, expiresAt, " +
-        "the access mode (ADR-013 B7) and the SPA fallback (ADR-013 C1). " +
+        "the access mode (ADR-013 B7, ADR-014) and the SPA fallback (ADR-013 C1). " +
         "`{\"access\":\"password\",\"password\":\"…\"}` protects " +
-        "a site (archive) asset in a project; `{\"access\":\"public\"}` unprotects it. Setting or " +
+        "a site (archive) asset in a project with a shared password; `{\"access\":\"restricted\"}` " +
+        "limits any project asset to project members who send their OIDC bearer; " +
+        "`{\"access\":\"public\"}` removes either. Setting or " +
         "changing the password invalidates every outstanding auth cookie. `{\"spa\":true}` makes " +
         "an extensionless miss inside the archive serve its root `index.html` with status 200.",
       responses: {
         200: jsonResponse("Updated asset", assetResponseSchema),
         400: jsonError("Protection or the SPA fallback is not available for this asset"),
         404: jsonError("Asset not found"),
-        503: jsonError("SIGNING_SECRET not configured"),
+        503: jsonError("SIGNING_SECRET not configured (access `password` only)"),
       },
     }),
     zValidator("param", idParamSchema),
@@ -48,7 +51,11 @@ export function registerUpdateAssetRoute(app: Hono<AppEnv>) {
       }
 
       if (body.access !== undefined) {
-        const result = await setAssetAccess(metadata, existing, { access: body.access, password: body.password }, {
+        let input: SetAccessInput;
+        if (body.access !== "password") input = { access: body.access };
+        else if (body.password !== undefined) input = { access: "password", password: body.password };
+        else return c.json({ error: "access \"password\" requires a password" }, 400);
+        const result = await setAssetAccess(metadata, existing, input, {
           signingSecret: c.get("signingSecret"),
         });
         if (!result.ok) return c.json({ error: result.error }, result.status);

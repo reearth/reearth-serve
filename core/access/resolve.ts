@@ -16,9 +16,8 @@
  * `/files/{id}/` stayed open would be theatre — the ID is printed in every
  * `siteUrl` we hand out.
  *
- * ADR-014 adds `restricted` as a third mode with more proofs (signed URLs, API
- * keys, OIDC bearers, grants). It slots into the same switch and returns the
- * same union; nothing in the delivery path has to change again.
+ * ADR-014's `restricted` mode slots into the same switch and returns the same
+ * union; its proofs live in `./restricted.ts`.
  */
 
 import type { AssetMetadata } from "../asset/model";
@@ -36,32 +35,28 @@ import {
 import { attemptPassword } from "./attempt";
 import { basicPassword } from "./password";
 import { clientIp } from "./ratelimit";
+import { resolveRestricted, type RestrictedDeps } from "./restricted";
 
 /**
  * The asset's access mode.
  *
  * ADR-013 B7 calls the field `hosting.access`; ADR-014 §1 makes the flat
- * `access` canonical and says the two are the same field. The flat name is what
- * is implemented: nesting it under `hosting` would have to be undone when
- * ADR-014's `restricted` mode lands, which applies to assets that are not
- * sites at all.
- *
- * Setting `password` is limited to archive (site) assets for now — see
- * `core/asset/usecase/set-access.ts`. That is a restriction on the *write*
- * path only; everything below is written against the mode, so lifting it is a
- * one-line change.
+ * `access` canonical and says the two are the same field. Setting `password`
+ * is limited to archive (site) assets on the write path
+ * (`core/asset/usecase/set-access.ts`); everything below is written against
+ * the mode alone.
  */
-export type AccessMode = "public" | "password";
+export type AccessMode = "public" | "password" | "restricted";
 
 /** The mode of an asset, defaulting to `public` for every row that has none. */
 export function accessModeOf(asset: Pick<AssetMetadata, "access">): AccessMode {
-  return asset.access === "password" ? "password" : "public";
+  return asset.access ?? "public";
 }
 
 /** The path segment the auth form posts to, under the asset's file prefix. */
 export const AUTH_PATH_SEGMENT = "_serve/auth";
 
-export interface AccessDeps {
+export interface AccessDeps extends Omit<RestrictedDeps, "siteHost"> {
   metadata: MetadataStore;
   /** Where the failed-attempt counters live (ADR-012 §2). */
   kv: KeyValue;
@@ -87,7 +82,7 @@ export interface AccessDeps {
  * depends on it: only a cookie, which the browser attaches on its own, is ever
  * answered with credentialed CORS.
  */
-export type AccessProof = "none" | "cookie" | "basic";
+export type AccessProof = "none" | "cookie" | "basic" | "bearer";
 
 export type AccessResolution =
   | { kind: "allow"; proof: AccessProof }
@@ -106,7 +101,9 @@ export async function resolveAccess(
   request: Request,
   deps: AccessDeps,
 ): Promise<AccessResolution> {
-  if (accessModeOf(asset) !== "password") return ALLOW_PUBLIC;
+  const mode = accessModeOf(asset);
+  if (mode === "public") return ALLOW_PUBLIC;
+  if (mode === "restricted") return resolveRestricted(request, deps);
 
   const secret = deps.signingSecret;
   if (!secret) return { kind: "challenge", response: signingSecretMissingResponse() };
