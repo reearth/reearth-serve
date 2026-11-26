@@ -20,6 +20,8 @@ export type ServiceGrant = { proof: "service" };
 
 export type Grant = VisitorGrant | ServiceGrant;
 
+export const SERVICE_GRANT: ServiceGrant = { proof: "service" };
+
 export type AccessProof = Grant["proof"];
 
 export interface DeliveryPolicy {

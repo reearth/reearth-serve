@@ -1,4 +1,4 @@
-import type { CompatError, ObjectInfo } from "../model";
+import type { CompatError, ExactHashes, ObjectInfo } from "../model";
 import type { ListPage } from "../layer";
 import { base64Of, crc32cBase64 } from "../hash";
 
@@ -110,16 +110,42 @@ export function objectResource(info: ObjectInfo, apiOrigin: string) {
   };
 }
 
-/** The headers a GCS XML API write answers with. */
-export function xmlObjectHeaders(info: ObjectInfo): Record<string, string> {
+function storedHeaders(info: ObjectInfo): Record<string, string> {
   return {
-    ETag: info.etag,
     "x-goog-generation": String(info.generation),
     "x-goog-metageneration": String(info.metageneration),
     "x-goog-stored-content-length": String(info.size),
     "x-goog-stored-content-encoding": info.contentEncoding ?? "identity",
-    ...(info.hashes && { "x-goog-hash": `crc32c=${crc32cBase64(info.hashes.crc32c)},md5=${base64Of(info.hashes.md5)}` }),
   };
+}
+
+const hashHeader = (hashes: ExactHashes) => `crc32c=${crc32cBase64(hashes.crc32c)},md5=${base64Of(hashes.md5)}`;
+
+/** The headers a GCS XML API write answers with. */
+export function xmlObjectHeaders(info: ObjectInfo): Record<string, string> {
+  return { ETag: info.etag, ...storedHeaders(info), ...(info.hashes && { "x-goog-hash": hashHeader(info.hashes) }) };
+}
+
+export type SentRead = { status: number; sentEncoding: string | null; storedEncoding: string | null; hashes: ExactHashes | null };
+
+/**
+ * A client checks `x-goog-hash` against the bytes it received (ADR-019 §3), so
+ * it goes only on a whole object sent in its stored encoding.
+ */
+export function readHashHeader(read: SentRead): string | null {
+  const encoding = (value: string | null) => (value === null || value === "identity" ? null : value);
+  if (read.status !== 200 || !read.hashes) return null;
+  return encoding(read.sentEncoding) === encoding(read.storedEncoding) ? hashHeader(read.hashes) : null;
+}
+
+/** Adds the object's stored headers, and its hash when {@link readHashHeader} allows, to a delivered read. */
+export function withReadHeaders(res: Response, info: ObjectInfo): Response {
+  for (const [name, value] of Object.entries(storedHeaders(info))) res.headers.set(name, value);
+  const hash = readHashHeader({
+    status: res.status, sentEncoding: res.headers.get("Content-Encoding"), storedEncoding: info.contentEncoding, hashes: info.hashes,
+  });
+  if (hash) res.headers.set("x-goog-hash", hash);
+  return res;
 }
 
 export function listResource(page: ListPage, apiOrigin: string) {
@@ -162,6 +188,19 @@ if (import.meta.vitest) {
     expect(res.status).toBe(404);
     expect(res.headers.get("Content-Type")).toBe("application/xml; charset=UTF-8");
     expect(await res.text()).toBe("<?xml version='1.0' encoding='UTF-8'?><Error><Code>NoSuchKey</Code><Message>No &#60;such&#62; key</Message></Error>");
+  });
+
+  const hashes: ExactHashes = { md5: new Uint8Array(16), crc32c: 0 };
+  test.each([
+    ["a whole identity read", { status: 200, sentEncoding: null, storedEncoding: null, hashes }, true],
+    ["a whole gzip passthrough", { status: 200, sentEncoding: "gzip", storedEncoding: "gzip", hashes }, true],
+    ["an identity read labelled identity", { status: 200, sentEncoding: "identity", storedEncoding: null, hashes }, true],
+    ["a range", { status: 206, sentEncoding: null, storedEncoding: null, hashes }, false],
+    ["a revalidation", { status: 304, sentEncoding: null, storedEncoding: null, hashes }, false],
+    ["a gzip object decompressed for the client", { status: 200, sentEncoding: null, storedEncoding: "gzip", hashes }, false],
+    ["an object with no stored hashes", { status: 200, sentEncoding: null, storedEncoding: null, hashes: null }, false],
+  ] as const)("%s sends x-goog-hash: %s", (_, read, sent) => {
+    expect(readHashHeader(read) !== null).toBe(sent);
   });
 
   test("a 401 carries a Bearer challenge", () => {

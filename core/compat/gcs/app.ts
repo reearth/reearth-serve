@@ -1,5 +1,7 @@
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import type { Deps } from "../../types";
+import { SERVICE_GRANT } from "../../access/grant";
+import { deliverAsset } from "../../file/handler";
 import { createHasher, base64Of, crc32cBase64, fromBase64 } from "../hash";
 import { objectLayer, type ObjectLayerDeps } from "../layer";
 import { MAX_LIST_RESULTS, type ListQuery } from "../list";
@@ -8,7 +10,9 @@ import { resumableUploads, type Chunk, type DeclaredHashes, type UploadStatus } 
 import { exchangeAssertion, gcsAuth, type GcsEnv, type TokenError } from "./auth";
 import { boundaryOf, MULTIPART_MAX_BYTES, parseRelated, readCapped } from "./multipart";
 import { objectPathOf, USER_META_PREFIX, WRITE_HEADERS } from "./signed-url";
-import { compatErrorResponse, gcsError, listResource, objectResource, surfaceOf, xmlObjectHeaders } from "./wire";
+import {
+  compatErrorResponse, gcsError, listResource, objectResource, surfaceOf, withReadHeaders, xmlObjectHeaders, type GcsSurface,
+} from "./wire";
 
 export type GcsDeps = ObjectLayerDeps & Pick<Deps, "signingSecret" | "credentialedOrigins" | "compatSignedPathPrefix">;
 
@@ -52,6 +56,15 @@ function generationMatchOf(c: Context<GcsEnv>): { ok: true; value: number | null
   if (raw === null) return { ok: true, value: null };
   return /^\d+$/.test(raw) ? { ok: true, value: Number(raw) } : { ok: false };
 }
+
+function generationOf(c: Context<GcsEnv>): { ok: true; value: number | null } | { ok: false } {
+  const raw = queryOf(c, "generation");
+  if (raw === null) return { ok: true, value: null };
+  return /^\d+$/.test(raw) ? { ok: true, value: Number(raw) } : { ok: false };
+}
+
+/** XML subresources of an object that a plain read must not answer with its bytes. */
+const XML_OBJECT_SUBRESOURCES = ["acl", "uploadId", "tagging"];
 
 type ObjectResource = {
   name?: unknown; contentType?: unknown; contentEncoding?: unknown; metadata?: unknown; crc32c?: unknown; md5Hash?: unknown;
@@ -107,11 +120,28 @@ export function gcsApp(deps: GcsDeps, apiOrigin: string) {
     return c.json(listResource(result.value, apiOrigin));
   });
 
+  async function readObject(c: Context<GcsEnv>, surface: GcsSurface, bucket: string, key: ObjectKey): Promise<Response> {
+    const generation = generationOf(c);
+    if (!generation.ok) return gcsError(surface, "invalid", "Invalid generation.");
+    const opened = await layerOf(c).open(bucket, key);
+    if (!opened.ok) return compatErrorResponse(surface, opened.error, `${bucket}/${key}`);
+    const missing = () => compatErrorResponse(surface, { code: "no_such_key" }, `${bucket}/${key}`);
+    if (generation.value !== null && generation.value !== opened.value.info.generation) return missing();
+    const res = await deliverAsset(deps.storage, c.req.raw, { resolved: opened.value.resolved, path: opened.value.path, grant: SERVICE_GRANT });
+    return res ? withReadHeaders(res, opened.value.info) : missing();
+  }
+
+  app.get("/download/storage/v1/b/:bucket/o/:object", (c) => {
+    const key = parseObjectKey(c.req.param("object"));
+    if (!key) return gcsError("json", "invalid", "Invalid object name.");
+    return readObject(c, "json", c.req.param("bucket"), key);
+  });
+
   app.get("/storage/v1/b/:bucket/o/:object", async (c) => {
-    if (queryOf(c, "alt") === "media") return gcsError("json", "not_implemented");
     const bucket = c.req.param("bucket");
     const key = parseObjectKey(c.req.param("object"));
     if (!key) return gcsError("json", "invalid", "Invalid object name.");
+    if (queryOf(c, "alt") === "media") return readObject(c, "json", bucket, key);
     const result = await layerOf(c).head(bucket, key);
     if (!result.ok) return compatErrorResponse("json", result.error, `${bucket}/${key}`);
     return c.json(objectResource(result.value, apiOrigin));
@@ -203,6 +233,16 @@ export function gcsApp(deps: GcsDeps, apiOrigin: string) {
     }
     if (!result.ok) return compatErrorResponse("xml", result.error, `${target.bucket}/${target.key}`);
     return c.body(null, 200, xmlObjectHeaders(result.value));
+  });
+
+  app.get("*", (c) => {
+    if (surfaceOf(c.req.path) === "json") return gcsError("json", "not_implemented");
+    const path = c.get("signedObjectPath") ?? objectPathOf(new URL(c.req.url).pathname);
+    if (path !== null && !path.includes("/")) return gcsError("xml", "not_implemented");
+    if (XML_OBJECT_SUBRESOURCES.some((name) => c.req.query(name) !== undefined)) return gcsError("xml", "not_implemented");
+    const target = xmlObjectOf(path);
+    if (!target) return gcsError("xml", "invalid", "Invalid object name.");
+    return readObject(c, "xml", target.bucket, target.key);
   });
 
   app.all("*", (c) => gcsError(surfaceOf(c.req.path), "not_implemented"));
