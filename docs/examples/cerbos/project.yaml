@@ -9,7 +9,7 @@ resourcePolicy:
     - actions: [create_asset, update_asset, delete_asset, extract_asset, manage_hosts, retry_job]
       effect: EFFECT_ALLOW
       roles: [editor, admin, owner]
-    - actions: [manage_webhooks]
+    - actions: [manage_webhooks, manage_compat]
       effect: EFFECT_ALLOW
       roles: [admin, owner]
     - actions: [delete]

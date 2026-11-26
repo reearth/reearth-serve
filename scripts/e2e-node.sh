@@ -26,6 +26,7 @@ DELIVERY_TOKEN_KEYS="${DELIVERY_TOKEN_KEYS:-$E2E_DELIVERY_TOKEN_KEYS}"
 # such as localhost as a public suffix, so each {id}.localhost is its own site
 # and the site-isolation check's public-suffix override is the honest setting.
 SITE_HOST_SUFFIX="${SITE_HOST_SUFFIX:-.localhost:${PORT}}"
+COMPAT_GCS_HOST="${COMPAT_GCS_HOST:-storage.localhost:${PORT}}"
 
 cleanup() {
   if [ -n "${SERVER_PID:-}" ]; then
@@ -97,6 +98,7 @@ SITE_HOST_SUFFIX="${SITE_HOST_SUFFIX}" \
 SITE_REGISTRABLE_DOMAIN="localhost" \
 SITE_DOMAIN_IS_PUBLIC_SUFFIX="true" \
 SITE_DNS_RESOLVER_URL="${DOH_URL}" \
+COMPAT_GCS_HOST="${COMPAT_GCS_HOST}" \
   npm run start:node &
 SERVER_PID=$!
 
@@ -129,6 +131,7 @@ E2E_ENDPOINT="${ENDPOINT}" \
 E2E_MOCK_OIDC="http://localhost:${MOCK_OIDC_PORT}" \
 E2E_INTERNAL_API_SECRET="${INTERNAL_API_SECRET}" \
 E2E_SITE_HOST_SUFFIX="${SITE_HOST_SUFFIX}" \
+E2E_COMPAT_GCS_HOST="${COMPAT_GCS_HOST}" \
 E2E_MOCK_DOH="http://localhost:${MOCK_DOH_PORT}" \
 E2E_PRESIGNED="false" \
 E2E_CONTAINER="false" \

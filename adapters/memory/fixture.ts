@@ -18,6 +18,7 @@ import { hashPassword } from "../../core/access/password";
 import type { Session, SessionStore } from "../../core/session/repository";
 import { CERTIFICATE_RELEASED, type SiteHost, type SiteHostPatch, type SiteHostStore } from "../../core/site/repository";
 import { MemoryFileStorage } from "./storage";
+import { MemoryCompatStore } from "./compat";
 import { MemoryKeyValue } from "./memory-kv";
 import { MemoryDnsResolver } from "./dns";
 import { MemoryCustomHostnames } from "./custom-hostnames";
@@ -361,6 +362,7 @@ export async function fixture(overrides?: Partial<Deps>) {
   const storage = new MemoryFileStorage();
   const siteHosts = new MemorySiteHostStore((id) => metadata.assets.has(id));
   const cache = new MemoryKeyValue();
+  const compat = new MemoryCompatStore();
   // Custom domains (ADR-013 B5): a resolver with no records — a test publishes
   // the one it wants found — and a provisioner that issues instantly.
   const dns = new MemoryDnsResolver();
@@ -420,6 +422,7 @@ export async function fixture(overrides?: Partial<Deps>) {
       async deleteAsset({ asset, releasedAt }) {
         metadata.assets.delete(asset.id);
         for (const [id, v] of versions.versions) if (v.assetId === asset.id) versions.versions.delete(id);
+        compat.dropAsset(asset.id);
         return { releasedSiteHosts: siteHosts.releaseByAsset(asset.id, releasedAt ?? Date.now()) };
       },
     },
@@ -443,6 +446,8 @@ export async function fixture(overrides?: Partial<Deps>) {
     cache,
     signingSecret: SIGNING_SECRET,
     credentialedOrigins: [],
+    compat,
+    compatApiHost: undefined,
     sessions: new MemorySessionStore(),
     sessionTtlSeconds: 60,
     internalApiSecret: undefined,
@@ -454,7 +459,7 @@ export async function fixture(overrides?: Partial<Deps>) {
     ...overrides,
   };
   return {
-    app: createApp(deps), deps, metadata, versions, storage, siteHosts, cache, geojson,
+    app: createApp(deps), deps, metadata, versions, storage, siteHosts, cache, geojson, compat,
     // The overridden instances when a test supplied its own, so a test can
     // always assert against the ones the app actually uses.
     dns: (deps.dns as MemoryDnsResolver),

@@ -8,6 +8,7 @@ import {
   projectResponseSchema, projectListResponseSchema, idParamSchema, projectListQuerySchema, createProjectBodySchema,
 } from "../../shared/openapi";
 import { registerProjectHostRoutes } from "../site/handler";
+import { registerProjectCompatRoutes } from "../compat/handler";
 import { jsonError, jsonResponse } from "../openapi";
 
 export const projectRoutes = new Hono<AppEnv>();
@@ -15,6 +16,7 @@ export const projectRoutes = new Hono<AppEnv>();
 // Site hosts across the project (ADR-013 B6). Registered from core/site so the
 // whole hosts API reads in one file.
 registerProjectHostRoutes(projectRoutes);
+registerProjectCompatRoutes(projectRoutes);
 
 projectRoutes.get("/",
   describeRoute({
@@ -123,7 +125,7 @@ projectRoutes.delete("/:id",
 
     const access = await authorizeProject(accessCtx(c), c.req.valid("param").id, "delete");
     if (!access.ok) return deniedResponse(c, access, { notFound: "Project not found or not authorized" });
-    await deleteProject(c.get("projects"), access.value.id);
+    await deleteProject(c.get("projects"), c.get("compat"), access.value.id);
     return c.body(null, 204);
   },
 );
