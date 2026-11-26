@@ -11,7 +11,7 @@
 //	E2E_GCS_REVOKE_URL    (revoked) the REST URL that revokes the credential
 //	E2E_GCS_REVOKE_TOKEN  (revoked) an admin bearer token for that URL
 //	E2E_COMPAT_SIGNED_PATH_PREFIX  (signed-put) COMPAT_SIGNED_PATH_PREFIX of that server, if set
-//	E2E_GZIP_PASSTHROUGH  (read) "false" where a proxy decodes gzip in front of Serve, as the Vite dev server does
+//	E2E_GZIP_PASSTHROUGH  (read) "false" where a proxy rewrites gzip responses in front of Serve, as under wrangler dev, where ReadCompressed(true) receives decompressed bytes (see e2e/compression.test.ts)
 //
 // The compat host is a Host header on the e2e server's port, and its name
 // need not resolve. Every connection is dialled to E2E_ENDPOINT's address

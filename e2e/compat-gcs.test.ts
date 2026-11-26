@@ -12,7 +12,7 @@ const run = promisify(execFile);
 const COMPAT_HOST = process.env.E2E_COMPAT_GCS_HOST;
 const SIGNED_PATH_PREFIX = process.env.E2E_COMPAT_SIGNED_PATH_PREFIX;
 const GO = await run("go", ["version"]).then(() => true, () => false);
-// Under wrangler dev the Vite dev server decodes gzip in front of the Worker (see e2e/compression.test.ts).
+// Under wrangler dev, ReadCompressed(true) receives decompressed bytes: the dev server rewrites gzip responses in front of the Worker (see e2e/compression.test.ts).
 const NODE_RUNTIME = process.env.E2E_NODE_RUNTIME === "true";
 
 if (COMPAT_HOST && !GO) {
