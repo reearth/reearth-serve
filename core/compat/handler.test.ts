@@ -28,6 +28,13 @@ async function compatApp(role: Role, compat = new MemoryCompatStore()) {
 }
 
 describe("compat management routes", () => {
+  test.each(["storage", "upload", "download", "batch"])("a new bucket named %s, an API path prefix, is refused", async (name) => {
+    const { call, compat } = await compatApp("admin");
+    const res = await call("POST", "/compat/buckets", { name });
+    expect(res.status).toBe(400);
+    expect(compat.buckets.size).toBe(0);
+  });
+
   test("a bucket deleted while its credential is issued answers 404 and leaves no credential for a recreated bucket", async () => {
     const compat = new DeletesAfterRead();
     const { call } = await compatApp("admin", compat);
