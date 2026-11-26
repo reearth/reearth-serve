@@ -20,6 +20,8 @@ INSERT INTO compat_hashes_new (object_ref, asset_id, generation, md5, crc32c)
     FROM compat_hashes AS h
     LEFT JOIN asset_versions AS v ON v.id = h.object_ref AND v.asset_id = h.asset_id;
 
+-- SQLite cannot drop NOT NULL in place; the rows were copied into compat_hashes_new above.
+-- atlas:nolint DS102
 DROP TABLE compat_hashes;
 ALTER TABLE compat_hashes_new RENAME TO compat_hashes;
 
