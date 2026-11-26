@@ -1,6 +1,12 @@
-import { describe, expect, test } from "vitest";
+import { afterEach, describe, expect, test } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { NodeSqlClient, createSqliteClient } from "./sqlite-node";
+import { appendFileSync, cpSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import {
+  DOMAIN_MIGRATIONS, MigrationDrift, NODE_MIGRATIONS, NodeSqlClient, UnledgeredDatabase,
+  createSqliteClient, type MigrationSource,
+} from "./sqlite-node";
 
 function client(): NodeSqlClient {
   const db = new DatabaseSync(":memory:");
@@ -65,5 +71,105 @@ describe("NodeSqlClient", () => {
     expect(rows.map((r) => r.name)).toEqual(
       expect.arrayContaining(["assets", "asset_versions", "cleanup_pending", "jobs", "members", "projects", "storage_usage", "workspaces"]),
     );
+  });
+});
+
+describe("createSqliteClient migration ledger", () => {
+  const dirs: string[] = [];
+  function tempDir(): string {
+    const dir = mkdtempSync(join(tmpdir(), "serve-ledger-"));
+    dirs.push(dir);
+    return dir;
+  }
+  afterEach(() => {
+    for (const dir of dirs.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  function copyOf(source: MigrationSource): MigrationSource {
+    const dir = tempDir();
+    cpSync(source.dir, dir, { recursive: true });
+    return { set: source.set, dir };
+  }
+
+  async function tables(sql: NodeSqlClient): Promise<string[]> {
+    const { rows } = await sql.execute(
+      "SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT GLOB 'sqlite_*' ORDER BY name",
+    );
+    return rows.map((r) => String(r.name));
+  }
+
+  async function ledger(sql: NodeSqlClient): Promise<string[]> {
+    const { rows } = await sql.execute("SELECT set_name, name FROM _serve_migrations ORDER BY set_name, name");
+    return rows.map((r) => `${r.set_name}/${r.name}`);
+  }
+
+  test("a file database reopens: the second boot applies nothing and keeps the data", async () => {
+    const path = join(tempDir(), "serve.sqlite");
+    const sources = [DOMAIN_MIGRATIONS, NODE_MIGRATIONS];
+
+    const first = createSqliteClient(path, sources);
+    await first.execute("INSERT INTO kv (key, value) VALUES (?1, ?2)", ["k", "v"]);
+    const appliedFirst = await ledger(first);
+    expect(appliedFirst).toContain("node/0001_create_queue_and_kv.sql");
+    expect(appliedFirst).toContain("domain/0001_create_initial_tables.sql");
+
+    const second = createSqliteClient(path, sources);
+    expect(await ledger(second)).toEqual(appliedFirst);
+    expect((await second.execute("SELECT value FROM kv WHERE key = ?1", ["k"])).rows).toEqual([{ value: "v" }]);
+  });
+
+  test("a later boot applies only the files added since", async () => {
+    const path = join(tempDir(), "serve.sqlite");
+    const source = copyOf(NODE_MIGRATIONS);
+    createSqliteClient(path, [source]);
+
+    writeFileSync(join(source.dir, "9999_extra.sql"), "CREATE TABLE extra (id TEXT PRIMARY KEY);");
+    const sql = createSqliteClient(path, [source]);
+    expect(await tables(sql)).toContain("extra");
+    expect(await ledger(sql)).toContain("node/9999_extra.sql");
+  });
+
+  test("an applied file that was edited fails with MigrationDrift naming set and file", () => {
+    const path = join(tempDir(), "serve.sqlite");
+    const source = copyOf(DOMAIN_MIGRATIONS);
+    createSqliteClient(path, [source]);
+
+    appendFileSync(join(source.dir, "0003_add_cleanup_pending.sql"), "\n-- edited\n");
+    let error: unknown;
+    try {
+      createSqliteClient(path, [source]);
+    } catch (e) {
+      error = e;
+    }
+    expect(error).toBeInstanceOf(MigrationDrift);
+    expect(error).toMatchObject({ set: "domain", file: "0003_add_cleanup_pending.sql" });
+  });
+
+  test("a file that fails halfway leaves no ledger row and no partial table", async () => {
+    const path = join(tempDir(), "serve.sqlite");
+    const dir = tempDir();
+    writeFileSync(join(dir, "0001_good.sql"), "CREATE TABLE good (id TEXT);");
+    writeFileSync(join(dir, "0002_bad.sql"), "CREATE TABLE half (id TEXT);\nINSERT INTO missing VALUES (1);");
+    const source: MigrationSource = { set: "node", dir };
+
+    expect(() => createSqliteClient(path, [source])).toThrow(/missing/);
+
+    const sql = new NodeSqlClient(new DatabaseSync(path));
+    expect(await tables(sql)).toEqual(["_serve_migrations", "good"]);
+    expect(await ledger(sql)).toEqual(["node/0001_good.sql"]);
+  });
+
+  test("a database with tables but no ledger is refused", () => {
+    const path = join(tempDir(), "serve.sqlite");
+    new DatabaseSync(path).exec("CREATE TABLE assets (id TEXT PRIMARY KEY)");
+    expect(() => createSqliteClient(path)).toThrow(UnledgeredDatabase);
+  });
+
+  test("files other than .sql in a migration directory are ignored", async () => {
+    const source = copyOf(NODE_MIGRATIONS);
+    writeFileSync(join(source.dir, "atlas.sum"), "h1:not-sql\n");
+    writeFileSync(join(source.dir, "README.md"), "# not sql\n");
+    const sql = createSqliteClient(":memory:", [source]);
+    expect(await ledger(sql)).toEqual(["node/0001_create_queue_and_kv.sql"]);
   });
 });
