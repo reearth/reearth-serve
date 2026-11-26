@@ -149,6 +149,11 @@ export const DOMAIN_MIGRATIONS: MigrationSource = {
   dir: fileURLToPath(new URL("../cloudflare/migrations", import.meta.url)),
 };
 
+/**
+ * Tables that only exist where Cloudflare KV and Queues do not: `kv` and
+ * `queue_messages`. Kept out of the D1 migrations on purpose; see the
+ * migration file's header.
+ */
 export const NODE_MIGRATIONS: MigrationSource = {
   set: "node",
   dir: fileURLToPath(new URL("../sql/migrations", import.meta.url)),
