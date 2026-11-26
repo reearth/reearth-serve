@@ -5,7 +5,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
 import { BASE } from "./helpers";
-import { api, issuedKeyFile, onHost, selfSignedBearer } from "./compat-helpers";
+import { api, issuedKeyFile, onHost, selfSignedBearer, type HostResponse } from "./compat-helpers";
 
 const run = promisify(execFile);
 const COMPAT_HOST = process.env.E2E_COMPAT_GCS_HOST;
@@ -27,6 +27,13 @@ async function written(key = "assets/ab/cdef/r.txt", body = BODY, contentType = 
 }
 
 const virtualHost = (bucket: string) => `${bucket}.${OBJECTS}`;
+
+const VOLATILE = new Set(["date", "connection", "keep-alive", "transfer-encoding"]);
+
+function sameAnswer(a: HostResponse, b: HostResponse): boolean {
+  const stable = (r: HostResponse) => JSON.stringify([r.status, r.body, Object.entries(r.headers).filter(([k]) => !VOLATILE.has(k)).sort()]);
+  return stable(a) === stable(b);
+}
 
 describe.runIf(COMPAT_HOST && OBJECTS)("public objects host", () => {
   test("a virtual-host read serves the bytes and the ETag /files serves", async () => {
@@ -63,32 +70,45 @@ describe.runIf(COMPAT_HOST && OBJECTS)("public objects host", () => {
     expect(again.body).toBe("");
   });
 
-  test("a password site answers the challenge /files answers", async () => {
+  test("a password site answers anonymously exactly as a missing key, and Basic sent up front opens it", async () => {
     const { admin, bucket, key, assetId, filename } = await written("sites/site.zip", EMPTY_ZIP, "application/zip");
     expect((await api(admin, "PATCH", `/assets/${assetId}`, { access: "password", password: "e2e-objects-host" })).status).toBe(200);
-    const files = await fetch(`${BASE}/files/${assetId}/${filename}`);
-    const res = await onHost(virtualHost(bucket), `/${key}`, {});
-    expect(res.status).toBe(401);
-    expect(res.status).toBe(files.status);
-    expect(res.headers["www-authenticate"]).toBe(files.headers.get("WWW-Authenticate"));
-    expect(JSON.parse(res.body)).toEqual(await files.json());
+    expect((await fetch(`${BASE}/files/${assetId}/${filename}`)).status).toBe(401);
+    const miss = await onHost(virtualHost(bucket), "/sites/none.zip", {});
+    for (const headers of [{}, { Authorization: `Basic ${btoa("x:wrong")}` }] as Record<string, string>[]) {
+      const res = await onHost(virtualHost(bucket), `/${key}`, headers);
+      expect(sameAnswer(res, miss)).toBe(true);
+    }
     const basic = await onHost(virtualHost(bucket), `/${key}`, { Authorization: `Basic ${btoa("x:e2e-objects-host")}` });
     expect(basic.status).toBe(200);
     expect(basic.body).toBe(EMPTY_ZIP);
   });
 
-  test("a restricted object needs a delivery token, which reads through the query", async () => {
+  test("a restricted object answers without a proof exactly as a missing key, and a delivery token reads it", async () => {
     const { admin, bucket, key, assetId } = await written();
     expect((await api(admin, "PATCH", `/assets/${assetId}`, { access: "restricted" })).status).toBe(200);
+    const miss = await onHost(virtualHost(bucket), "/assets/none.txt", {});
     const refused = await onHost(virtualHost(bucket), `/${key}`, { Authorization: `Bearer ${admin}` });
-    expect(refused.status).toBe(401);
-    expect(refused.body).not.toContain(BODY);
+    expect(sameAnswer(refused, miss)).toBe(true);
     const minted = await api(admin, "POST", `/assets/${assetId}/signed-urls`, { expiresIn: 600 });
     expect(minted.status).toBe(200);
     const { token } = await minted.json() as { token: string };
     const read = await onHost(virtualHost(bucket), `/${key}?serve_token=${encodeURIComponent(token)}`, {});
     expect(read.status).toBe(200);
     expect(read.body).toBe(BODY);
+  });
+
+  test("an HTML or SVG object downloads as an attachment in a sandbox in both URL forms", async () => {
+    for (const [name, type] of [["page.html", "text/html"], ["image.svg", "image/svg+xml"]]) {
+      const { bucket } = await written(`active/${name}`, "<b>x</b>", type);
+      for (const [host, path] of [[virtualHost(bucket), `/active/${name}`], [OBJECTS!, `/${bucket}/active/${name}`]]) {
+        const res = await onHost(host, path, {});
+        expect(res.status).toBe(200);
+        expect(res.headers["content-disposition"]).toBe(`attachment; filename="${name}"`);
+        expect(res.headers["content-security-policy"]).toBe("sandbox");
+        expect(res.headers["x-content-type-options"]).toBe("nosniff");
+      }
+    }
   });
 
   test("PUT on the objects host answers 405 and changes nothing", async () => {
