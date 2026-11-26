@@ -96,7 +96,7 @@ describe("objects host", () => {
   test("a restricted object is refused as on a site host, and an OIDC-style bearer is not a proof here", async () => {
     const { f, ids } = await written();
     await f.metadata.setProtection(ids["media/assets/ab/r.txt"], { access: "restricted" });
-    for (const headers of [{}, { Authorization: "Bearer not-a-delivery-token" }]) {
+    for (const headers of [{}, { Authorization: "Bearer not-a-delivery-token" }] as Record<string, string>[]) {
       const res = await virtual(f, "/assets/ab/r.txt", { headers });
       expect(res.status).toBe(401);
       expect(res.headers.get("WWW-Authenticate")).toBe("ServeToken");
