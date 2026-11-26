@@ -6,6 +6,7 @@ import type { AssetMetadata, AssetVersion, StoredFile } from "../asset/model";
 import type { FileStorage } from "../asset/repository";
 import { resolveAssetVersion } from "../asset/usecase";
 import type { ResolvedAsset } from "../asset/usecase/resolve-version";
+import type { OpenObject } from "../compat/layer";
 import { legacyThumbKey, versionThumbKey } from "../asset/usecase/shared";
 import { cacheControlFor, etagMatches, representationEtag, thumbnailCacheControl, type CachePolicy } from "./caching";
 import { addVary, applyCors, preflightResponse, type CorsPolicy } from "./cors";
@@ -733,35 +734,25 @@ interface ServeOptions extends ReadConditions {
   cacheControl: string;
   storage: FileStorage;
   siteHost: boolean;
-  /** In place of the stored object's tag, quoted. */
-  etag?: string;
+  quotedEtag?: string;
   /** Send an encoding other than gzip as stored, labelled with it, rather than unlabelled. */
   labelStoredEncoding?: boolean;
 }
 
+const SERVICE_GRANT: ServiceGrant = { proof: "service" };
+
 export interface DeliveryTarget {
-  resolved: ResolvedAsset;
-  /** The uploaded object's own path: its filename, which `locate` maps to the main file in every layout. */
-  path: string;
-  grant: ServiceGrant;
-  /** The caller's ETag for the object, quoted; `If-None-Match` compares against it. */
-  etag: string;
+  object: OpenObject;
+  quotedEtag: string;
 }
 
-/**
- * The `/files` delivery of one asset to a caller that already holds
- * `read_asset` on it (ADR-019 §6): ETag, `If-None-Match`, `Range` and gzip
- * passthrough as on `/files`, under the service grant's policy, and none of
- * the visitor's checks, site rules or fallbacks. The caller authorizes; only
- * `resolveAccess`, inside `serveRoute`, grants a visitor. Null when the bytes
- * are gone, for the caller to answer in its own protocol.
- */
-export async function deliverAsset(storage: FileStorage, request: Request, target: DeliveryTarget): Promise<Response | null> {
-  const { asset, version } = target.resolved;
+export async function deliverAsset(storage: FileStorage, request: Request, { object, quotedEtag }: DeliveryTarget): Promise<Response | null> {
+  const { asset, version } = object.resolved;
   // Only the layout of the version the caller described, so its headers never name other bytes.
-  const located = await locate(storage, version ? versionedLayout(asset, version) : legacyLayout(asset), target.path);
+  const layout = version ? versionedLayout(asset, version) : legacyLayout(asset);
+  const located = await locate(storage, layout, layout.filename);
   if (!located) return null;
-  const policy = deliveryPolicy(target.grant, toUnixSeconds(Date.now()));
+  const policy = deliveryPolicy(SERVICE_GRANT, toUnixSeconds(Date.now()));
   const conditions = conditionsOf(request);
   const res = await sendLocated(located, {
     ...conditions,
@@ -770,7 +761,7 @@ export async function deliverAsset(storage: FileStorage, request: Request, targe
     cacheControl: cacheControlFor({ pinned: false, contentType: located.contentType }, policy),
     storage,
     siteHost: false,
-    etag: target.etag,
+    quotedEtag,
     labelStoredEncoding: true,
   });
   if (res.status === 404) return null;
@@ -786,7 +777,7 @@ async function sendLocated(located: Located, opts: ServeOptions): Promise<Respon
   // them and asked for the whole file; every other path decodes.
   const passthrough = isGzipStored && clientAcceptsGzip && !rangeHeader;
 
-  const etag = opts.etag ?? representationEtag(file.etag, { transformed: isGzipStored && !passthrough });
+  const etag = opts.quotedEtag ?? representationEtag(file.etag, { transformed: isGzipStored && !passthrough });
 
   const common: Record<string, string> = {
     "Content-Type": contentType,

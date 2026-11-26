@@ -1,6 +1,5 @@
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import type { Deps } from "../../types";
-import { SERVICE_GRANT } from "../../access/grant";
 import { deliverAsset } from "../../file/handler";
 import { createHasher, base64Of, crc32cBase64, fromBase64 } from "../hash";
 import { objectLayer, type ObjectLayerDeps } from "../layer";
@@ -121,8 +120,8 @@ export function gcsApp(deps: GcsDeps, apiOrigin: string) {
     if (!opened.ok) return compatErrorResponse(surface, opened.error, `${bucket}/${key}`);
     const missing = () => compatErrorResponse(surface, { code: "no_such_key" }, `${bucket}/${key}`);
     if (generation.value !== null && generation.value !== opened.value.info.generation) return missing();
-    const { resolved, path, info } = opened.value;
-    const res = await deliverAsset(deps.storage, c.req.raw, { resolved, path, grant: SERVICE_GRANT, etag: etagHeader(info) });
+    const { info } = opened.value;
+    const res = await deliverAsset(deps.storage, c.req.raw, { object: opened.value, quotedEtag: etagHeader(info) });
     return res ? withReadHeaders(res, info) : missing();
   }
 

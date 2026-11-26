@@ -102,7 +102,7 @@ describe("put and head", () => {
 });
 
 describe("open", () => {
-  test("names the asset, version and path delivery serves, with the head's info", async () => {
+  test("names the asset and version delivery serves, with the head's info", async () => {
     const f = await layerFixture();
     written(await f.editor.put(BUCKET, key("k.txt"), meta(), body("one")));
     const second = written(await f.editor.put(BUCKET, key("k.txt"), meta(), body("two!")));
@@ -111,7 +111,6 @@ describe("open", () => {
     const [asset] = f.assets();
     const latest = f.versionsOf(asset.id).at(-1)!;
     expect(opened.value.info).toEqual(second);
-    expect(opened.value.path).toBe("k.txt");
     expect(opened.value.resolved.asset.id).toBe(asset.id);
     expect(opened.value.resolved.version?.id).toBe(latest.id);
   });

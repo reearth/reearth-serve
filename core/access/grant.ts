@@ -15,12 +15,9 @@ export type VisitorGrant =
   | { proof: "bearer" }
   | { proof: "token"; exp: UnixSeconds };
 
-/** A compat API read, after the front end authorized `read_asset` for its service principal. */
 export type ServiceGrant = { proof: "service" };
 
 export type Grant = VisitorGrant | ServiceGrant;
-
-export const SERVICE_GRANT: ServiceGrant = { proof: "service" };
 
 export type AccessProof = Grant["proof"];
 

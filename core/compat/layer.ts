@@ -40,7 +40,9 @@ export type UploadCommit = CommitIds & {
   leftovers(): string[];
 };
 
-export type OpenObject = { resolved: ResolvedAsset; path: string; info: ObjectInfo };
+declare const openedByTheLayer: unique symbol;
+
+export type OpenObject = { readonly resolved: ResolvedAsset; readonly info: ObjectInfo; readonly [openedByTheLayer]: true };
 
 export interface ObjectLayer {
   head(bucket: string, key: ObjectKey): Promise<Result<ObjectInfo>>;
@@ -312,7 +314,7 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
     const r = await resolve(auth.value.bucket, key);
     const info = r && await describe(auth.value.bucket, r);
     if (!r || !info) return fail({ code: "no_such_key" });
-    return { ok: true, value: { resolved: { asset: r.asset, version: r.version }, path: r.version?.filename ?? r.asset.filename, info } };
+    return { ok: true, value: { resolved: { asset: r.asset, version: r.version }, info } as OpenObject };
   }
 
   return {
