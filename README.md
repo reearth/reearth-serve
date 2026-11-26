@@ -103,7 +103,7 @@ The production endpoint is `https://serve.reearth.land`. Point the CLI at it via
 | KV | Key-Value | Sessions, Upload Sessions | TTL auto-expiration for ephemeral data |
 | R2 | Object Storage | File content | Zero egress cost, Range request support |
 
-See [ADR-003](./docs/adr/003-kv-to-d1-migration.md) for the D1 migration rationale, [ADR-005](./docs/adr/005-asset-versioning.md) for asset versioning, [ADR-006](./docs/adr/006-derived-asset-and-asset-edge.md) for derived assets and dependency graphs, and [ADR-007](./docs/adr/007-webhooks-and-event-log.md) for webhooks and event logging.
+See [ADR-003](./docs/adr/003-kv-to-d1-migration.md) for the D1 migration rationale, [ADR-005](./docs/adr/005-asset-versioning.md) for asset versioning, [ADR-006](./docs/adr/006-derived-asset-and-asset-edge.md) for derived assets and dependency graphs, [ADR-007](./docs/adr/007-webhooks-and-event-log.md) for webhooks and event logging, and [ADR-020](./docs/adr/020-atlas-migrations.md) for how migrations are checked.
 
 ### Running on Node (API only)
 

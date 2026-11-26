@@ -28,6 +28,8 @@ npm run dev        # Start dev server with HMR (port 5173)
 | `npm run start:node` | Start the Node runtime (API only, port 8788) |
 | `npm run test:e2e` | E2E tests (requires running dev server) |
 | `npm run typecheck` | TypeScript type check |
+| `npm run db:check` | Check migration files against `origin/main` (see Schema Migrations) |
+| `npm run db:hash` | Rewrite both `atlas.sum` files after adding a migration |
 | `npm run typegen` | Generate Wrangler + React Router types |
 | `npm run cli -- <command>` | Run CLI commands |
 
@@ -77,35 +79,72 @@ Metadata is stored in Cloudflare D1 (SQLite). Sessions and upload sessions use K
 
 ### Schema Migrations
 
-The domain schema lives in `adapters/cloudflare/migrations/` and is managed by
-wrangler. `adapters/sql/migrations/` holds the `kv` and `queue_messages` tables,
-which stand in for Cloudflare KV and Queues — the Node runtime applies both
-directories, and D1 must never get the second one.
+The domain schema lives in `adapters/cloudflare/migrations/`. wrangler applies
+it to D1 and records each applied file in D1's `d1_migrations` table.
+`adapters/sql/migrations/` holds the `kv` and `queue_messages` tables, which
+stand in for Cloudflare KV and Queues. The Node runtime and the unit tests
+apply both directories. D1 must never get the second one.
+
+[Atlas](https://github.com/ariga/atlas) checks the files but never applies
+them (see [ADR-020](./docs/adr/020-atlas-migrations.md)). Each directory has an
+`atlas.sum`, and `npm run db:check` runs these checks against `origin/main`
+(set `DB_CHECK_BASE` to compare with another ref):
+
+- file names are `NNNN_name.sql`, and no two files share a prefix;
+- a file on the base branch is unchanged;
+- a new file sorts after the base branch's highest prefix;
+- `atlas.sum` matches the files, and the files replay on SQLite;
+- the new files contain no destructive change.
+
+CI runs the same command, and deploy waits for it. The first run downloads the
+Atlas binary pinned in `tools/atlas.lock`, so it needs network access. It needs
+no Atlas account.
+
+To add a domain migration:
 
 ```bash
-# Create a new migration
 npx wrangler d1 migrations create reearth-serve <description>
+# edit the new file, then:
+npm run db:hash
+npm run db:check
+```
 
+A Node-only migration goes in `adapters/sql/migrations/`, created by hand with
+the next free prefix and a name that no domain migration uses.
+
+Rules:
+
+- **Never edit a merged migration.** Add a new one. A changed file replays
+  differently on a fresh database, and `db:check` fails on it.
+- **Renumber on a collision.** If another PR merged the same prefix first,
+  rename your file to the next free prefix and rerun `npm run db:hash`.
+- **Do not use `atlas migrate diff`.** Its output for this schema fails on D1,
+  and its timestamp file names break the `NNNN` order.
+- **Waive a destructive change only on purpose.** A table rebuild (create a new
+  table, copy, drop the old one) trips the lint. Put a
+  `-- atlas:nolint <code>` line that names each analyzer it waives, such as
+  `DS102` for a dropped table, with a comment line beside it that says why. A
+  bare `-- atlas:nolint` waives every analyzer and fails `db:check`.
+
+```sql
+-- Rebuild assets to change a column type; the data is copied above.
+-- atlas:nolint DS102
+DROP TABLE assets_old;
+```
+
+Other commands:
+
+```bash
 # Apply locally (development)
 npx wrangler d1 migrations apply reearth-serve --local
-
-# Apply to production
-npx wrangler d1 migrations apply reearth-serve --remote
 
 # List pending migrations
 npx wrangler d1 migrations list reearth-serve --remote
 ```
 
-Migrations are automatically applied before deployment in `scripts/deploy.sh`.
-
-The latest domain migration is `0004_add_site_hosts.sql` (ADR-013 B2). It adds
-a table only, so it is backward-compatible and can be applied before the deploy:
-`npx wrangler d1 migrations apply reearth-serve --remote`. The Node runtime and
-the unit tests pick it up automatically — both apply
-`adapters/cloudflare/migrations/` wholesale — so nothing outside D1 needs a
-manual step.
-
-When developing locally, the E2E test script (`scripts/e2e.sh`) automatically applies migrations after clearing miniflare state.
+`scripts/deploy.sh` applies pending migrations to remote D1 before each
+deploy. The E2E script (`scripts/e2e.sh`) clears the local state and applies
+them to a local D1.
 
 ### Schema Changes
 
@@ -120,8 +159,9 @@ CI runs on push/PR to `main`:
 - TypeScript type check + unit tests
 - Production build
 - Go lint + tests for containers
+- Migration checks (`npm run db:check`)
 
-Deployment is triggered on push to `main` via `scripts/deploy.sh`:
+Deployment is triggered on push to `main`, once the type check, build and migration checks pass, via `scripts/deploy.sh`:
 1. D1 migrations are applied (`--remote`)
 2. Code is built and deployed to Cloudflare Workers
 
