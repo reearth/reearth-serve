@@ -20,20 +20,13 @@ export function objectsHost(reader: ObjectReader, deliver: (request: Request) =>
     const url = new URL(request.url);
     const target = targetOf(host, url.pathname);
     const located = target && await reader.locate(target.bucket, target.key);
-    if (!located) return notFound();
+    if (!located) return missingObjectResponse();
     const res = await deliver(filesRequest(request, url, located));
-    if (!refused(res.status)) return res;
+    if (res.status !== 404) return res;
     await res.body?.cancel().catch(() => {});
-    return notFound();
+    return missingObjectResponse();
   };
 }
-
-/**
- * Keys are names, not capabilities, so a challenge or a refusal would confirm
- * that a protected object exists. Every one reads as a missing key; a 416
- * comes only after access was granted.
- */
-const refused = (status: number) => status >= 400 && status !== 416;
 
 function targetOf(host: ObjectsHost, rawPath: string): { bucket: string; key: ObjectKey } | null {
   let path: string;
@@ -68,8 +61,11 @@ function methodNotAllowed(): Response {
   });
 }
 
-/** One answer for an unknown bucket, an unknown key and every refusal, and `no-store`, since the key may be written a moment later. */
-function notFound(): Response {
+/**
+ * One answer for an unknown bucket, an unknown key and an access refusal, and
+ * `no-store`, since the key may be written a moment later.
+ */
+export function missingObjectResponse(): Response {
   return new Response(JSON.stringify({ error: "File not found" }), {
     status: 404,
     headers: {
