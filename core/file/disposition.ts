@@ -14,6 +14,8 @@
  * needs its HTML to render.
  */
 
+import { essenceOf, OCTET_STREAM, parseMediaType, type MediaType } from "./media-type";
+
 export const INLINE_TYPES: ReadonlySet<string> = new Set([
   "image/png",
   "image/jpeg",
@@ -35,19 +37,27 @@ export const INLINE_TYPES: ReadonlySet<string> = new Set([
   "audio/ogg",
 ]);
 
-/** True when `contentType`'s media type, without parameters or case, is in {@link INLINE_TYPES}. */
-export function isInlineType(contentType: string): boolean {
-  return INLINE_TYPES.has(contentType.split(";")[0].trim().toLowerCase());
+/** True when `type`'s essence is in {@link INLINE_TYPES}. */
+export function isInlineType(type: MediaType): boolean {
+  return INLINE_TYPES.has(essenceOf(type));
 }
 
-/** `Content-Disposition`, plus the sandbox CSP whenever it is an attachment. */
-export function dispositionHeaders(
-  contentType: string,
+/**
+ * `Content-Type` and `Content-Disposition` for a parsed stored type, plus the
+ * sandbox CSP whenever it is an attachment.
+ *
+ * `null` is a stored value `parseMediaType` rejected. Rows written before
+ * uploads were parsed may hold one, so it is sent as octet-stream and treated
+ * as active on the apex.
+ */
+export function contentHeaders(
+  type: MediaType | null,
   displayName: string,
   siteHost: boolean,
 ): Record<string, string> {
-  const inline = siteHost || isInlineType(contentType);
+  const inline = siteHost || (type !== null && isInlineType(type));
   const headers: Record<string, string> = {
+    "Content-Type": type ?? OCTET_STREAM,
     "Content-Disposition": `${inline ? "inline" : "attachment"}; filename="${encodeURIComponent(displayName)}"`,
   };
   if (!inline) headers["Content-Security-Policy"] = "sandbox";
@@ -57,11 +67,31 @@ export function dispositionHeaders(
 if (import.meta.vitest) {
   const { test, expect } = import.meta.vitest;
 
-  test("isInlineType ignores parameters and case", () => {
-    expect(isInlineType("text/plain; charset=utf-8")).toBe(true);
-    expect(isInlineType("IMAGE/PNG")).toBe(true);
-    for (const type of ["text/html", "image/svg+xml", "application/xml", "text/javascript", "application/pdf", ""]) {
-      expect(isInlineType(type)).toBe(false);
+  const disposition = (stored: string | undefined, siteHost = false) =>
+    contentHeaders(parseMediaType(stored), "f", siteHost)["Content-Disposition"].split(";")[0];
+
+  test("the parsed type decides, ignoring parameters and case", () => {
+    expect(disposition("text/plain; charset=utf-8")).toBe("inline");
+    expect(disposition("IMAGE/PNG")).toBe("inline");
+    for (const type of ["text/html", "image/svg+xml", "application/xml", "text/javascript", "application/pdf"]) {
+      expect(disposition(type), type).toBe("attachment");
     }
+  });
+
+  test("a type that does not parse is an octet-stream attachment, sandboxed", () => {
+    for (const stored of ["text/plain;x=,text/html", "", undefined]) {
+      expect(contentHeaders(parseMediaType(stored), "f", false)).toEqual({
+        "Content-Type": "application/octet-stream",
+        "Content-Disposition": 'attachment; filename="f"',
+        "Content-Security-Policy": "sandbox",
+      });
+    }
+  });
+
+  test("a site host stays inline and still gets the normalized type", () => {
+    expect(contentHeaders(parseMediaType("TEXT/HTML; x=y"), "f", true)).toEqual({
+      "Content-Type": "text/html",
+      "Content-Disposition": 'inline; filename="f"',
+    });
   });
 }

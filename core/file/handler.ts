@@ -8,7 +8,8 @@ import { resolveAssetVersion } from "../asset/usecase";
 import { legacyThumbKey, versionThumbKey } from "../asset/usecase/shared";
 import { cacheControlFor, etagMatches, representationEtag, thumbnailCacheControl, type CachePolicy } from "./caching";
 import { addVary, applyCors, preflightResponse, type CorsPolicy } from "./cors";
-import { dispositionHeaders } from "./disposition";
+import { contentHeaders } from "./disposition";
+import { OCTET_STREAM, parseMediaType, type MediaType } from "./media-type";
 import { handleAuthSubmit } from "../access/form";
 import { AUTH_PATH_SEGMENT, resolveAccess, type AccessDeps } from "../access/resolve";
 import type { BearerDecision } from "../access/restricted";
@@ -125,7 +126,8 @@ function legacyLayout(asset: AssetMetadata): Layout {
 interface Located {
   key: string;
   file: StoredFile;
-  contentType: string;
+  /** The stored type, parsed; `null` when it does not parse. */
+  contentType: MediaType | null;
   contentEncoding?: string;
   displayName: string;
   originalSize?: number;
@@ -151,7 +153,7 @@ async function locate(storage: FileStorage, layout: Layout, filePath: string): P
     return {
       key: layout.mainKey,
       file,
-      contentType: layout.contentType,
+      contentType: parseMediaType(layout.contentType),
       contentEncoding: layout.contentEncoding,
       displayName: layout.filename,
       originalSize: layout.originalSize,
@@ -164,7 +166,7 @@ async function locate(storage: FileStorage, layout: Layout, filePath: string): P
     return {
       key: layout.mainKey,
       file,
-      contentType: layout.contentType,
+      contentType: parseMediaType(layout.contentType),
       contentEncoding: layout.contentEncoding,
       displayName: layout.filename,
       originalSize: layout.originalSize,
@@ -178,7 +180,7 @@ async function locate(storage: FileStorage, layout: Layout, filePath: string): P
   return {
     key,
     file,
-    contentType: file.contentType,
+    contentType: parseMediaType(file.contentType),
     contentEncoding: file.contentEncoding,
     displayName: entryPath.split("/").pop() || entryPath,
   };
@@ -243,9 +245,8 @@ async function archiveFallback(
 function serve404Page(located: Located, siteHost: boolean): Response {
   const isGzipStored = located.contentEncoding === "gzip";
   const headers: Record<string, string> = {
-    "Content-Type": located.contentType,
     "Cache-Control": "no-store",
-    ...dispositionHeaders(located.contentType, located.displayName, siteHost),
+    ...contentHeaders(located.contentType, located.displayName, siteHost),
   };
   if (!isGzipStored) headers["Content-Length"] = String(located.file.size);
   return new Response(
@@ -534,7 +535,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     rangeHeader,
     clientAcceptsGzip,
     ifNoneMatch: c.req.header("If-None-Match"),
-    cacheControl: cacheControlFor({ pinned, contentType: located.contentType }, policy),
+    cacheControl: cacheControlFor({ pinned, contentType: located.contentType ?? OCTET_STREAM }, policy),
     storage,
     siteHost: c.get("siteHost"),
   });
@@ -728,9 +729,8 @@ async function serveFile(located: Located, opts: ServeOptions): Promise<Response
   const etag = representationEtag(file.etag, { transformed: isGzipStored && !passthrough });
 
   const common: Record<string, string> = {
-    "Content-Type": contentType,
     "Cache-Control": opts.cacheControl,
-    ...dispositionHeaders(contentType, displayName, opts.siteHost),
+    ...contentHeaders(contentType, displayName, opts.siteHost),
   };
   if (etag) common["ETag"] = etag;
   // The body differs by Accept-Encoding whenever gzip is on disk.
