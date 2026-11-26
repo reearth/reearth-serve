@@ -146,7 +146,7 @@ describe("_headers", () => {
 
   test("and on a 206", async () => {
     const { app } = await rulesFixture({ headers });
-    const res = await app.request(`http://localhost/files/${ASSET_ID}/assets/app.js`, {
+    const res = await app.request(`http://localhost/files/${ASSET_ID}/about.html`, {
       headers: { Range: "bytes=0-9" },
     });
     expect(res.status).toBe(206);

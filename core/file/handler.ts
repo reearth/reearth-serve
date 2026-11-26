@@ -26,7 +26,7 @@ import {
   applySiteHeaders, siteRedirect, siteRedirectResponse, targetFilePath,
 } from "./site-routing";
 import { errorResponseSchema } from "../../shared";
-import { parseRange, sliceStream } from "./stream";
+import { parseRange, resolveRange, sliceStream, type RangeRequest } from "./stream";
 import {
   THUMBNAIL_SIZES,
   isThumbnailSize,
@@ -598,7 +598,7 @@ fileRoutes.get("/:id/:path{.+}",
       "Gzip-stored files are sent as-is with `Content-Encoding: gzip` when the request has `Accept-Encoding: gzip` and no `Range`; otherwise they are decompressed on the fly.",
       "",
       "Conditional requests: every file carries an `ETag`, and an `If-None-Match` that matches it answers `304` with no body. `If-Modified-Since` is ignored: no `Last-Modified` is sent.",
-      "An unparseable `Range` header is ignored and the full file is returned with `200`.",
+      "`Range` takes one `bytes` range, `bytes=<first>-`, `bytes=<first>-<last>` or the suffix `bytes=-<n>`. A first byte at or past the end answers `416`; a malformed or inverted range, another unit or several ranges are ignored and the full file is returned with `200`, as is any range on a gzip-stored file whose original size is unknown.",
       "",
       "Here, on the shared origin, only types a browser shows without running script are `inline`; HTML, SVG, XML, JavaScript, PDF and every other type download as an `attachment` with `Content-Security-Policy: sandbox`. A hosted site renders on its site host only.",
       "",
@@ -614,7 +614,7 @@ fileRoutes.get("/:id/:path{.+}",
       { name: "id", in: "path", required: true, schema: { type: "string" }, description: "Asset ID or version ID" },
       { name: "path", in: "path", required: true, schema: { type: "string" }, description: "Filename, or a path inside an extracted archive (may contain `/`, sent raw or escaped as `%2F`). Decoded once; a `.` or `..` segment, a backslash, NUL, or a `%2F` left after decoding answers 400" },
       { name: "thumb", in: "query", required: false, schema: { type: "string", enum: [...THUMBNAIL_SIZES] }, description: "Serve the WebP thumbnail of this size instead of the file. Any other value → 400" },
-      { name: "Range", in: "header", required: false, schema: { type: "string", pattern: "^bytes=\\d+-\\d*$" }, description: "Single byte range, `bytes=<start>-` or `bytes=<start>-<end>`. Suffix (`bytes=-N`) and multi-range forms are ignored" },
+      { name: "Range", in: "header", required: false, schema: { type: "string", pattern: "^bytes=(\\d+-\\d*|-\\d+)$" }, description: "Single byte range, `bytes=<start>-`, `bytes=<start>-<end>` or `bytes=-<n>` for the last n bytes. Multi-range forms are ignored" },
       { name: "Accept-Encoding", in: "header", required: false, schema: { type: "string" }, description: "If it contains `gzip`, gzip-stored files are passed through compressed (non-Range requests only)" },
       { name: "If-None-Match", in: "header", required: false, schema: { type: "string" }, description: "One or more entity tags, or `*`. Compared weakly against the `ETag`; a match answers `304`" },
     ],
@@ -645,6 +645,10 @@ fileRoutes.get("/:id/:path{.+}",
           "Cache-Control": fileHeaders["Cache-Control"],
           "Content-Disposition": fileHeaders["Content-Disposition"],
         },
+      },
+      416: {
+        description: "The range starts at or past the end of the file. No body",
+        headers: { ...nosniff, ...corsHeaders, "Content-Range": stringHeader("`bytes */<size>`") },
       },
       400: jsonError("Invalid path or thumbnail size, or two different delivery tokens on a restricted asset"),
       401: {
@@ -709,7 +713,7 @@ async function serveThumbnail(
 }
 
 interface ReadConditions {
-  range: { offset: number; length: number } | null;
+  range: RangeRequest | null;
   rangeHeader: string | undefined;
   clientAcceptsGzip: boolean;
   ifNoneMatch: string | undefined;
@@ -785,14 +789,21 @@ async function sendLocated(located: Located, opts: ServeOptions): Promise<Respon
     return new Response(null, { status: 304, headers: common });
   }
 
+  const unsatisfiable = async (size: number) => {
+    await file.body.cancel().catch(() => {});
+    return new Response(null, { status: 416, headers: { ...common, "Content-Range": `bytes */${size}` } });
+  };
+
   // --- Non-gzip file ---
   if (!isGzipStored) {
     const headers: Record<string, string> = { ...common, "Accept-Ranges": "bytes" };
-    if (range) {
+    const part = resolveRange(range, file.size);
+    if (part.kind === "unsatisfiable") return unsatisfiable(file.size);
+    if (part.kind === "part") {
       // The first read fetched the whole object to learn its metadata; the
       // range itself is a second, bounded read.
       await file.body.cancel().catch(() => {});
-      const rangedFile = await storage.get(key, range);
+      const rangedFile = await storage.get(key, { offset: part.offset, length: part.length });
       if (!rangedFile) {
         return new Response(JSON.stringify({ error: "File not found" }), {
           status: 404,
@@ -832,22 +843,19 @@ async function sendLocated(located: Located, opts: ServeOptions): Promise<Respon
   }
 
   // --- Gzip-stored: decompress ---
+  // A range is a range of the decompressed bytes, so it needs their total; an
+  // entry whose original size was never recorded is sent whole instead.
+  const part = originalSize ? resolveRange(range, originalSize) : { kind: "whole" as const };
+  if (part.kind === "unsatisfiable") return unsatisfiable(originalSize!);
   const decompressed = decompressStream(file.body);
   const headers: Record<string, string> = { ...common, "Accept-Ranges": "bytes" };
 
-  if (!range) {
+  if (part.kind === "whole") {
     if (originalSize) headers["Content-Length"] = String(originalSize);
     return new Response(decompressed, { status: 200, headers });
   }
 
-  // Range on gzip: decompress, skip to offset, stream the range
-  const sliced = sliceStream(decompressed, range.offset, range.length, originalSize);
-  if (originalSize) {
-    const end = Math.min(range.offset + range.length, originalSize) - 1;
-    const length = end - range.offset + 1;
-    headers["Content-Range"] = `bytes ${range.offset}-${end}/${originalSize}`;
-    headers["Content-Length"] = String(length);
-  }
-
-  return new Response(sliced, { status: 206, headers });
+  headers["Content-Range"] = `bytes ${part.offset}-${part.offset + part.length - 1}/${originalSize}`;
+  headers["Content-Length"] = String(part.length);
+  return new Response(sliceStream(decompressed, part.offset, part.length, originalSize), { status: 206, headers });
 }
