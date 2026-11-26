@@ -8,6 +8,7 @@ import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
 import type { JobQueue } from "../../queue/port";
 import type { ExtractionMessage } from "../../extraction/handler";
+import { storedMediaType } from "../../file/media-type";
 
 export async function completeUploadSession(
   sessions: UploadSessionStore,
@@ -63,7 +64,7 @@ export async function completeUploadSession(
   const asset: AssetMetadata = {
     id,
     filename: session.filename,
-    contentType: session.contentType,
+    contentType: storedMediaType(session.contentType),
     size: head.size,
     createdAt: session.createdAt,
     expiresAt: projectId ? 0 : now + ttlSeconds * 1000,

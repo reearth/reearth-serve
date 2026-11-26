@@ -7,6 +7,7 @@ import type { SetAccessInput } from "../usecase/set-access";
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { assetResponseSchema, idParamSchema, updateAssetBodySchema } from "../../../shared/openapi";
 import { jsonError, jsonResponse } from "../../openapi";
+import { assetView } from "./shared";
 
 export function registerUpdateAssetRoute(app: Hono<AppEnv>) {
   app.patch("/:id",
@@ -67,7 +68,7 @@ export function registerUpdateAssetRoute(app: Hono<AppEnv>) {
       }
 
       const enriched = await enrichAssetWithVersion(metadata, versions, id);
-      return c.json({ asset: enriched ?? updated });
+      return c.json({ asset: assetView(enriched ?? updated) });
     },
   );
 }

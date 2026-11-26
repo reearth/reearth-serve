@@ -6,6 +6,7 @@ import { getAssetMetadata, updateAsset, enrichAssetWithVersion } from "../usecas
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { assetResponseSchema, idParamSchema, setActiveVersionBodySchema } from "../../../shared/openapi";
 import { jsonError, jsonResponse } from "../../openapi";
+import { assetView } from "./shared";
 
 export function registerSetActiveVersionRoute(app: Hono<AppEnv>) {
   app.put("/:id/active-version",
@@ -36,7 +37,7 @@ export function registerSetActiveVersionRoute(app: Hono<AppEnv>) {
       }
 
       const enriched = await enrichAssetWithVersion(metadata, versions, id);
-      return c.json({ asset: enriched ?? updated });
+      return c.json({ asset: assetView(enriched ?? updated) });
     },
   );
 }
