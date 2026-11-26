@@ -40,7 +40,6 @@ export type UploadCommit = CommitIds & {
   leftovers(): string[];
 };
 
-/** An object to read: the asset and version `info` describes, and the path delivery serves it at. */
 export type OpenObject = { resolved: ResolvedAsset; path: string; info: ObjectInfo };
 
 export interface ObjectLayer {

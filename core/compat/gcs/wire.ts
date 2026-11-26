@@ -138,7 +138,6 @@ export function readHashHeader(read: SentRead): string | null {
   return encoding(read.sentEncoding) === encoding(read.storedEncoding) ? hashHeader(read.hashes) : null;
 }
 
-/** Adds the object's stored headers, and its hash when {@link readHashHeader} allows, to a delivered read. */
 export function withReadHeaders(res: Response, info: ObjectInfo): Response {
   for (const [name, value] of Object.entries(storedHeaders(info))) res.headers.set(name, value);
   const hash = readHashHeader({

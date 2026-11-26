@@ -194,7 +194,6 @@ function layoutsOf({ asset, version }: ResolvedAsset): Layout[] {
   return version ? [versionedLayout(asset, version), legacyLayout(asset)] : [legacyLayout(asset)];
 }
 
-/** The first layout that holds `path`. */
 async function locateIn(storage: FileStorage, layouts: Layout[], path: string): Promise<Located | null> {
   for (const layout of layouts) {
     const located = await locate(storage, layout, path);
@@ -709,7 +708,6 @@ async function serveThumbnail(
   });
 }
 
-/** What a read asks of the bytes: a range, an encoding, a revalidation. */
 interface ReadConditions {
   range: { offset: number; length: number } | null;
   rangeHeader: string | undefined;
