@@ -100,6 +100,75 @@ describe.runIf(COMPAT_HOST)("GCS API bearer auth", () => {
   });
 });
 
+describe.runIf(COMPAT_HOST)("GCS API object reads", () => {
+  const BODY = "hello, compat reader";
+
+  async function written() {
+    const issued = await issuedKeyFile();
+    const auth = { Authorization: await selfSignedBearer(issued.keyFile) };
+    const path = `/${issued.bucket}/read/r.txt`;
+    const put = await onCompatHost(path, { ...auth, "Content-Type": "text/plain", "Content-Length": String(BODY.length) }, "PUT", BODY);
+    expect(put.status).toBe(200);
+    const listed = await api(issued.admin, "GET", `/assets?projectId=${issued.projectId}`);
+    const [asset] = (await listed.json() as { assets: { id: string }[] }).assets;
+    return { ...issued, auth, path, assetId: asset.id, generation: String(put.headers["x-goog-generation"]) };
+  }
+
+  async function setAccess(admin: string, assetId: string, body: Record<string, string>) {
+    expect((await api(admin, "PATCH", `/assets/${assetId}`, body)).status).toBe(200);
+  }
+
+  test("HEAD on the XML path answers the generation and the stored length", async () => {
+    const { auth, path, generation } = await written();
+    const res = await onCompatHost(path, auth, "HEAD");
+    expect(res.status).toBe(200);
+    expect(res.headers).toMatchObject({
+      "x-goog-generation": generation,
+      "x-goog-metageneration": "1",
+      "x-goog-stored-content-length": String(BODY.length),
+      "x-goog-stored-content-encoding": "identity",
+    });
+    expect(res.body).toBe("");
+  });
+
+  test("an If-None-Match of the ETag answers 304", async () => {
+    const { auth, path } = await written();
+    const first = await onCompatHost(path, auth);
+    expect(first.status).toBe(200);
+    expect(first.body).toBe(BODY);
+    const again = await onCompatHost(path, { ...auth, "If-None-Match": String(first.headers.etag) });
+    expect(again.status).toBe(304);
+    expect(again.headers["x-goog-hash"]).toBeUndefined();
+  });
+
+  test("a password asset reads through the API while /files without a cookie still challenges", async () => {
+    const { admin, auth, path, assetId } = await written();
+    await setAccess(admin, assetId, { access: "password", password: "e2e-compat-read" });
+    const read = await onCompatHost(path, auth);
+    expect(read.status).toBe(200);
+    expect(read.body).toBe(BODY);
+    expect((await fetch(`${BASE}/files/${assetId}/r.txt`)).status).toBe(401);
+  });
+
+  test("a restricted asset reads through the API while /files without a proof is 401", async () => {
+    const { admin, auth, path, assetId } = await written();
+    await setAccess(admin, assetId, { access: "restricted" });
+    const read = await onCompatHost(path, auth);
+    expect(read.status).toBe(200);
+    expect(read.body).toBe(BODY);
+    expect((await fetch(`${BASE}/files/${assetId}/r.txt`)).status).toBe(401);
+  });
+
+  test("a read without a credential is refused on the XML and JSON paths", async () => {
+    const { bucket, path } = await written();
+    const xml = await onCompatHost(path, {});
+    expect(xml.status).toBe(401);
+    expect(xml.body).not.toContain(BODY);
+    const json = await onCompatHost(`/storage/v1/b/${bucket}/o/read%2Fr.txt?alt=media`, {});
+    expect(json.status).toBe(401);
+  });
+});
+
 describe.runIf(COMPAT_HOST && GO)("Go storage client v1.69 (e2e/compat-gcs)", () => {
   let dir: string;
   let binary: string;
@@ -212,6 +281,19 @@ describe.runIf(COMPAT_HOST && GO)("Go storage client v1.69 (e2e/compat-gcs)", ()
       "revoked: 403 AccessDenied",
     ]);
   }, 60_000);
+
+  test("read: a full read with its CRC32C checked, a 5-byte range, gzip passthrough and decompression, and a missing key", async () => {
+    const { bucket, path } = await keyFileOnDisk();
+    const { stdout } = await scenario("read", { E2E_GCS_KEY_FILE: path, E2E_GCS_BUCKET: bucket });
+    const lines = stdout.trim().split("\n");
+    expect(lines[0]).toMatch(/^read: 262144 bytes, CRC32C [0-9a-f]{8} checked$/);
+    expect(lines.slice(1)).toEqual([
+      expect.stringMatching(/^range: [0-9a-f]{10}$/),
+      expect.stringMatching(/^gzip passthrough: \d+ stored bytes, Decompressed false$/),
+      "gzip decompressed: 17408 bytes",
+      "missing: ErrObjectNotExist",
+    ]);
+  }, 120_000);
 
   test("race: two writers on one new key make one asset and both succeed", async () => {
     const { admin, bucket, path, projectId } = await keyFileOnDisk();

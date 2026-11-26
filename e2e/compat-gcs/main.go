@@ -22,6 +22,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/md5"
 	"encoding/base64"
@@ -65,11 +66,12 @@ var scenarios = map[string]func(context.Context, *storage.Client, config) error{
 	"resumable-16m":           resumable16M,
 	"signed-put":              signedPut,
 	"signed-refusals":         signedRefusals,
+	"read":                    read,
 }
 
 func main() {
 	if len(os.Args) != 2 || scenarios[os.Args[1]] == nil {
-		fmt.Fprintln(os.Stderr, "usage: compat-gcs <attrs-missing|revoked|write-attrs-list-delete|paging|race|resumable-40m|resumable-16m|signed-put|signed-refusals>")
+		fmt.Fprintln(os.Stderr, "usage: compat-gcs <attrs-missing|revoked|write-attrs-list-delete|paging|race|resumable-40m|resumable-16m|signed-put|signed-refusals|read>")
 		os.Exit(2)
 	}
 	cfg, err := loadConfig()
@@ -377,6 +379,100 @@ func race(ctx context.Context, client *storage.Client, cfg config) error {
 }
 
 const mib = 1 << 20
+
+func readAll(r *storage.Reader, err error) ([]byte, storage.ReaderObjectAttrs, error) {
+	if err != nil {
+		return nil, storage.ReaderObjectAttrs{}, err
+	}
+	defer func() { _ = r.Close() }()
+	data, err := io.ReadAll(r)
+	return data, r.Attrs, err
+}
+
+func read(ctx context.Context, client *storage.Client, cfg config) error {
+	bucket := client.Bucket(cfg.bucket)
+	plain := bucket.Object("read/plain.bin")
+	data := pattern(256*1024, 7)
+	if _, err := write(ctx, plain, "application/octet-stream", nil, data); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+	defer func() { _ = plain.Delete(ctx) }()
+
+	got, attrs, err := readAll(plain.NewReader(ctx))
+	if err != nil {
+		return fmt.Errorf("NewReader: %w", err)
+	}
+	if !bytes.Equal(got, data) {
+		return fmt.Errorf("NewReader: %d bytes differ from the %d written", len(got), len(data))
+	}
+	if want := crc32.Checksum(data, crc32.MakeTable(crc32.Castagnoli)); attrs.CRC32C != want || attrs.Decompressed {
+		return fmt.Errorf("NewReader: want CRC32C %08x checked on the stored bytes, got %08x (decompressed %v)", want, attrs.CRC32C, attrs.Decompressed)
+	}
+	fmt.Printf("read: %d bytes, CRC32C %08x checked\n", len(got), attrs.CRC32C)
+
+	head, attrs, err := readAll(plain.NewRangeReader(ctx, 0, 5))
+	if err != nil {
+		return fmt.Errorf("NewRangeReader: %w", err)
+	}
+	if !bytes.Equal(head, data[:5]) || attrs.Size != int64(len(data)) || attrs.CRC32C != 0 {
+		return fmt.Errorf("NewRangeReader(0, 5): got %x of %d (CRC32C %08x), want %x of %d and no hash", head, attrs.Size, attrs.CRC32C, data[:5], len(data))
+	}
+	fmt.Printf("range: %x\n", head)
+
+	if err := readGzip(ctx, bucket); err != nil {
+		return err
+	}
+
+	_, _, err = readAll(bucket.Object("read/missing.bin").NewReader(ctx))
+	if !errors.Is(err, storage.ErrObjectNotExist) {
+		return fmt.Errorf("NewReader on a missing key: want ErrObjectNotExist, got %v", err)
+	}
+	fmt.Println("missing: ErrObjectNotExist")
+	return nil
+}
+
+func readGzip(ctx context.Context, bucket *storage.BucketHandle) error {
+	obj := bucket.Object("read/data.json")
+	doc := bytes.Repeat([]byte(`{"type":"Feature","properties":{}}`), 512)
+	var packed bytes.Buffer
+	zw := gzip.NewWriter(&packed)
+	if _, err := zw.Write(doc); err != nil {
+		return err
+	}
+	if err := zw.Close(); err != nil {
+		return err
+	}
+	w := obj.NewWriter(ctx)
+	w.ContentType = "application/json"
+	w.ContentEncoding = "gzip"
+	if _, err := w.Write(packed.Bytes()); err != nil {
+		_ = w.Close()
+		return fmt.Errorf("gzip write: %w", err)
+	}
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("gzip write: %w", err)
+	}
+	defer func() { _ = obj.Delete(ctx) }()
+
+	stored, attrs, err := readAll(obj.ReadCompressed(true).NewReader(ctx))
+	if err != nil {
+		return fmt.Errorf("ReadCompressed(true): %w", err)
+	}
+	if !bytes.Equal(stored, packed.Bytes()) || attrs.Decompressed {
+		return fmt.Errorf("ReadCompressed(true): got %d bytes (decompressed %v), want the %d stored gzip bytes", len(stored), attrs.Decompressed, packed.Len())
+	}
+	fmt.Printf("gzip passthrough: %d stored bytes, Decompressed false\n", len(stored))
+
+	plain, _, err := readAll(obj.ReadCompressed(false).NewReader(ctx))
+	if err != nil {
+		return fmt.Errorf("ReadCompressed(false): %w", err)
+	}
+	if !bytes.Equal(plain, doc) {
+		return fmt.Errorf("ReadCompressed(false): got %d bytes, want the %d decompressed bytes", len(plain), len(doc))
+	}
+	fmt.Printf("gzip decompressed: %d bytes\n", len(plain))
+	return nil
+}
 
 func pattern(size int, seed byte) []byte {
 	data := make([]byte, size)
