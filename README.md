@@ -55,7 +55,7 @@ When calling with `Authorization: Bearer <jwt>`, add
 and the caller needs `create_asset` on that project (see [Authorization](#authorization)). Anonymous
 (demo-mode) uploads omit both headers and are tracked by `X-Session-Id`.
 
-The production endpoint is `https://serve.reearth.land`. Point the CLI at it via `REEARTH_SERVE_ENDPOINT=https://serve.reearth.land` (or `--endpoint` per command).
+Point the CLI at a deployment with `REEARTH_SERVE_ENDPOINT=https://api.example.com` (or `--endpoint` per command). Values for the Re:Earth deployment are in [docs/examples/reearth](./docs/examples/reearth/README.md).
 
 ## Architecture
 
@@ -103,7 +103,7 @@ The production endpoint is `https://serve.reearth.land`. Point the CLI at it via
 | KV | Key-Value | Sessions, Upload Sessions | TTL auto-expiration for ephemeral data |
 | R2 | Object Storage | File content | Zero egress cost, Range request support |
 
-See [ADR-003](./docs/adr/003-kv-to-d1-migration.md) for the D1 migration rationale, [ADR-005](./docs/adr/005-asset-versioning.md) for asset versioning, [ADR-006](./docs/adr/006-derived-asset-and-asset-edge.md) for derived assets and dependency graphs, and [ADR-007](./docs/adr/007-webhooks-and-event-log.md) for webhooks and event logging.
+See [ADR-003](./docs/adr/003-kv-to-d1-migration.md) for the D1 migration rationale, [ADR-005](./docs/adr/005-asset-versioning.md) for asset versioning, [ADR-006](./docs/adr/006-derived-asset-and-asset-edge.md) for derived assets and dependency graphs, [ADR-007](./docs/adr/007-webhooks-and-event-log.md) for webhooks and event logging, and [ADR-020](./docs/adr/020-atlas-migrations.md) for how migrations are checked.
 
 ### Running on Node (API only)
 
@@ -322,8 +322,8 @@ reearth-serve file cp <assetId>:data.geojson .       # members download with the
 ```bash
 reearth-serve asset sign <assetId> tiles/ --expires 24h   # prints the token, its expiry and a URL template
 curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
-  -d '{"prefix":"tiles/","expiresIn":86400}' https://serve.example.com/api/v1/assets/<assetId>/signed-urls
-# → {"token":"…","expiresAt":1767312000000,"urlTemplate":"https://serve.example.com/files/<assetId>/{path}?serve_token=…"}
+  -d '{"prefix":"tiles/","expiresIn":86400}' https://api.example.com/api/v1/assets/<assetId>/signed-urls
+# → {"token":"…","expiresAt":1767312000000,"urlTemplate":"https://api.example.com/files/<assetId>/{path}?serve_token=…"}
 ```
 
 - **Mint.** `POST /api/v1/assets/:id/signed-urls` with `{ prefix?, versionId?, expiresIn? }`. `id` is an asset ID or a version ID; a version ID, or `versionId` in the body, pins the token and the template to that version. `expiresIn` is 60 to 604 800 seconds, 3 600 by default, and `expiresAt` is Unix milliseconds. `prefix` is a decoded path (one leading `/` is stripped; `.`, `..`, backslashes and NUL are refused). The caller needs `read_asset`. Answers: `501` when `DELIVERY_TOKEN_KEYS` is unset, `400` for a bad body, `404` without access, `400` for a password-protected asset or a `versionId` of another asset. Every response, preflights and auth refusals included, carries `Access-Control-Allow-Origin: *`.
@@ -356,7 +356,7 @@ steps, and the domain does not resolve until the second one passes:
 reearth-serve asset host add <assetId> map.city.example.jp --custom
 #   prints the two DNS records to publish:
 #     _reearth-serve-verify.map.city.example.jp  TXT    reearth-serve-verify=<token>
-#     map.city.example.jp                        CNAME  serve.reearth.land
+#     map.city.example.jp                        CNAME  api.example.com
 reearth-serve asset host verify <assetId> map.city.example.jp
 reearth-serve asset host show <assetId> map.city.example.jp   # certificate: pending | active
 ```

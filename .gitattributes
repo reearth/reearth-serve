@@ -1,0 +1,2 @@
+adapters/cloudflare/migrations/* text eol=lf
+adapters/sql/migrations/* text eol=lf
