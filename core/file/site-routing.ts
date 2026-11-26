@@ -52,7 +52,8 @@ export function siteRedirect(
  * The `Location` is a path on the same origin, built under `/files/{id}` so the
  * site middleware's `unrewriteLocation` strips the prefix back off on a site
  * host, exactly as it does for A1's directory redirect. The query string
- * survives, because a rule moves a page and not its parameters.
+ * survives, because a rule moves a page and not its parameters; the caller
+ * decides whether a `serve_token` in it survives too (ADR-014 §4 Response).
  *
  * Permanent moves (301/308) take the moving-HTML policy: they are worth
  * caching, but a redeploy must be able to take them back. Temporary ones
@@ -62,10 +63,10 @@ export function siteRedirect(
  */
 export function siteRedirectResponse(
   match: RedirectMatch,
-  opts: { assetId: string; requestUrl: string; protected: boolean },
+  opts: { assetId: string; search: string; protected: boolean },
 ): Response {
-  const url = new URL(opts.requestUrl);
-  const location = `/files/${opts.assetId}${match.to}${url.search}`;
+  const search = match.to.includes("?") ? opts.search.replace(/^\?/, "&") : opts.search;
+  const location = `/files/${opts.assetId}${match.to}${search}`;
   const cacheControl = opts.protected || match.status === 302 || match.status === 307
     ? "no-store"
     : ENTRY_CACHE_CONTROL;
