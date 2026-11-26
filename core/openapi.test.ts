@@ -254,18 +254,19 @@ describe("OpenAPI document", () => {
     const bound = Object.keys(paths).filter((p) => p.startsWith("/api/v1/") && !["/api/v1/health", "/api/v1/doc", "/api/v1/docs"].includes(p));
     expect(bound.length).toBeGreaterThan(0);
     for (const path of bound) expect(declares(path), path).toBe(true);
-    // /files binds no caller. Its own 503 is a password-protection misconfiguration.
+    // /files binds no caller through the middleware. Its own 503 covers password
+    // misconfiguration and a directory outage on a restricted read.
     expect(paths["/files/{id}/{path}"].get.responses["503"]).not.toEqual({ $ref: "#/components/responses/TenancyUnavailable" });
   });
 
-  test("documents public file delivery without auth", async () => {
+  test("documents file delivery as anonymous, or a delivery token or bearer for a restricted asset", async () => {
     const spec = await loadSpec();
     const op = spec.paths["/files/{id}/{path}"]?.get;
     expect(op).toBeDefined();
-    expect(op.security).toEqual([]);
+    expect(op.security).toEqual([{}, { serveTokenQuery: [] }, { serveTokenHeader: [] }, { bearerAuth: [] }]);
     expect(paramsOf(spec, op).map((p) => `${p.in}:${p.name}`)).toEqual(
       expect.arrayContaining(["path:id", "path:path", "query:thumb", "header:Range", "header:Accept-Encoding", "header:If-None-Match"]),
     );
-    expect(Object.keys(op.responses).sort()).toEqual(["200", "206", "301", "304", "400", "401", "404", "429", "503"]);
+    expect(Object.keys(op.responses).sort()).toEqual(["200", "206", "301", "304", "400", "401", "403", "404", "429", "503"]);
   });
 });

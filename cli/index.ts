@@ -1,7 +1,7 @@
 import { Command } from "commander";
 import { PATHS } from "../shared/paths";
-import type { AssetMetadata, AssetVersion, Job } from "../shared/api";
-import { apiGet, apiPost, apiPatch, apiPut, apiDelete, output, formatAsset, formatJob, formatVersion, formatBytes, parseOnOff, promptPasswordTwice } from "./helpers";
+import type { AssetMetadata, AssetVersion, CreateSignedUrlBody, Job, SignedUrl } from "../shared/api";
+import { apiGet, apiPost, apiPatch, apiPut, apiDelete, output, formatAsset, formatJob, formatVersion, formatBytes, parseDuration, parseOnOff, promptPasswordTwice } from "./helpers";
 import { doUpload } from "./upload";
 import { registerFileCommands } from "./file";
 import { registerHostCommands } from "./host";
@@ -221,7 +221,8 @@ asset
   });
 
 /**
- * `asset protect <id> --password | --off` (ADR-013 B7).
+ * `asset protect <id> --password | --restricted | --off` (ADR-013 B7,
+ * ADR-014 §6).
  *
  * The password is only ever read from a prompt, twice, without echo. Not from
  * an argument: a command line is visible in `ps`, in shell history and in CI
@@ -230,11 +231,12 @@ asset
  */
 asset
   .command("protect")
-  .description("Password-protect a site (archive) asset, or remove the protection")
+  .description("Password-protect a site (archive) asset, restrict an asset to project members, or remove the protection")
   .argument("<id>", "Asset ID")
   .option("--password", "Prompt for a new password (never pass it on the command line)")
-  .option("--off", "Remove the protection: the site becomes public again")
-  .action(async (id: string, cmdOpts: { password?: boolean | string; off?: boolean }) => {
+  .option("--restricted", "Only project members who send their login token may read the files")
+  .option("--off", "Remove the protection: the asset becomes public again")
+  .action(async (id: string, cmdOpts: { password?: boolean | string; restricted?: boolean; off?: boolean }) => {
     const opts = program.opts<{ endpoint: string; json: boolean }>();
 
     if (typeof cmdOpts.password === "string") {
@@ -244,23 +246,57 @@ asset
       );
       process.exit(1);
     }
-    if (!!cmdOpts.password === !!cmdOpts.off) {
-      console.error("Error: pass exactly one of --password or --off");
+    if ([cmdOpts.password, cmdOpts.restricted, cmdOpts.off].filter(Boolean).length !== 1) {
+      console.error("Error: pass exactly one of --password, --restricted or --off");
       process.exit(1);
     }
 
     const body = cmdOpts.off
       ? { access: "public" as const }
-      : { access: "password" as const, password: await promptPasswordTwice() };
+      : cmdOpts.restricted
+        ? { access: "restricted" as const }
+        : { access: "password" as const, password: await promptPasswordTwice() };
 
     const data = await apiPatch<{ asset: AssetMetadata }>(opts.endpoint, PATHS.asset(id), body);
     if (opts.json) {
       output(data, true);
     } else if (cmdOpts.off) {
       console.log("Protection removed: the asset is public again.");
+    } else if (cmdOpts.restricted) {
+      console.log("Restricted. Project members read it with their login token; everyone else gets 401 or 404.");
     } else {
       console.log("Protected. Visitors now get a password page; tools can send HTTP Basic.");
       console.log("Changing the password signs every existing visitor out.");
+    }
+  });
+
+/**
+ * `asset sign <id> [prefix]` (ADR-014 §6): mint a delivery token for a
+ * restricted asset. The pin is `--version-id`, because the program's own
+ * `--version` is parsed anywhere on the command line and would print the CLI
+ * version instead.
+ */
+asset
+  .command("sign")
+  .description("Mint a delivery token that reads the asset's files under a prefix without logging in")
+  .argument("<id>", "Asset ID or version ID")
+  .argument("[prefix]", "Path inside the asset the token covers (default: the whole asset)")
+  .option("--expires <duration>", "Token lifetime: seconds, or a number with s, m, h or d (default: 1h, at most 7d)")
+  .option("--version-id <versionId>", "Pin the token to this version")
+  .action(async (id: string, prefix: string | undefined, cmdOpts: { expires?: string; versionId?: string }) => {
+    const opts = program.opts<{ endpoint: string; json: boolean }>();
+    const body: CreateSignedUrlBody = {};
+    if (cmdOpts.expires !== undefined) body.expiresIn = parseDuration(cmdOpts.expires, "--expires");
+    if (prefix !== undefined) body.prefix = prefix;
+    if (cmdOpts.versionId !== undefined) body.versionId = cmdOpts.versionId;
+    const data = await apiPost<SignedUrl>(opts.endpoint, PATHS.assetSignedUrls(id), body);
+    if (opts.json) {
+      output(data, true);
+    } else {
+      console.log(`Token:      ${data.token}`);
+      console.log(`Expires at: ${new Date(data.expiresAt).toISOString()}`);
+      console.log(`URL:        ${data.urlTemplate}`);
+      console.log("Replace {path} with a path inside the asset, or send the token as the X-Serve-Token header.");
     }
   });
 

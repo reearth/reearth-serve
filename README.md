@@ -55,7 +55,7 @@ When calling with `Authorization: Bearer <jwt>`, add
 and the caller needs `create_asset` on that project (see [Authorization](#authorization)). Anonymous
 (demo-mode) uploads omit both headers and are tracked by `X-Session-Id`.
 
-The production endpoint is `https://serve.reearth.land`. Point the CLI at it via `REEARTH_SERVE_ENDPOINT=https://serve.reearth.land` (or `--endpoint` per command).
+Point the CLI at a deployment with `REEARTH_SERVE_ENDPOINT=https://api.example.com` (or `--endpoint` per command). Values for the Re:Earth deployment are in [docs/examples/reearth](./docs/examples/reearth/README.md).
 
 ## Architecture
 
@@ -103,7 +103,7 @@ The production endpoint is `https://serve.reearth.land`. Point the CLI at it via
 | KV | Key-Value | Sessions, Upload Sessions | TTL auto-expiration for ephemeral data |
 | R2 | Object Storage | File content | Zero egress cost, Range request support |
 
-See [ADR-003](./docs/adr/003-kv-to-d1-migration.md) for the D1 migration rationale, [ADR-005](./docs/adr/005-asset-versioning.md) for asset versioning, [ADR-006](./docs/adr/006-derived-asset-and-asset-edge.md) for derived assets and dependency graphs, and [ADR-007](./docs/adr/007-webhooks-and-event-log.md) for webhooks and event logging.
+See [ADR-003](./docs/adr/003-kv-to-d1-migration.md) for the D1 migration rationale, [ADR-005](./docs/adr/005-asset-versioning.md) for asset versioning, [ADR-006](./docs/adr/006-derived-asset-and-asset-edge.md) for derived assets and dependency graphs, [ADR-007](./docs/adr/007-webhooks-and-event-log.md) for webhooks and event logging, and [ADR-020](./docs/adr/020-atlas-migrations.md) for how migrations are checked.
 
 ### Running on Node (API only)
 
@@ -122,7 +122,7 @@ SSR on Node is out of scope, and any other path returns 404 saying so.
 |----------|---------|-------------|
 | `PORT` | `8788` | Listen port |
 | `BASE_URL` | `http://localhost:$PORT` | Public base URL used in generated file links |
-| `SQLITE_PATH` | `:memory:` | SQLite database file; in-memory by default |
+| `SQLITE_PATH` | `:memory:` | SQLite database file; in-memory by default. A file survives restarts: each boot applies only pending migrations and refuses to start if an applied one was edited (ADR-020). A file created before the ledger is refused; recreate it |
 | `INTERNAL_API_SECRET` | (unset) | Shared secret for `/api/internal/*` and `POST /internal/cron`; unset ⇒ both refuse every request |
 | `SIGNING_SECRET` | (unset) | HMAC key for the password cookie of protected sites (ADR-013 B7); unset ⇒ protected assets answer 503 and protecting one is refused |
 | `CREDENTIALED_ORIGINS` | (unset) | Comma-separated exact origins, besides Serve's own, whose pages may read a protected file with the visitor's cookie; an entry with a path, a wildcard or `null` fails at startup |
@@ -154,9 +154,8 @@ curl -X POST -H "Authorization: Bearer $INTERNAL_API_SECRET" \
 
 Not available on this runtime: presigned uploads (no S3 adapter), archive
 extraction (no container launcher), and thumbnail generation (the jSquash wasm
-codecs need a bundler). File storage is in-process, so everything is lost when
-the process exits unless `SQLITE_PATH` is set — and even then, the file bytes are
-not persisted.
+codecs need a bundler). File storage is in-process, so file bytes are lost when
+the process exits. Metadata is lost too unless `SQLITE_PATH` names a file.
 
 ## API
 
@@ -180,6 +179,7 @@ not persisted.
 | `POST` | `/api/v1/assets/uploads` | Create presigned upload session |
 | `POST` | `/api/v1/assets/uploads/:id/complete` | Complete upload session |
 | `POST` | `/api/v1/assets/:id/extract` | Start archive extraction |
+| `POST` | `/api/v1/assets/:id/signed-urls` | Mint a delivery token for a restricted asset (`{ prefix?, versionId?, expiresIn? }`) |
 | `GET` | `/api/v1/assets/:id/hosts` | List the asset's site hosts (named subdomains and custom domains) |
 | `GET` | `/api/v1/assets/:id/hosts/:hostname` | Get one host, with the DNS still to publish while a custom domain is unverified |
 | `POST` | `/api/v1/assets/:id/hosts` | Claim a name or register a custom domain (`{ hostname, kind? }`) |
@@ -312,8 +312,36 @@ reearth-serve asset protect <assetId> --off        # remove it
 - **It is a property of the asset, not of one hostname.** Every URL form is protected at once: `/files/<id>/…`, `<id>.serve…`, the named host, `v<n>--`/`latest--` previews, custom domains, thumbnails, `Range` requests and `HEAD`. Protecting only the pretty hostname would be theatre — the asset ID is printed in every `siteUrl`.
 - **CORS caveat.** A cookie read is answered with credentialed CORS (the echoed `Origin` plus `Access-Control-Allow-Credentials: true`) only when the `Origin` is Serve's own or is listed in `CREDENTIALED_ORIGINS`. Every other read, Basic included, gets `Access-Control-Allow-Origin: *` without credentials. So a page on another origin embeds a protected tileset by sending Basic, or by being listed. Public assets keep `*`. This is the one place protection changes how an asset is consumed, which is why `access` is visible in the API response.
 - **Caching.** Responses keep their usual lifetimes but become `private`, with `Vary: Cookie, Authorization`, so no shared cache stores them.
-- **Limits.** Site (archive) assets in a project only — demo assets are always public, and protecting a plain dataset is [ADR-014](./docs/adr/014-asset-access-control.md)'s job. Ten wrong passwords from one IP in 15 minutes gets `429`. And it does not hide the asset's *existence*: a protected URL answers `401`, not `404`. A shared password is a speed bump for staging, not a control for sensitive data.
+- **Limits.** Site (archive) assets in a project only. Demo assets are always public, and a plain dataset is restricted to members instead (below). Ten wrong passwords from one IP in 15 minutes gets `429`. And it does not hide the asset's *existence*: a protected URL answers `401`, not `404`. A shared password is a speed bump for staging, not a control for sensitive data.
 - **Operator setup.** Set `SIGNING_SECRET` (`wrangler secret put SIGNING_SECRET`, or the env var on Node). Until it is set, protecting an asset is refused with `503` and an already-protected asset answers `503` rather than serving its bytes.
+
+**Member-only assets.** Any project asset, a single file or an archive, can be limited to the members of its project ([ADR-014](./docs/adr/014-asset-access-control.md)):
+
+```bash
+reearth-serve asset protect <assetId> --restricted   # or PATCH {"access":"restricted"}
+reearth-serve file cp <assetId>:data.geojson .       # members download with their login token
+```
+
+- **Proof.** A delivery token (below), or `Authorization: Bearer <OIDC access token>` on the apex `/files/…` path from a member whose role holds `read_asset`. A site host ignores bearers and accepts only a token.
+- **Answers.** No valid proof: `401` JSON with `WWW-Authenticate: Bearer, ServeToken` (`ServeToken` alone on a site host), browser navigations included. A signed-in caller who may not read it: `404`, the same as a missing asset. A token that verifies but does not cover the path or version: `403`, unless a bearer is also sent, which then decides. Two different tokens: `400`. Directory or Cerbos outage: `503` with `Retry-After: 5`. All refusals are `no-store`, and the bytes are never read before the decision.
+- **Caching and CORS.** A member's read is `private` with `Vary: Authorization, X-Serve-Token` and `Access-Control-Allow-Origin: *` without credentials. Misses and redirects are `no-store`. Every `/files` response exposes `WWW-Authenticate` and `Retry-After` to cross-origin scripts.
+- **No secret needed.** Restricting does not need `SIGNING_SECRET`. Bearer reads need an OIDC issuer, and tokens need `DELIVERY_TOKEN_KEYS`; with neither, a restricted asset answers `401` to everyone.
+- **Not a recall.** Restricting does not take back what shared caches already hold from when the asset was public, so restrict before sharing URLs.
+
+**Delivery tokens.** A browser viewer cannot attach a bearer to an `<img>` or a tile request, so a member mints a token that covers a path prefix and hands it to the viewer ([ADR-014 §4](./docs/adr/014-asset-access-control.md)). They are the recommended integration for browser viewers, because CORS stays `*`.
+
+```bash
+reearth-serve asset sign <assetId> tiles/ --expires 24h   # prints the token, its expiry and a URL template
+curl -X POST -H "Authorization: Bearer $TOKEN" -H 'content-type: application/json' \
+  -d '{"prefix":"tiles/","expiresIn":86400}' https://api.example.com/api/v1/assets/<assetId>/signed-urls
+# → {"token":"…","expiresAt":1767312000000,"urlTemplate":"https://api.example.com/files/<assetId>/{path}?serve_token=…"}
+```
+
+- **Mint.** `POST /api/v1/assets/:id/signed-urls` with `{ prefix?, versionId?, expiresIn? }`. `id` is an asset ID or a version ID; a version ID, or `versionId` in the body, pins the token and the template to that version. `expiresIn` is 60 to 604 800 seconds, 3 600 by default, and `expiresAt` is Unix milliseconds. `prefix` is a decoded path (one leading `/` is stripped; `.`, `..`, backslashes and NUL are refused). The caller needs `read_asset`. Answers: `501` when `DELIVERY_TOKEN_KEYS` is unset, `400` for a bad body, `404` without access, `400` for a password-protected asset or a `versionId` of another asset. Every response, preflights and auth refusals included, carries `Access-Control-Allow-Origin: *`.
+- **Carry.** The `serve_token` query parameter (no preflight, and Cesium and PMTiles copy it to every child request) or the `X-Serve-Token` header (kept out of URLs and logs). Tokens open restricted assets only; a public or password asset ignores them.
+- **Match.** A prefix covers a path at a segment boundary: `tiles` covers `tiles` and `tiles/a`, `tiles/` covers `tiles/a` but not `tiles`, and neither covers `tiles-old/a`. The path is the request path decoded once, the same string the storage key is built from; `..`, a backslash or a double-encoded `%252F` answer `400`. A thumbnail is matched on its source file's name. Redirects Serve builds inside the asset (a directory's trailing slash, `_redirects`) keep a query token.
+- **Response.** `Access-Control-Allow-Origin: *` without credentials, `Cache-Control: private` with `max-age` no longer than the token's remaining life (`immutable` only at a version-ID URL), and `Referrer-Policy: no-referrer`.
+- **Key rotation, in two deploys.** `DELIVERY_TOKEN_KEYS` holds at most two keys. Add the new key as the inactive one and deploy, so every instance can verify it. Then make it active and deploy. Wait the longest token life (7 days at most) and remove the old key. To revoke a leaked key, remove it at once; every token it signed stops working, and clients mint again.
 
 **Named sites.** An ID-shaped host is correct but not printable, so an archive asset in a project can also be given a name:
 
@@ -339,7 +367,7 @@ steps, and the domain does not resolve until the second one passes:
 reearth-serve asset host add <assetId> map.city.example.jp --custom
 #   prints the two DNS records to publish:
 #     _reearth-serve-verify.map.city.example.jp  TXT    reearth-serve-verify=<token>
-#     map.city.example.jp                        CNAME  serve.reearth.land
+#     map.city.example.jp                        CNAME  api.example.com
 reearth-serve asset host verify <assetId> map.city.example.jp
 reearth-serve asset host show <assetId> map.city.example.jp   # certificate: pending | active
 ```
@@ -406,7 +434,7 @@ CERBOS_ENDPOINT=http://localhost:3592 npm run start:node
 
 Serve fails closed when Cerbos cannot decide. A timeout, a refused connection or a non-2xx answer returns `503 {"error":"Authorization service unavailable"}` with `Retry-After: 5`, never an allow.
 
-Workspaces and memberships live in Serve's own D1 or SQLite directory, and Serve binds them to the caller once per request, after token verification. Health, the OpenAPI routes, `/files` and `/api/internal/*` skip that step, so a token there costs no directory lookup.
+Workspaces and memberships live in Serve's own D1 or SQLite directory, and Serve binds them to the caller once per request, after token verification. Health, the OpenAPI routes, `/files` and `/api/internal/*` skip that step, so a token there costs no directory lookup. The one exception is a read of a restricted asset with a bearer: the file handler verifies the token, binds the caller and checks `read_asset` itself, and a caller the directory does not know gets `404` there, not `401`.
 
 **Upgrade note.** Earlier releases sent Cerbos the kinds `asset`, `job`, `project` and `workspace`, with actions such as `create` and `read`. A policy written for those names denies every check after this release. Replace it with the policies in `docs/examples/cerbos/`.
 
@@ -431,6 +459,8 @@ npm run cli -- asset update <id> --description "My dataset" --user-meta '{"tag":
 npm run cli -- asset update <id> --spa on       # SPA fallback: unknown routes get index.html
 npm run cli -- asset delete <id>
 npm run cli -- asset protect <id> --password    # prompts twice; protects a site
+npm run cli -- asset protect <id> --restricted  # project members only (bearer or delivery token)
+npm run cli -- asset sign <id> [prefix] --expires 24h [--version-id <vid>]  # mint a delivery token
 npm run cli -- asset protect <id> --off         # public again
 
 # Versioning
@@ -455,6 +485,7 @@ npm run cli -- file thumb <id> --size xs        # download xs thumbnail (default
 npm run cli -- file thumb <id> --size md --url  # print URL without downloading
 npm run cli -- file cp -r <id>:. ./out --password   # protected asset: prompts, then sends Basic
 REEARTH_SERVE_SITE_PASSWORD=… npm run cli -- file sync <id> ./local   # same, non-interactive
+# Without a password, `file cp` and `file sync` send your login token, which opens a restricted asset
 
 # Job management
 npm run cli -- job list

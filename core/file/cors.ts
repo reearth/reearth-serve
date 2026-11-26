@@ -9,8 +9,9 @@
  * `Access-Control-Allow-Credentials: true` lets every page on the web read a
  * protected asset with the visitor's cookie. So only a cookie proof is ever
  * answered with credentials, and only for an origin Serve trusts: its own, or
- * one listed in `CREDENTIALED_ORIGINS`. Basic is sent by the caller on purpose
- * and needs no credentialed CORS, so it gets `*` like a public read.
+ * one listed in `CREDENTIALED_ORIGINS`. Basic, bearer and delivery tokens are
+ * sent by the caller on purpose and need no credentialed CORS, so they get `*`
+ * like a public read.
  *
  * Preflights and refusals carry no proof at all. They tell a trusted origin
  * that credentials are welcome and everyone else `*`, whatever the asset's
@@ -21,7 +22,7 @@
  * runs before that.
  */
 
-import type { AccessProof } from "../access/resolve";
+import type { AccessProof } from "../access/grant";
 
 export interface CorsPolicy {
   /** What the response was authorized by; null for a preflight or a refusal. */
@@ -35,6 +36,8 @@ export interface CorsPolicy {
 const PREFLIGHT_METHODS = "GET, HEAD, OPTIONS";
 const PREFLIGHT_HEADERS = "range, if-none-match, if-modified-since, authorization, x-serve-token";
 const PREFLIGHT_MAX_AGE = "86400";
+/** A cross-origin client must read the challenge and the retry delay (ADR-014 §5). */
+const EXPOSE_HEADERS = "WWW-Authenticate, Retry-After";
 
 function credentialed(policy: CorsPolicy): boolean {
   if (policy.proof !== null && policy.proof !== "cookie") return false;
@@ -43,6 +46,7 @@ function credentialed(policy: CorsPolicy): boolean {
 
 /** Add the access headers for `policy` to `headers`, in place. */
 export function applyCors(headers: Headers, policy: CorsPolicy): void {
+  headers.set("Access-Control-Expose-Headers", EXPOSE_HEADERS);
   if (policy.proof !== "none") addVary(headers, "Origin");
   if (policy.proof === "cookie") headers.set("Cross-Origin-Resource-Policy", "same-origin");
   if (credentialed(policy)) {
@@ -156,6 +160,25 @@ if (import.meta.vitest) {
     expect(headers.get("Cross-Origin-Resource-Policy")).toBeNull();
   });
 
+  test.each(["bearer", "token"] as const)("a %s proof gets * without credentials, even from a trusted origin", (proof) => {
+    const headers = new Headers();
+    applyCors(headers, policy(proof, OWN));
+    expect(headers.get("Access-Control-Allow-Origin")).toBe("*");
+    expect(headers.get("Access-Control-Allow-Credentials")).toBeNull();
+    expect(headers.get("Vary")).toBe("Origin");
+    expect(headers.get("Cross-Origin-Resource-Policy")).toBeNull();
+  });
+
+  test("every response and every preflight exposes the challenge and the retry delay", () => {
+    for (const proof of ["none", "cookie", "basic", "bearer", "token", null] as const) {
+      const headers = new Headers();
+      applyCors(headers, policy(proof, "https://evil.example"));
+      expect(headers.get("Access-Control-Expose-Headers")).toBe("WWW-Authenticate, Retry-After");
+    }
+    const preflight = preflightResponse({ origin: null, trustedOrigins: [OWN] });
+    expect(preflight.headers.get("Access-Control-Expose-Headers")).toBe("WWW-Authenticate, Retry-After");
+  });
+
   test("a refusal credentials a trusted origin and gives everyone else *", () => {
     const trusted = new Headers();
     applyCors(trusted, policy(null, OWN));
@@ -168,10 +191,11 @@ if (import.meta.vitest) {
     expect(other.get("Vary")).toBe("Origin");
   });
 
-  test("a preflight allows fixed headers instead of echoing the request", () => {
+  test("a preflight allows fixed headers, the token header among them, instead of echoing the request", () => {
     const res = preflightResponse({ origin: "https://evil.example", trustedOrigins: [OWN] });
     expect(res.status).toBe(204);
     expect(res.headers.get("Access-Control-Allow-Headers")).toBe(PREFLIGHT_HEADERS);
+    expect(PREFLIGHT_HEADERS.split(", ")).toContain("x-serve-token");
     expect(res.headers.get("Access-Control-Max-Age")).toBe("86400");
     expect(res.headers.get("Access-Control-Allow-Origin")).toBe("*");
   });

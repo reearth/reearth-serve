@@ -113,19 +113,31 @@ export function parseOnOff(value: string, flag: string): boolean {
   throw new Error(`${flag} takes on or off`);
 }
 
+const DURATION_UNITS: Record<string, number> = { s: 1, m: 60, h: 3600, d: 86400 };
+
+/** `90`, `90s`, `30m`, `24h` or `7d`, in seconds. */
+export function parseDuration(value: string, flag: string): number {
+  const match = /^(\d+)([smhd]?)$/.exec(value.trim());
+  if (!match) throw new Error(`${flag} takes a duration such as 3600, 30m, 24h or 7d`);
+  return Number(match[1]) * DURATION_UNITS[match[2] || "s"];
+}
+
 // --- HTTP helpers ---
 
 const TOKEN_REFRESH_BUFFER_MS = 60 * 1000; // refresh 60s before expiry
 
+/** The stored login, refreshed first when it is expired or about to be. */
+async function freshCredentials(): Promise<ReturnType<typeof loadCredentials>> {
+  const creds = loadCredentials();
+  if (creds?.expiresAt && creds.expiresAt - Date.now() < TOKEN_REFRESH_BUFFER_MS) {
+    if (await refreshAccessToken()) return loadCredentials();
+  }
+  return creds;
+}
+
 export async function commonHeaders(): Promise<Record<string, string>> {
   const headers: Record<string, string> = {};
-  let creds = loadCredentials();
-
-  // Auto-refresh if token is expired or about to expire
-  if (creds?.expiresAt && creds.expiresAt - Date.now() < TOKEN_REFRESH_BUFFER_MS) {
-    const newToken = await refreshAccessToken();
-    if (newToken) creds = loadCredentials();
-  }
+  const creds = await freshCredentials();
 
   if (creds) {
     headers["Authorization"] = `Bearer ${creds.accessToken}`;
@@ -402,6 +414,31 @@ export async function promptPasswordTwice(): Promise<string> {
 export function basicAuthHeader(password: string | undefined): Record<string, string> {
   if (!password) return {};
   return { Authorization: `Basic ${Buffer.from(`viewer:${password}`).toString("base64")}` };
+}
+
+/**
+ * The `Authorization` a file download sends: Basic when a site password is
+ * configured, else the login token, so a project member reads a restricted
+ * asset with the same commands (ADR-014 §6). Public files ignore either.
+ *
+ * Returns a resolver to call per request, because a long `cp -r` or `sync`
+ * can outlive the login token. Concurrent callers share one in-flight
+ * resolution, so parallel workers trigger at most one refresh.
+ */
+export function downloadAuth(password: string | undefined): () => Promise<Record<string, string>> {
+  if (password) {
+    const header = basicAuthHeader(password);
+    return async () => header;
+  }
+  let pending: Promise<Record<string, string>> | null = null;
+  return () => {
+    pending ??= freshCredentials()
+      .then((creds): Record<string, string> => (creds ? { Authorization: `Bearer ${creds.accessToken}` } : {}))
+      .finally(() => {
+        pending = null;
+      });
+    return pending;
+  };
 }
 
 /**

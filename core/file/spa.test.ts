@@ -96,7 +96,7 @@ describe("spa: true", () => {
     const { app } = await spaFixture();
     const res = await app.request(`http://localhost/files/${ASSET_ID}/docs`);
     expect(res.status).toBe(301);
-    expect(res.headers.get("Location")).toBe(`http://localhost/files/${ASSET_ID}/docs/`);
+    expect(res.headers.get("Location")).toBe(`/files/${ASSET_ID}/docs/`);
   });
 
   test("a pinned version URL keeps the pinned policy", async () => {
