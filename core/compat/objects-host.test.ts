@@ -168,6 +168,28 @@ describe("objects host", () => {
     }
   });
 
+  test("a wrong Basic password costs one PBKDF2 whether the key is unbound, restricted, rate limited or a password object", async () => {
+    const { f, ids } = await written({ media: ["pw.txt", "restricted.txt", "limited.txt"] });
+    await protect(f.metadata, ids["media/pw.txt"], "pw");
+    await protect(f.metadata, ids["media/limited.txt"], "pw");
+    await f.metadata.setProtection(ids["media/restricted.txt"], { access: "restricted" });
+    const wrong = { Authorization: `Basic ${btoa("x:wrong")}`, "X-Forwarded-For": "203.0.113.9" };
+    for (let i = 0; i < 12; i++) await virtual(f, "/limited.txt", { headers: wrong });
+    const derive = vi.spyOn(crypto.subtle, "deriveBits");
+    const derivations = async (path: string, headers: Record<string, string> = wrong) => {
+      derive.mockClear();
+      expect((await virtual(f, path, { headers })).status).toBe(404);
+      return derive.mock.calls.filter(([alg]) => (alg as Pbkdf2Params).name === "PBKDF2").length;
+    };
+    expect(await derivations("/pw.txt")).toBe(1);
+    for (const path of ["/none.txt", "/restricted.txt", "/limited.txt"]) expect(await derivations(path)).toBe(1);
+    expect(await derivations("/none.txt", {})).toBe(0);
+    derive.mockClear();
+    expect((await f.app.request("http://localhost/files/none/x.txt", { headers: wrong })).status).toBe(404);
+    expect(derive).not.toHaveBeenCalled();
+    derive.mockRestore();
+  });
+
   test("a broken password protection fails closed as a missing key, while /files answers 503", async () => {
     const { f, ids } = await written();
     const id = ids["media/assets/ab/r.txt"];
