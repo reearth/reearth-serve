@@ -106,6 +106,28 @@ if (import.meta.vitest) {
     expect(parseMediaType(null)).toBeNull();
   });
 
+  test("parseMediaType keeps the empty and quoted parameter forms RFC 9110 allows", () => {
+    expect(parseMediaType("text/plain;")).toBe("text/plain");
+    expect(parseMediaType("text/plain ; charset=utf-8")).toBe("text/plain; charset=utf-8");
+    expect(parseMediaType("text/plain;;charset=a")).toBe("text/plain; charset=a");
+    expect(parseMediaType('text/plain; a="b;c"; charset=x')).toBe("text/plain; charset=x");
+  });
+
+  test("parseMediaType rejects a value longer than 256 bytes", () => {
+    const at = (length: number) => "text/plain; a=" + "b".repeat(length - "text/plain; a=".length);
+    expect(parseMediaType(at(256))).toBe("text/plain");
+    expect(parseMediaType(at(257))).toBeNull();
+  });
+
+  test("parseMediaType runs in linear time on hostile input", () => {
+    const hostile = ['a/b' + "; ".repeat(5000) + '"', ";  ".repeat(5000), " ; ".repeat(5000), "; a=b ".repeat(5000)];
+    for (const raw of [...hostile, ...hostile.map((h) => "text/plain" + h), " ".repeat(10000) + "x", "a/b" + " ".repeat(10000) + "x"]) {
+      const start = performance.now();
+      parseMediaType(raw);
+      expect(performance.now() - start, JSON.stringify(raw.slice(0, 20))).toBeLessThan(50);
+    }
+  });
+
   test("a charset that is not a token is dropped, not passed on", () => {
     expect(parseMediaType('text/plain; charset="utf 8"')).toBe("text/plain");
     expect(parseMediaType('text/plain; charset="a\\"b"')).toBe("text/plain");

@@ -147,6 +147,9 @@ describe("the API reports a stored Content-Type normalized", () => {
     ["terminal escape after CR LF", "text/plain\r\n\u001b[31mX", "application/octet-stream"],
     ["OSC title escape", "\u001b]0;pwned\u0007", "application/octet-stream"],
     ["empty parameter before a comma", "image/png;,text/html", "application/octet-stream"],
+    ["raw SGR escape", "\u001b[31m", "application/octet-stream"],
+    ["SGR escape after a type", "text/plain\u001b[31m", "application/octet-stream"],
+    ["comma list", "text/plain,text/html", "application/octet-stream"],
     ["uppercase with extra parameters", "TEXT/PLAIN; Charset=UTF-8; x=y", "text/plain; charset=utf-8"],
   ])("%s", async (_name, stored, sent) => {
     const f = await siteFixture();
@@ -173,5 +176,43 @@ describe("the API reports a stored Content-Type normalized", () => {
     expect(version.version.contentType).toBe(sent);
     const files = (await (await get(`/api/v1/assets/${SINGLE_FILE_ID}/files`)).text()).trim().split("\n");
     expect(files.map((line) => (JSON.parse(line) as { contentType: string }).contentType)).toEqual([sent]);
+  });
+});
+
+// Each of these took the old media-type regex into catastrophic backtracking.
+const PATHOLOGICAL: Array<[string, string]> = [
+  ["unterminated quote after many empty parameters", "a/b" + "; ".repeat(5000) + '"'],
+  ["many empty parameters", "text/plain" + ";  ".repeat(5000)],
+  ["many padded empty parameters", "text/plain" + " ; ".repeat(5000)],
+  ["many padded parameters", "text/plain" + "; a=b ".repeat(5000)],
+];
+
+describe("a pathological Content-Type is rejected quickly", () => {
+  test.each(PATHOLOGICAL)("read of a seeded row: %s", async (_name, stored) => {
+    const { app, metadata } = await fixture();
+    metadata.assets.set(SINGLE_FILE_ID, { ...metadata.assets.get(SINGLE_FILE_ID)!, contentType: stored });
+    const start = performance.now();
+    const res = await app.request(`/files/${SINGLE_FILE_ID}/data.geojson`);
+    expect(performance.now() - start).toBeLessThan(500);
+    expectServedAs(res, SANDBOXED.type, false, _name);
+  });
+
+  test.each(PATHOLOGICAL)("upload: %s", async (_name, header) => {
+    const f = await fixture({ anonymousUploadEnabled: true });
+    f.deps.writes = {
+      ...f.deps.writes,
+      async createAsset({ asset }: { asset: AssetMetadata }) { f.metadata.assets.set(asset.id, asset); },
+    } as AtomicWrites;
+    const app = createApp(f.deps);
+    const body = "x";
+    const start = performance.now();
+    const res = await app.request("/api/v1/assets", {
+      method: "POST",
+      headers: { "X-Filename": "a.txt", "Content-Length": "1", "Content-Type": header },
+      body,
+    });
+    expect(performance.now() - start).toBeLessThan(500);
+    expect(res.status).toBe(201);
+    expect(((await res.json()) as { asset: AssetMetadata }).asset.contentType).toBe("application/octet-stream");
   });
 });

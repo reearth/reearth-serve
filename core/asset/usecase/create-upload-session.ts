@@ -131,6 +131,13 @@ if (import.meta.vitest) {
     expect(createUploadSessionBodySchema.safeParse({ filename: "my file..v2.json", size: 1 }).success).toBe(true);
   });
 
+  test("upload session body caps contentType at 256 characters", async () => {
+    const { createUploadSessionBodySchema } = await import("../../../shared/api");
+    const at = (length: number) => ({ filename: "a.txt", size: 1, contentType: "text/plain;a=" + "b".repeat(length - 13) });
+    expect(createUploadSessionBodySchema.safeParse(at(256)).success).toBe(true);
+    expect(createUploadSessionBodySchema.safeParse(at(257)).success).toBe(false);
+  });
+
   test("createUploadSession returns presigned URL for single upload", async () => {
     const sessions = mockSessions();
     const presigned = mockPresignedUrls();
