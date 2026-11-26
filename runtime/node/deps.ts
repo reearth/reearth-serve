@@ -18,8 +18,8 @@ import { SqlKeyValue } from "../../adapters/sql/kv";
 import { MemoryFileStorage } from "../../adapters/memory/storage";
 import {
   createSqliteClient,
-  DOMAIN_MIGRATIONS_DIR,
-  SQL_ADAPTER_MIGRATIONS_DIR,
+  DOMAIN_MIGRATIONS,
+  NODE_MIGRATIONS,
 } from "../../adapters/memory/sqlite-node";
 import { WebCryptoDeliveryTokenCodec } from "../../adapters/webcrypto/delivery-token";
 import { UnavailableContainerLauncher } from "./container";
@@ -56,10 +56,7 @@ export function buildNodeRuntime(env: Env = process.env): NodeRuntime {
   const config = loadConfig(env);
 
   // The domain schema plus the queue/kv tables that only exist off Cloudflare.
-  const sql = createSqliteClient(config.sqlitePath, [
-    DOMAIN_MIGRATIONS_DIR,
-    SQL_ADAPTER_MIGRATIONS_DIR,
-  ]);
+  const sql = createSqliteClient(config.sqlitePath, [DOMAIN_MIGRATIONS, NODE_MIGRATIONS]);
 
   if (config.objectStore) {
     console.warn(

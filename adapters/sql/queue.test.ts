@@ -3,13 +3,13 @@
 // invisible, `retry` redelivers with a higher attempt count, and a message
 // that exhausts its attempts stops coming back (ADR-012 §4).
 import { describe, expect, test } from "vitest";
-import { createSqliteClient, DOMAIN_MIGRATIONS_DIR, SQL_ADAPTER_MIGRATIONS_DIR } from "../memory/sqlite-node";
+import { createSqliteClient, DOMAIN_MIGRATIONS, NODE_MIGRATIONS } from "../memory/sqlite-node";
 import { SqlJobQueue } from "./queue";
 
 type Msg = { id: string };
 
 function fixture(options: { maxAttempts?: number } = {}) {
-  const db = createSqliteClient(":memory:", [DOMAIN_MIGRATIONS_DIR, SQL_ADAPTER_MIGRATIONS_DIR]);
+  const db = createSqliteClient(":memory:", [DOMAIN_MIGRATIONS, NODE_MIGRATIONS]);
   let now = 1_700_000_000_000;
   const queue = new SqlJobQueue<Msg>(db, "extraction", { ...options, now: () => now });
   return { db, queue, advance: (seconds: number) => { now += seconds * 1000; } };
