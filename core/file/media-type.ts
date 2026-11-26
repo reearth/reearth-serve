@@ -75,6 +75,7 @@ export function parseMediaType(raw: string | null | undefined): MediaType | null
   }
 
   const essence = `${type}/${subtype}`.toLowerCase();
+  if (essence === "*/*") return null;
   return (charset ? `${essence}; charset=${charset}` : essence) as MediaType;
 }
 
