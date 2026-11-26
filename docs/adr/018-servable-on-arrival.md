@@ -145,6 +145,16 @@ Three pitfalls:
 - **Eager parsing.** `zip.NewReader` parses the whole central directory
   into `[]*zip.File`. At 50,000 entries that is 50,000 allocations per
   request; at that scale a streaming parser is required.
+- **Data descriptors.** 72.8% of the entries in PLATEAU zips carry a data
+  descriptor, so the local header's sizes are zero. Sizes and CRCs come
+  from the central directory only (Measurement 2).
+
+Filename encoding is not a corner case for the target corpus: no entry in
+the 1,635 PLATEAU zips sets the UTF-8 flag, and non-ASCII names occur in
+citygml zips. The encoding is decided once per archive (UTF-8 when every
+name decodes strictly, then the Info-ZIP Unicode Path extra field, then
+one legacy charset for the whole archive) so that names never flip
+between entries.
 
 **Entry hashes.** An entry read in place has only the CRC-32 that the
 central directory records. The manifest MD5 that `file sync` compares
@@ -201,19 +211,52 @@ Questions).
 
 ### 5. Delivery without decoding
 
-BGZF is a concatenation of independent gzip members, and a concatenation
-of gzip members is itself a valid gzip stream. A byte range cut at member
-boundaries is therefore a valid gzip stream. For a repacked BGZF object
-the Worker:
+A response body Serve sends with `Content-Encoding: gzip` is always a
+single gzip member. A concatenation of members is valid gzip by RFC 1952,
+but clients do not read it: Chromium, Firefox and WebKit decode the
+first member and drop the rest without an error, curl and wget do the
+same, and `DecompressionStream("gzip")` in workerd and Node throws on
+the second member (Measurement 1). BGZF, which is a run of members, is
+therefore not a delivery format.
 
-1. issues a `Range` read to R2,
-2. returns the bytes unchanged,
-3. sets `Content-Encoding: gzip`.
+A repacked object is instead one gzip member whose DEFLATE stream is
+written with a full flush at every access point (every 1 MiB of input by
+default). A full flush ends the block on a byte boundary and resets the
+dictionary, so the compressed bytes between two access points decode on
+their own with no saved window. The access-point table records, per
+segment, its compressed offset, its uncompressed length and its CRC-32.
+For a byte range the Worker:
 
-The browser decodes. Workers bill CPU time and not I/O wait, so this path
-costs about the same CPU as passing an uncompressed object through. The
-choice between "range read and decode" and "store expanded and pass
-through" disappears.
+1. issues one `Range` read to R2 covering the segments that hold the
+   range,
+2. writes a 10-byte gzip header,
+3. streams the segments unchanged,
+4. appends an empty final block (`03 00`) and an 8-byte trailer whose
+   CRC-32 is the `crc32_combine` of the segments' recorded CRCs,
+5. sets `Content-Encoding: gzip`.
+
+This is the transmux of §3 applied to a range of segments instead of a
+zip entry. The client decodes. Workers bill CPU time and not I/O wait, and
+combining CRCs costs microseconds, so this path costs about the same CPU
+as passing an uncompressed object through. The choice between "range read
+and decode" and "store expanded and pass through" disappears.
+
+The repacker also starts a segment at every entry that is at least one
+interval long, so such an entry is a run of whole segments and its
+response carries no bytes of its neighbours. Smaller entries share
+segments; reading one decodes at most one interval in the Worker and
+returns the slice, which costs a few milliseconds of CPU and streams. The
+rules for gzip-stored objects in `core/file/handler.ts` still apply: the
+single member is passed through when the client accepts gzip and sent no
+`Range`, and decoded and sliced in the Worker otherwise.
+
+The interval is a size trade-off. A full flush resets the dictionary, and
+CityGML compresses about 20 times, so short segments lose most of their
+context. On PLATEAU bldg files a flush every 64 KiB costs 33% to 61% in
+size against one unbroken stream, every 256 KiB costs 9% to 16%, and
+every 1 MiB costs 2% to 4% (Measurement 1). BGZF's 64 KiB members lose the
+same. Free egress makes the over-read of a wide interval cheap, so 1 MiB
+is the default.
 
 **gzip is the single encoding.** zstd reached Safari in 26.3
 (2026-02-11) and became Baseline Newly Available that day; Chrome 123 and
@@ -333,7 +376,10 @@ with ADR-015 §1 (the original is the source of truth).
 **GeoTIFF.** A COG is tiled, has overviews, and has its IFDs at the
 front. A sidecar can add only the overviews. Whether an original is tiled
 is readable from its TIFF tags, so like the solid-7z check it is measured
-first. Overview generation makes smaller images, as thumbnail generation
+first (Measurement 4: GeoTIFFs from COG pipelines are tiled, older
+science rasters such as Hansen GFC and WorldPop are one-row strips, and
+PLATEAU orthos are mostly small tiled files). Overview generation makes
+smaller images, as thumbnail generation
 does; a thumbnail is the top level of the pyramid and an `.ovr` is every
 level, so the two may share an implementation.
 
@@ -356,7 +402,7 @@ CityGML and JSONL use one mechanism.
 ### 8. The container index is metadata of the original
 
 ADR-015 §2 condition 3 admits only one generation of derivation. An index
-over a repacked BGZF object would be a derivation of a derivation and
+over a repacked object would be a derivation of a derivation and
 would break that rule in form.
 
 The container index is therefore classified as **metadata of the
@@ -367,6 +413,15 @@ and building the index in finalisation (§6) is justified the same way as
 computing the checksum there. The index is keyed by the blob's SHA-256
 (ADR-017 §3), so every version in a workspace that points at the same
 blob shares one index.
+
+Until ADR-017 lands, the index is stored next to the original
+(`assets/{id}[/v/{vid}]/_archive/container.v1`) and its key is recorded in
+the asset or version row's system metadata. Readers take the key from the
+row and never derive it, so moving to blob keys changes only the writer,
+and a row whose index was never moved reads from the central directory.
+This is a deliberate interim deviation from keying by the blob's SHA-256:
+until then, versions that point at identical bytes each build their own
+index instead of sharing one.
 
 ## Alternatives Considered
 
@@ -420,7 +475,11 @@ repacked objects and would keep the index out of finalisation.
 
 - Serve gains format-specific read paths in the Worker (zip central
   directory, tar entry tables, gzip access points, bz2 block boundaries,
-  BGZF) where today it serves only whole objects.
+  full-flush segments) where today it serves only whole objects.
+- Every gzip body Serve emits, and every object it passes through as
+  gzip, must be a single member. An object stored as concatenated members
+  must be decoded in the Worker with a decoder that continues past the
+  first member, because `DecompressionStream` does not (Measurement 1).
 - Reads of an archive that has no index yet cost more requests and more
   CPU than reads of extracted objects. The cost falls as jobs complete,
   but it is a real cost during that window, and for an L3 archive before
@@ -455,17 +514,110 @@ repacked objects and would keep the index out of finalisation.
 5. **The distribution of LZ77 back-reference distances.** Whether access
    point windows can be trimmed. Research-oriented and not urgent.
 
+### Measurement results (2026-11-19)
+
+All runs were local or read-only `Range` requests to public URLs. The
+scripts are kept with the implementation PRs so the numbers can be rerun.
+
+**1. A multi-member gzip is not read to the end.** The body was
+20,154,551 bytes of CityGML-like text, served with
+`Content-Encoding: gzip` as BGZF (64 KiB members), as 1 MiB members, as
+two tiny members, and as a BGZF range cut, both directly and through a
+local workerd Worker with `encodeBody: "manual"`.
+
+| Client | Result |
+|---|---|
+| Chromium 156, Firefox 144, WebKit 26 | First member only, no error (BGZF arrives as 65,280 bytes) |
+| curl 8.7.1, wget | First member only |
+| `DecompressionStream("gzip")`, workerd and Node | Throws on the second member |
+| Python requests, Go net/http, Node fetch (undici) | All members |
+
+§5 was rewritten from BGZF to full-flush segments in one member. That
+layout returned the exact bytes in Chromium, Firefox, WebKit, curl,
+workerd and Node
+`DecompressionStream`, for the whole object, a 30-segment cut and a single
+segment, with the trailer CRC built by `crc32_combine`. A local workerd
+Worker that assembled the member itself, from one `Range` read of the raw
+segments and a segment table, gave all three browsers the exact bytes
+too.
+
+The size cost of the flushes, against one unbroken deflate stream at
+level 6, on four PLATEAU bldg `.gml` files of 26 to 43 MB:
+
+| Interval | Size cost |
+|---|---|
+| 64 KiB | 33% to 61% |
+| 256 KiB | 9% to 16% |
+| 1 MiB | 2% to 4% |
+
+On synthetic CityGML-like text the 64 KiB cost was only 1.0%, because that
+text compresses 8 times where real bldg files compress 17 to 26 times.
+
+**2. The p99 zip needs a container index.** Sample: every zip resource of
+the 367 `plateau*` datasets on geospatial.jp CKAN, 1,635 of 1,642 parsed
+(7 returned HTTP 500), 3.45 TB.
+
+| | p50 | p90 | p99 | max |
+|---|---|---|---|---|
+| Entries | 1,515 | 20,903 | 73,234 | 283,475 |
+| Central directory | 170 KB | 2.68 MB | 13.2 MB | 41.9 MB |
+| Zip size | 269 MB | 1.94 GB | 41.8 GB | 269 GB |
+
+109 zips use Zip64. 72.8% of entries carry a data descriptor. Only store
+and deflate occur. No entry sets the UTF-8 flag. A general corpus of 417
+zips (Natural Earth, TIGER/Line, PyPI wheels, Maven jars) has a p99 of
+1,427 entries and a 146 KB central directory.
+
+**3. Distributed 7z files are solid.** 106 of the 114 PLATEAU `.7z`
+resources (668 GB, all LZMA2) have a folder holding more than one file,
+and 33 hold every file in one folder. The 8 non-solid files are orthos
+with one file per folder. One citygml folder holds 165,936 files and
+4.3 GB uncompressed. 22 of 24 sampled GitHub release `.7z` files are
+solid. Repacking is the common case for 7z, not the exception.
+
+**4. Tiled GeoTIFFs come from COG pipelines.** 240 of 304 sampled files
+are tiled, but about 210 of those come from sources that publish COGs
+(Copernicus DEM, ESA WorldCover, Sentinel-2, OpenAerialMap). Hansen GFC
+and WorldPop are all stripped, mostly one row per strip. Of 35 random
+PLATEAU ortho zips, 30 hold tiled TIFFs (mostly 128x128, uncompressed)
+and 5 hold stripped ones. Sidecars cover most PLATEAU orthos; legacy
+science rasters need conversion.
+
+**5. Most back-references are short.** Over 7 PLATEAU bldg `.gml`
+entries (26 to 58 MB each), 34.9% of matches reach beyond 4 KiB, 30.4%
+beyond 8 KiB, 8.3% beyond 16 KiB and 3.3% beyond 24 KiB.
+
 ### Decisions
 
+Each item carries a proposed answer, for the deciders to accept or
+change.
+
 - Whether the container index uses mokuji or a sorted flat array (§4).
+  *Proposed:* a sorted flat array sorted by the UTF-8 bytes of the path,
+  whose records are the in-memory table layout byte for byte. One sort
+  serves exact lookup, prefix listing, delimiter listing and continuation
+  tokens, and one builder writes both the cache and the file. mokuji stays
+  open for content indexes above Serve.
 - The finalisation thresholds for skipping the container index (§6).
+  *Proposed:* build it up to 100,000 entries or 20 MiB of central
+  directory, which covers PLATEAU's p99. Skip it, and record the skip,
+  when the central directory fits the 1 MiB tail read (the p50 zip),
+  because the index cannot beat that read.
 - The shape of the decompressed-stream endpoint and the webhook that
-  hands it to the service above Serve (§4).
+  hands it to the service above Serve (§4). *Proposed:* no new endpoint.
+  `GET /files/:id/<path>` without `Accept-Encoding: gzip` already streams
+  an entry's decoded bytes in order. The webhook waits for ADR-007.
 - Which hash an in-place entry reports in the listing (`crc32:` from the
   central directory, or a SHA-256 filled in later by an optimisation
-  job), and the matching change to `file sync` (§3).
+  job), and the matching change to `file sync` (§3). *Proposed:*
+  `crc32:` now, and `file sync` computes CRC-32 locally for such entries.
+  A SHA-256 job is a later optimisation.
 - Whether zip extraction continues at all once zip entries are served in
   place, or is kept only where it measurably reduces request cost.
+  *Proposed:* keep it during the rollout, with extracted objects read
+  first so archives that are already extracted respond exactly as today.
+  Decide after measuring that a warm in-place read costs the same single
+  request as an extracted one.
 
 ## Notes: research directions
 
