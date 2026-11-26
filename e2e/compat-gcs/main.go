@@ -20,17 +20,22 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"crypto/md5"
 	"errors"
 	"fmt"
+	"hash/crc32"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"sync"
 	"time"
 
 	"cloud.google.com/go/storage"
 	"google.golang.org/api/googleapi"
+	"google.golang.org/api/iterator"
 	"google.golang.org/api/option"
 )
 
@@ -44,13 +49,16 @@ type config struct {
 }
 
 var scenarios = map[string]func(context.Context, *storage.Client, config) error{
-	"attrs-missing": attrsMissing,
-	"revoked":       revoked,
+	"attrs-missing":           attrsMissing,
+	"revoked":                 revoked,
+	"write-attrs-list-delete": writeAttrsListDelete,
+	"paging":                  paging,
+	"race":                    race,
 }
 
 func main() {
 	if len(os.Args) != 2 || scenarios[os.Args[1]] == nil {
-		fmt.Fprintln(os.Stderr, "usage: compat-gcs <attrs-missing|revoked>")
+		fmt.Fprintln(os.Stderr, "usage: compat-gcs <attrs-missing|revoked|write-attrs-list-delete|paging|race>")
 		os.Exit(2)
 	}
 	cfg, err := loadConfig()
@@ -61,7 +69,7 @@ func main() {
 	dialEverythingTo(cfg.endpoint.Host)
 	sendHTTPSInPlaintext()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 	client, err := storage.NewClient(ctx,
 		option.WithEndpoint("http://"+cfg.compatHost+"/storage/v1/"),
@@ -155,5 +163,203 @@ func revoke(ctx context.Context, cfg config) error {
 	if res.StatusCode != http.StatusNoContent {
 		return fmt.Errorf("revoke: want 204, got %d", res.StatusCode)
 	}
+	return nil
+}
+
+func write(ctx context.Context, obj *storage.ObjectHandle, contentType string, metadata map[string]string, data []byte) (*storage.ObjectAttrs, error) {
+	w := obj.NewWriter(ctx)
+	w.ContentType = contentType
+	w.Metadata = metadata
+	if _, err := w.Write(data); err != nil {
+		_ = w.Close()
+		return nil, err
+	}
+	if err := w.Close(); err != nil {
+		return nil, err
+	}
+	return w.Attrs(), nil
+}
+
+func checkHashes(attrs *storage.ObjectAttrs, data []byte) error {
+	wantCRC := crc32.Checksum(data, crc32.MakeTable(crc32.Castagnoli))
+	wantMD5 := md5.Sum(data)
+	if attrs.CRC32C != wantCRC {
+		return fmt.Errorf("CRC32C: want %08x, got %08x", wantCRC, attrs.CRC32C)
+	}
+	if !bytes.Equal(attrs.MD5, wantMD5[:]) {
+		return fmt.Errorf("MD5: want %x, got %x", wantMD5, attrs.MD5)
+	}
+	return nil
+}
+
+func writeAttrsListDelete(ctx context.Context, client *storage.Client, cfg config) error {
+	bucket := client.Bucket(cfg.bucket)
+	obj := bucket.Object("assets/ab/cdef/a.txt")
+	first := []byte("small body")
+	if _, err := write(ctx, obj, "text/plain", map[string]string{"k": "v"}, first); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+	attrs, err := obj.Attrs(ctx)
+	if err != nil {
+		return fmt.Errorf("attrs: %w", err)
+	}
+	if err := checkHashes(attrs, first); err != nil {
+		return err
+	}
+	if attrs.ContentType != "text/plain" || attrs.Metadata["k"] != "v" || attrs.Size != int64(len(first)) {
+		return fmt.Errorf("attrs: got ContentType %q, Metadata %v, Size %d", attrs.ContentType, attrs.Metadata, attrs.Size)
+	}
+	firstGeneration := attrs.Generation
+
+	second := []byte("second, longer body")
+	if _, err := write(ctx, obj, "text/plain", nil, second); err != nil {
+		return fmt.Errorf("overwrite: %w", err)
+	}
+	attrs, err = obj.Attrs(ctx)
+	if err != nil {
+		return fmt.Errorf("attrs after overwrite: %w", err)
+	}
+	if err := checkHashes(attrs, second); err != nil {
+		return fmt.Errorf("after overwrite: %w", err)
+	}
+	if attrs.Generation <= firstGeneration {
+		return fmt.Errorf("overwrite: generation %d is not above %d", attrs.Generation, firstGeneration)
+	}
+	fmt.Println("overwrite: generation increased")
+	lastGeneration := attrs.Generation
+
+	if _, err := write(ctx, bucket.Object("assets/ab/cdef/sub/b.txt"), "text/plain", nil, []byte("b")); err != nil {
+		return fmt.Errorf("write sub/b.txt: %w", err)
+	}
+	var objects, prefixes []string
+	it := bucket.Objects(ctx, &storage.Query{Prefix: "assets/ab/cdef/", Delimiter: "/"})
+	for {
+		item, err := it.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("list: %w", err)
+		}
+		if item.Prefix != "" {
+			prefixes = append(prefixes, item.Prefix)
+		} else {
+			objects = append(objects, item.Name)
+		}
+	}
+	if len(objects) != 1 || objects[0] != "assets/ab/cdef/a.txt" || len(prefixes) != 1 || prefixes[0] != "assets/ab/cdef/sub/" {
+		return fmt.Errorf("list: want one object and one prefix, got %v and %v", objects, prefixes)
+	}
+	fmt.Println("listed:", objects, prefixes)
+
+	for _, name := range []string{"assets/ab/cdef/a.txt", "assets/ab/cdef/a.txt", "never/written.txt"} {
+		if err := bucket.Object(name).Delete(ctx); err != nil {
+			return fmt.Errorf("delete %s: %w", name, err)
+		}
+		fmt.Println("deleted:", name)
+	}
+	if _, err := obj.Attrs(ctx); !errors.Is(err, storage.ErrObjectNotExist) {
+		return fmt.Errorf("attrs after delete: want ErrObjectNotExist, got %v", err)
+	}
+
+	recreated, err := write(ctx, obj, "text/plain", nil, first)
+	if err != nil {
+		return fmt.Errorf("recreate: %w", err)
+	}
+	if recreated.Generation <= lastGeneration {
+		return fmt.Errorf("recreate: generation %d is not above %d", recreated.Generation, lastGeneration)
+	}
+	fmt.Println("recreate: generation increased")
+	if err := obj.Delete(ctx); err != nil {
+		return fmt.Errorf("delete recreated: %w", err)
+	}
+	return nil
+}
+
+const pagingKeys = 1050
+
+func paging(ctx context.Context, client *storage.Client, cfg config) error {
+	bucket := client.Bucket(cfg.bucket)
+	names := make(chan string)
+	errs := make(chan error, pagingKeys)
+	var wg sync.WaitGroup
+	for range 16 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for name := range names {
+				if _, err := write(ctx, bucket.Object(name), "text/plain", nil, []byte(name)); err != nil {
+					errs <- fmt.Errorf("write %s: %w", name, err)
+				}
+			}
+		}()
+	}
+	for i := range pagingKeys {
+		names <- fmt.Sprintf("paging/%05d.txt", i)
+	}
+	close(names)
+	wg.Wait()
+	close(errs)
+	if err := <-errs; err != nil {
+		return err
+	}
+
+	seen := map[string]int{}
+	it := bucket.Objects(ctx, &storage.Query{Prefix: "paging/"})
+	for {
+		item, err := it.Next()
+		if errors.Is(err, iterator.Done) {
+			break
+		}
+		if err != nil {
+			return fmt.Errorf("list: %w", err)
+		}
+		seen[item.Name]++
+	}
+	for i := range pagingKeys {
+		if name := fmt.Sprintf("paging/%05d.txt", i); seen[name] != 1 {
+			return fmt.Errorf("list: %s seen %d times", name, seen[name])
+		}
+	}
+	if len(seen) != pagingKeys {
+		return fmt.Errorf("list: want %d keys, got %d", pagingKeys, len(seen))
+	}
+	fmt.Println("listed:", len(seen))
+	return nil
+}
+
+// The Go client does not retry an upload without preconditions by default,
+// so both writers opt in to retries.
+func race(ctx context.Context, client *storage.Client, cfg config) error {
+	obj := client.Bucket(cfg.bucket).Object("race/new.txt").Retryer(storage.WithPolicy(storage.RetryAlways))
+	start := make(chan struct{})
+	errs := make([]error, 2)
+	written := make([]*storage.ObjectAttrs, 2)
+	var wg sync.WaitGroup
+	for i := range 2 {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			<-start
+			written[i], errs[i] = write(ctx, obj, "text/plain", nil, []byte(fmt.Sprintf("writer %d", i)))
+		}()
+	}
+	close(start)
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		return err
+	}
+	attrs, err := obj.Attrs(ctx)
+	if err != nil {
+		return fmt.Errorf("attrs: %w", err)
+	}
+	low, high := written[0].Generation, written[1].Generation
+	if low > high {
+		low, high = high, low
+	}
+	if low == high || attrs.Generation != high {
+		return fmt.Errorf("race: writers got generations %d and %d, the object has %d", low, high, attrs.Generation)
+	}
+	fmt.Println("generation: the later of two distinct writes")
 	return nil
 }

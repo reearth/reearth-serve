@@ -5,6 +5,7 @@ import type { AppEnv } from "../../types";
 import { getAssetMetadata, deleteAsset } from "../usecase";
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { siteHostDeps } from "../../site/handler";
+import { usageScopes } from "./shared";
 import { idParamSchema } from "../../../shared/openapi";
 import { jsonError } from "../../openapi";
 
@@ -27,15 +28,8 @@ export function registerDeleteRoute(app: Hono<AppEnv>) {
       if (!access.ok) return deniedResponse(c, access, { notFound: "Asset not found" });
       const asset = access.value;
 
-      const scopes: string[] = [];
-      if (asset.projectId) {
-        scopes.push(`project:${asset.projectId}`);
-        const project = await c.get("projects").find(asset.projectId);
-        if (project?.workspaceId) scopes.push(`workspace:${project.workspaceId}`);
-      }
-
       await deleteAsset(c.get("writes"), c.get("storage"), asset, {
-        usageScopes: scopes,
+        usageScopes: await usageScopes(c, asset.projectId),
         pendingCleanup: c.get("pendingCleanup"),
         siteHosts: siteHostDeps(c),
       });

@@ -1,22 +1,29 @@
 import type {
   Binding, BindingKind, BucketName, CompatBucket, CompatCredential, CredentialId,
-  ExactHashes, UploadId, UploadSession,
+  UploadId, UploadSession,
 } from "../../core/compat/model";
 import {
-  newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatStore, type DeleteBucketResult,
+  generationSeed, newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatStore, type DeleteBucketResult,
+  type LeaseToken, type RecordRef, type VersionRecord,
 } from "../../core/compat/repository";
 import { isServiceRole } from "../../core/auth/types";
 
+export type VersionsOf = (assetId: string) => { id: string; version: number }[];
+
 type Row = {
   bucket: BucketName; key: string; kind: BindingKind; assetId: string | null; claimedAt: number; claimToken: ClaimToken;
+  lease: { token: LeaseToken; at: number } | null;
 };
 
 export class MemoryCompatStore implements CompatStore {
   readonly buckets = new Map<string, CompatBucket>();
   readonly bindings = new Map<string, Row>();
-  readonly hashes = new Map<string, { assetId: string; hashes: ExactHashes }>();
+  readonly hashes = new Map<string, { assetId: string; record: VersionRecord }>();
+  readonly generations = new Map<string, number>();
   readonly credentials = new Map<string, CompatCredential>();
   readonly uploads = new Map<string, UploadSession>();
+
+  constructor(private readonly versionsOf: VersionsOf = () => []) {}
 
   async findBucket(name: BucketName): Promise<CompatBucket | null> {
     return this.buckets.get(name) ?? null;
@@ -27,6 +34,7 @@ export class MemoryCompatStore implements CompatStore {
   async insertBucket(bucket: CompatBucket): Promise<boolean> {
     if (this.buckets.has(bucket.name)) return false;
     this.buckets.set(bucket.name, { ...bucket });
+    this.generations.set(bucket.name, generationSeed());
     return true;
   }
   async deleteBucket(projectId: string, name: BucketName, revokedAt: number): Promise<DeleteBucketResult> {
@@ -37,6 +45,7 @@ export class MemoryCompatStore implements CompatStore {
     }
     for (const u of this.uploads.values()) if (u.bucket === name) this.uploads.delete(u.id);
     this.buckets.delete(name);
+    this.generations.delete(name);
     return "deleted";
   }
   async deleteProject(projectId: string): Promise<void> {
@@ -44,7 +53,10 @@ export class MemoryCompatStore implements CompatStore {
     for (const [id, row] of this.bindings) if (names.has(row.bucket)) this.bindings.delete(id);
     for (const [id, u] of this.uploads) if (names.has(u.bucket)) this.uploads.delete(id);
     for (const [id, c] of this.credentials) if (c.projectId === projectId) this.credentials.delete(id);
-    for (const name of names) this.buckets.delete(name);
+    for (const name of names) {
+      this.buckets.delete(name);
+      this.generations.delete(name);
+    }
   }
 
   async findBinding(bucket: BucketName, key: BindingKey): Promise<Binding | null> {
@@ -56,7 +68,7 @@ export class MemoryCompatStore implements CompatStore {
     const row = this.bindings.get(id);
     if (!row || (row.assetId === null && row.claimedAt < staleBefore)) {
       const token = newClaimToken();
-      this.bindings.set(id, { bucket, key, kind, assetId: null, claimedAt: now, claimToken: token });
+      this.bindings.set(id, { bucket, key, kind, assetId: null, claimedAt: now, claimToken: token, lease: null });
       return { kind: "claimed", token };
     }
     const binding = toBinding(row);
@@ -78,6 +90,16 @@ export class MemoryCompatStore implements CompatStore {
   async deleteBinding(bucket: BucketName, key: BindingKey): Promise<void> {
     this.bindings.delete(rowKey(bucket, key));
   }
+  async lease(bucket: BucketName, key: BindingKey, token: LeaseToken, now: number, staleBefore: number): Promise<boolean> {
+    const row = this.bindings.get(rowKey(bucket, key));
+    if (!row || row.assetId === null || (row.lease !== null && row.lease.at >= staleBefore)) return false;
+    row.lease = { token, at: now };
+    return true;
+  }
+  async releaseLease(bucket: BucketName, key: BindingKey, token: LeaseToken): Promise<void> {
+    const row = this.bindings.get(rowKey(bucket, key));
+    if (row?.lease?.token === token) row.lease = null;
+  }
   async scanBindings(bucket: BucketName, from: string, until: string | null, limit: number): Promise<Binding[]> {
     return [...this.bindings.values()]
       .filter((r) => r.bucket === bucket && cmp(r.key, from) >= 0 && (until === null || cmp(r.key, until) < 0))
@@ -86,11 +108,30 @@ export class MemoryCompatStore implements CompatStore {
       .slice(0, limit);
   }
 
-  async findHashes(objectRef: string): Promise<ExactHashes | null> {
-    return this.hashes.get(objectRef)?.hashes ?? null;
+  async records(bucket: BucketName, refs: RecordRef[]): Promise<Map<string, VersionRecord>> {
+    const out = new Map<string, VersionRecord>();
+    if (!this.buckets.has(bucket)) return out;
+    for (const { objectRef, assetId, hashes } of refs) {
+      for (const ref of this.inVersionOrder(assetId, objectRef)) this.recordOnce(bucket, ref, assetId);
+      const stored = this.hashes.get(objectRef)!;
+      if (hashes && !stored.record.hashes) stored.record = { ...stored.record, hashes };
+      out.set(objectRef, stored.record);
+    }
+    return out;
   }
-  async putHashes(objectRef: string, assetId: string, hashes: ExactHashes): Promise<void> {
-    this.hashes.set(objectRef, { assetId, hashes });
+
+  private inVersionOrder(assetId: string, objectRef: string): string[] {
+    const versions = this.versionsOf(assetId).sort((a, b) => a.version - b.version);
+    const at = versions.findIndex((v) => v.id === objectRef);
+    if (at < 0) return [objectRef];
+    return [assetId, ...versions.slice(0, at).map((v) => v.id), objectRef];
+  }
+
+  private recordOnce(bucket: BucketName, objectRef: string, assetId: string): void {
+    if (this.hashes.has(objectRef)) return;
+    const generation = (this.generations.get(bucket) ?? 0) + 1;
+    this.generations.set(bucket, generation);
+    this.hashes.set(objectRef, { assetId, record: { generation, hashes: null } });
   }
 
   async findCredential(id: CredentialId): Promise<CompatCredential | null> {

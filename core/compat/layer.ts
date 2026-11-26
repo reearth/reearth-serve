@@ -1,0 +1,321 @@
+import type { Deps } from "../types";
+import type { AssetMetadata, AssetVersion } from "../asset/model";
+import type { Project } from "../project/model";
+import { authorizeService } from "../auth/access";
+import type { ProjectAction } from "../auth/permissions";
+import type { ServicePrincipal } from "../auth/types";
+import { uploadAsset } from "../asset/usecase/upload";
+import { uploadVersion, type UploadVersionResult } from "../asset/usecase/upload-version";
+import { deleteAsset } from "../asset/usecase/delete";
+import { resolveAssetVersion } from "../asset/usecase/resolve-version";
+import { updateAsset } from "../asset/usecase/update-asset";
+import { siteHostDepsFrom } from "../site/handler";
+import { hashingStream, type HashingStream } from "./hash";
+import { listPage, type ListQuery } from "./list";
+import { generateId } from "../asset/usecase/shared";
+import { newLeaseToken, type ClaimToken, type RecordRef, type VersionRecord } from "./repository";
+import {
+  parseBucketName,
+  type Binding, type CompatBucket, type CompatError, type ObjectInfo, type ObjectKey,
+  type PutMeta, type Result, type SizedBody,
+} from "./model";
+
+export type ObjectLayerDeps = Pick<
+  Deps,
+  | "compat" | "projects" | "serviceAuthorizer" | "metadata" | "versions" | "writes" | "storage" | "ttlSeconds"
+  | "baseUrl" | "extractionQueue" | "thumbnailQueue" | "pendingCleanup" | "siteHosts" | "cache" | "siteHostSuffix"
+  | "dns" | "customHostnames" | "siteFallbackOrigin"
+>;
+
+export type ListPage = { objects: ObjectInfo[]; prefixes: string[]; nextPageToken: string | null };
+
+export interface ObjectLayer {
+  head(bucket: string, key: ObjectKey): Promise<Result<ObjectInfo>>;
+  list(bucket: string, query: ListQuery): Promise<Result<ListPage>>;
+  put(bucket: string, key: ObjectKey, meta: PutMeta, body: SizedBody): Promise<Result<ObjectInfo>>;
+  delete(bucket: string, key: ObjectKey): Promise<Result<void>>;
+}
+
+export const HOLD_STALE_MS = 10 * 60 * 1000;
+
+/**
+ * Each listed object costs a few point reads, and a Worker invocation may run
+ * at most 1,000 D1 queries, so a page stops short of GCS's 1,000 items. The
+ * client follows `nextPageToken` either way.
+ */
+export const LIST_PAGE_CAP = 200;
+
+type Resolved = { binding: Extract<Binding, { kind: "object" }>; asset: AssetMetadata; version: AssetVersion | null };
+
+const fail = (error: CompatError): { ok: false; error: CompatError } => ({ ok: false, error });
+
+const LENGTH_MISMATCH: CompatError = { code: "invalid", message: "The request body does not match its Content-Length." };
+
+export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, now: () => number = Date.now): ObjectLayer {
+  const { compat } = deps;
+
+  async function authorized(raw: string, action: ProjectAction): Promise<Result<{ bucket: CompatBucket; project: Project }>> {
+    const name = parseBucketName(raw);
+    const bucket = name ? await compat.findBucket(name) : null;
+    if (!bucket) return fail({ code: "no_such_bucket" });
+    const decision = await authorizeService(
+      { authorizer: deps.serviceAuthorizer, projects: deps.projects },
+      service,
+      { projectId: bucket.projectId, bucket: bucket.name },
+      action,
+    );
+    if (!decision.ok) return fail({ code: decision.reason === "forbidden" ? "forbidden" : "no_such_bucket" });
+    return { ok: true, value: { bucket, project: decision.value } };
+  }
+
+  async function resolve(bucket: CompatBucket, key: ObjectKey): Promise<Resolved | null> {
+    const binding = await compat.findBinding(bucket.name, key);
+    return binding?.kind === "object" ? load(bucket, binding) : null;
+  }
+
+  async function load(bucket: CompatBucket, binding: Extract<Binding, { kind: "object" }>): Promise<Resolved | null> {
+    const found = await resolveAssetVersion(deps.metadata, deps.versions, binding.assetId);
+    if (!found || found.asset.id !== binding.assetId || found.asset.projectId !== bucket.projectId) return null;
+    return { binding, ...found };
+  }
+
+  async function describeAll(bucket: CompatBucket, objects: Resolved[]): Promise<ObjectInfo[]> {
+    const records = await compat.records(bucket.name, objects.map((r) => ({ objectRef: refOf(r), assetId: r.asset.id })));
+    return objects.flatMap((r) => {
+      const record = records.get(refOf(r));
+      return record ? [infoOf(bucket, r.binding.key, r.asset, r.version, record)] : [];
+    });
+  }
+
+  async function describe(bucket: CompatBucket, r: Resolved): Promise<ObjectInfo | null> {
+    return (await describeAll(bucket, [r]))[0] ?? null;
+  }
+
+  async function recordWrite(bucket: CompatBucket, ref: Omit<RecordRef, "hashes">, body: LengthCheckedBody): Promise<VersionRecord> {
+    const hashes = await body.digest();
+    const record = (await compat.records(bucket.name, [{ ...ref, hashes }])).get(ref.objectRef);
+    if (!record) throw new Error(`bucket ${bucket.name} is gone`);
+    return record;
+  }
+
+  async function writeVersion(
+    bucket: CompatBucket, key: ObjectKey, scopes: string[], meta: PutMeta, body: SizedBody, asset: AssetMetadata,
+  ): Promise<Result<ObjectInfo>> {
+    const checked = lengthCheckedBody(body);
+    const versionId = generateId();
+    let result: UploadVersionResult | null;
+    try {
+      result = await uploadVersion(deps.metadata, deps.writes, deps.storage, asset.id, fileOf(key, meta, body, checked.stream), deps.baseUrl, {
+        extractionQueue: deps.extractionQueue,
+        thumbnailQueue: deps.thumbnailQueue,
+        usageScopes: scopes,
+        siteHostSuffix: deps.siteHostSuffix,
+        userMeta: meta.userMeta,
+        versionId,
+        written: { applied: async () => (await deps.versions.find(versionId)) !== null },
+      });
+    } catch (e) {
+      if (checked.lengthMismatched()) return fail(LENGTH_MISMATCH);
+      throw e;
+    }
+    if (!result) return fail({ code: "busy" });
+    if (asset.activeVersionId) await updateAsset(deps.metadata, deps.versions, asset.id, { activeVersionId: null });
+    const stored = await recordWrite(bucket, { objectRef: result.version.id, assetId: asset.id }, checked);
+    return { ok: true, value: infoOf(bucket, key, asset, result.version, stored) };
+  }
+
+  async function writeAsset(bucket: CompatBucket, key: ObjectKey, scopes: string[], meta: PutMeta, body: SizedBody, token: ClaimToken): Promise<Result<ObjectInfo>> {
+    const checked = lengthCheckedBody(body);
+    const id = generateId();
+    let asset: AssetMetadata;
+    try {
+      ({ asset } = await uploadAsset(deps.writes, deps.storage, fileOf(key, meta, body, checked.stream), deps.ttlSeconds, deps.baseUrl, {
+        id,
+        written: { applied: async () => (await deps.metadata.find(id)) !== null },
+        projectId: bucket.projectId,
+        extractionQueue: deps.extractionQueue,
+        thumbnailQueue: deps.thumbnailQueue,
+        usageScopes: scopes,
+        siteHostSuffix: deps.siteHostSuffix,
+        userMeta: meta.userMeta,
+      }));
+    } catch (e) {
+      await compat.releaseClaim(bucket.name, key, token);
+      if (checked.lengthMismatched()) return fail(LENGTH_MISMATCH);
+      throw e;
+    }
+    const stored = await recordWrite(bucket, { objectRef: asset.id, assetId: asset.id }, checked);
+    if (!(await compat.bind(bucket.name, key, token, asset.id))) {
+      await removeAsset(asset, scopes);
+      return fail({ code: "busy" });
+    }
+    return { ok: true, value: infoOf(bucket, key, asset, null, stored) };
+  }
+
+  async function overwrite(
+    raw: string, bucket: CompatBucket, key: ObjectKey, scopes: string[], meta: PutMeta, body: SizedBody,
+  ): Promise<Result<ObjectInfo>> {
+    const update = await authorized(raw, "update_asset");
+    if (!update.ok) return update;
+    return leased(bucket, key, async () => {
+      const live = await resolve(bucket, key);
+      if (!live) return fail({ code: "busy" });
+      if (meta.ifGenerationMatch !== null && meta.ifGenerationMatch !== (await describe(bucket, live))?.generation) {
+        return fail({ code: "precondition_failed" });
+      }
+      return writeVersion(bucket, key, scopes, meta, body, live.asset);
+    });
+  }
+
+  async function leased<T>(bucket: CompatBucket, key: ObjectKey, work: () => Promise<Result<T>>): Promise<Result<T>> {
+    const token = newLeaseToken();
+    const at = now();
+    if (!(await compat.lease(bucket.name, key, token, at, at - HOLD_STALE_MS))) return fail({ code: "busy" });
+    try {
+      return await work();
+    } finally {
+      await compat.releaseLease(bucket.name, key, token);
+    }
+  }
+
+  async function removeAsset(asset: AssetMetadata, scopes: string[]): Promise<void> {
+    await deleteAsset(deps.writes, deps.storage, asset, {
+      usageScopes: scopes,
+      pendingCleanup: deps.pendingCleanup,
+      siteHosts: siteHostDepsFrom(deps),
+    });
+  }
+
+  return {
+    async head(raw, key) {
+      const auth = await authorized(raw, "read_asset");
+      if (!auth.ok) return auth;
+      const r = await resolve(auth.value.bucket, key);
+      const info = r && await describe(auth.value.bucket, r);
+      return info ? { ok: true, value: info } : fail({ code: "no_such_key" });
+    },
+
+    async list(raw, query) {
+      const auth = await authorized(raw, "read_asset");
+      if (!auth.ok) return auth;
+      const { bucket } = auth.value;
+      const page = await listPage(
+        { ...query, maxResults: Math.min(query.maxResults, LIST_PAGE_CAP) },
+        (from, until, limit) => compat.scanBindings(bucket.name, from, until, limit),
+      );
+      if (!page) return fail({ code: "invalid", message: "Invalid pageToken." });
+      const loaded = await Promise.all(page.objects.map((binding) => binding.kind === "object" ? load(bucket, binding) : null));
+      const objects = await describeAll(bucket, loaded.filter((r): r is Resolved => r !== null));
+      return { ok: true, value: { objects, prefixes: page.prefixes, nextPageToken: page.nextPageToken } };
+    },
+
+    async put(raw, key, meta, body) {
+      const auth = await authorized(raw, "create_asset");
+      if (!auth.ok) return auth;
+      const { bucket, project } = auth.value;
+      const scopes = scopesOf(project);
+      for (let attempt = 0; attempt < 2; attempt++) {
+        if (await resolve(bucket, key)) return overwrite(raw, bucket, key, scopes, meta, body);
+        if (meta.ifGenerationMatch !== null && meta.ifGenerationMatch !== 0) return fail({ code: "precondition_failed" });
+        const at = now();
+        const claim = await compat.claim(bucket.name, key, "object", at, at - HOLD_STALE_MS);
+        if (claim.kind === "busy") return fail({ code: "busy" });
+        if (claim.kind === "claimed") return writeAsset(bucket, key, scopes, meta, body, claim.token);
+        if (claim.binding.kind === "object" && !(await load(bucket, claim.binding))) {
+          await compat.deleteBinding(bucket.name, key);
+        }
+      }
+      return fail({ code: "busy" });
+    },
+
+    async delete(raw, key) {
+      const auth = await authorized(raw, "delete_asset");
+      if (!auth.ok) return auth;
+      const { bucket, project } = auth.value;
+      if ((await compat.findBinding(bucket.name, key))?.kind !== "object") return { ok: true, value: undefined };
+      return leased(bucket, key, async () => {
+        const binding = await compat.findBinding(bucket.name, key);
+        if (binding?.kind !== "object") return { ok: true, value: undefined };
+        const asset = await deps.metadata.find(binding.assetId);
+        if (!asset || asset.projectId !== bucket.projectId) {
+          await compat.deleteBinding(bucket.name, key);
+          return { ok: true, value: undefined };
+        }
+        await removeAsset(asset, scopesOf(project));
+        return { ok: true, value: undefined };
+      });
+    },
+  };
+}
+
+type LengthCheckedBody = Pick<HashingStream, "stream" | "digest"> & { lengthMismatched(): boolean };
+
+function lengthCheckedBody(body: SizedBody): LengthCheckedBody {
+  let seen = 0;
+  let mismatch = false;
+  const mismatchError = () => {
+    mismatch = true;
+    return new Error(`body length differs from the declared ${body.size} bytes`);
+  };
+  const counted = body.stream.pipeThrough(new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      seen += chunk.length;
+      if (seen > body.size) throw mismatchError();
+      controller.enqueue(chunk);
+    },
+    flush() {
+      if (seen !== body.size) throw mismatchError();
+    },
+  }));
+  const known = body.hashes;
+  const hashed = known ? { stream: counted, digest: async () => known } : hashingStream(counted);
+  return { ...hashed, lengthMismatched: () => mismatch };
+}
+
+function refOf(r: Resolved): string {
+  return r.version?.id ?? r.asset.id;
+}
+
+function scopesOf(project: Project): string[] {
+  return project.workspaceId ? [`project:${project.id}`, `workspace:${project.workspaceId}`] : [`project:${project.id}`];
+}
+
+function filenameOf(key: ObjectKey): string {
+  return key.split("/").filter(Boolean).pop() ?? "object";
+}
+
+function fileOf(key: ObjectKey, meta: PutMeta, body: SizedBody, stream: ReadableStream<Uint8Array>) {
+  return {
+    name: filenameOf(key),
+    type: meta.contentType,
+    body: stream,
+    size: body.size,
+    ...(meta.contentEncoding && { contentEncoding: meta.contentEncoding }),
+  };
+}
+
+function stringMeta(meta: Record<string, unknown> | undefined): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(meta ?? {})) out[k] = typeof v === "string" ? v : JSON.stringify(v);
+  return out;
+}
+
+function infoOf(
+  bucket: CompatBucket, key: ObjectKey, asset: AssetMetadata, version: AssetVersion | null, record: VersionRecord,
+): ObjectInfo {
+  const current = version ?? asset;
+  return {
+    bucket: bucket.name,
+    key,
+    size: current.size,
+    contentType: current.contentType,
+    contentEncoding: current.contentEncoding ?? null,
+    generation: record.generation,
+    metageneration: 1,
+    etag: version?.id ?? asset.id,
+    created: new Date(current.createdAt),
+    updated: new Date(current.createdAt),
+    hashes: record.hashes,
+    userMeta: stringMeta(current.userMeta),
+  };
+}

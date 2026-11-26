@@ -4,7 +4,7 @@ import { MemoryCompatStore } from "../memory/compat";
 import { SqlCompatStore } from "./compat";
 import { SqlAtomicWrites } from "./writes";
 import { SqlMetadataStore } from "./stores";
-import type { BindingKey, ClaimToken, CompatStore } from "../../core/compat/repository";
+import type { BindingKey, ClaimToken, CompatStore, LeaseToken } from "../../core/compat/repository";
 import type {
   BucketName, CompatBucket, CompatCredential, CredentialId, FolderKey, ObjectKey, UploadId, UploadSession,
 } from "../../core/compat/model";
@@ -198,12 +198,56 @@ describe.each([
     });
   });
 
-  test("hashes round-trip the exact bytes", async () => {
+  test("records store the exact hash bytes, and a record stored first keeps its generation", async () => {
     const s = make();
+    await s.insertBucket(bucket());
     const md5 = new Uint8Array([0, 1, 2, 250, 255, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]);
-    await s.putHashes("v1", "a1", { md5, crc32c: 0xffffffff });
-    expect(await s.findHashes("v1")).toEqual({ md5, crc32c: 0xffffffff });
-    expect(await s.findHashes("v2")).toBeNull();
+    const generation = (await s.records(media, [{ objectRef: "v1", assetId: "a1" }])).get("v1")!.generation;
+    const filled = await s.records(media, [{ objectRef: "v1", assetId: "a1", hashes: { md5, crc32c: 0xffffffff } }]);
+    expect(filled.get("v1")).toEqual({ generation, hashes: { md5, crc32c: 0xffffffff } });
+    const other = await s.records(media, [{ objectRef: "v1", assetId: "a1", hashes: { md5: new Uint8Array(16), crc32c: 1 } }]);
+    expect(other.get("v1")).toEqual({ generation, hashes: { md5, crc32c: 0xffffffff } });
+  });
+
+  test("a bucket issues each missing record the next generation above its high mark, and none for a bucket that is gone", async () => {
+    const s = make();
+    const seed = Date.now() * 1000;
+    await s.insertBucket(bucket());
+    const page = await s.records(media, ["v1", "v2", "v1", "v3"].map((objectRef) => ({ objectRef, assetId: "a1" })));
+    const base = page.get("v1")!.generation;
+    expect(base).toBeGreaterThan(seed);
+    expect([...page.entries()].sort()).toEqual([["v1", { generation: base, hashes: null }], ["v2", { generation: base + 1, hashes: null }], ["v3", { generation: base + 2, hashes: null }]]);
+    expect((await s.records(media, [{ objectRef: "v2", assetId: "a1" }, { objectRef: "v4", assetId: "a1" }])).get("v4")?.generation).toBe(base + 3);
+    expect((await s.records("absent" as BucketName, [{ objectRef: "v9", assetId: "a9" }])).size).toBe(0);
+  });
+
+  test("concurrent first observers of one record agree on its generation", async () => {
+    const s = make();
+    await s.insertBucket(bucket());
+    const seen = await Promise.all([1, 2, 3, 4].map(() => s.records(media, [{ objectRef: "v1", assetId: "a1" }])));
+    const generations = new Set(seen.map((m) => m.get("v1")!.generation));
+    expect(generations.size).toBe(1);
+    const [first] = generations;
+    expect((await s.records(media, [{ objectRef: "v2", assetId: "a1" }])).get("v2")?.generation).toBe(first + 1);
+  });
+
+  describe("leases", () => {
+    test("one holder at a time, taken over only once stale, and only on a bound key", async () => {
+      const s = make();
+      const k = "k" as ObjectKey;
+      const [a, b] = ["lease-a", "lease-b"] as LeaseToken[];
+      expect(await s.lease(media, k, a, 1000, 0)).toBe(false);
+      const token = await claimed(s, k, 1000);
+      expect(await s.lease(media, k, a, 1000, 0)).toBe(false);
+      await s.bind(media, k, token, "asset-1");
+      expect(await s.lease(media, k, a, 1000, 0)).toBe(true);
+      expect(await s.lease(media, k, b, 2000, 1000)).toBe(false);
+      expect(await s.lease(media, k, b, 2000, 1001)).toBe(true);
+      await s.releaseLease(media, k, a);
+      expect(await s.lease(media, k, a, 2000, 0)).toBe(false);
+      await s.releaseLease(media, k, b);
+      expect(await s.lease(media, k, a, 2000, 0)).toBe(true);
+    });
   });
 
   describe("credentials", () => {
@@ -290,15 +334,35 @@ describe("SqlAtomicWrites.deleteAsset", () => {
     for (const [k, id] of [[key, "a1"], [other, "a2"]] as const) {
       await store.bind(media, k, await claimed(store, k, 1000), id);
     }
-    await store.putHashes("v1", "a1", { md5: new Uint8Array(16), crc32c: 1 });
-    await store.putHashes("v2", "a2", { md5: new Uint8Array(16), crc32c: 2 });
+    await store.insertBucket(bucket());
+    await store.records(media, [{ objectRef: "v1", assetId: "a1" }, { objectRef: "v2", assetId: "a2" }]);
+    const recorded = async () => (await sql.execute("SELECT object_ref FROM compat_hashes ORDER BY object_ref")).rows.map((r) => r.object_ref);
 
     await new SqlAtomicWrites(sql).deleteAsset({ asset, cleanupPrefix: "assets/a1/" });
 
     expect(await store.findBinding(media, key)).toBeNull();
-    expect(await store.findHashes("v1")).toBeNull();
     expect(await store.findBinding(media, other)).not.toBeNull();
-    expect(await store.findHashes("v2")).not.toBeNull();
+    expect(await recorded()).toEqual(["v2"]);
     expect(await metadata.find("a1")).toBeNull();
+  });
+});
+
+describe("SqlCompatStore read cost", () => {
+  test("recording refs that are all recorded already writes no row (R7-5)", async () => {
+    const db = createSqliteClient();
+    const s = new SqlCompatStore(db);
+    await s.insertBucket(bucket());
+    const refs = [{ objectRef: "v1", assetId: "a1" }, { objectRef: "v2", assetId: "a1" }];
+    await s.records(media, refs);
+    const real = db.batch.bind(db);
+    const affected: number[] = [];
+    db.batch = async (statements) => {
+      const results = await real(statements);
+      affected.push(...results.map((r) => r.rowsAffected));
+      return results;
+    };
+    expect((await s.records(media, refs)).size).toBe(2);
+    expect(affected.length).toBeGreaterThan(0);
+    expect(affected.reduce((a, b) => a + b, 0)).toBe(0);
   });
 });
