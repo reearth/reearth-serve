@@ -168,6 +168,24 @@ describe("objects host", () => {
     }
   });
 
+  test("a broken password protection fails closed as a missing key, while /files answers 503", async () => {
+    const { f, ids } = await written();
+    const id = ids["media/assets/ab/r.txt"];
+    await protect(f.metadata, id, "pw");
+    f.metadata.protection.delete(id);
+    expect((await f.app.request(`http://localhost/files/${id}/r.txt`)).status).toBe(503);
+    const miss = await missingKey(f);
+    for (const read of [virtual, pathStyle]) {
+      for (const headers of [{}, { Authorization: `Basic ${btoa("x:pw")}` }] as Record<string, string>[]) {
+        expect(await answer(await read(f, "/assets/ab/r.txt", { headers }))).toEqual(miss);
+      }
+    }
+    await protect(f.metadata, id, "pw");
+    const down = vi.spyOn(f.metadata, "findProtection").mockRejectedValue(new Error("metadata down"));
+    expect(await answer(await virtual(f, "/assets/ab/r.txt"))).toEqual(miss);
+    down.mockRestore();
+  });
+
   test("a storage failure stays a 5xx rather than reading as a missing key", async () => {
     const { f } = await written();
     const get = vi.spyOn(f.storage, "get").mockRejectedValue(new Error("storage down"));
