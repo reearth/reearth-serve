@@ -6,6 +6,7 @@ import { getAssetMetadata, listVersions } from "../usecase";
 import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { versionListResponseSchema, idParamSchema, paginationQuerySchema } from "../../../shared/openapi";
 import { jsonError, jsonResponse } from "../../openapi";
+import { versionView } from "./shared";
 
 export function registerListVersionsRoute(app: Hono<AppEnv>) {
   app.get("/:id/versions",
@@ -31,7 +32,7 @@ export function registerListVersionsRoute(app: Hono<AppEnv>) {
 
       const limit = parseInt(limitStr || "20", 10);
       const result = await listVersions(versions, id, { limit: Math.min(limit, 100), cursor });
-      return c.json({ versions: result.items, cursor: result.cursor });
+      return c.json({ versions: result.items.map(versionView), cursor: result.cursor });
     },
   );
 }

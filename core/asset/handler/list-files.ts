@@ -7,6 +7,7 @@ import { accessCtx, authorizeAsset, deniedResponse } from "../../auth/access";
 import { fileListExamples } from "../../openapi-examples";
 import { fileEntrySchema, idParamSchema, fileListQuerySchema } from "../../../shared/openapi";
 import { jsonError } from "../../openapi";
+import { storedMediaType } from "../../file/media-type";
 
 export function registerListFilesRoute(app: Hono<AppEnv>) {
   app.get("/:id/files",
@@ -49,7 +50,7 @@ export function registerListFilesRoute(app: Hono<AppEnv>) {
         const storageKey = `assets/${id}/${asset.filename}`;
         const head = await storage.head(storageKey);
         const hash = head?.etag ? `md5:${head.etag.replace(/"/g, "")}` : undefined;
-        const entry = { path: asset.filename, size: asset.size, contentType: asset.contentType, ...(hash && { hash }) };
+        const entry = { path: asset.filename, size: asset.size, contentType: storedMediaType(asset.contentType), ...(hash && { hash }) };
         const body = new ReadableStream({
           start(controller) {
             controller.enqueue(encoder.encode(JSON.stringify(entry) + "\n"));
