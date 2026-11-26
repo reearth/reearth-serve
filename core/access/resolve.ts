@@ -16,9 +16,8 @@
  * `/files/{id}/` stayed open would be theatre — the ID is printed in every
  * `siteUrl` we hand out.
  *
- * ADR-014 adds `restricted` as a third mode with more proofs (signed URLs, API
- * keys, OIDC bearers, grants). It slots into the same switch and returns the
- * same union; nothing in the delivery path has to change again.
+ * ADR-014's `restricted` mode slots into the same switch and returns the same
+ * union; its proofs live in `./restricted.ts`.
  */
 
 import type { AssetMetadata } from "../asset/model";
@@ -36,32 +35,31 @@ import {
 import { attemptPassword } from "./attempt";
 import { basicPassword } from "./password";
 import { clientIp } from "./ratelimit";
+import { resolveRestricted, type RestrictedDeps } from "./restricted";
+import type { Grant } from "./grant";
+import type { TokenCarry } from "./request";
+import { toUnixSeconds, type AssetPath } from "./token";
 
 /**
  * The asset's access mode.
  *
  * ADR-013 B7 calls the field `hosting.access`; ADR-014 §1 makes the flat
- * `access` canonical and says the two are the same field. The flat name is what
- * is implemented: nesting it under `hosting` would have to be undone when
- * ADR-014's `restricted` mode lands, which applies to assets that are not
- * sites at all.
- *
- * Setting `password` is limited to archive (site) assets for now — see
- * `core/asset/usecase/set-access.ts`. That is a restriction on the *write*
- * path only; everything below is written against the mode, so lifting it is a
- * one-line change.
+ * `access` canonical and says the two are the same field. Setting `password`
+ * is limited to archive (site) assets on the write path
+ * (`core/asset/usecase/set-access.ts`); everything below is written against
+ * the mode alone.
  */
-export type AccessMode = "public" | "password";
+export type AccessMode = "public" | "password" | "restricted";
 
 /** The mode of an asset, defaulting to `public` for every row that has none. */
 export function accessModeOf(asset: Pick<AssetMetadata, "access">): AccessMode {
-  return asset.access === "password" ? "password" : "public";
+  return asset.access ?? "public";
 }
 
 /** The path segment the auth form posts to, under the asset's file prefix. */
 export const AUTH_PATH_SEGMENT = "_serve/auth";
 
-export interface AccessDeps {
+export interface AccessDeps extends Omit<RestrictedDeps, "siteHost"> {
   metadata: MetadataStore;
   /** Where the failed-attempt counters live (ADR-012 §2). */
   kv: KeyValue;
@@ -82,18 +80,21 @@ export interface AccessDeps {
   now?: number;
 }
 
-/**
- * What a request was allowed on. `none` is a public read. The CORS decision
- * depends on it: only a cookie, which the browser attaches on its own, is ever
- * answered with credentialed CORS.
- */
-export type AccessProof = "none" | "cookie" | "basic";
-
 export type AccessResolution =
-  | { kind: "allow"; proof: AccessProof }
+  | { kind: "allow"; grant: Grant }
   | { kind: "challenge"; response: Response };
 
-const ALLOW_PUBLIC: AccessResolution = { kind: "allow", proof: "none" };
+const ALLOW_PUBLIC: AccessResolution = { kind: "allow", grant: { proof: "none" } };
+
+/** One read, as the access check sees it. */
+export interface AccessRequest {
+  /** With `serve_token` already stripped from its URL. */
+  request: Request;
+  carry: TokenCarry;
+  versionId: string | null;
+  /** The request path, or the source filename for a thumbnail. */
+  matchPath: AssetPath;
+}
 
 /**
  * Decide whether this request may read this asset's bytes.
@@ -103,10 +104,20 @@ const ALLOW_PUBLIC: AccessResolution = { kind: "allow", proof: "none" };
  */
 export async function resolveAccess(
   asset: AssetMetadata,
-  request: Request,
+  read: AccessRequest,
   deps: AccessDeps,
 ): Promise<AccessResolution> {
-  if (accessModeOf(asset) !== "password") return ALLOW_PUBLIC;
+  const mode = accessModeOf(asset);
+  if (mode === "public") return ALLOW_PUBLIC;
+  const { request, ...match } = read;
+  if (mode === "restricted") {
+    return resolveRestricted({
+      ...match,
+      assetId: asset.id,
+      authorization: request.headers.get("Authorization"),
+      now: toUnixSeconds(deps.now ?? Date.now()),
+    }, deps);
+  }
 
   const secret = deps.signingSecret;
   if (!secret) return { kind: "challenge", response: signingSecretMissingResponse() };
@@ -128,7 +139,7 @@ export async function resolveAccess(
     passwordVersion: protection.version,
     now,
   });
-  if (cookieOk) return { kind: "allow", proof: "cookie" };
+  if (cookieOk) return { kind: "allow", grant: { proof: "cookie" } };
 
   // 2. `Authorization: Basic`, for a stateless tool (curl, QGIS, `file cp`)
   //    that keeps no cookie jar. The memo in `attemptPassword` keeps that
@@ -136,7 +147,7 @@ export async function resolveAccess(
   const submitted = basicPassword(request.headers.get("Authorization"));
   if (submitted !== null) {
     const result = await attemptPassword(deps.kv, asset.id, protection, submitted, clientIp(request), now);
-    if (result.kind === "ok") return { kind: "allow", proof: "basic" };
+    if (result.kind === "ok") return { kind: "allow", grant: { proof: "basic" } };
     if (result.kind === "limited") {
       return { kind: "challenge", response: rateLimitedResponse(result.retryAfterSeconds, false) };
     }

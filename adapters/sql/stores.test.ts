@@ -382,9 +382,23 @@ describe("SqlMetadataStore access column", () => {
     await sql.execute("UPDATE assets SET access = NULL WHERE id = 'a1'");
     await sql.execute("UPDATE assets SET access = 'public' WHERE id = 'a2'");
     // A mode a newer deployment wrote, or a typo, must never read back as public.
-    await sql.execute("UPDATE assets SET access = 'restricted' WHERE id = 'a3'");
+    await sql.execute("UPDATE assets SET access = 'members' WHERE id = 'a3'");
     expect((await store.find("a1"))?.access).toBe("public");
     expect((await store.find("a2"))?.access).toBe("public");
     expect((await store.find("a3"))?.access).toBe("password");
+  });
+
+  test("restricted reads back, clears the password material and keeps the counter", async () => {
+    const store = new SqlMetadataStore(db());
+    await store.save(asset({ id: "a1" }), 3600);
+    await store.setProtection("a1", { access: "password", hash: "h", salt: "s" });
+    expect((await store.findProtection("a1"))?.version).toBe(1);
+
+    await store.setProtection("a1", { access: "restricted" });
+    expect((await store.find("a1"))?.access).toBe("restricted");
+    expect(await store.findProtection("a1")).toBeNull();
+
+    await store.setProtection("a1", { access: "password", hash: "h2", salt: "s2" });
+    expect((await store.findProtection("a1"))?.version).toBe(2);
   });
 });
