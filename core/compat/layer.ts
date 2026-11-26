@@ -8,7 +8,7 @@ import type { ServicePrincipal } from "../auth/types";
 import { uploadAsset } from "../asset/usecase/upload";
 import { uploadVersion, type UploadVersionResult } from "../asset/usecase/upload-version";
 import { deleteAsset } from "../asset/usecase/delete";
-import { resolveAssetVersion } from "../asset/usecase/resolve-version";
+import { resolveAssetVersion, type ResolvedAsset } from "../asset/usecase/resolve-version";
 import { updateAsset } from "../asset/usecase/update-asset";
 import { siteHostDepsFrom } from "../site/handler";
 import { hashingStream, type HashingStream } from "./hash";
@@ -40,8 +40,12 @@ export type UploadCommit = CommitIds & {
   leftovers(): string[];
 };
 
+/** An object to read: the asset and version `info` describes, and the path delivery serves it at. */
+export type OpenObject = { resolved: ResolvedAsset; path: string; info: ObjectInfo };
+
 export interface ObjectLayer {
   head(bucket: string, key: ObjectKey): Promise<Result<ObjectInfo>>;
+  open(bucket: string, key: ObjectKey): Promise<Result<OpenObject>>;
   list(bucket: string, query: ListQuery): Promise<Result<ListPage>>;
   put(bucket: string, key: ObjectKey, meta: PutMeta, body: SizedBody, commit?: UploadCommit): Promise<Result<ObjectInfo>>;
   delete(bucket: string, key: ObjectKey): Promise<Result<void>>;
@@ -303,14 +307,22 @@ export function objectLayer(deps: ObjectLayerDeps, service: ServicePrincipal, no
     });
   }
 
+  async function open(raw: string, key: ObjectKey): Promise<Result<OpenObject>> {
+    const auth = await authorized(raw, "read_asset");
+    if (!auth.ok) return auth;
+    const r = await resolve(auth.value.bucket, key);
+    const info = r && await describe(auth.value.bucket, r);
+    if (!r || !info) return fail({ code: "no_such_key" });
+    return { ok: true, value: { resolved: { asset: r.asset, version: r.version }, path: r.version?.filename ?? r.asset.filename, info } };
+  }
+
   return {
     async head(raw, key) {
-      const auth = await authorized(raw, "read_asset");
-      if (!auth.ok) return auth;
-      const r = await resolve(auth.value.bucket, key);
-      const info = r && await describe(auth.value.bucket, r);
-      return info ? { ok: true, value: info } : fail({ code: "no_such_key" });
+      const opened = await open(raw, key);
+      return opened.ok ? { ok: true, value: opened.value.info } : opened;
     },
+
+    open,
 
     async list(raw, query) {
       const auth = await authorized(raw, "read_asset");
