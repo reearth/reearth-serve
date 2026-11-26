@@ -4,7 +4,7 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 BASE="${DB_CHECK_BASE:-origin/main}"
 
-npx tsx scripts/migration-sequence.ts --base "$BASE" adapters/cloudflare/migrations adapters/sql/migrations
+node_modules/.bin/tsx scripts/migration-sequence.ts --base "$BASE" adapters/cloudflare/migrations adapters/sql/migrations
 
 for env in d1 node; do
   echo "atlas: validate and lint env ${env} against ${BASE}"
