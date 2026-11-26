@@ -29,6 +29,10 @@ export interface AssetProtection {
   version: number;
 }
 
+export type AccessChange =
+  | { access: "public" | "restricted" }
+  | { access: "password"; hash: string; salt: string };
+
 export type ListScope =
   | { kind: "session"; sessionId: string }
   | { kind: "project"; projectId: string }
@@ -47,7 +51,8 @@ export interface MetadataStore {
   /** Password material, or null when the asset is not password-protected. */
   findProtection(id: string): Promise<AssetProtection | null>;
   /**
-   * Set the access mode and, for `password`, its material.
+   * Set the access mode and, for `password`, its material. `restricted`
+   * clears the material the way `public` does.
    *
    * The store owns the version counter: setting a password increments it, and
    * clearing to `public` drops the hash and the salt but leaves the counter
@@ -57,7 +62,7 @@ export interface MetadataStore {
    */
   setProtection(
     id: string,
-    value: { access: "public" } | { access: "password"; hash: string; salt: string },
+    value: AccessChange,
   ): Promise<void>;
   /** `spa` is ADR-013 C1's SPA fallback flag; see `core/asset/usecase/set-spa.ts`. */
   update(id: string, patch: { activeVersionId?: string | null; expiresAt?: number; description?: string; userMeta?: Record<string, unknown>; spa?: boolean }): Promise<void>;

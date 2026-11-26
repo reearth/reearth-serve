@@ -1,5 +1,5 @@
 /**
- * Turning protection on and off (ADR-013 B7).
+ * Setting an asset's access mode (ADR-013 B7, ADR-014 §1).
  *
  * Split out of `updateAsset` because it is the one field of the PATCH body
  * that is not a plain column write: it hashes, it bumps a counter, it refuses
@@ -15,11 +15,10 @@ export type SetAccessResult =
   | { ok: true }
   | { ok: false; status: 400 | 503; error: string };
 
-export interface SetAccessInput {
-  access: "public" | "password";
-  /** Required for `password`, rejected for `public` (the API schema enforces it). */
-  password?: string;
-}
+export type SetAccessInput =
+  | { access: "public" }
+  | { access: "restricted" }
+  | { access: "password"; password: string };
 
 /**
  * Apply an access change to `asset`.
@@ -27,14 +26,13 @@ export interface SetAccessInput {
  * - **Project assets only.** A demo asset is anonymous, lives an hour and has
  *   no accountable owner to hold a password or a project to rate-limit
  *   against, so protecting one would be a promise nothing backs.
- * - **Archive assets only, for now.** B7 is the *hosting* flavour of access
- *   control — a password on a site a person opens in a browser — and the same
- *   rule already governs named sites (`names require an archive asset`,
- *   `core/site/usecase.ts`). Protecting a plain dataset is the general
- *   requirement ADR-014 exists for, and is deferred to it by decision on
- *   2026-09-11. The `access` field and the `resolveAccess` seam are already
- *   general, so lifting this restriction later is one condition, not a
- *   redesign.
+ * - **`restricted` takes any project asset** (ADR-014 §1) and needs no
+ *   `SIGNING_SECRET`: a member proves access with a bearer, which Serve
+ *   verifies without a secret of its own.
+ * - **`password` takes archive assets only.** B7 is the *hosting* flavour
+ *   of access control, a password on a site a person opens in a browser, and
+ *   the same rule already governs named sites (`names require an archive
+ *   asset`, `core/site/usecase.ts`). ADR-014 §1 keeps it that way.
  * - **`SIGNING_SECRET` must exist.** Without it the cookie cannot be minted,
  *   so the asset would be protected and unreachable — better to refuse the
  *   change than to create that state.
@@ -54,9 +52,9 @@ export async function setAssetAccess(
   }
 
   // Unprotecting is always allowed: a row that somehow became protected must
-  // never be stuck that way because it fails a check the protect path applies.
-  if (input.access === "public") {
-    await metadata.setProtection(asset.id, { access: "public" });
+  // never be stuck that way because it fails a check the password path applies.
+  if (input.access !== "password") {
+    await metadata.setProtection(asset.id, { access: input.access });
     return { ok: true };
   }
 

@@ -67,5 +67,10 @@ export async function accountsCheck(sub: string, check: ResourceCheck): Promise<
 
 export async function accountsRequestLines(): Promise<string[]> {
   const log = await readFile(ACCOUNTS_LOG, "utf8");
-  return log.split("\n").flatMap((line) => line.match(/<-- (GET|POST|PATCH|DELETE) \S+/)?.[0] ?? []);
+  return log.split("\n").flatMap((line) => {
+    const fields = line.match(/\trequest\t(\{.*\})$/)?.[1];
+    if (!fields) return [];
+    const { method, route } = JSON.parse(fields) as { method: string; route: string };
+    return [`${method} ${route}`];
+  });
 }

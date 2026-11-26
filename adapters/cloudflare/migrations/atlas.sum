@@ -1,0 +1,10 @@
+h1:Dh/WQiDjTw6ismc875R4sHOfFeEsIsQUjZgr3dpMVEc=
+0001_create_initial_tables.sql h1:p6iCNMN4ea/PgUSrI+zj/mOPjDJ7EKRQtJfPlSKoBNg=
+0002_add_asset_versions.sql h1:6GmzJOxu3yikrtH76hl6jkXmJtedLiCv//UcO/0xr/4=
+0003_add_cleanup_pending.sql h1:4B9Z1S9FNMjj92hxvj1oh0AvakHenHTHCDkn4RxjFd0=
+0004_add_site_hosts.sql h1:Z5AU0WwFuM/vkz7QAy+lbXS9cPLjcZjtn6hzuh3d9/Y=
+0005_site_hosts_verification.sql h1:6501pLKsV75YzxcthcXM/PShUhEASYZYW+9LbXt9MQ8=
+0006_asset_access.sql h1:UGOeFUf4oUCc2Xwrg4DyXG7DiyyhAqT83DfjT4CAuR8=
+0007_asset_spa.sql h1:nNMqkc3oeMhEdWeqAIwUqEyWvgd3QFKQoYzCau30vVw=
+0008_compat.sql h1:nJMi1Fj1fd9pnjykTdrhDdnQxUT1O0ocTSHtBQQML4c=
+0009_compat_generation.sql h1:40tGTtZ/VXNMsv6j5oVx/YjBu/bsO6/d7VwKJS0J0Ao=

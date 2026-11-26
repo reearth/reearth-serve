@@ -57,10 +57,10 @@ export const archiveFormatSchema = enumComponent("ArchiveFormat", z.enum(["zip",
  *
  * ADR-013 B7 writes the field as `hosting.access`; ADR-014 §1 declares the flat
  * `access` field canonical and the two the same thing. The flat name is the one
- * implemented: protection is a property of the asset, not of hosting, and
- * ADR-014's `restricted` mode joins this enum without a shape change.
+ * implemented: protection is a property of the asset, not of hosting.
+ * `restricted` is ADR-014's member-only mode.
  */
-export const assetAccessSchema = enumComponent("AssetAccess", z.enum(["public", "password"]));
+export const assetAccessSchema = enumComponent("AssetAccess", z.enum(["public", "password", "restricted"]));
 export const jobTypeSchema = z.literal("archive-extraction");
 export const jobStatusSchema = z.enum(["pending", "running", "completed", "failed"]);
 
@@ -422,9 +422,9 @@ export const updateAssetBodySchema = component("UpdateAssetRequest", z.object({
   activeVersionId: z.string().nullable().optional(),
   expiresAt: z.number().optional(),
   /**
-   * Turn protection on or off (ADR-013 B7). `password` requires `password`;
-   * `public` forbids it, so "unprotect" cannot be typed as an accidental
-   * password change. Re-sending `password` with a new secret rotates it and
+   * Set the access mode (ADR-013 B7, ADR-014 §1). `password` requires
+   * `password`; `public` and `restricted` forbid it, so neither can be typed
+   * as an accidental password change. Re-sending `password` with a new secret rotates it and
    * bumps the version, which invalidates every outstanding cookie.
    */
   access: assetAccessSchema.optional(),
@@ -454,6 +454,32 @@ export const setActiveVersionBodySchema = component("SetActiveVersionRequest", z
   versionId: z.string().nullable(),
 }));
 
+// --- Signed URLs (ADR-014 §4) ---
+
+export const SIGNED_URL_MIN_EXPIRES_IN = 60;
+export const SIGNED_URL_MAX_EXPIRES_IN = 7 * 24 * 60 * 60;
+export const SIGNED_URL_DEFAULT_EXPIRES_IN = 3600;
+
+export const createSignedUrlBodySchema = component("CreateSignedUrlRequest", z.object({
+  prefix: z.string().optional().meta({
+    description: "Decoded path inside the asset the token covers, never percent-encoded. One leading `/` is stripped; a `.` or `..` segment, a backslash or NUL is refused. Empty or omitted covers the whole asset",
+  }),
+  versionId: z.string().min(1).optional().meta({
+    description: "Pin the token to this version of the asset. Must match the version ID in the URL when `id` is one",
+  }),
+  expiresIn: z.number().int().min(SIGNED_URL_MIN_EXPIRES_IN).max(SIGNED_URL_MAX_EXPIRES_IN)
+    .default(SIGNED_URL_DEFAULT_EXPIRES_IN)
+    .meta({ description: "Token lifetime in seconds" }),
+}));
+
+export const signedUrlSchema = component("SignedUrl", z.object({
+  token: z.string().meta({ description: "Send as the `serve_token` query parameter or the `X-Serve-Token` header" }),
+  expiresAt: z.number().meta({ description: "Unix milliseconds" }),
+  urlTemplate: z.string().meta({
+    description: "`<base>/files/<id>/{path}?serve_token=<token>`; `{path}` is the whole path inside the asset, each segment percent-encoded",
+  }),
+}));
+
 // --- Error response ---
 
 export const errorResponseSchema = component("Error", z.object({
@@ -471,6 +497,8 @@ export type UpdateMemberBody = z.infer<typeof updateMemberBodySchema>;
 export type Project = z.infer<typeof projectSchema>;
 export type CreateProjectBody = z.infer<typeof createProjectBodySchema>;
 export type AssetAccess = z.infer<typeof assetAccessSchema>;
+export type CreateSignedUrlBody = z.input<typeof createSignedUrlBodySchema>;
+export type SignedUrl = z.infer<typeof signedUrlSchema>;
 export type SiteHeaderRule = z.infer<typeof siteHeaderRuleSchema>;
 export type SiteRedirectRule = z.infer<typeof siteRedirectRuleSchema>;
 export type SiteHosting = z.infer<typeof siteHostingSchema>;

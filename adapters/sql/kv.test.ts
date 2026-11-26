@@ -2,11 +2,11 @@
 // Cloudflare KV's: an expired value is never returned, and a TTL-less value
 // stays forever (ADR-012 §2).
 import { describe, expect, test } from "vitest";
-import { createSqliteClient, DOMAIN_MIGRATIONS_DIR, SQL_ADAPTER_MIGRATIONS_DIR } from "../memory/sqlite-node";
+import { createSqliteClient, DOMAIN_MIGRATIONS, NODE_MIGRATIONS } from "../memory/sqlite-node";
 import { SqlKeyValue } from "./kv";
 
 function fixture() {
-  const db = createSqliteClient(":memory:", [DOMAIN_MIGRATIONS_DIR, SQL_ADAPTER_MIGRATIONS_DIR]);
+  const db = createSqliteClient(":memory:", [DOMAIN_MIGRATIONS, NODE_MIGRATIONS]);
   let now = 1_700_000_000_000;
   const kv = new SqlKeyValue(db, { now: () => now });
   return { db, kv, advance: (seconds: number) => { now += seconds * 1000; } };

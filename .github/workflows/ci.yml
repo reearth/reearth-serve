@@ -71,7 +71,7 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
-      ACCOUNTS_SHA: b7d5685eacfc4976d7e62a583506bb1186f18d55
+      ACCOUNTS_SHA: ede96ba38b666b6be1e009ec9d14e1764d9948e7
     steps:
       - name: Harden Runner
         uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
@@ -172,11 +172,39 @@ jobs:
       - name: Build
         run: go build -o /dev/null .
 
+  migrations:
+    name: Migrations / Atlas
+    runs-on: ubuntu-latest
+    # Keep this job secretless: it runs PR-controlled SQL in SQLite.
+    permissions:
+      contents: read
+    steps:
+      - name: Harden Runner
+        uses: step-security/harden-runner@46b06cea07f9e64621fdf066ba77ac6915163d43 # v2.22.3
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 22
+          cache: npm
+      - uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        with:
+          path: .cache/atlas
+          key: atlas-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('tools/atlas.lock') }}
+      - run: npm ci
+      - run: npm run db:check
+        env:
+          DB_CHECK_BASE: ${{ github.event_name == 'pull_request' && format('origin/{0}', github.base_ref) || github.event.before }}
+
   # Single required status check for branch rules. It aggregates every job
   # above so the ruleset can require "CI" instead of tracking job names.
   ci:
     name: CI
-    needs: [check, build, e2e-node, e2e-accounts, container-archive-extractor, container-thumbnail]
+    needs: [check, build, e2e-node, e2e-accounts, container-archive-extractor, container-thumbnail, migrations]
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -196,7 +224,7 @@ jobs:
 
   deploy:
     name: Deploy
-    needs: [check, build]
+    needs: [check, build, migrations]
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     permissions:

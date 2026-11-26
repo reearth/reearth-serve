@@ -20,6 +20,8 @@
     "test:e2e:dev": "bash scripts/e2e.sh",
     "test:e2e:node": "bash scripts/e2e-node.sh",
     "test:e2e:accounts": "bash scripts/e2e-accounts.sh",
+    "db:hash": "bash scripts/atlas.sh migrate hash --env d1 && bash scripts/atlas.sh migrate hash --env node",
+    "db:check": "bash scripts/db-check.sh",
     "start:node": "NODE_OPTIONS=--experimental-sqlite tsx runtime/node/index.ts",
     "cli": "tsx cli/index.ts --"
   },
