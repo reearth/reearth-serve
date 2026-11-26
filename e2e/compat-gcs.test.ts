@@ -294,10 +294,12 @@ describe.runIf(COMPAT_HOST && GO)("Go storage client v1.69 (e2e/compat-gcs)", ()
     expect(lines[0]).toMatch(/^read: 262144 bytes, CRC32C [0-9a-f]{8} checked$/);
     expect(lines.slice(1)).toEqual([
       expect.stringMatching(/^range: [0-9a-f]{10}$/),
+      "range from 990 and suffix: bytes match",
       NODE_RUNTIME
         ? expect.stringMatching(/^gzip passthrough: \d+ stored bytes, Decompressed false$/)
         : "gzip passthrough: not checked behind a decoding proxy",
       "gzip decompressed: 17408 bytes",
+      "gzip ranges: whole object, as under decompressive transcoding",
       "missing: ErrObjectNotExist",
     ]);
   }, 120_000);

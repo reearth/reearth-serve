@@ -420,6 +420,20 @@ func read(ctx context.Context, client *storage.Client, cfg config) error {
 	}
 	fmt.Printf("range: %x\n", head)
 
+	for _, r := range []struct {
+		offset, length int64
+		want           []byte
+	}{{990, -1, data[990:]}, {-5, -1, data[len(data)-5:]}} {
+		got, _, err := readAll(plain.NewRangeReader(ctx, r.offset, r.length))
+		if err != nil {
+			return fmt.Errorf("NewRangeReader(%d, %d): %w", r.offset, r.length, err)
+		}
+		if !bytes.Equal(got, r.want) {
+			return fmt.Errorf("NewRangeReader(%d, %d): got %d bytes, want %d", r.offset, r.length, len(got), len(r.want))
+		}
+	}
+	fmt.Println("range from 990 and suffix: bytes match")
+
 	if err := readGzip(ctx, bucket); err != nil {
 		return err
 	}
@@ -476,6 +490,17 @@ func readGzip(ctx context.Context, bucket *storage.BucketHandle) error {
 		return fmt.Errorf("ReadCompressed(false): got %d bytes, want the %d decompressed bytes", len(plain), len(doc))
 	}
 	fmt.Printf("gzip decompressed: %d bytes\n", len(plain))
+
+	for _, r := range []struct{ offset, length int64 }{{0, 5}, {990, -1}, {-5, -1}} {
+		got, attrs, err := readAll(obj.ReadCompressed(false).NewRangeReader(ctx, r.offset, r.length))
+		if err != nil {
+			return fmt.Errorf("gzip NewRangeReader(%d, %d): %w", r.offset, r.length, err)
+		}
+		if !bytes.Equal(got, doc) || !attrs.Decompressed {
+			return fmt.Errorf("gzip NewRangeReader(%d, %d): got %d bytes (decompressed %v), want the whole %d-byte object as GCS serves it", r.offset, r.length, len(got), attrs.Decompressed, len(doc))
+		}
+	}
+	fmt.Println("gzip ranges: whole object, as under decompressive transcoding")
 	return nil
 }
 
