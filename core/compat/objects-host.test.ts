@@ -296,15 +296,18 @@ describe("objects host", () => {
     expect(await res.text()).toBe(BODY);
   });
 
-  test("a written Content-Type with a comma reads as a sandboxed octet-stream download in both URL forms", async () => {
+  test("a written Content-Type with a comma reads as octet-stream in both URL forms, exactly as on the apex", async () => {
     for (const type of ["text/plain;x=,text/html", "image/png;,text/html", 'application/json;a=",text/html']) {
-      const { f } = await written({ media: ["typed/page"] }, "<script>alert(1)</script>", type);
+      const { f, ids } = await written({ media: ["typed/page"] }, "<script>alert(1)</script>", type);
+      const apex = await f.app.request(`http://localhost/files/${ids["media/typed/page"]}/page`);
       for (const read of [virtual, pathStyle]) {
         const res = await read(f, "/typed/page");
         expect(res.status).toBe(200);
         expect(res.headers.get("Content-Type")).toBe("application/octet-stream");
-        expect(res.headers.get("Content-Disposition")).toMatch(/^attachment/);
-        expect(res.headers.get("Content-Security-Policy")).toBe("sandbox");
+        expect(res.headers.get("X-Content-Type-Options")).toBe("nosniff");
+        for (const name of ["Content-Type", "Content-Disposition", "Content-Security-Policy"]) {
+          expect(res.headers.get(name), name).toBe(apex.headers.get(name));
+        }
       }
     }
   });
