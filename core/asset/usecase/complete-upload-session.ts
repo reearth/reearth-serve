@@ -138,7 +138,7 @@ if (import.meta.vitest) {
   function mockWrites() {
     const calls: CreateAssetInput[] = [];
     const writes: AtomicWrites = {
-      createAsset: vi.fn(async (input: CreateAssetInput) => { calls.push(input); }),
+      createAsset: vi.fn(async (input: CreateAssetInput) => { calls.push(input); return { generation: null }; }),
       createVersion: vi.fn(async () => { throw new Error("not used"); }),
       saveJob: vi.fn(async () => { throw new Error("not used"); }),
       deleteAsset: vi.fn(async () => { throw new Error("not used"); }),

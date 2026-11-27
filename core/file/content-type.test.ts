@@ -70,7 +70,7 @@ describe("uploading a Content-Type through the API", () => {
     const f = await fixture({ anonymousUploadEnabled: true });
     const writes: AtomicWrites = {
       ...f.deps.writes,
-      async createAsset({ asset }: { asset: AssetMetadata }) { f.metadata.assets.set(asset.id, asset); },
+      async createAsset({ asset }: { asset: AssetMetadata }) { f.metadata.assets.set(asset.id, asset); return { generation: null }; },
     } as AtomicWrites;
     f.deps.writes = writes;
     return { ...f, app: createApp(f.deps) };
@@ -196,7 +196,7 @@ describe("a pathological Content-Type is rejected quickly", () => {
     const f = await fixture({ anonymousUploadEnabled: true });
     f.deps.writes = {
       ...f.deps.writes,
-      async createAsset({ asset }: { asset: AssetMetadata }) { f.metadata.assets.set(asset.id, asset); },
+      async createAsset({ asset }: { asset: AssetMetadata }) { f.metadata.assets.set(asset.id, asset); return { generation: null }; },
     } as AtomicWrites;
     const app = createApp(f.deps);
     const body = "x";

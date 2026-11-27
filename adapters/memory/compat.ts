@@ -1,10 +1,10 @@
 import type {
   Binding, BindingKind, BucketName, CompatBucket, CompatCredential, CredentialId,
-  UploadId, UploadSession,
+  UploadId, UploadPhase, UploadSession,
 } from "../../core/compat/model";
 import {
-  generationSeed, newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatStore, type DeleteBucketResult,
-  type LeaseToken, type RecordRef, type VersionRecord,
+  generationSeed, newClaimToken, type BindingKey, type ClaimResult, type ClaimToken, type CompatPublish, type CompatStore,
+  type DeleteBucketResult, type LeaseToken, type RecordRef, type VersionRecord,
 } from "../../core/compat/repository";
 import { isServiceRole } from "../../core/auth/types";
 
@@ -76,9 +76,7 @@ export class MemoryCompatStore implements CompatStore {
   }
   async bind(bucket: BucketName, key: BindingKey, token: ClaimToken, assetId: string): Promise<boolean> {
     const row = this.bindings.get(rowKey(bucket, key));
-    if (!row) return false;
-    if (row.assetId === assetId) return true;
-    if (row.assetId !== null || row.claimToken !== token) return false;
+    if (!row || (row.assetId !== assetId && (row.assetId !== null || row.claimToken !== token))) return false;
     row.assetId = assetId;
     return true;
   }
@@ -94,6 +92,18 @@ export class MemoryCompatStore implements CompatStore {
     const row = this.bindings.get(rowKey(bucket, key));
     if (!row || row.assetId === null || (row.lease !== null && row.lease.at >= staleBefore)) return false;
     row.lease = { token, at: now };
+    return true;
+  }
+  async renewLease(bucket: BucketName, key: BindingKey, token: LeaseToken, now: number): Promise<boolean> {
+    const row = this.bindings.get(rowKey(bucket, key));
+    if (row?.lease?.token !== token) return false;
+    row.lease = { token, at: now };
+    return true;
+  }
+  async renewClaim(bucket: BucketName, key: BindingKey, token: ClaimToken, now: number): Promise<boolean> {
+    const row = this.bindings.get(rowKey(bucket, key));
+    if (!row || row.assetId !== null || row.claimToken !== token) return false;
+    row.claimedAt = now;
     return true;
   }
   async releaseLease(bucket: BucketName, key: BindingKey, token: LeaseToken): Promise<void> {
@@ -120,9 +130,15 @@ export class MemoryCompatStore implements CompatStore {
     return out;
   }
 
-  private inVersionOrder(assetId: string, objectRef: string): string[] {
+  /**
+   * `objectRef` last, after its asset row and every older version of
+   * `assetId`, oldest first. An `unsaved` version, as in a publish, is newer
+   * than every saved one.
+   */
+  private inVersionOrder(assetId: string, objectRef: string, unsaved = false): string[] {
+    if (objectRef === assetId) return [objectRef];
     const versions = this.versionsOf(assetId).sort((a, b) => a.version - b.version);
-    const at = versions.findIndex((v) => v.id === objectRef);
+    const at = unsaved ? versions.length : versions.findIndex((v) => v.id === objectRef);
     if (at < 0) return [objectRef];
     return [assetId, ...versions.slice(0, at).map((v) => v.id), objectRef];
   }
@@ -162,19 +178,16 @@ export class MemoryCompatStore implements CompatStore {
 
   async createUpload(session: UploadSession): Promise<void> {
     if (this.uploads.has(session.id)) throw new Error(`upload ${session.id} already exists`);
-    this.uploads.set(session.id, { ...session });
+    this.uploads.set(session.id, structuredClone(session));
   }
   async findUpload(id: UploadId): Promise<UploadSession | null> {
-    return this.uploads.get(id) ?? null;
-  }
-  async advanceUpload(
-    id: UploadId,
-    expect: Pick<UploadSession, "received" | "state">,
-    next: Pick<UploadSession, "received" | "hashState" | "state" | "result">,
-  ): Promise<boolean> {
     const u = this.uploads.get(id);
-    if (!u || u.received !== expect.received || u.state !== expect.state) return false;
-    this.uploads.set(id, { ...u, ...next });
+    return u ? structuredClone(u) : null;
+  }
+  async updateUpload(id: UploadId, revision: number, phase: UploadPhase): Promise<boolean> {
+    const u = this.uploads.get(id);
+    if (!u || u.revision !== revision) return false;
+    this.uploads.set(id, { ...u, revision: revision + 1, phase: structuredClone(phase) });
     return true;
   }
   async listExpiredUploads(now: number, limit: number): Promise<UploadSession[]> {
@@ -183,8 +196,49 @@ export class MemoryCompatStore implements CompatStore {
       .sort((a, b) => a.expiresAt - b.expiresAt)
       .slice(0, limit);
   }
-  async deleteUpload(id: UploadId): Promise<void> {
-    this.uploads.delete(id);
+  async deleteUpload(id: UploadId, revision?: number): Promise<boolean> {
+    const u = this.uploads.get(id);
+    if (!u || (revision !== undefined && u.revision !== revision)) return false;
+    return this.uploads.delete(id);
+  }
+  async sweepStaleHolds(staleBefore: number): Promise<{ claims: number; leases: number }> {
+    let claims = 0;
+    let leases = 0;
+    for (const [id, row] of this.bindings) {
+      if (row.assetId === null && row.claimedAt < staleBefore) {
+        this.bindings.delete(id);
+        claims++;
+      } else if (row.lease !== null && row.lease.at < staleBefore) {
+        row.lease = null;
+        leases++;
+      }
+    }
+    return { claims, leases };
+  }
+
+  /**
+   * The compat rows of `publish` (see `SqlAtomicWrites`), synchronously so no
+   * other request runs between the check and the writes. Returns the issued
+   * generation, or null when the publish no longer holds and nothing changed.
+   */
+  publish({ upload, hold, record, result }: CompatPublish): number | null {
+    const session = this.uploads.get(upload.id);
+    const row = this.bindings.get(rowKey(hold.bucket, hold.key));
+    if (session?.revision !== upload.revision || !row) return null;
+    const holds = hold.kind === "lease"
+      ? row.lease?.token === hold.token && row.assetId === hold.assetId
+      : row.claimToken === hold.token && row.assetId === null;
+    if (!holds) return null;
+    if (hold.kind === "claim") row.assetId = hold.assetId;
+    for (const ref of this.inVersionOrder(hold.assetId, record.objectRef, true)) {
+      if (ref !== record.objectRef) this.recordOnce(hold.bucket, ref, hold.assetId);
+    }
+    const generation = (this.generations.get(hold.bucket) ?? 0) + 1;
+    this.generations.set(hold.bucket, generation);
+    this.hashes.set(record.objectRef, { assetId: hold.assetId, record: { generation, hashes: record.hashes } });
+    const committed = { state: "committed" as const, result: structuredClone({ ...result, generation }) };
+    this.uploads.set(session.id, { ...session, revision: session.revision + 1, phase: committed });
+    return generation;
   }
 
   dropAsset(assetId: string): void {
