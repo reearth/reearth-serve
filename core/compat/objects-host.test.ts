@@ -296,6 +296,41 @@ describe("objects host", () => {
     expect(await res.text()).toBe(BODY);
   });
 
+  test("a written Content-Type with a comma reads as a sandboxed octet-stream download in both URL forms", async () => {
+    for (const type of ["text/plain;x=,text/html", "image/png;,text/html", 'application/json;a=",text/html']) {
+      const { f } = await written({ media: ["typed/page"] }, "<script>alert(1)</script>", type);
+      for (const read of [virtual, pathStyle]) {
+        const res = await read(f, "/typed/page");
+        expect(res.status).toBe(200);
+        expect(res.headers.get("Content-Type")).toBe("application/octet-stream");
+        expect(res.headers.get("Content-Disposition")).toMatch(/^attachment/);
+        expect(res.headers.get("Content-Security-Policy")).toBe("sandbox");
+      }
+    }
+  });
+
+  test("a multipart upload with a CRLF in its contentType stores a normalized type and reads back", async () => {
+    const f = await compatFixture();
+    const auth = bearer(await accessToken(f, await keyFor(f, "editor")));
+    const boundary = "b88f";
+    const metadata = { name: "typed/crlf.txt", contentType: "text/plain\r\nSet-Cookie: pwn=1" };
+    const body = `--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(metadata)}\n\r\n`
+      + `--${boundary}\r\nContent-Type: text/plain\r\n\r\n${BODY}\r\n--${boundary}--\r\n`;
+    const written = await onApi(f, "/upload/storage/v1/b/media/o?uploadType=multipart", {
+      method: "POST", headers: { ...auth, "Content-Type": `multipart/related; boundary=${boundary}` }, body,
+    });
+    expect(written.status).toBe(200);
+    const stored = (await written.json() as { contentType: string }).contentType;
+    expect(stored).not.toMatch(/[\r\n]|Set-Cookie/i);
+    for (const read of [virtual, pathStyle]) {
+      const res = await read(f, "/typed/crlf.txt");
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Set-Cookie")).toBeNull();
+      expect(res.headers.get("Content-Type")).not.toMatch(/[\r\n]|Set-Cookie/i);
+      expect(await res.text()).toBe(BODY);
+    }
+  });
+
   test("an unauthorized lookup cannot be delivered as an object the layer opened", () => {
     const deliverLookup = (f: Fixture, located: UnauthorizedLookup) =>
       // @ts-expect-error a lookup made without a principal is not an OpenObject
