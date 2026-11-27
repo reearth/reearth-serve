@@ -11,6 +11,7 @@
 //	E2E_GCS_REVOKE_URL    (revoked) the REST URL that revokes the credential
 //	E2E_GCS_REVOKE_TOKEN  (revoked) an admin bearer token for that URL
 //	E2E_COMPAT_SIGNED_PATH_PREFIX  (signed-put) COMPAT_SIGNED_PATH_PREFIX of that server, if set
+//	E2E_GZIP_PASSTHROUGH  (read) "false" where a proxy rewrites gzip responses in front of Serve, as under wrangler dev, where ReadCompressed(true) receives decompressed bytes (see e2e/compression.test.ts)
 //
 // The compat host is a Host header on the e2e server's port, and its name
 // need not resolve. Every connection is dialled to E2E_ENDPOINT's address
@@ -22,6 +23,7 @@ package main
 
 import (
 	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/md5"
 	"encoding/base64"
@@ -65,11 +67,12 @@ var scenarios = map[string]func(context.Context, *storage.Client, config) error{
 	"resumable-16m":           resumable16M,
 	"signed-put":              signedPut,
 	"signed-refusals":         signedRefusals,
+	"read":                    read,
 }
 
 func main() {
 	if len(os.Args) != 2 || scenarios[os.Args[1]] == nil {
-		fmt.Fprintln(os.Stderr, "usage: compat-gcs <attrs-missing|revoked|write-attrs-list-delete|paging|race|resumable-40m|resumable-16m|signed-put|signed-refusals>")
+		fmt.Fprintln(os.Stderr, "usage: compat-gcs <attrs-missing|revoked|write-attrs-list-delete|paging|race|resumable-40m|resumable-16m|signed-put|signed-refusals|read>")
 		os.Exit(2)
 	}
 	cfg, err := loadConfig()
@@ -178,9 +181,10 @@ func revoke(ctx context.Context, cfg config) error {
 	return nil
 }
 
-func write(ctx context.Context, obj *storage.ObjectHandle, contentType string, metadata map[string]string, data []byte) (*storage.ObjectAttrs, error) {
+func write(ctx context.Context, obj *storage.ObjectHandle, contentType, contentEncoding string, metadata map[string]string, data []byte) (*storage.ObjectAttrs, error) {
 	w := obj.NewWriter(ctx)
 	w.ContentType = contentType
+	w.ContentEncoding = contentEncoding
 	w.Metadata = metadata
 	if _, err := w.Write(data); err != nil {
 		_ = w.Close()
@@ -208,7 +212,7 @@ func writeAttrsListDelete(ctx context.Context, client *storage.Client, cfg confi
 	bucket := client.Bucket(cfg.bucket)
 	obj := bucket.Object("assets/ab/cdef/a.txt")
 	first := []byte("small body")
-	if _, err := write(ctx, obj, "text/plain", map[string]string{"k": "v"}, first); err != nil {
+	if _, err := write(ctx, obj, "text/plain", "", map[string]string{"k": "v"}, first); err != nil {
 		return fmt.Errorf("write: %w", err)
 	}
 	attrs, err := obj.Attrs(ctx)
@@ -224,7 +228,7 @@ func writeAttrsListDelete(ctx context.Context, client *storage.Client, cfg confi
 	firstGeneration := attrs.Generation
 
 	second := []byte("second, longer body")
-	if _, err := write(ctx, obj, "text/plain", nil, second); err != nil {
+	if _, err := write(ctx, obj, "text/plain", "", nil, second); err != nil {
 		return fmt.Errorf("overwrite: %w", err)
 	}
 	attrs, err = obj.Attrs(ctx)
@@ -240,7 +244,7 @@ func writeAttrsListDelete(ctx context.Context, client *storage.Client, cfg confi
 	fmt.Println("overwrite: generation increased")
 	lastGeneration := attrs.Generation
 
-	if _, err := write(ctx, bucket.Object("assets/ab/cdef/sub/b.txt"), "text/plain", nil, []byte("b")); err != nil {
+	if _, err := write(ctx, bucket.Object("assets/ab/cdef/sub/b.txt"), "text/plain", "", nil, []byte("b")); err != nil {
 		return fmt.Errorf("write sub/b.txt: %w", err)
 	}
 	var objects, prefixes []string
@@ -274,7 +278,7 @@ func writeAttrsListDelete(ctx context.Context, client *storage.Client, cfg confi
 		return fmt.Errorf("attrs after delete: want ErrObjectNotExist, got %v", err)
 	}
 
-	recreated, err := write(ctx, obj, "text/plain", nil, first)
+	recreated, err := write(ctx, obj, "text/plain", "", nil, first)
 	if err != nil {
 		return fmt.Errorf("recreate: %w", err)
 	}
@@ -300,7 +304,7 @@ func paging(ctx context.Context, client *storage.Client, cfg config) error {
 		go func() {
 			defer wg.Done()
 			for name := range names {
-				if _, err := write(ctx, bucket.Object(name), "text/plain", nil, []byte(name)); err != nil {
+				if _, err := write(ctx, bucket.Object(name), "text/plain", "", nil, []byte(name)); err != nil {
 					errs <- fmt.Errorf("write %s: %w", name, err)
 				}
 			}
@@ -353,7 +357,7 @@ func race(ctx context.Context, client *storage.Client, cfg config) error {
 		go func() {
 			defer wg.Done()
 			<-start
-			written[i], errs[i] = write(ctx, obj, "text/plain", nil, []byte(fmt.Sprintf("writer %d", i)))
+			written[i], errs[i] = write(ctx, obj, "text/plain", "", nil, []byte(fmt.Sprintf("writer %d", i)))
 		}()
 	}
 	close(start)
@@ -377,6 +381,122 @@ func race(ctx context.Context, client *storage.Client, cfg config) error {
 }
 
 const mib = 1 << 20
+
+func readAll(r *storage.Reader, err error) ([]byte, storage.ReaderObjectAttrs, error) {
+	if err != nil {
+		return nil, storage.ReaderObjectAttrs{}, err
+	}
+	defer func() { _ = r.Close() }()
+	data, err := io.ReadAll(r)
+	return data, r.Attrs, err
+}
+
+func read(ctx context.Context, client *storage.Client, cfg config) error {
+	bucket := client.Bucket(cfg.bucket)
+	plain := bucket.Object("read/plain.bin")
+	data := pattern(256*1024, 7)
+	if _, err := write(ctx, plain, "application/octet-stream", "", nil, data); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+	defer func() { _ = plain.Delete(ctx) }()
+
+	got, attrs, err := readAll(plain.NewReader(ctx))
+	if err != nil {
+		return fmt.Errorf("NewReader: %w", err)
+	}
+	if !bytes.Equal(got, data) {
+		return fmt.Errorf("NewReader: %d bytes differ from the %d written", len(got), len(data))
+	}
+	if want := crc32.Checksum(data, crc32.MakeTable(crc32.Castagnoli)); attrs.CRC32C != want || attrs.Decompressed {
+		return fmt.Errorf("NewReader: want CRC32C %08x checked on the stored bytes, got %08x (decompressed %v)", want, attrs.CRC32C, attrs.Decompressed)
+	}
+	fmt.Printf("read: %d bytes, CRC32C %08x checked\n", len(got), attrs.CRC32C)
+
+	head, attrs, err := readAll(plain.NewRangeReader(ctx, 0, 5))
+	if err != nil {
+		return fmt.Errorf("NewRangeReader: %w", err)
+	}
+	if !bytes.Equal(head, data[:5]) || attrs.Size != int64(len(data)) || attrs.CRC32C != 0 {
+		return fmt.Errorf("NewRangeReader(0, 5): got %x of %d (CRC32C %08x), want %x of %d and no hash", head, attrs.Size, attrs.CRC32C, data[:5], len(data))
+	}
+	fmt.Printf("range: %x\n", head)
+
+	for _, r := range []struct {
+		offset, length int64
+		want           []byte
+	}{{990, -1, data[990:]}, {-5, -1, data[len(data)-5:]}} {
+		got, _, err := readAll(plain.NewRangeReader(ctx, r.offset, r.length))
+		if err != nil {
+			return fmt.Errorf("NewRangeReader(%d, %d): %w", r.offset, r.length, err)
+		}
+		if !bytes.Equal(got, r.want) {
+			return fmt.Errorf("NewRangeReader(%d, %d): got %d bytes, want %d", r.offset, r.length, len(got), len(r.want))
+		}
+	}
+	fmt.Println("range from 990 and suffix: bytes match")
+
+	if err := readGzip(ctx, bucket); err != nil {
+		return err
+	}
+
+	_, _, err = readAll(bucket.Object("read/missing.bin").NewReader(ctx))
+	if !errors.Is(err, storage.ErrObjectNotExist) {
+		return fmt.Errorf("NewReader on a missing key: want ErrObjectNotExist, got %v", err)
+	}
+	fmt.Println("missing: ErrObjectNotExist")
+	return nil
+}
+
+func readGzip(ctx context.Context, bucket *storage.BucketHandle) error {
+	obj := bucket.Object("read/data.json")
+	doc := bytes.Repeat([]byte(`{"type":"Feature","properties":{}}`), 512)
+	var packed bytes.Buffer
+	zw := gzip.NewWriter(&packed)
+	if _, err := zw.Write(doc); err != nil {
+		return err
+	}
+	if err := zw.Close(); err != nil {
+		return err
+	}
+	if _, err := write(ctx, obj, "application/json", "gzip", nil, packed.Bytes()); err != nil {
+		return fmt.Errorf("gzip write: %w", err)
+	}
+	defer func() { _ = obj.Delete(ctx) }()
+
+	if os.Getenv("E2E_GZIP_PASSTHROUGH") == "false" {
+		fmt.Println("gzip passthrough: not checked behind a decoding proxy")
+	} else {
+		stored, attrs, err := readAll(obj.ReadCompressed(true).NewReader(ctx))
+		if err != nil {
+			return fmt.Errorf("ReadCompressed(true): %w", err)
+		}
+		if !bytes.Equal(stored, packed.Bytes()) || attrs.Decompressed {
+			return fmt.Errorf("ReadCompressed(true): got %d bytes (decompressed %v), want the %d stored gzip bytes", len(stored), attrs.Decompressed, packed.Len())
+		}
+		fmt.Printf("gzip passthrough: %d stored bytes, Decompressed false\n", len(stored))
+	}
+
+	plain, _, err := readAll(obj.ReadCompressed(false).NewReader(ctx))
+	if err != nil {
+		return fmt.Errorf("ReadCompressed(false): %w", err)
+	}
+	if !bytes.Equal(plain, doc) {
+		return fmt.Errorf("ReadCompressed(false): got %d bytes, want the %d decompressed bytes", len(plain), len(doc))
+	}
+	fmt.Printf("gzip decompressed: %d bytes\n", len(plain))
+
+	for _, r := range []struct{ offset, length int64 }{{0, 5}, {990, -1}, {-5, -1}} {
+		got, attrs, err := readAll(obj.ReadCompressed(false).NewRangeReader(ctx, r.offset, r.length))
+		if err != nil {
+			return fmt.Errorf("gzip NewRangeReader(%d, %d): %w", r.offset, r.length, err)
+		}
+		if !bytes.Equal(got, doc) || !attrs.Decompressed {
+			return fmt.Errorf("gzip NewRangeReader(%d, %d): got %d bytes (decompressed %v), want the whole %d-byte object as GCS serves it", r.offset, r.length, len(got), attrs.Decompressed, len(doc))
+		}
+	}
+	fmt.Println("gzip ranges: whole object, as under decompressive transcoding")
+	return nil
+}
 
 func pattern(size int, seed byte) []byte {
 	data := make([]byte, size)

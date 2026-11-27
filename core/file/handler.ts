@@ -5,6 +5,8 @@ import { decompressStream } from "../asset/compression";
 import type { AssetMetadata, AssetVersion, StoredFile } from "../asset/model";
 import type { FileStorage } from "../asset/repository";
 import { resolveAssetVersion } from "../asset/usecase";
+import type { ResolvedAsset } from "../asset/usecase/resolve-version";
+import type { OpenObject } from "../compat/layer";
 import { legacyThumbKey, versionThumbKey } from "../asset/usecase/shared";
 import { cacheControlFor, etagMatches, representationEtag, thumbnailCacheControl, type CachePolicy } from "./caching";
 import { addVary, applyCors, preflightResponse, type CorsPolicy } from "./cors";
@@ -13,7 +15,7 @@ import { readStoredType, sentMediaType, type StoredType } from "./media-type";
 import { handleAuthSubmit } from "../access/form";
 import { AUTH_PATH_SEGMENT, resolveAccess, type AccessDeps } from "../access/resolve";
 import type { BearerDecision } from "../access/restricted";
-import { deliveryPolicy } from "../access/grant";
+import { deliveryPolicy, type ServiceGrant } from "../access/grant";
 import { readDeliveryRequest } from "../access/request";
 import { toUnixSeconds, type AssetPath } from "../access/token";
 import type { VerifiedCaller } from "../auth/types";
@@ -26,7 +28,7 @@ import {
   applySiteHeaders, siteRedirect, siteRedirectResponse, targetFilePath,
 } from "./site-routing";
 import { errorResponseSchema } from "../../shared";
-import { parseRange, sliceStream } from "./stream";
+import { parseRange, resolveRange, sliceStream, type RangeRequest } from "./stream";
 import {
   THUMBNAIL_SIZES,
   isThumbnailSize,
@@ -129,8 +131,13 @@ interface Located {
   mediaType: StoredType;
   contentEncoding?: string;
   displayName: string;
-  originalSize?: number;
+  originalSize: OriginalSize;
 }
+
+/** The decompressed size of a gzip-stored file, which a file extracted from an archive never records. */
+type OriginalSize = number | "unknown";
+
+const originalSizeOf = (recorded: number | undefined): OriginalSize => recorded || "unknown";
 
 /**
  * Map a request path onto an object in one layout.
@@ -155,7 +162,7 @@ async function locate(storage: FileStorage, layout: Layout, filePath: string): P
       mediaType: readStoredType(layout.contentType),
       contentEncoding: layout.contentEncoding,
       displayName: layout.filename,
-      originalSize: layout.originalSize,
+      originalSize: originalSizeOf(layout.originalSize),
     };
   }
 
@@ -168,7 +175,7 @@ async function locate(storage: FileStorage, layout: Layout, filePath: string): P
       mediaType: readStoredType(layout.contentType),
       contentEncoding: layout.contentEncoding,
       displayName: layout.filename,
-      originalSize: layout.originalSize,
+      originalSize: originalSizeOf(layout.originalSize),
     };
   }
 
@@ -182,7 +189,24 @@ async function locate(storage: FileStorage, layout: Layout, filePath: string): P
     mediaType: readStoredType(file.contentType),
     contentEncoding: file.contentEncoding,
     displayName: entryPath.split("/").pop() || entryPath,
+    originalSize: "unknown",
   };
+}
+
+function layoutsWithLegacyFallback({ asset, version }: ResolvedAsset): Layout[] {
+  return version ? [versionedLayout(asset, version), legacyLayout(asset)] : [legacyLayout(asset)];
+}
+
+function exactLayoutOf({ asset, version }: ResolvedAsset): Layout {
+  return version ? versionedLayout(asset, version) : legacyLayout(asset);
+}
+
+async function locateIn(storage: FileStorage, layouts: Layout[], path: string): Promise<Located | null> {
+  for (const layout of layouts) {
+    const located = await locate(storage, layout, path);
+    if (located) return located;
+  }
+  return null;
 }
 
 /** True when `path` names a directory that has an index file, in any layout. */
@@ -365,10 +389,6 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
   const versions = c.get("versions");
   const storage = c.get("storage");
   const id = c.req.param("id");
-  const rangeHeader = c.req.header("Range");
-  const acceptEncoding = c.req.header("Accept-Encoding") ?? "";
-  const clientAcceptsGzip = acceptEncoding.includes("gzip");
-  const range = parseRange(rangeHeader);
 
   // `serve_token` leaves the query here, before anything reads it, and the
   // storage key is built from the same parsed path a token is matched on
@@ -439,10 +459,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     return decorate(await serveThumbnail(storage, asset, version, thumb, pinned, policy));
   }
 
-  // Versioned layout first; assets from before ADR-005 have no version row and
-  // live under the legacy prefix, which is also the fallback when the
-  // versioned key is missing.
-  const layouts = version ? [versionedLayout(asset, version), legacyLayout(asset)] : [legacyLayout(asset)];
+  const layouts = layoutsWithLegacyFallback(resolved);
   const isArchive = layouts.some((l) => l.archive);
 
   // `_headers` / `_redirects` (ADR-013 C3). The rules were parsed once, at
@@ -475,11 +492,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     }
   }
 
-  let located: Located | null = null;
-  for (const layout of layouts) {
-    located = await locate(storage, layout, servePath);
-    if (located) break;
-  }
+  let located = await locateIn(storage, layouts, servePath);
 
   // Plain rules apply only to a path that is not a file — Netlify's shadowing
   // semantics — so they are consulted here, after the lookup missed and before
@@ -496,10 +509,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     if (fallbackRule && !rewritten) {
       servePath = targetFilePath(fallbackRule.to);
       rewritten = true;
-      for (const layout of layouts) {
-        located = await locate(storage, layout, servePath);
-        if (located) break;
-      }
+      located = await locateIn(storage, layouts, servePath);
     }
   }
 
@@ -529,18 +539,16 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
     located = fallback.located;
   }
 
-  const res = await serveFile(located, {
-    range,
-    rangeHeader,
-    clientAcceptsGzip,
-    ifNoneMatch: c.req.header("If-None-Match"),
+  const res = await sendLocated(located, {
+    ...conditionsOf(c.req.raw),
     cacheControl: cacheControlFor({ pinned, contentType: sentMediaType(located.mediaType) }, policy),
     storage,
     siteHost: c.get("siteHost"),
+    storedEncoding: "omit",
   });
 
   // `_headers` rules go on first, so everything the handler sets below — and
-  // everything `serveFile` already set — wins over a rule that named the same
+  // everything `sendLocated` already set — wins over a rule that named the same
   // header (ADR-013 C3).
   applySiteHeaders(res, hosting, servePath, c.get("siteHost"));
 
@@ -597,7 +605,7 @@ fileRoutes.get("/:id/:path{.+}",
       "Gzip-stored files are sent as-is with `Content-Encoding: gzip` when the request has `Accept-Encoding: gzip` and no `Range`; otherwise they are decompressed on the fly.",
       "",
       "Conditional requests: every file carries an `ETag`, and an `If-None-Match` that matches it answers `304` with no body. `If-Modified-Since` is ignored: no `Last-Modified` is sent.",
-      "An unparseable `Range` header is ignored and the full file is returned with `200`.",
+      "`Range` takes one `bytes` range, `bytes=<first>-`, `bytes=<first>-<last>` or the suffix `bytes=-<n>`. A first byte at or past the end answers `416`; a malformed or inverted range, another unit or several ranges are ignored and the full file is returned with `200`, as is any range on a gzip-stored file whose original size is unknown.",
       "",
       "Here, on the shared origin, only types a browser shows without running script are `inline`; HTML, SVG, XML, JavaScript, PDF and every other type download as an `attachment` with `Content-Security-Policy: sandbox`. A hosted site renders on its site host only.",
       "",
@@ -613,7 +621,7 @@ fileRoutes.get("/:id/:path{.+}",
       { name: "id", in: "path", required: true, schema: { type: "string" }, description: "Asset ID or version ID" },
       { name: "path", in: "path", required: true, schema: { type: "string" }, description: "Filename, or a path inside an extracted archive (may contain `/`, sent raw or escaped as `%2F`). Decoded once; a `.` or `..` segment, a backslash, NUL, or a `%2F` left after decoding answers 400" },
       { name: "thumb", in: "query", required: false, schema: { type: "string", enum: [...THUMBNAIL_SIZES] }, description: "Serve the WebP thumbnail of this size instead of the file. Any other value → 400" },
-      { name: "Range", in: "header", required: false, schema: { type: "string", pattern: "^bytes=\\d+-\\d*$" }, description: "Single byte range, `bytes=<start>-` or `bytes=<start>-<end>`. Suffix (`bytes=-N`) and multi-range forms are ignored" },
+      { name: "Range", in: "header", required: false, schema: { type: "string", pattern: "^bytes=(\\d+-\\d*|-\\d+)$" }, description: "Single byte range, `bytes=<start>-`, `bytes=<start>-<end>` or `bytes=-<n>` for the last n bytes. Multi-range forms are ignored" },
       { name: "Accept-Encoding", in: "header", required: false, schema: { type: "string" }, description: "If it contains `gzip`, gzip-stored files are passed through compressed (non-Range requests only)" },
       { name: "If-None-Match", in: "header", required: false, schema: { type: "string" }, description: "One or more entity tags, or `*`. Compared weakly against the `ETag`; a match answers `304`" },
     ],
@@ -644,6 +652,10 @@ fileRoutes.get("/:id/:path{.+}",
           "Cache-Control": fileHeaders["Cache-Control"],
           "Content-Disposition": fileHeaders["Content-Disposition"],
         },
+      },
+      416: {
+        description: "The range starts at or past the end of the file. No body",
+        headers: { ...nosniff, ...corsHeaders, "Content-Range": stringHeader("`bytes */<size>`") },
       },
       400: jsonError("Invalid path or thumbnail size, or two different delivery tokens on a restricted asset"),
       401: {
@@ -707,17 +719,59 @@ async function serveThumbnail(
   });
 }
 
-interface ServeOptions {
-  range: { offset: number; length: number } | null;
+interface ReadConditions {
+  range: RangeRequest | null;
   rangeHeader: string | undefined;
   clientAcceptsGzip: boolean;
   ifNoneMatch: string | undefined;
+}
+
+function conditionsOf(request: Request): ReadConditions {
+  const rangeHeader = request.headers.get("Range") ?? undefined;
+  return {
+    range: parseRange(rangeHeader),
+    rangeHeader,
+    clientAcceptsGzip: (request.headers.get("Accept-Encoding") ?? "").includes("gzip"),
+    ifNoneMatch: request.headers.get("If-None-Match") ?? undefined,
+  };
+}
+
+interface ServeOptions extends ReadConditions {
   cacheControl: string;
   storage: FileStorage;
   siteHost: boolean;
+  quotedEtag?: string;
+  storedEncoding: "label" | "omit";
 }
 
-async function serveFile(located: Located, opts: ServeOptions): Promise<Response> {
+const SERVICE_GRANT: ServiceGrant = { proof: "service" };
+
+export interface DeliveryTarget {
+  object: OpenObject;
+  quotedEtag: string;
+}
+
+export async function deliverAsset(storage: FileStorage, request: Request, { object, quotedEtag }: DeliveryTarget): Promise<Response | null> {
+  const layout = exactLayoutOf(object.resolved);
+  const located = await locate(storage, layout, layout.filename);
+  if (!located) return null;
+  const policy = deliveryPolicy(SERVICE_GRANT, toUnixSeconds(Date.now()));
+  const res = await sendLocated(located, {
+    ...conditionsOf(request),
+    // GCS answers a gzip object whole whatever the Range (decompressive transcoding), and its clients expect that.
+    ...(located.contentEncoding === "gzip" && { range: null, rangeHeader: undefined }),
+    cacheControl: cacheControlFor({ pinned: false, contentType: sentMediaType(located.mediaType) }, policy),
+    storage,
+    siteHost: false,
+    quotedEtag,
+    storedEncoding: "label",
+  });
+  if (res.status === 404) return null;
+  res.headers.set("X-Content-Type-Options", "nosniff");
+  return res;
+}
+
+async function sendLocated(located: Located, opts: ServeOptions): Promise<Response> {
   const { file, key, mediaType, contentEncoding, displayName, originalSize } = located;
   const { range, rangeHeader, clientAcceptsGzip, storage } = opts;
   const isGzipStored = contentEncoding === "gzip";
@@ -725,7 +779,7 @@ async function serveFile(located: Located, opts: ServeOptions): Promise<Response
   // them and asked for the whole file; every other path decodes.
   const passthrough = isGzipStored && clientAcceptsGzip && !rangeHeader;
 
-  const etag = representationEtag(file.etag, { transformed: isGzipStored && !passthrough });
+  const etag = opts.quotedEtag ?? representationEtag(file.etag, { transformed: isGzipStored && !passthrough });
 
   const common: Record<string, string> = {
     "Cache-Control": opts.cacheControl,
@@ -740,14 +794,26 @@ async function serveFile(located: Located, opts: ServeOptions): Promise<Response
     return new Response(null, { status: 304, headers: common });
   }
 
+  const unsatisfiable = async (size: number) => {
+    await file.body.cancel().catch(() => {});
+    return new Response(null, { status: 416, headers: { ...common, "Content-Range": `bytes */${size}` } });
+  };
+
   // --- Non-gzip file ---
   if (!isGzipStored) {
     const headers: Record<string, string> = { ...common, "Accept-Ranges": "bytes" };
-    if (range) {
+    const labelled = opts.storedEncoding === "label" && contentEncoding !== undefined && contentEncoding !== "identity";
+    if (labelled) headers["Content-Encoding"] = contentEncoding;
+    // The body is already in that encoding; see the passthrough below.
+    const asStored = (body: ReadableStream<Uint8Array> | null, status: number) =>
+      new Response(body, { status, headers, ...(labelled && { encodeBody: "manual" }) } as ResponseInit);
+    const part = resolveRange(range, file.size);
+    if (part.kind === "unsatisfiable") return unsatisfiable(file.size);
+    if (part.kind === "part") {
       // The first read fetched the whole object to learn its metadata; the
       // range itself is a second, bounded read.
       await file.body.cancel().catch(() => {});
-      const rangedFile = await storage.get(key, range);
+      const rangedFile = await storage.get(key, { offset: part.offset, length: part.length });
       if (!rangedFile) {
         return new Response(JSON.stringify({ error: "File not found" }), {
           status: 404,
@@ -758,13 +824,13 @@ async function serveFile(located: Located, opts: ServeOptions): Promise<Response
         const { offset, length, totalSize } = rangedFile.range;
         headers["Content-Range"] = `bytes ${offset}-${offset + length - 1}/${totalSize}`;
         headers["Content-Length"] = String(length);
-        return new Response(rangedFile.body, { status: 206, headers });
+        return asStored(rangedFile.body, 206);
       }
-      return new Response(rangedFile.body, { status: 200, headers });
+      return asStored(rangedFile.body, 200);
     }
 
     headers["Content-Length"] = String(file.size);
-    return new Response(file.body, { status: 200, headers });
+    return asStored(file.body, 200);
   }
 
   // --- Gzip-stored + client accepts gzip + no range → pass through ---
@@ -787,22 +853,18 @@ async function serveFile(located: Located, opts: ServeOptions): Promise<Response
   }
 
   // --- Gzip-stored: decompress ---
-  const decompressed = decompressStream(file.body);
   const headers: Record<string, string> = { ...common, "Accept-Ranges": "bytes" };
+  if (originalSize === "unknown") return new Response(decompressStream(file.body), { status: 200, headers });
+  const part = resolveRange(range, originalSize);
+  if (part.kind === "unsatisfiable") return unsatisfiable(originalSize);
+  const decompressed = decompressStream(file.body);
 
-  if (!range) {
-    if (originalSize) headers["Content-Length"] = String(originalSize);
+  if (part.kind === "whole") {
+    headers["Content-Length"] = String(originalSize);
     return new Response(decompressed, { status: 200, headers });
   }
 
-  // Range on gzip: decompress, skip to offset, stream the range
-  const sliced = sliceStream(decompressed, range.offset, range.length, originalSize);
-  if (originalSize) {
-    const end = Math.min(range.offset + range.length, originalSize) - 1;
-    const length = end - range.offset + 1;
-    headers["Content-Range"] = `bytes ${range.offset}-${end}/${originalSize}`;
-    headers["Content-Length"] = String(length);
-  }
-
-  return new Response(sliced, { status: 206, headers });
+  headers["Content-Range"] = `bytes ${part.offset}-${part.offset + part.length - 1}/${originalSize}`;
+  headers["Content-Length"] = String(part.length);
+  return new Response(sliceStream(decompressed, part.offset, part.length, originalSize), { status: 206, headers });
 }

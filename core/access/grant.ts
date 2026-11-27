@@ -7,12 +7,16 @@
 
 import type { UnixSeconds } from "./token";
 
-export type Grant =
+export type VisitorGrant =
   | { proof: "none" }
   | { proof: "cookie" }
   | { proof: "basic" }
   | { proof: "bearer" }
   | { proof: "token"; exp: UnixSeconds };
+
+export type ServiceGrant = { proof: "service" };
+
+export type Grant = VisitorGrant | ServiceGrant;
 
 export type AccessProof = Grant["proof"];
 
@@ -40,6 +44,7 @@ const BY_PROOF = {
   basic: { private: true, vary: PASSWORD_VARY, noStoreMisses: false, noReferrer: false },
   bearer: { private: true, vary: RESTRICTED_VARY, noStoreMisses: true, noReferrer: false },
   token: { private: true, vary: RESTRICTED_VARY, noStoreMisses: true, noReferrer: true },
+  service: { private: true, vary: [], noStoreMisses: true, noReferrer: false },
 } as const satisfies Record<AccessProof, Omit<DeliveryPolicy, "proof" | "maxAgeCap">>;
 
 export function deliveryPolicy(grant: Grant, now: UnixSeconds): DeliveryPolicy {
@@ -67,5 +72,11 @@ if (import.meta.vitest) {
     expect(deliveryPolicy({ proof: "bearer" }, now).vary).toContain("X-Serve-Token");
     expect(deliveryPolicy({ proof: "cookie" }, now).vary).not.toContain("X-Serve-Token");
     expect(deliveryPolicy({ proof: "none" }, now)).toMatchObject({ private: false, vary: [], noStoreMisses: false });
+  });
+
+  test("a service read is private and varies on no visitor header", () => {
+    expect(deliveryPolicy({ proof: "service" }, now)).toEqual({
+      proof: "service", private: true, vary: [], noStoreMisses: true, noReferrer: false, maxAgeCap: null,
+    });
   });
 }

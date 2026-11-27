@@ -12,6 +12,8 @@ const run = promisify(execFile);
 const COMPAT_HOST = process.env.E2E_COMPAT_GCS_HOST;
 const SIGNED_PATH_PREFIX = process.env.E2E_COMPAT_SIGNED_PATH_PREFIX;
 const GO = await run("go", ["version"]).then(() => true, () => false);
+// Under wrangler dev, ReadCompressed(true) receives decompressed bytes: the dev server rewrites gzip responses in front of the Worker (see e2e/compression.test.ts).
+const NODE_RUNTIME = process.env.E2E_NODE_RUNTIME === "true";
 
 if (COMPAT_HOST && !GO) {
   console.warn("compat-gcs: `go` is not on PATH, so the Go client scenarios are skipped. Install Go 1.26 to run them.");
@@ -97,6 +99,78 @@ describe.runIf(COMPAT_HOST)("GCS API bearer auth", () => {
     const finished = await onCompatHost(session, { ...owner, ...chunk }, "PUT", "abc");
     expect(finished.status).toBe(200);
     expect(JSON.parse(finished.body)).toMatchObject({ name: "hijack.txt", size: "3", md5Hash: "kAFQmDzST7DWlj99KOF/cg==" });
+  });
+});
+
+describe.runIf(COMPAT_HOST)("GCS API object reads", () => {
+  const BODY = "hello, compat reader";
+  const EMPTY_ZIP = String.fromCharCode(0x50, 0x4b, 0x05, 0x06, ...new Array(18).fill(0));
+
+  async function written(name = "r.txt", body = BODY, contentType = "text/plain") {
+    const issued = await issuedKeyFile();
+    const auth = { Authorization: await selfSignedBearer(issued.keyFile) };
+    const path = `/${issued.bucket}/read/${name}`;
+    const put = await onCompatHost(path, { ...auth, "Content-Type": contentType, "Content-Length": String(body.length) }, "PUT", body);
+    expect(put.status).toBe(200);
+    const listed = await api(issued.admin, "GET", `/assets?projectId=${issued.projectId}`);
+    const [asset] = (await listed.json() as { assets: { id: string }[] }).assets;
+    return { ...issued, auth, path, assetId: asset.id, generation: String(put.headers["x-goog-generation"]) };
+  }
+
+  async function setAccess(admin: string, assetId: string, body: Record<string, string>) {
+    expect((await api(admin, "PATCH", `/assets/${assetId}`, body)).status).toBe(200);
+  }
+
+  test("HEAD on the XML path answers the generation and the stored length", async () => {
+    const { auth, path, generation } = await written();
+    const res = await onCompatHost(path, auth, "HEAD");
+    expect(res.status).toBe(200);
+    expect(res.headers).toMatchObject({
+      "x-goog-generation": generation,
+      "x-goog-metageneration": "1",
+      "x-goog-stored-content-length": String(BODY.length),
+      "x-goog-stored-content-encoding": "identity",
+    });
+    expect(res.body).toBe("");
+  });
+
+  test("an If-None-Match of the ETag answers 304", async () => {
+    const { auth, path } = await written();
+    const first = await onCompatHost(path, auth);
+    expect(first.status).toBe(200);
+    expect(first.body).toBe(BODY);
+    const again = await onCompatHost(path, { ...auth, "If-None-Match": String(first.headers.etag) });
+    expect(again.status).toBe(304);
+    expect(again.headers["x-goog-hash"]).toBeUndefined();
+  });
+
+  test("a password site reads through the API while /files without a cookie still challenges", async () => {
+    const { admin, auth, path, assetId } = await written("site.zip", EMPTY_ZIP, "application/zip");
+    await setAccess(admin, assetId, { access: "password", password: "e2e-compat-read" });
+    const read = await onCompatHost(path, auth);
+    expect(read.status).toBe(200);
+    expect(read.body).toBe(EMPTY_ZIP);
+    const challenged = await fetch(`${BASE}/files/${assetId}/site.zip`);
+    expect(challenged.status).toBe(401);
+    expect(challenged.headers.get("WWW-Authenticate")).toContain("Basic");
+  });
+
+  test("a restricted asset reads through the API while /files without a proof is 401", async () => {
+    const { admin, auth, path, assetId } = await written();
+    await setAccess(admin, assetId, { access: "restricted" });
+    const read = await onCompatHost(path, auth);
+    expect(read.status).toBe(200);
+    expect(read.body).toBe(BODY);
+    expect((await fetch(`${BASE}/files/${assetId}/r.txt`)).status).toBe(401);
+  });
+
+  test("a read without a credential is refused on the XML and JSON paths", async () => {
+    const { bucket, path } = await written();
+    const xml = await onCompatHost(path, {});
+    expect(xml.status).toBe(401);
+    expect(xml.body).not.toContain(BODY);
+    const json = await onCompatHost(`/storage/v1/b/${bucket}/o/read%2Fr.txt?alt=media`, {});
+    expect(json.status).toBe(401);
   });
 });
 
@@ -212,6 +286,23 @@ describe.runIf(COMPAT_HOST && GO)("Go storage client v1.69 (e2e/compat-gcs)", ()
       "revoked: 403 AccessDenied",
     ]);
   }, 60_000);
+
+  test("read: a full read with its CRC32C checked, a 5-byte range, gzip passthrough and decompression, and a missing key", async () => {
+    const { bucket, path } = await keyFileOnDisk();
+    const { stdout } = await scenario("read", { E2E_GCS_KEY_FILE: path, E2E_GCS_BUCKET: bucket, E2E_GZIP_PASSTHROUGH: String(NODE_RUNTIME) });
+    const lines = stdout.trim().split("\n");
+    expect(lines[0]).toMatch(/^read: 262144 bytes, CRC32C [0-9a-f]{8} checked$/);
+    expect(lines.slice(1)).toEqual([
+      expect.stringMatching(/^range: [0-9a-f]{10}$/),
+      "range from 990 and suffix: bytes match",
+      NODE_RUNTIME
+        ? expect.stringMatching(/^gzip passthrough: \d+ stored bytes, Decompressed false$/)
+        : "gzip passthrough: not checked behind a decoding proxy",
+      "gzip decompressed: 17408 bytes",
+      "gzip ranges: whole object, as under decompressive transcoding",
+      "missing: ErrObjectNotExist",
+    ]);
+  }, 120_000);
 
   test("race: two writers on one new key make one asset and both succeed", async () => {
     const { admin, bucket, path, projectId } = await keyFileOnDisk();

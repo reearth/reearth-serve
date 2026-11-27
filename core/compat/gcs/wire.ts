@@ -1,4 +1,4 @@
-import type { CompatError, ObjectInfo } from "../model";
+import { JSON_API_PATH_PREFIXES, type CompatError, type ExactHashes, type ObjectInfo } from "../model";
 import type { ListPage } from "../layer";
 import { base64Of, crc32cBase64 } from "../hash";
 
@@ -50,8 +50,12 @@ const ERRORS: Record<GcsErrorCode, ErrorSpec> = {
 
 export type GcsSurface = "json" | "xml";
 
+const JSON_API_PATH = new RegExp(
+  `^/(${JSON_API_PATH_PREFIXES.map((prefix) => (prefix === "storage" ? prefix : `${prefix}/storage`)).join("|")})/v1(/|$)`,
+);
+
 export function surfaceOf(path: string): GcsSurface {
-  return /^\/(storage|upload\/storage|batch\/storage)\/v1(\/|$)/.test(path) ? "json" : "xml";
+  return JSON_API_PATH.test(path) ? "json" : "xml";
 }
 
 function escapeXml(text: string): string {
@@ -110,16 +114,43 @@ export function objectResource(info: ObjectInfo, apiOrigin: string) {
   };
 }
 
-/** The headers a GCS XML API write answers with. */
-export function xmlObjectHeaders(info: ObjectInfo): Record<string, string> {
+function storedHeaders(info: ObjectInfo): Record<string, string> {
   return {
-    ETag: info.etag,
     "x-goog-generation": String(info.generation),
     "x-goog-metageneration": String(info.metageneration),
     "x-goog-stored-content-length": String(info.size),
     "x-goog-stored-content-encoding": info.contentEncoding ?? "identity",
-    ...(info.hashes && { "x-goog-hash": `crc32c=${crc32cBase64(info.hashes.crc32c)},md5=${base64Of(info.hashes.md5)}` }),
   };
+}
+
+const hashHeader = (hashes: ExactHashes) => `crc32c=${crc32cBase64(hashes.crc32c)},md5=${base64Of(hashes.md5)}`;
+
+export const etagHeader = (info: ObjectInfo) => `"${info.etag}"`;
+
+export function xmlWriteHeaders(info: ObjectInfo): Record<string, string> {
+  return { ETag: etagHeader(info), ...storedHeaders(info), ...(info.hashes && { "x-goog-hash": hashHeader(info.hashes) }) };
+}
+
+type SentRead = { status: number; sentEncoding: string | null; storedEncoding: string | null; hashes: ExactHashes | null };
+
+const encodingOf = (value: string | null) => (value === null || value === "identity" ? null : value);
+
+/**
+ * A client checks `x-goog-hash` against the bytes it received (ADR-019 §3), so
+ * it goes only on a whole object sent in its stored encoding.
+ */
+function readHashHeader(read: SentRead): string | null {
+  if (read.status !== 200 || !read.hashes) return null;
+  return encodingOf(read.sentEncoding) === encodingOf(read.storedEncoding) ? hashHeader(read.hashes) : null;
+}
+
+export function withReadHeaders(res: Response, info: ObjectInfo): Response {
+  for (const [name, value] of Object.entries(storedHeaders(info))) res.headers.set(name, value);
+  const hash = readHashHeader({
+    status: res.status, sentEncoding: res.headers.get("Content-Encoding"), storedEncoding: info.contentEncoding, hashes: info.hashes,
+  });
+  if (hash) res.headers.set("x-goog-hash", hash);
+  return res;
 }
 
 export function listResource(page: ListPage, apiOrigin: string) {
@@ -138,6 +169,7 @@ if (import.meta.vitest) {
     ["/storage/v1/b/media/o/k", "json"],
     ["/upload/storage/v1/b/media/o", "json"],
     ["/batch/storage/v1", "json"],
+    ["/download/storage/v1/b/media/o/k", "json"],
     ["/media/assets/a.txt", "xml"],
     ["/storage", "xml"],
     ["/storage/v10/b", "xml"],
@@ -162,6 +194,19 @@ if (import.meta.vitest) {
     expect(res.status).toBe(404);
     expect(res.headers.get("Content-Type")).toBe("application/xml; charset=UTF-8");
     expect(await res.text()).toBe("<?xml version='1.0' encoding='UTF-8'?><Error><Code>NoSuchKey</Code><Message>No &#60;such&#62; key</Message></Error>");
+  });
+
+  const hashes: ExactHashes = { md5: new Uint8Array(16), crc32c: 0 };
+  test.each([
+    ["a whole identity read", { status: 200, sentEncoding: null, storedEncoding: null, hashes }, true],
+    ["a whole gzip passthrough", { status: 200, sentEncoding: "gzip", storedEncoding: "gzip", hashes }, true],
+    ["an identity read labelled identity", { status: 200, sentEncoding: "identity", storedEncoding: null, hashes }, true],
+    ["a range", { status: 206, sentEncoding: null, storedEncoding: null, hashes }, false],
+    ["a revalidation", { status: 304, sentEncoding: null, storedEncoding: null, hashes }, false],
+    ["a gzip object decompressed for the client", { status: 200, sentEncoding: null, storedEncoding: "gzip", hashes }, false],
+    ["an object with no stored hashes", { status: 200, sentEncoding: null, storedEncoding: null, hashes: null }, false],
+  ] as const)("%s sends x-goog-hash: %s", (_, read, sent) => {
+    expect(readHashHeader(read) !== null).toBe(sent);
   });
 
   test("a 401 carries a Bearer challenge", () => {

@@ -1,7 +1,8 @@
 import { describe, expect, test, vi } from "vitest";
 import { createHash } from "node:crypto";
 import { SignJWT, importPKCS8 } from "jose";
-import { fixture } from "../../../adapters/memory/fixture";
+import { gzipSync } from "node:zlib";
+import { fixture, protect } from "../../../adapters/memory/fixture";
 import { MemoryProjectStore } from "../../../adapters/memory/site-fixture";
 import type { Deps } from "../../types";
 import { issueCredential, type KeyFile } from "../credential";
@@ -407,6 +408,221 @@ describe("bearer auth", () => {
   });
 });
 
+describe("object reads", () => {
+  const BODY = "hello, compat reader";
+  const MD5 = createHash("md5").update(BODY).digest("base64");
+
+  async function written(path = "/media/assets/ab/r.txt", body: string | Uint8Array = BODY, headers: Record<string, string> = {}) {
+    const f = await compatFixture();
+    const auth = bearer(await accessToken(f, await keyFor(f, "editor")));
+    const put = await onApi(f, path, {
+      method: "PUT", headers: { ...auth, "Content-Type": "text/plain", "Content-Length": String(body.length), ...headers }, body: body as BodyInit,
+    });
+    expect(put.status).toBe(200);
+    const viewer = bearer(await accessToken(f, await keyFor(f, "viewer")));
+    return { f, auth: viewer, generation: put.headers.get("x-goog-generation")! };
+  }
+
+  test("an XML GET serves the bytes with the object's stored headers and its hash", async () => {
+    const { f, auth, generation } = await written();
+    const res = await onApi(f, "/media/assets/ab/r.txt", { headers: auth });
+    expect(res.status).toBe(200);
+    expect(await res.text()).toBe(BODY);
+    expect(Object.fromEntries(res.headers)).toMatchObject({
+      "x-goog-generation": generation,
+      "x-goog-metageneration": "1",
+      "x-goog-stored-content-length": String(BODY.length),
+      "x-goog-stored-content-encoding": "identity",
+      "content-length": String(BODY.length),
+      "cache-control": "private, max-age=0, must-revalidate",
+      "x-content-type-options": "nosniff",
+    });
+    expect(res.headers.get("x-goog-hash")).toContain(`md5=${MD5}`);
+  });
+
+  test("a HEAD answers the same headers and no body", async () => {
+    const { f, auth, generation } = await written();
+    const res = await onApi(f, "/media/assets/ab/r.txt", { method: "HEAD", headers: auth });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-goog-generation")).toBe(generation);
+    expect(res.headers.get("x-goog-stored-content-length")).toBe(String(BODY.length));
+    expect(await res.text()).toBe("");
+  });
+
+  test("a range is 206 with those bytes and no hash", async () => {
+    const { f, auth } = await written();
+    const res = await onApi(f, "/media/assets/ab/r.txt", { headers: { ...auth, Range: "bytes=0-4" } });
+    expect(res.status).toBe(206);
+    expect(await res.text()).toBe("hello");
+    expect(res.headers.get("Content-Range")).toBe(`bytes 0-4/${BODY.length}`);
+    expect(res.headers.get("x-goog-hash")).toBeNull();
+  });
+
+  test("a matching If-None-Match is 304 with no hash", async () => {
+    const { f, auth } = await written();
+    const etag = (await onApi(f, "/media/assets/ab/r.txt", { headers: auth })).headers.get("ETag")!;
+    const res = await onApi(f, "/media/assets/ab/r.txt", { headers: { ...auth, "If-None-Match": etag } });
+    expect(res.status).toBe(304);
+    expect(res.headers.get("x-goog-hash")).toBeNull();
+  });
+
+  test("a gzip object passes through to a client that accepts gzip, with its hash, and is decompressed without one", async () => {
+    const gz = gzipSync(Buffer.from(BODY));
+    const { f, auth } = await written("/media/assets/ab/r.txt.gz", gz, { "Content-Encoding": "gzip" });
+    const raw = await onApi(f, "/media/assets/ab/r.txt.gz", { headers: { ...auth, "Accept-Encoding": "gzip" } });
+    expect(raw.headers.get("Content-Encoding")).toBe("gzip");
+    expect(Buffer.from(await raw.arrayBuffer()).equals(gz)).toBe(true);
+    expect(raw.headers.get("x-goog-hash")).toContain(`md5=${createHash("md5").update(gz).digest("base64")}`);
+    expect(raw.headers.get("x-goog-stored-content-encoding")).toBe("gzip");
+    const plain = await onApi(f, "/media/assets/ab/r.txt.gz", { headers: { ...auth, "Accept-Encoding": "identity" } });
+    expect(plain.headers.get("Content-Encoding")).toBeNull();
+    expect(await plain.text()).toBe(BODY);
+    expect(plain.headers.get("x-goog-hash")).toBeNull();
+  });
+
+  test("JSON alt=media and the mediaLink path serve the bytes, and a stale generation is 404", async () => {
+    const { f, auth, generation } = await written();
+    const resource = await (await onApi(f, "/storage/v1/b/media/o/assets%2Fab%2Fr.txt", { headers: auth })).json() as { mediaLink: string };
+    for (const path of ["/storage/v1/b/media/o/assets%2Fab%2Fr.txt?alt=media", new URL(resource.mediaLink).pathname + new URL(resource.mediaLink).search]) {
+      const res = await onApi(f, path, { headers: auth });
+      expect(res.status).toBe(200);
+      expect(await res.text()).toBe(BODY);
+    }
+    const stale = await onApi(f, `/storage/v1/b/media/o/assets%2Fab%2Fr.txt?alt=media&generation=${BigInt(generation) - 1n}`, { headers: auth });
+    expect(stale.status).toBe(404);
+    expect(await stale.json()).toMatchObject({ error: { code: 404, errors: [{ reason: "notFound" }] } });
+    expect((await onApi(f, `/media/assets/ab/r.txt?generation=${generation}`, { headers: auth })).status).toBe(200);
+    expect((await onApi(f, "/media/assets/ab/r.txt?generation=x", { headers: auth })).status).toBe(400);
+  });
+
+  test("a missing key is NoSuchKey in XML and notFound in JSON", async () => {
+    const { f, auth } = await written();
+    const xml = await onApi(f, "/media/assets/ab/none.txt", { headers: auth });
+    expect(xml.status).toBe(404);
+    expect(await xml.text()).toContain("<Code>NoSuchKey</Code>");
+    const json = await onApi(f, "/storage/v1/b/media/o/none.txt?alt=media", { headers: auth });
+    expect(json.status).toBe(404);
+    expect(await json.json()).toMatchObject({ error: { errors: [{ reason: "notFound" }] } });
+  });
+
+  test("no credential is 401 on every read path, and a bucket outside the grant reads as unknown", async () => {
+    const { f, auth } = await written();
+    for (const path of ["/media/assets/ab/r.txt", "/storage/v1/b/media/o/assets%2Fab%2Fr.txt?alt=media", "/download/storage/v1/b/media/o/assets%2Fab%2Fr.txt?alt=media"]) {
+      expect((await onApi(f, path)).status).toBe(401);
+    }
+    const other = await onApi(f, "/other/assets/ab/r.txt", { headers: auth });
+    expect(other.status).toBe(404);
+    expect(await other.text()).toContain("<Code>NoSuchBucket</Code>");
+  });
+
+  test("a password or restricted asset reads through the API while /files still refuses a visitor", async () => {
+    const { f, auth } = await written();
+    const binding = await f.compat.findBinding("media" as BucketName, "assets/ab/r.txt" as ObjectKey);
+    const assetId = binding?.kind === "object" ? binding.assetId : "";
+    await protect(f.metadata, assetId, "pw");
+    expect(await (await onApi(f, "/media/assets/ab/r.txt", { headers: auth })).text()).toBe(BODY);
+    expect((await f.app.request(`http://localhost/files/${assetId}/r.txt`)).status).toBe(401);
+    await f.metadata.setProtection(assetId, { access: "restricted" });
+    expect(await (await onApi(f, "/media/assets/ab/r.txt", { headers: auth })).text()).toBe(BODY);
+    expect((await f.app.request(`http://localhost/files/${assetId}/r.txt`)).status).toBe(401);
+  });
+
+  test("a Range on a gzip object is ignored, as GCS does under decompressive transcoding", async () => {
+    const gz = gzipSync(Buffer.from(BODY));
+    const { f, auth } = await written("/media/assets/ab/r.txt.gz", gz, { "Content-Encoding": "gzip" });
+    for (const range of ["bytes=0-4", "bytes=10-", "bytes=-3"]) {
+      const plain = await onApi(f, "/media/assets/ab/r.txt.gz", { headers: { ...auth, Range: range, "Accept-Encoding": "identity" } });
+      expect(plain.status).toBe(200);
+      expect(plain.headers.get("Content-Range")).toBeNull();
+      expect(await plain.text()).toBe(BODY);
+      const stored = await onApi(f, "/media/assets/ab/r.txt.gz", { headers: { ...auth, Range: range, "Accept-Encoding": "gzip" } });
+      expect(stored.status).toBe(200);
+      expect(stored.headers.get("Content-Encoding")).toBe("gzip");
+      expect(Buffer.from(await stored.arrayBuffer()).equals(gz)).toBe(true);
+    }
+  });
+
+  test("a version whose own bytes are gone reads as missing, never as the original upload's bytes", async () => {
+    const { f, auth } = await written();
+    const editor = bearer(await accessToken(f, await keyFor(f, "editor")));
+    const again = await onApi(f, "/media/assets/ab/r.txt", {
+      method: "PUT", headers: { ...editor, "Content-Type": "text/plain", "Content-Length": "3" }, body: "two",
+    });
+    expect(again.status).toBe(200);
+    const binding = await f.compat.findBinding("media" as BucketName, "assets/ab/r.txt" as ObjectKey);
+    const assetId = binding?.kind === "object" ? binding.assetId : "";
+    const [version] = [...f.versions.versions.values()].filter((v) => v.assetId === assetId);
+    await f.storage.delete(`assets/${assetId}/v/${version.id}/r.txt`);
+    const res = await onApi(f, "/media/assets/ab/r.txt", { headers: auth });
+    expect(res.status).toBe(404);
+    expect(await res.text()).toContain("<Code>NoSuchKey</Code>");
+  });
+
+  test("an object stored br is sent as stored, labelled br, with its hash", async () => {
+    const packed = Buffer.from([0x0b, 0x02, 0x80, 0x68, 0x69, 0x03]);
+    const { f, auth } = await written("/media/assets/ab/r.br", packed, { "Content-Encoding": "br" });
+    const res = await onApi(f, "/media/assets/ab/r.br", { headers: { ...auth, "Accept-Encoding": "br" } });
+    expect(res.status).toBe(200);
+    expect(res.headers.get("Content-Encoding")).toBe("br");
+    expect(Buffer.from(await res.arrayBuffer()).equals(packed)).toBe(true);
+    expect(res.headers.get("x-goog-hash")).toContain(`md5=${createHash("md5").update(packed).digest("base64")}`);
+  });
+
+  test("one ETag names the object on PUT, XML GET and HEAD, and the JSON resource, and If-None-Match compares against it", async () => {
+    const f = await compatFixture();
+    const auth = bearer(await accessToken(f, await keyFor(f, "editor")));
+    const put = await onApi(f, "/media/e.txt", { method: "PUT", headers: { ...auth, "Content-Length": "3" }, body: "abc" });
+    const resource = await (await onApi(f, "/storage/v1/b/media/o/e.txt", { headers: auth })).json() as { etag: string };
+    const etag = `"${resource.etag}"`;
+    expect(put.headers.get("ETag")).toBe(etag);
+    expect((await onApi(f, "/media/e.txt", { headers: auth })).headers.get("ETag")).toBe(etag);
+    expect((await onApi(f, "/media/e.txt", { method: "HEAD", headers: auth })).headers.get("ETag")).toBe(etag);
+    expect((await onApi(f, "/media/e.txt", { headers: { ...auth, "If-None-Match": etag } })).status).toBe(304);
+    expect((await onApi(f, "/storage/v1/b/media/o/e.txt?alt=media", { headers: { ...auth, "If-None-Match": etag } })).status).toBe(304);
+  });
+
+  test("the mediaLink path answers errors in the JSON shape", async () => {
+    const f = await compatFixture();
+    const res = await onApi(f, "/download/storage/v1/b/media/o/e.txt?alt=media");
+    expect(res.status).toBe(401);
+    expect(await res.json()).toMatchObject({ error: { code: 401 } });
+  });
+
+  test.each(["text/plain;x=,text/html", "image/png;,text/html", "text/plain\r\nX: y"])(
+    "a stored type of %j reads as a sandboxed octet-stream on every path, and its metadata says so",
+    async (stored) => {
+      const { f, auth } = await written();
+      const binding = await f.compat.findBinding("media" as BucketName, "assets/ab/r.txt" as ObjectKey);
+      const asset = f.metadata.assets.get(binding?.kind === "object" ? binding.assetId : "")!;
+      f.metadata.assets.set(asset.id, { ...asset, contentType: stored });
+      const reads = [
+        ["XML GET", "/media/assets/ab/r.txt", "GET"],
+        ["XML HEAD", "/media/assets/ab/r.txt", "HEAD"],
+        ["alt=media", "/storage/v1/b/media/o/assets%2Fab%2Fr.txt?alt=media", "GET"],
+        ["download", "/download/storage/v1/b/media/o/assets%2Fab%2Fr.txt?alt=media", "GET"],
+      ];
+      for (const [name, path, method] of reads) {
+        const res = await onApi(f, path, { method, headers: auth });
+        expect(res.status, name).toBe(200);
+        expect(res.headers.get("Content-Type"), name).toBe("application/octet-stream");
+        expect(res.headers.get("Content-Disposition"), name).toMatch(/^attachment;/);
+        expect(res.headers.get("Content-Security-Policy"), name).toBe("sandbox");
+      }
+      const resource = await (await onApi(f, "/storage/v1/b/media/o/assets%2Fab%2Fr.txt", { headers: auth })).json();
+      expect(resource).toMatchObject({ contentType: "application/octet-stream" });
+      const listed = await (await onApi(f, "/storage/v1/b/media/o?prefix=assets%2Fab%2F", { headers: auth })).json() as { items: { contentType: string }[] };
+      expect(listed.items.map((item) => item.contentType)).toEqual(["application/octet-stream"]);
+    },
+  );
+
+  test.each(["acl", "uploadId", "encryption", "retention", "legalHold"])("an XML GET with ?%s answers 501 and not the bytes", async (name) => {
+    const { f, auth } = await written();
+    const res = await onApi(f, `/media/assets/ab/r.txt?${name}`, { headers: auth });
+    expect(res.status).toBe(501);
+    expect(await res.text()).not.toContain(BODY);
+  });
+});
+
 describe("routes not built yet", () => {
   test("answer 501 in the GCS JSON or XML error shape", async () => {
     const f = await compatFixture();
@@ -414,7 +630,7 @@ describe("routes not built yet", () => {
     const compose = await onApi(f, "/storage/v1/b/media/o/k/compose", { method: "POST", headers: bearer(token) });
     expect(compose.status).toBe(501);
     expect(await compose.json()).toMatchObject({ error: { code: 501, errors: [{ reason: "notImplemented" }] } });
-    const xml = await onApi(f, "/media/k", { headers: bearer(token) });
+    const xml = await onApi(f, "/media", { headers: bearer(token) });
     expect(xml.status).toBe(501);
     expect(await xml.text()).toContain("<Code>NotImplemented</Code>");
   });
@@ -725,6 +941,11 @@ describe("V4 signed URLs", () => {
       const res = await put(f, url, "abc", { ...cmsHeaders, Origin: ORIGIN });
       expect(res.status).toBe(200);
       expect(res.headers.get("Access-Control-Allow-Origin")).toBe(ORIGIN);
+      const exposed = res.headers.get("Access-Control-Expose-Headers")!.split(", ");
+      expect(exposed).toEqual(expect.arrayContaining([
+        "ETag", "x-goog-generation", "x-goog-hash", "Content-Range", "Content-Length",
+        "x-goog-stored-content-length", "x-goog-stored-content-encoding", "x-goog-metageneration",
+      ]));
     });
 
     test("another origin gets no CORS headers", async () => {

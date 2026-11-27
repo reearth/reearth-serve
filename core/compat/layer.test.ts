@@ -101,6 +101,27 @@ describe("put and head", () => {
   });
 });
 
+describe("open", () => {
+  test("names the asset and version delivery serves, with the head's info", async () => {
+    const f = await layerFixture();
+    written(await f.editor.put(BUCKET, key("k.txt"), meta(), body("one")));
+    const second = written(await f.editor.put(BUCKET, key("k.txt"), meta(), body("two!")));
+    const opened = await f.viewer.open(BUCKET, key("k.txt"));
+    if (!opened.ok) throw new Error(opened.error.code);
+    const [asset] = f.assets();
+    const latest = f.versionsOf(asset.id).at(-1)!;
+    expect(opened.value.info).toEqual(second);
+    expect(opened.value.resolved.asset.id).toBe(asset.id);
+    expect(opened.value.resolved.version?.id).toBe(latest.id);
+  });
+
+  test("a missing key is no_such_key and an unknown bucket no_such_bucket", async () => {
+    const f = await layerFixture();
+    expect(await f.viewer.open(BUCKET, key("none.txt"))).toEqual({ ok: false, error: { code: "no_such_key" } });
+    expect(await f.viewer.open("nope", key("k.txt"))).toEqual({ ok: false, error: { code: "no_such_bucket" } });
+  });
+});
+
 describe("two writers on one new key", () => {
   test("make one asset; the second is told busy while the first holds the claim", async () => {
     const f = await layerFixture();

@@ -36,7 +36,7 @@ import { attemptPassword } from "./attempt";
 import { basicPassword } from "./password";
 import { clientIp } from "./ratelimit";
 import { resolveRestricted, type RestrictedDeps } from "./restricted";
-import type { Grant } from "./grant";
+import type { VisitorGrant } from "./grant";
 import type { TokenCarry } from "./request";
 import { toUnixSeconds, type AssetPath } from "./token";
 
@@ -81,7 +81,7 @@ export interface AccessDeps extends Omit<RestrictedDeps, "siteHost"> {
 }
 
 export type AccessResolution =
-  | { kind: "allow"; grant: Grant }
+  | { kind: "allow"; grant: VisitorGrant }
   | { kind: "challenge"; response: Response };
 
 const ALLOW_PUBLIC: AccessResolution = { kind: "allow", grant: { proof: "none" } };

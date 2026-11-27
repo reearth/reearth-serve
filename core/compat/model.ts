@@ -22,6 +22,13 @@ export function parseBucketName(raw: string): BucketName | null {
   return raw as BucketName;
 }
 
+export const JSON_API_PATH_PREFIXES = ["storage", "upload", "download", "batch"] as const;
+
+export function parseNewBucketName(raw: string): BucketName | null {
+  const name = parseBucketName(raw);
+  return name && !(JSON_API_PATH_PREFIXES as readonly string[]).includes(name) ? name : null;
+}
+
 export type MountRule = z.infer<typeof compatMountRuleSchema>;
 /** "none": entry path is the path inside the archive. "skip-top": drop a top folder named like the archive. */
 export type StripRule = MountRule["strip"];

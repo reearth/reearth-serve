@@ -11,7 +11,7 @@ import {
   issueCompatCredentialBodySchema,
 } from "../../shared/compat";
 import { isServiceRole } from "../auth/types";
-import { parseBucketName, type CompatCredential, type CredentialId } from "./model";
+import { parseBucketName, parseNewBucketName, type CompatCredential, type CredentialId } from "./model";
 import { issueCredential } from "./credential";
 
 function toCredentialDto(c: CompatCredential): z.infer<typeof compatCredentialSchema> {
@@ -52,7 +52,7 @@ export function registerProjectCompatRoutes(app: Hono<AppEnv>) {
       summary: "Create a compat bucket",
       description:
         "Creates a bucket name that the storage compatibility API (ADR-019) maps onto this project's assets. " +
-        "Names are unique across the server. `mount` maps every key under a folder to one archive asset. Admin or above.",
+        "Names are unique across the server and follow GCS naming; `storage`, `upload`, `download` and `batch` are refused, because the API's own paths start with them. `mount` maps every key under a folder to one archive asset. Admin or above.",
       responses: {
         201: jsonResponse("Bucket created", compatBucketResponseSchema),
         400: jsonError("Bad request"),
@@ -70,7 +70,7 @@ export function registerProjectCompatRoutes(app: Hono<AppEnv>) {
       if (!access.ok) return deniedResponse(c, access, { notFound: "Project not found", forbiddenAs: 403 });
 
       const body = c.req.valid("json");
-      const name = parseBucketName(body.name);
+      const name = parseNewBucketName(body.name);
       if (!name) return c.json({ error: "Invalid bucket name" }, 400);
       const bucket = { name, projectId: access.value.id, mount: body.mount ?? null, createdAt: Date.now() };
       if (!await c.get("compat").insertBucket(bucket)) return c.json({ error: "Bucket name is taken" }, 409);
