@@ -490,6 +490,7 @@ export async function fixture(overrides?: Partial<Deps>) {
     limits: { subrequestBudget: 700 },
     deliveryTokens: null,
     compatObjectsHost: undefined,
+    compatSignedPathPrefix: null,
     serviceAuthorizer: new SimpleAuthorizer(),
     ...overrides,
   };

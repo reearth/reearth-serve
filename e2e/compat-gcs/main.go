@@ -10,6 +10,7 @@
 //	E2E_GCS_BUCKET        the bucket the key file's credential is bound to
 //	E2E_GCS_REVOKE_URL    (revoked) the REST URL that revokes the credential
 //	E2E_GCS_REVOKE_TOKEN  (revoked) an admin bearer token for that URL
+//	E2E_COMPAT_SIGNED_PATH_PREFIX  (signed-put) COMPAT_SIGNED_PATH_PREFIX of that server, if set
 //
 // The compat host is a Host header on the e2e server's port, and its name
 // need not resolve. Every connection is dialled to E2E_ENDPOINT's address
@@ -23,13 +24,18 @@ import (
 	"bytes"
 	"context"
 	"crypto/md5"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"hash/crc32"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"path"
+	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -46,6 +52,7 @@ type config struct {
 	bucket      string
 	revokeURL   string
 	revokeToken string
+	pathPrefix  string
 }
 
 var scenarios = map[string]func(context.Context, *storage.Client, config) error{
@@ -56,11 +63,13 @@ var scenarios = map[string]func(context.Context, *storage.Client, config) error{
 	"race":                    race,
 	"resumable-40m":           resumable40M,
 	"resumable-16m":           resumable16M,
+	"signed-put":              signedPut,
+	"signed-refusals":         signedRefusals,
 }
 
 func main() {
 	if len(os.Args) != 2 || scenarios[os.Args[1]] == nil {
-		fmt.Fprintln(os.Stderr, "usage: compat-gcs <attrs-missing|revoked|write-attrs-list-delete|paging|race|resumable-40m|resumable-16m>")
+		fmt.Fprintln(os.Stderr, "usage: compat-gcs <attrs-missing|revoked|write-attrs-list-delete|paging|race|resumable-40m|resumable-16m|signed-put|signed-refusals>")
 		os.Exit(2)
 	}
 	cfg, err := loadConfig()
@@ -101,6 +110,7 @@ func loadConfig() (config, error) {
 		bucket:      os.Getenv("E2E_GCS_BUCKET"),
 		revokeURL:   os.Getenv("E2E_GCS_REVOKE_URL"),
 		revokeToken: os.Getenv("E2E_GCS_REVOKE_TOKEN"),
+		pathPrefix:  os.Getenv("E2E_COMPAT_SIGNED_PATH_PREFIX"),
 	}
 	if cfg.compatHost == "" || cfg.keyFile == "" || cfg.bucket == "" {
 		return config{}, errors.New("E2E_COMPAT_GCS_HOST, E2E_GCS_KEY_FILE and E2E_GCS_BUCKET are required")
@@ -428,4 +438,208 @@ func resumable40M(ctx context.Context, client *storage.Client, cfg config) error
 func resumable16M(ctx context.Context, client *storage.Client, cfg config) error {
 	_, err := writeResumable(ctx, client.Bucket(cfg.bucket).Object("resumable/16m.bin"), pattern(16*mib, 3))
 	return err
+}
+
+// cmsSignedURL signs a PUT the way CMS IssueUploadAssetLink does.
+func cmsSignedURL(client *storage.Client, cfg config, key string, expires time.Duration, headers ...string) (string, error) {
+	return client.Bucket(cfg.bucket).SignedURL(key, &storage.SignedURLOptions{
+		Scheme:      storage.SigningSchemeV4,
+		Method:      http.MethodPut,
+		Expires:     time.Now().Add(expires),
+		ContentType: "application/geo+json",
+		QueryParameters: map[string][]string{
+			"reearth-x-workspace": {"ws1"},
+			"reearth-x-project":   {"p1"},
+			"reearth-x-public":    {"true"},
+		},
+		Headers: append([]string{"Content-Encoding: gzip"}, headers...),
+	})
+}
+
+func sendSigned(ctx context.Context, method, rawURL, contentType string, body []byte, headers ...string) (int, string, error) {
+	req, err := http.NewRequestWithContext(ctx, method, rawURL, bytes.NewReader(body))
+	if err != nil {
+		return 0, "", err
+	}
+	req.Header.Set("Content-Type", contentType)
+	req.Header.Set("Content-Encoding", "gzip")
+	for _, h := range headers {
+		name, value, _ := strings.Cut(h, ":")
+		req.Header.Set(name, strings.TrimSpace(value))
+	}
+	res, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer func() { _ = res.Body.Close() }()
+	text, err := io.ReadAll(res.Body)
+	if err != nil {
+		return 0, "", err
+	}
+	code := ""
+	if m := xmlCode.FindSubmatch(text); m != nil {
+		code = string(m[1])
+	}
+	return res.StatusCode, code, nil
+}
+
+var xmlCode = regexp.MustCompile(`<Code>([^<]+)</Code>`)
+
+func putSigned(ctx context.Context, client *storage.Client, cfg config, key, rawURL string, data []byte) error {
+	status, code, err := sendSigned(ctx, http.MethodPut, rawURL, "application/geo+json", data)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("signed PUT of %s: want 200, got %d %s", key, status, code)
+	}
+	attrs, err := client.Bucket(cfg.bucket).Object(key).Attrs(ctx)
+	if err != nil {
+		return fmt.Errorf("attrs: %w", err)
+	}
+	if err := checkHashes(attrs, data); err != nil {
+		return err
+	}
+	if attrs.ContentType != "application/geo+json" || attrs.ContentEncoding != "gzip" {
+		return fmt.Errorf("attrs: want application/geo+json and gzip, got %s and %s", attrs.ContentType, attrs.ContentEncoding)
+	}
+	fmt.Printf("signed PUT: %d, Attrs MD5 matches %x\n", status, attrs.MD5)
+	return nil
+}
+
+func signedPut(ctx context.Context, client *storage.Client, cfg config) error {
+	key := "assets/ab/cdef/signed (1).geojson"
+	signed, err := cmsSignedURL(client, cfg, key, 15*time.Minute)
+	if err != nil {
+		return fmt.Errorf("sign: %w", err)
+	}
+	if err := putSigned(ctx, client, cfg, key, signed, pattern(1024, 4)); err != nil {
+		return err
+	}
+	if err := signedMetadata(ctx, client, cfg); err != nil {
+		return err
+	}
+	if cfg.pathPrefix == "" {
+		return nil
+	}
+	key = "assets/ab/cdef/rewritten.geojson"
+	signed, err = cmsSignedURL(client, cfg, key, 15*time.Minute)
+	if err != nil {
+		return fmt.Errorf("sign: %w", err)
+	}
+	rewritten, err := url.Parse(signed)
+	if err != nil {
+		return err
+	}
+	rewritten.Scheme = "http"
+	rewritten.Path = path.Join(cfg.pathPrefix, rewritten.Path)
+	return putSigned(ctx, client, cfg, key, rewritten.String(), pattern(512, 5))
+}
+
+func signedMetadata(ctx context.Context, client *storage.Client, cfg config) error {
+	key := "assets/ab/cdef/meta.geojson"
+	owner := "x-goog-meta-owner: alice"
+	signed, err := cmsSignedURL(client, cfg, key, 15*time.Minute, owner)
+	if err != nil {
+		return fmt.Errorf("sign: %w", err)
+	}
+	status, code, err := sendSigned(ctx, http.MethodPut, signed, "application/geo+json", []byte("m"), owner)
+	if err != nil {
+		return err
+	}
+	if status != http.StatusOK {
+		return fmt.Errorf("signed PUT with metadata: want 200, got %d %s", status, code)
+	}
+	attrs, err := client.Bucket(cfg.bucket).Object(key).Attrs(ctx)
+	if err != nil {
+		return fmt.Errorf("attrs: %w", err)
+	}
+	fmt.Printf("signed x-goog-meta-owner: Attrs metadata owner=%s\n", attrs.Metadata["owner"])
+	return nil
+}
+
+func signedHeaderRefusals(ctx context.Context, client *storage.Client, cfg config) error {
+	approved := md5.Sum([]byte("approved"))
+	md5URL, err := client.Bucket(cfg.bucket).SignedURL("assets/ab/cdef/md5.geojson", &storage.SignedURLOptions{
+		Scheme:      storage.SigningSchemeV4,
+		Method:      http.MethodPut,
+		Expires:     time.Now().Add(15 * time.Minute),
+		ContentType: "application/geo+json",
+		MD5:         base64.StdEncoding.EncodeToString(approved[:]),
+		Headers:     []string{"Content-Encoding: gzip"},
+	})
+	if err != nil {
+		return fmt.Errorf("sign: %w", err)
+	}
+	cases := []struct {
+		name, key, header string
+		body              []byte
+	}{
+		{"content-md5 of other bytes", "md5.geojson", "Content-MD5: " + base64.StdEncoding.EncodeToString(approved[:]), []byte("tampered")},
+		{"outside x-goog-content-length-range", "range.geojson", "x-goog-content-length-range: 0,1", []byte("xx")},
+		{"create-only over an existing object", "once.geojson", "x-goog-if-generation-match: 0", []byte("x")},
+		{"unsupported signed header", "acl.geojson", "x-goog-acl: private", []byte("x")},
+	}
+	for _, c := range cases {
+		signed := md5URL
+		if c.key != "md5.geojson" {
+			if signed, err = cmsSignedURL(client, cfg, "assets/ab/cdef/"+c.key, 15*time.Minute, c.header); err != nil {
+				return fmt.Errorf("sign: %w", err)
+			}
+		}
+		if c.key == "once.geojson" {
+			if status, code, err := sendSigned(ctx, http.MethodPut, signed, "application/geo+json", c.body, c.header); err != nil || status != http.StatusOK {
+				return fmt.Errorf("create-only first PUT: %d %s %v", status, code, err)
+			}
+		}
+		status, code, err := sendSigned(ctx, http.MethodPut, signed, "application/geo+json", c.body, c.header)
+		if err != nil {
+			return fmt.Errorf("%s: %w", c.name, err)
+		}
+		fmt.Printf("%s: %d %s\n", c.name, status, code)
+	}
+	return nil
+}
+
+func signedRefusals(ctx context.Context, client *storage.Client, cfg config) error {
+	if cfg.revokeURL == "" || cfg.revokeToken == "" {
+		return errors.New("E2E_GCS_REVOKE_URL and E2E_GCS_REVOKE_TOKEN are required")
+	}
+	key := "assets/ab/cdef/refused.geojson"
+	signed, err := cmsSignedURL(client, cfg, key, 15*time.Minute)
+	if err != nil {
+		return fmt.Errorf("sign: %w", err)
+	}
+	short, err := cmsSignedURL(client, cfg, key, 2*time.Second)
+	if err != nil {
+		return fmt.Errorf("sign: %w", err)
+	}
+	time.Sleep(3 * time.Second)
+	cases := []struct {
+		name, method, url, contentType string
+	}{
+		{"tampered content type", http.MethodPut, signed, "text/plain"},
+		{"expired", http.MethodPut, short, "application/geo+json"},
+		{"other key", http.MethodPut, strings.Replace(signed, "refused.geojson", "other.geojson", 1), "application/geo+json"},
+		{"wrong method", http.MethodGet, signed, "application/geo+json"},
+	}
+	for _, c := range cases {
+		status, code, err := sendSigned(ctx, c.method, c.url, c.contentType, []byte("x"))
+		if err != nil {
+			return fmt.Errorf("%s: %w", c.name, err)
+		}
+		fmt.Printf("%s: %d %s\n", c.name, status, code)
+	}
+	if err := signedHeaderRefusals(ctx, client, cfg); err != nil {
+		return err
+	}
+	if err := revoke(ctx, cfg); err != nil {
+		return err
+	}
+	status, code, err := sendSigned(ctx, http.MethodPut, signed, "application/geo+json", []byte("x"))
+	if err != nil {
+		return fmt.Errorf("revoked: %w", err)
+	}
+	fmt.Printf("revoked: %d %s\n", status, code)
+	return nil
 }

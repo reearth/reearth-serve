@@ -1,4 +1,5 @@
 import { describe, expect, test, vi } from "vitest";
+import { createHash } from "node:crypto";
 import { SignJWT, importPKCS8 } from "jose";
 import { fixture } from "../../../adapters/memory/fixture";
 import { MemoryProjectStore } from "../../../adapters/memory/site-fixture";
@@ -7,6 +8,7 @@ import { issueCredential, type KeyFile } from "../credential";
 import type { BucketName, CredentialId, ObjectKey } from "../model";
 import type { ServiceRole } from "../../auth/types";
 import { contentRangeOf, declaredHashesOf } from "./app";
+import { canonicalRequest, objectPathOf, parseSignedUrl } from "./signed-url";
 
 const API_HOST = "storage.example.test";
 const API = `https://${API_HOST}`;
@@ -454,5 +456,283 @@ describe("hosts", () => {
   test("with the layer off, the would-be API host falls through to the app", async () => {
     const f = await compatFixture({ compatApiHost: undefined, compatObjectsHost: undefined });
     expect((await onApi(f, "/api/v1/health")).status).toBe(200);
+  });
+});
+
+describe("V4 signed URLs", () => {
+  type SignOptions = {
+    method?: string; path?: string; contentType?: string; contentEncoding?: string; expires?: number; signedAt?: number;
+    headers?: Record<string, string>;
+  };
+
+  const timestampOf = (ms: number) => new Date(ms).toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+
+  async function signedUrl(keyFile: KeyFile, opts: SignOptions = {}): Promise<string> {
+    const timestamp = timestampOf(opts.signedAt ?? Date.now());
+    const signedHeaders = ["content-encoding", "content-type", "host"].filter((h) =>
+      h === "host" || (h === "content-type" ? opts.contentType : opts.contentEncoding) !== undefined)
+      .concat(Object.keys(opts.headers ?? {})).sort();
+    const url = new URL(`${API}${opts.path ?? "/media/assets/ab/signed.txt"}`);
+    const scope = `${timestamp.slice(0, 8)}/auto/storage/goog4_request`;
+    for (const [k, v] of Object.entries({
+      "X-Goog-Algorithm": "GOOG4-RSA-SHA256",
+      "X-Goog-Credential": `${keyFile.client_email}/${scope}`,
+      "X-Goog-Date": timestamp,
+      "X-Goog-Expires": String(opts.expires ?? 900),
+      "X-Goog-SignedHeaders": signedHeaders.join(";"),
+      "x-app-workspace": "ws1",
+      "x-app-project": "p1",
+      "x-app-public": "true",
+    })) url.searchParams.set(k, v);
+    const headers = new Headers(opts.headers);
+    if (opts.contentType) headers.set("Content-Type", opts.contentType);
+    if (opts.contentEncoding) headers.set("Content-Encoding", opts.contentEncoding);
+    const claim = { ...parseSignedUrl(new URL(`${url}&X-Goog-Signature=00`))!, signedHeaders };
+    const canonical = canonicalRequest({ method: opts.method ?? "PUT", url, headers }, claim, { apiHost: API_HOST, objectPath: objectPathOf(url.pathname)! });
+    const digest = Buffer.from(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(canonical))).toString("hex");
+    const key = await crypto.subtle.importKey(
+      "pkcs8", Buffer.from(keyFile.private_key.replace(/-----[^-]+-----|\s/g, ""), "base64"),
+      { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"],
+    );
+    const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, new TextEncoder().encode(
+      ["GOOG4-RSA-SHA256", timestamp, scope, digest].join("\n"),
+    ));
+    url.searchParams.set("X-Goog-Signature", Buffer.from(signature).toString("hex"));
+    return url.toString();
+  }
+
+  const put = (f: Fixture, url: string, body: string, headers: Record<string, string> = {}) =>
+    f.app.request(url, { method: "PUT", headers: { Host: API_HOST, "Content-Length": String(body.length), ...headers }, body });
+
+  async function editor(overrides: Partial<Deps> = {}) {
+    const f = await compatFixture(overrides);
+    const keyFile = await keyFor(f, "editor");
+    return { f, keyFile, headers: bearer(await accessToken(f, keyFile)) };
+  }
+
+  const cms = { contentType: "application/geo+json", contentEncoding: "gzip" };
+  const cmsHeaders = { "Content-Type": cms.contentType, "Content-Encoding": cms.contentEncoding };
+
+  test("a signed PUT with an application's options (content type, Content-Encoding, extra query parameters) stores the bytes with the signed content type and encoding", async () => {
+    const { f, keyFile, headers } = await editor();
+    const res = await put(f, await signedUrl(keyFile, cms), "small body", cmsHeaders);
+    expect(res.status).toBe(200);
+    expect(res.headers.get("x-goog-hash")).toBe("crc32c=Yk9x6g==,md5=KJ2vAHjAOf4oawDFYf2glw==");
+    expect(res.headers.get("x-goog-generation")).toMatch(/^\d{16}$/);
+    const got = await onApi(f, "/storage/v1/b/media/o/assets%2Fab%2Fsigned.txt", { headers });
+    expect(await got.json()).toMatchObject({
+      name: "assets/ab/signed.txt", contentType: "application/geo+json", contentEncoding: "gzip", size: "10", md5Hash: "KJ2vAHjAOf4oawDFYf2glw==",
+    });
+  });
+
+  test("a changed content type is SignatureDoesNotMatch in the XML shape", async () => {
+    const { f, keyFile } = await editor();
+    const res = await put(f, await signedUrl(keyFile, cms), "x", { ...cmsHeaders, "Content-Type": "text/plain" });
+    expect(res.status).toBe(403);
+    expect(await res.text()).toContain("<Code>SignatureDoesNotMatch</Code>");
+  });
+
+  test("the URL writes only its own key, and only with its own method", async () => {
+    const { f, keyFile } = await editor();
+    const url = await signedUrl(keyFile, cms);
+    expect((await put(f, url.replace("signed.txt", "other.txt"), "x", cmsHeaders)).status).toBe(403);
+    const get = await f.app.request(url, { headers: { Host: API_HOST, ...cmsHeaders } });
+    expect(get.status).toBe(403);
+    expect(await get.text()).toContain("<Code>SignatureDoesNotMatch</Code>");
+  });
+
+  test("an expired URL is ExpiredToken 400", async () => {
+    const { f, keyFile } = await editor();
+    const res = await put(f, await signedUrl(keyFile, { ...cms, expires: 1, signedAt: Date.now() - 5_000 }), "x", cmsHeaders);
+    expect(res.status).toBe(400);
+    expect(await res.text()).toContain("<Code>ExpiredToken</Code>");
+  });
+
+  test("a revoked credential's URL is refused", async () => {
+    const { f, keyFile } = await editor();
+    const url = await signedUrl(keyFile, cms);
+    await f.compat.revokeCredential("p1", keyFile.private_key_id as CredentialId, Date.now());
+    const res = await put(f, url, "x", cmsHeaders);
+    expect(res.status).toBe(403);
+    expect(await res.text()).toContain("<Code>AccessDenied</Code>");
+  });
+
+  test("a viewer's signed PUT is refused by the layer", async () => {
+    const f = await compatFixture();
+    const res = await put(f, await signedUrl(await keyFor(f, "viewer"), cms), "x", cmsHeaders);
+    expect(res.status).toBe(403);
+  });
+
+  test("a PUT without Content-Length is 411", async () => {
+    const { f, keyFile } = await editor();
+    const res = await f.app.request(await signedUrl(keyFile), {
+      method: "PUT", headers: { Host: API_HOST }, body: new Blob(["abc"]).stream(), duplex: "half",
+    } as RequestInit);
+    expect(res.status).toBe(411);
+  });
+
+  test("with COMPAT_SIGNED_PATH_PREFIX, a URL rewritten under the prefix still writes the object", async () => {
+    const { f, keyFile, headers } = await editor({ compatSignedPathPrefix: "/uploads" });
+    const rewritten = new URL(await signedUrl(keyFile, cms));
+    rewritten.pathname = `/uploads${rewritten.pathname}`;
+    expect((await put(f, rewritten.toString(), "small body", cmsHeaders)).status).toBe(200);
+    expect((await onApi(f, "/storage/v1/b/media/o/assets%2Fab%2Fsigned.txt", { headers })).status).toBe(200);
+  });
+
+  test("a bearer XML PUT writes the object too", async () => {
+    const { f, headers } = await editor();
+    const res = await put(f, `${API}/media/assets/ab/bearer.txt`, "abc", { ...headers, "Content-Type": "text/plain" });
+    expect(res.status).toBe(200);
+  });
+
+  const md5Of = (text: string) => createHash("md5").update(text).digest("base64");
+  const object = async (f: Fixture, headers: Record<string, string>, bucket = "media", key = "assets/ab/signed.txt") => {
+    const res = await onApi(f, `/storage/v1/b/${bucket}/o/${encodeURIComponent(key)}`, { headers });
+    return res.status === 200 ? await res.json() as { size: string; md5Hash: string; metadata?: Record<string, string> } : res.status;
+  };
+
+  describe("signed write headers are enforced, as GCS does", () => {
+    test("a body whose MD5 differs from the signed Content-MD5 is 400 BadDigest, and neither a new object nor an overwrite lands", async () => {
+      const { f, keyFile, headers } = await editor();
+      const url = await signedUrl(keyFile, { headers: { "content-md5": md5Of("the approved file") } });
+      const evil = await put(f, url, "other bytes of another length", { "Content-MD5": md5Of("the approved file") });
+      expect(evil.status).toBe(400);
+      expect(await evil.text()).toContain("<Code>BadDigest</Code>");
+      expect(await object(f, headers)).toBe(404);
+      expect((await put(f, url, "the approved file", { "Content-MD5": md5Of("the approved file") })).status).toBe(200);
+      expect((await put(f, url, "the approved filE", { "Content-MD5": md5Of("the approved file") })).status).toBe(400);
+      expect(await object(f, headers)).toMatchObject({ md5Hash: md5Of("the approved file") });
+    });
+
+    test("a Content-MD5 that is not a base64 MD5 is 400 InvalidDigest", async () => {
+      const { f, keyFile } = await editor();
+      const res = await put(f, await signedUrl(keyFile, { headers: { "content-md5": "abc" } }), "x", { "Content-MD5": "abc" });
+      expect(res.status).toBe(400);
+      expect(await res.text()).toContain("<Code>InvalidDigest</Code>");
+    });
+
+    test.each([
+      ["longer than", 400, "x".repeat(11), "EntityTooLarge"],
+      ["shorter than", 400, "x", "EntityTooSmall"],
+      ["inside", 200, "x".repeat(5), null],
+    ])("a body %s the signed x-goog-content-length-range 2,10 answers %s", async (_, status, body, code) => {
+      const { f, keyFile, headers } = await editor();
+      const range = { "x-goog-content-length-range": "2,10" };
+      const res = await put(f, await signedUrl(keyFile, { headers: range }), body, range);
+      expect(res.status).toBe(status);
+      if (code) expect(await res.text()).toContain(`<Code>${code}</Code>`);
+      expect(await object(f, headers)).toEqual(code ? 404 : expect.objectContaining({ size: String(body.length) }));
+    });
+
+    test("a create-only URL (x-goog-if-generation-match: 0) writes once, then answers 412", async () => {
+      const { f, keyFile, headers } = await editor();
+      const createOnly = { "x-goog-if-generation-match": "0" };
+      const url = await signedUrl(keyFile, { headers: createOnly });
+      expect((await put(f, url, "first", createOnly)).status).toBe(200);
+      const second = await put(f, url, "second", createOnly);
+      expect(second.status).toBe(412);
+      expect(await second.text()).toContain("<Code>PreconditionFailed</Code>");
+      expect(await object(f, headers)).toMatchObject({ md5Hash: md5Of("first") });
+    });
+
+    test("signed x-goog-meta-* headers become the object's metadata", async () => {
+      const { f, keyFile, headers } = await editor();
+      const meta = { "x-goog-meta-owner": "alice", "x-goog-meta-source": "cms upload" };
+      expect((await put(f, await signedUrl(keyFile, { headers: meta }), "hi", meta)).status).toBe(200);
+      expect(await object(f, headers)).toMatchObject({ metadata: { owner: "alice", source: "cms upload" } });
+    });
+
+    test.each(["x-goog-acl", "x-goog-if-generation-not-match", "x-goog-content-sha256"])("a URL that signs %s, which Serve does not apply, is 501 NotImplemented", async (name) => {
+      const { f, keyFile, headers } = await editor();
+      const signed = { [name]: "1" };
+      const res = await put(f, await signedUrl(keyFile, { headers: signed }), "x", signed);
+      expect(res.status).toBe(501);
+      expect(await res.text()).toContain(`<Code>NotImplemented</Code><Message>Not implemented: signed ${name}.</Message>`);
+      expect(await object(f, headers)).toBe(404);
+    });
+  });
+
+  describe("a bearer XML PUT applies the same headers", () => {
+    test.each<[string, number, Record<string, string>, string | null]>([
+      ["a Content-MD5 of other bytes", 400, { "Content-MD5": md5Of("other") }, "BadDigest"],
+      ["an x-goog-content-length-range it falls outside", 400, { "x-goog-content-length-range": "0,2" }, "EntityTooLarge"],
+      ["x-goog-if-generation-match of an absent object's other generation", 412, { "x-goog-if-generation-match": "1" }, "PreconditionFailed"],
+      ["x-goog-if-generation-not-match", 501, { "x-goog-if-generation-not-match": "1" }, "NotImplemented"],
+      ["a matching Content-MD5 and x-goog-meta-owner", 200, { "Content-MD5": md5Of("abc"), "x-goog-meta-owner": "bob" }, null],
+    ])("%s answers %s", async (_, status, extra, code) => {
+      const { f, headers } = await editor();
+      const res = await put(f, `${API}/media/assets/ab/signed.txt`, "abc", { ...headers, ...extra });
+      expect(res.status).toBe(status);
+      if (code) expect(await res.text()).toContain(`<Code>${code}</Code>`);
+      expect(await object(f, headers)).toEqual(code ? 404 : expect.objectContaining({ metadata: { owner: "bob" } }));
+    });
+  });
+
+  describe("COMPAT_SIGNED_PATH_PREFIX and a bucket named like its first segment", () => {
+    async function uploadsBucket() {
+      const f = await compatFixture({ compatSignedPathPrefix: "/uploads" });
+      await f.compat.insertBucket({ name: "uploads" as BucketName, projectId: "p1", mount: null, createdAt: 0 });
+      const { credential, keyFile } = await issueCredential({
+        projectId: "p1", bucket: "uploads" as BucketName, role: "editor", label: null, createdBy: "u1", apiOrigin: API, now: Date.now(),
+      });
+      await f.compat.insertCredential(credential);
+      const media = bearer(await accessToken(f, await keyFor(f, "editor")));
+      return { f, keyFile, headers: bearer(await accessToken(f, keyFile)), media };
+    }
+
+    test("an unprefixed URL for that bucket writes there, and so does the same URL rewritten under the prefix", async () => {
+      const { f, keyFile, headers } = await uploadsBucket();
+      const url = new URL(await signedUrl(keyFile, { path: "/uploads/a/b.txt" }));
+      expect((await put(f, url.toString(), "direct")).status).toBe(200);
+      expect(await object(f, headers, "uploads", "a/b.txt")).toMatchObject({ md5Hash: md5Of("direct") });
+      url.pathname = `/uploads${url.pathname}`;
+      expect((await put(f, url.toString(), "prefixed")).status).toBe(200);
+      expect(await object(f, headers, "uploads", "a/b.txt")).toMatchObject({ md5Hash: md5Of("prefixed") });
+    });
+
+    test("a URL is written only where it was signed for, never at the other reading of its path", async () => {
+      const { f, keyFile, headers, media } = await uploadsBucket();
+      const url = await signedUrl(keyFile, { path: "/uploads/media/x.txt" });
+      expect((await put(f, url, "in uploads")).status).toBe(200);
+      expect(await object(f, headers, "uploads", "media/x.txt")).toMatchObject({ md5Hash: md5Of("in uploads") });
+      expect(await object(f, media, "media", "x.txt")).toBe(404);
+    });
+  });
+
+  test("a virtual-hosted-style URL is 501 in the XML shape, naming the path style", async () => {
+    const { f, keyFile } = await editor();
+    const res = await f.app.request(`https://media.${API_HOST}/assets/ab/signed.txt${new URL(await signedUrl(keyFile, cms)).search}`, {
+      method: "PUT", headers: { Host: `media.${API_HOST}`, "Content-Length": "1", ...cmsHeaders }, body: "x",
+    });
+    expect(res.status).toBe(501);
+    expect(await res.text()).toContain(`<Code>NotImplemented</Code><Message>Not implemented: virtual-hosted-style URLs. Use path-style URLs on ${API_HOST}.</Message>`);
+  });
+
+  describe("browser CORS", () => {
+    const ORIGIN = "https://cms.example.test";
+
+    test("a preflight from a configured origin is allowed, and the PUT's response is readable", async () => {
+      const { f, keyFile } = await editor({ credentialedOrigins: [ORIGIN] });
+      const url = await signedUrl(keyFile, cms);
+      const preflight = await f.app.request(url, {
+        method: "OPTIONS",
+        headers: { Host: API_HOST, Origin: ORIGIN, "Access-Control-Request-Method": "PUT", "Access-Control-Request-Headers": "content-type,content-encoding" },
+      });
+      expect(preflight.status).toBe(204);
+      expect(preflight.headers.get("Access-Control-Allow-Origin")).toBe(ORIGIN);
+      expect(preflight.headers.get("Access-Control-Allow-Methods")).toContain("PUT");
+      expect(preflight.headers.get("Access-Control-Allow-Headers")).toBe("content-type,content-encoding");
+      const res = await put(f, url, "abc", { ...cmsHeaders, Origin: ORIGIN });
+      expect(res.status).toBe(200);
+      expect(res.headers.get("Access-Control-Allow-Origin")).toBe(ORIGIN);
+    });
+
+    test("another origin gets no CORS headers", async () => {
+      const { f, keyFile } = await editor({ credentialedOrigins: [ORIGIN] });
+      const preflight = await f.app.request(await signedUrl(keyFile, cms), {
+        method: "OPTIONS", headers: { Host: API_HOST, Origin: "https://evil.example", "Access-Control-Request-Method": "PUT" },
+      });
+      expect(preflight.headers.get("Access-Control-Allow-Origin")).toBeNull();
+    });
   });
 });

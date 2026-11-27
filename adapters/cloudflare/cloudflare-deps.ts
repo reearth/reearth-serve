@@ -21,6 +21,7 @@ import { NoopProvisioner, type CustomHostnameProvisioner } from "../../core/site
 import { apexHost } from "../../core/site/middleware";
 import { parseCredentialedOrigins } from "../../core/file/cors";
 import { parseCompatHosts } from "../../core/compat/hosts";
+import { parseSignedPathPrefix } from "../../core/compat/gcs/signed-url";
 import { checkSiteIsolation, PUBLIC_SUFFIX_OVERRIDE_NOTICE } from "../../core/site/isolation";
 import { WebCryptoDeliveryTokenCodec } from "../webcrypto/delivery-token";
 import { parseDeliveryTokenKeys, type DeliveryTokenCodec } from "../../core/access/token";
@@ -106,6 +107,7 @@ export function buildDeps(env: Env): Deps {
     compat: new SqlCompatStore(sql),
     compatApiHost: compatHosts.api,
     compatObjectsHost: compatHosts.objects,
+    compatSignedPathPrefix: parseSignedPathPrefix(env.COMPAT_SIGNED_PATH_PREFIX),
 
     sessions: new KeyValueSessionStore(kv),
     sessionTtlSeconds: SESSION_TTL_SECONDS,

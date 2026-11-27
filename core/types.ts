@@ -133,6 +133,7 @@ export type Deps = ContextDeps & {
   extractionStuckThresholdMs: number;
   limits: Limits;
   compatObjectsHost: string | undefined;
+  compatSignedPathPrefix: string | null;
   serviceAuthorizer: Authorizer;
 };
 

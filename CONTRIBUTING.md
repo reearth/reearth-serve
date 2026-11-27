@@ -57,6 +57,7 @@ E2E_ENDPOINT=http://localhost:5173 npm run test:e2e
 | `E2E_THUMBNAILS` | (unset) | Set to `false` to skip thumbnail tests on a runtime without the jSquash wasm codecs |
 | `E2E_SITE_HOST_SUFFIX` | (unset) | The suffix the server was started with; unset ⇒ the site-host suite is skipped |
 | `E2E_COMPAT_GCS_HOST` | (unset) | The `COMPAT_GCS_HOST` the server was started with; unset ⇒ the compat credential and GCS API tests are skipped. The Go client scenarios (`e2e/compat-gcs/`) also need `go` 1.26 on `PATH`, and are skipped with a warning without it |
+| `E2E_COMPAT_SIGNED_PATH_PREFIX` | (unset) | The `COMPAT_SIGNED_PATH_PREFIX` the server was started with; set, the `signed-put` scenario also writes through a URL rewritten under it |
 | `E2E_MOCK_DOH` | (unset) | Base URL of the mock DoH resolver (`e2e/mock-doh.ts`); unset ⇒ the custom-domain verification tests are skipped |
 
 `npm run test:e2e:node` starts `runtime/node` instead of wrangler and sets
@@ -212,6 +213,7 @@ Set via `npx wrangler secret put <NAME>`:
 | `SITE_FALLBACK_ORIGIN` | No | What a customer CNAMEs their domain at — Cloudflare for SaaS's fallback origin. Unset ⇒ the host of `BASE_URL` |
 | `SITE_DNS_RESOLVER_URL` | No | DNS-over-HTTPS endpoint used for the custom-domain TXT check. Default `https://cloudflare-dns.com/dns-query` |
 | `COMPAT_GCS_HOST` | No | Host the GCS-compatible API answers on (ADR-019), e.g. `storage.example.com`. A bare `host[:port]`; a scheme or path refuses to start. Key files name it as their token endpoint. Unset ⇒ the API is off and issuing a compat credential answers 503 |
+| `COMPAT_SIGNED_PATH_PREFIX` | No | Path an application puts in front of a V4 signed URL's path after signing. A signed request is checked against its path as received, then with the prefix removed (ADR-019 §4). Must start with `/` |
 | `COMPAT_OBJECTS_HOST` | No | Read-only public objects host (ADR-019 §6). A bare `host[:port]`. Reserved: answers 501 until it is built |
 | `ACCOUNTS_URL` | No | Optional adapter setting. Takes workspaces, members and decisions from an external accounts service; see [`adapters/accounts/README.md`](./adapters/accounts/README.md). Excludes `CERBOS_ENDPOINT` and needs `OIDC_ISSUER_URL`. An invalid value stops Node at startup; on Workers every `/api/` and `/files` request answers `500`. |
 
