@@ -14,6 +14,7 @@ import { siteHostDepsFrom } from "../site/handler";
 import { hashingStream, type HashingStream } from "./hash";
 import { listPage, type ListQuery } from "./list";
 import { generateId } from "../asset/usecase/shared";
+import { storedMediaType } from "../file/media-type";
 import { newLeaseToken, type ClaimToken, type CompatPublish, type LeaseToken, type RecordRef, type VersionRecord } from "./repository";
 import {
   parseBucketName,
@@ -475,7 +476,7 @@ function infoOf(
     bucket: bucket.name,
     key,
     size: current.size,
-    contentType: current.contentType,
+    contentType: storedMediaType(current.contentType),
     contentEncoding: current.contentEncoding ?? null,
     generation: record.generation,
     metageneration: 1,

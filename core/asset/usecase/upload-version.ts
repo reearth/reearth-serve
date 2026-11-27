@@ -8,6 +8,7 @@ import { enqueueThumbnail } from "../../thumbnail/queue";
 import type { ThumbnailMessage } from "../../thumbnail/queue";
 import type { JobQueue } from "../../queue/port";
 import type { ExtractionMessage } from "../../extraction/handler";
+import { storedMediaType } from "../../file/media-type";
 
 export interface UploadVersionResult {
   version: AssetVersion;
@@ -24,7 +25,7 @@ export async function uploadVersion(
   assetId: string,
   file: {
     name: string;
-    type: string;
+    type?: string;
     body: ReadableStream<Uint8Array>;
     size: number;
     contentEncoding?: string;
@@ -38,7 +39,7 @@ export async function uploadVersion(
 
   const versionId = options?.versionId ?? generateId();
   const now = Date.now();
-  const contentType = file.type || "application/octet-stream";
+  const contentType = storedMediaType(file.type);
   const key = versionStorageKey(assetId, versionId, file.name);
 
   await storage.put(key, file.body, contentType, file.size,

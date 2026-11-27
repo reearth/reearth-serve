@@ -11,7 +11,8 @@ import { missingObjectResponse } from "./missing-object";
 import { legacyThumbKey, versionThumbKey } from "../asset/usecase/shared";
 import { cacheControlFor, etagMatches, representationEtag, thumbnailCacheControl, type CachePolicy } from "./caching";
 import { addVary, applyCors, preflightResponse, type CorsPolicy } from "./cors";
-import { dispositionHeaders } from "./disposition";
+import { contentHeaders } from "./disposition";
+import { readStoredType, sentMediaType, type StoredType } from "./media-type";
 import { handleAuthSubmit } from "../access/form";
 import { accessModeOf, AUTH_PATH_SEGMENT, resolveAccess, type AccessDeps, type AccessResolution } from "../access/resolve";
 import { decoyPasswordCheck } from "../access/password";
@@ -129,7 +130,7 @@ function legacyLayout(asset: AssetMetadata): Layout {
 interface Located {
   key: string;
   file: StoredFile;
-  contentType: string;
+  mediaType: StoredType;
   contentEncoding?: string;
   displayName: string;
   originalSize: OriginalSize;
@@ -160,7 +161,7 @@ async function locate(storage: FileStorage, layout: Layout, filePath: string): P
     return {
       key: layout.mainKey,
       file,
-      contentType: layout.contentType,
+      mediaType: readStoredType(layout.contentType),
       contentEncoding: layout.contentEncoding,
       displayName: layout.filename,
       originalSize: originalSizeOf(layout.originalSize),
@@ -173,7 +174,7 @@ async function locate(storage: FileStorage, layout: Layout, filePath: string): P
     return {
       key: layout.mainKey,
       file,
-      contentType: layout.contentType,
+      mediaType: readStoredType(layout.contentType),
       contentEncoding: layout.contentEncoding,
       displayName: layout.filename,
       originalSize: originalSizeOf(layout.originalSize),
@@ -187,7 +188,7 @@ async function locate(storage: FileStorage, layout: Layout, filePath: string): P
   return {
     key,
     file,
-    contentType: file.contentType,
+    mediaType: readStoredType(file.contentType),
     contentEncoding: file.contentEncoding,
     displayName: entryPath.split("/").pop() || entryPath,
     originalSize: "unknown",
@@ -269,9 +270,8 @@ async function archiveFallback(
 function serve404Page(located: Located, siteHost: boolean): Response {
   const isGzipStored = located.contentEncoding === "gzip";
   const headers: Record<string, string> = {
-    "Content-Type": located.contentType,
     "Cache-Control": "no-store",
-    ...dispositionHeaders(located.contentType, located.displayName, siteHost),
+    ...contentHeaders(located.mediaType, located.displayName, siteHost),
   };
   if (!isGzipStored) headers["Content-Length"] = String(located.file.size);
   return new Response(
@@ -575,7 +575,7 @@ async function serveRoute(c: Context<AppEnv, "/:id/:path{.+}">): Promise<Respons
 
   const res = await sendLocated(located, {
     ...conditionsOf(c.req.raw),
-    cacheControl: cacheControlFor({ pinned, contentType: located.contentType }, policy),
+    cacheControl: cacheControlFor({ pinned, contentType: sentMediaType(located.mediaType) }, policy),
     storage,
     siteHost: rules.siteDisposition,
     storedEncoding: "omit",
@@ -820,7 +820,7 @@ export async function deliverAsset(storage: FileStorage, request: Request, { obj
     ...conditionsOf(request),
     // GCS answers a gzip object whole whatever the Range (decompressive transcoding), and its clients expect that.
     ...(located.contentEncoding === "gzip" && { range: null, rangeHeader: undefined }),
-    cacheControl: cacheControlFor({ pinned: false, contentType: located.contentType }, policy),
+    cacheControl: cacheControlFor({ pinned: false, contentType: sentMediaType(located.mediaType) }, policy),
     storage,
     siteHost: false,
     quotedEtag,
@@ -832,7 +832,7 @@ export async function deliverAsset(storage: FileStorage, request: Request, { obj
 }
 
 async function sendLocated(located: Located, opts: ServeOptions): Promise<Response> {
-  const { file, key, contentType, contentEncoding, displayName, originalSize } = located;
+  const { file, key, mediaType, contentEncoding, displayName, originalSize } = located;
   const { range, rangeHeader, clientAcceptsGzip, storage } = opts;
   const isGzipStored = contentEncoding === "gzip";
   // Pass the stored gzip bytes through untouched when the client can take
@@ -842,9 +842,8 @@ async function sendLocated(located: Located, opts: ServeOptions): Promise<Respon
   const etag = opts.quotedEtag ?? representationEtag(file.etag, { transformed: isGzipStored && !passthrough });
 
   const common: Record<string, string> = {
-    "Content-Type": contentType,
     "Cache-Control": opts.cacheControl,
-    ...dispositionHeaders(contentType, displayName, opts.siteHost),
+    ...contentHeaders(mediaType, displayName, opts.siteHost),
   };
   if (etag) common["ETag"] = etag;
   // The body differs by Accept-Encoding whenever gzip is on disk.

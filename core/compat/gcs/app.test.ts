@@ -536,6 +536,33 @@ describe("object reads", () => {
     expect(await res.json()).toMatchObject({ error: { code: 401 } });
   });
 
+  test.each(["text/plain;x=,text/html", "image/png;,text/html", "text/plain\r\nX: y"])(
+    "a stored type of %j reads as a sandboxed octet-stream on every path, and its metadata says so",
+    async (stored) => {
+      const { f, auth } = await written();
+      const binding = await f.compat.findBinding("media" as BucketName, "assets/ab/r.txt" as ObjectKey);
+      const asset = f.metadata.assets.get(binding?.kind === "object" ? binding.assetId : "")!;
+      f.metadata.assets.set(asset.id, { ...asset, contentType: stored });
+      const reads = [
+        ["XML GET", "/media/assets/ab/r.txt", "GET"],
+        ["XML HEAD", "/media/assets/ab/r.txt", "HEAD"],
+        ["alt=media", "/storage/v1/b/media/o/assets%2Fab%2Fr.txt?alt=media", "GET"],
+        ["download", "/download/storage/v1/b/media/o/assets%2Fab%2Fr.txt?alt=media", "GET"],
+      ];
+      for (const [name, path, method] of reads) {
+        const res = await onApi(f, path, { method, headers: auth });
+        expect(res.status, name).toBe(200);
+        expect(res.headers.get("Content-Type"), name).toBe("application/octet-stream");
+        expect(res.headers.get("Content-Disposition"), name).toMatch(/^attachment;/);
+        expect(res.headers.get("Content-Security-Policy"), name).toBe("sandbox");
+      }
+      const resource = await (await onApi(f, "/storage/v1/b/media/o/assets%2Fab%2Fr.txt", { headers: auth })).json();
+      expect(resource).toMatchObject({ contentType: "application/octet-stream" });
+      const listed = await (await onApi(f, "/storage/v1/b/media/o?prefix=assets%2Fab%2F", { headers: auth })).json() as { items: { contentType: string }[] };
+      expect(listed.items.map((item) => item.contentType)).toEqual(["application/octet-stream"]);
+    },
+  );
+
   test.each(["acl", "uploadId", "encryption", "retention", "legalHold"])("an XML GET with ?%s answers 501 and not the bytes", async (name) => {
     const { f, auth } = await written();
     const res = await onApi(f, `/media/assets/ab/r.txt?${name}`, { headers: auth });
