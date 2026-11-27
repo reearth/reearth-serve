@@ -54,7 +54,7 @@ export function buildDeps(env: Env): Deps {
   }
   const objectStore = r2Credentials(env);
   const tenancyConfig = parseTenancyConfig(env);
-  const compatHosts = parseCompatHosts({ api: env.COMPAT_GCS_HOST, objects: env.COMPAT_OBJECTS_HOST }, env.BASE_URL);
+  const compatHosts = parseCompatHosts({ api: env.COMPAT_GCS_HOST, objects: env.COMPAT_OBJECTS_HOST }, { baseUrl: env.BASE_URL, siteHostSuffix: env.SITE_HOST_SUFFIX });
   // One KeyValue per invocation, shared by every store that only needs
   // "JSON blob under a key with a TTL" (ADR-012 §2).
   const kv = new CloudflareKeyValue(env.KV);

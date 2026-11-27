@@ -11,6 +11,7 @@
 //	E2E_GCS_REVOKE_URL    (revoked) the REST URL that revokes the credential
 //	E2E_GCS_REVOKE_TOKEN  (revoked) an admin bearer token for that URL
 //	E2E_COMPAT_SIGNED_PATH_PREFIX  (signed-put) COMPAT_SIGNED_PATH_PREFIX of that server, if set
+//	E2E_OBJECTS_PUBLIC_BASES  (cms-url) comma-separated publicBase values on the objects host
 //	E2E_GZIP_PASSTHROUGH  (read) "false" where a proxy rewrites gzip responses in front of Serve, as under wrangler dev, where ReadCompressed(true) receives decompressed bytes (see e2e/compression.test.ts)
 //
 // The compat host is a Host header on the e2e server's port, and its name
@@ -26,6 +27,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/md5"
+	"crypto/rand"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -68,11 +70,12 @@ var scenarios = map[string]func(context.Context, *storage.Client, config) error{
 	"signed-put":              signedPut,
 	"signed-refusals":         signedRefusals,
 	"read":                    read,
+	"cms-url":                 cmsURL,
 }
 
 func main() {
 	if len(os.Args) != 2 || scenarios[os.Args[1]] == nil {
-		fmt.Fprintln(os.Stderr, "usage: compat-gcs <attrs-missing|revoked|write-attrs-list-delete|paging|race|resumable-40m|resumable-16m|signed-put|signed-refusals|read>")
+		fmt.Fprintln(os.Stderr, "usage: compat-gcs <attrs-missing|revoked|write-attrs-list-delete|paging|race|resumable-40m|resumable-16m|signed-put|signed-refusals|read|cms-url>")
 		os.Exit(2)
 	}
 	cfg, err := loadConfig()
@@ -761,5 +764,53 @@ func signedRefusals(ctx context.Context, client *storage.Client, cfg config) err
 		return fmt.Errorf("revoked: %w", err)
 	}
 	fmt.Printf("revoked: %d %s\n", status, code)
+	return nil
+}
+
+// getURL is Re:Earth CMS's public URL rule (server/internal/infrastructure/gcp/file.go).
+func getURL(host *url.URL, uuid, fName string) string {
+	return host.JoinPath("assets", uuid[:2], uuid[2:], fName).String()
+}
+
+func cmsURL(ctx context.Context, client *storage.Client, cfg config) error {
+	bases := strings.Split(os.Getenv("E2E_OBJECTS_PUBLIC_BASES"), ",")
+	if bases[0] == "" {
+		return errors.New("E2E_OBJECTS_PUBLIC_BASES is required")
+	}
+	id := make([]byte, 16)
+	if _, err := rand.Read(id); err != nil {
+		return err
+	}
+	uuid := fmt.Sprintf("%x-%x-%x-%x-%x", id[0:4], id[4:6], id[6:8], id[8:10], id[10:])
+	fName := "tile set 1.json"
+	data := []byte(`{"asset":{"version":"1.0"}}`)
+	obj := client.Bucket(cfg.bucket).Object(path.Join("assets", uuid[:2], uuid[2:], fName))
+	if _, err := write(ctx, obj, "application/json", "", nil, data); err != nil {
+		return fmt.Errorf("write: %w", err)
+	}
+	for _, raw := range bases {
+		base, err := url.Parse(raw)
+		if err != nil {
+			return err
+		}
+		u := getURL(base, uuid, fName)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, u, nil)
+		if err != nil {
+			return err
+		}
+		res, err := http.DefaultClient.Do(req)
+		if err != nil {
+			return fmt.Errorf("GET %s: %w", u, err)
+		}
+		got, err := io.ReadAll(res.Body)
+		_ = res.Body.Close()
+		if err != nil {
+			return err
+		}
+		if res.StatusCode != http.StatusOK || !bytes.Equal(got, data) {
+			return fmt.Errorf("GET %s: want 200 and the written bytes, got %d %q", u, res.StatusCode, got)
+		}
+		fmt.Printf("cms url %s: bytes match\n", strings.TrimPrefix(strings.Replace(u, uuid[2:], "{uuid[2:]}", 1), base.Scheme+"://"))
+	}
 	return nil
 }

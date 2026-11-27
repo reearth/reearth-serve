@@ -146,6 +146,13 @@ describe("loadConfig", () => {
       .toThrow(/COMPAT_OBJECTS_HOST/);
   });
 
+  test("an objects host under the site-host suffix, the API host or the BASE_URL host refuses to start", () => {
+    expect(() => loadConfig({ SITE_HOST_SUFFIX: ".sites.example.net", SITE_REGISTRABLE_DOMAIN: "example.net", BASE_URL: "https://serve.example.test", COMPAT_OBJECTS_HOST: "o.sites.example.net" }))
+      .toThrow(/COMPAT_OBJECTS_HOST/);
+    expect(() => loadConfig({ COMPAT_GCS_HOST: "storage.example.test", COMPAT_OBJECTS_HOST: "objects.storage.example.test" })).toThrow(/COMPAT_OBJECTS_HOST/);
+    expect(() => loadConfig({ BASE_URL: "https://serve.example.test", COMPAT_OBJECTS_HOST: "objects.serve.example.test" })).toThrow(/COMPAT_OBJECTS_HOST/);
+  });
+
   test("site hosts refuse to start on the API's own registrable domain", () => {
     const sites = { SITE_HOST_SUFFIX: ".sites.example.net", SITE_REGISTRABLE_DOMAIN: "example.net" };
     // The Node default BASE_URL does not count: the operator must say it.

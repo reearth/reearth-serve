@@ -7,13 +7,30 @@ export type CompatHost =
   | { kind: "gcs-api" }
   | { kind: "gcs-api-virtual-host" }
   | { kind: "objects-path-style" }
-  | { kind: "objects-virtual-host"; bucket: BucketName };
+  | { kind: "objects-virtual-host"; bucket: BucketName }
+  | { kind: "objects-no-bucket" };
 
 function hostname(host: string): string {
   return host.trim().toLowerCase().replace(/:\d+$/, "").replace(/\.$/, "");
 }
 
-export function parseCompatHosts(env: { api: string | undefined; objects: string | undefined }, baseUrl: string): CompatHostConfig {
+function overlaps(a: string, b: string): boolean {
+  return a === b || a.endsWith(`.${b}`) || b.endsWith(`.${a}`);
+}
+
+function checkObjectsHost(objects: string, others: { name: string; setting: string }[]): void {
+  const name = hostname(objects);
+  for (const other of others) {
+    if (overlaps(name, hostname(other.name))) {
+      throw new Error(`COMPAT_OBJECTS_HOST "${objects}" overlaps the ${other.setting} host "${other.name}"`);
+    }
+  }
+}
+
+export function parseCompatHosts(
+  env: { api: string | undefined; objects: string | undefined },
+  { baseUrl, siteHostSuffix }: { baseUrl: string; siteHostSuffix: string | undefined },
+): CompatHostConfig {
   const cfg = { api: parseCompatHost(env.api), objects: parseCompatHost(env.objects, "COMPAT_OBJECTS_HOST") };
   const apex = new URL(baseUrl).host;
   if (classifyCompatHost(apex, { api: cfg.api, objects: undefined })) {
@@ -24,6 +41,13 @@ export function parseCompatHosts(env: { api: string | undefined; objects: string
   }
   if (cfg.api && cfg.objects && hostname(cfg.api) === hostname(cfg.objects)) {
     throw new Error(`COMPAT_GCS_HOST "${cfg.api}" is the same host as COMPAT_OBJECTS_HOST "${cfg.objects}"`);
+  }
+  if (cfg.objects) {
+    checkObjectsHost(cfg.objects, [
+      { name: apex, setting: "BASE_URL" },
+      ...(cfg.api ? [{ name: cfg.api, setting: "COMPAT_GCS_HOST" }] : []),
+      ...(siteHostSuffix?.trim() ? [{ name: siteHostSuffix.trim().replace(/^\./, ""), setting: "SITE_HOST_SUFFIX" }] : []),
+    ]);
   }
   return cfg;
 }
@@ -37,7 +61,7 @@ export function classifyCompatHost(host: string | null | undefined, cfg: CompatH
   if (objects && name === objects) return { kind: "objects-path-style" };
   if (objects && name.endsWith(`.${objects}`)) {
     const bucket = parseBucketName(name.slice(0, -objects.length - 1));
-    return bucket ? { kind: "objects-virtual-host", bucket } : null;
+    return bucket ? { kind: "objects-virtual-host", bucket } : { kind: "objects-no-bucket" };
   }
   if (api && name.endsWith(`.${api}`) && parseBucketName(name.slice(0, -api.length - 1))) return { kind: "gcs-api-virtual-host" };
   return null;
@@ -75,8 +99,8 @@ if (import.meta.vitest) {
     ["media.objects.example.com", cfg, { kind: "objects-virtual-host", bucket: "media" as BucketName }],
     ["Media.Objects.Example.com:443", cfg, { kind: "objects-virtual-host", bucket: "media" as BucketName }],
     ["my.dotted.bucket.objects.example.com", cfg, { kind: "objects-virtual-host", bucket: "my.dotted.bucket" as BucketName }],
-    ["ab.objects.example.com", cfg, null],
-    ["goog-x.objects.example.com", cfg, null],
+    ["ab.objects.example.com", cfg, { kind: "objects-no-bucket" }],
+    ["goog-x.objects.example.com", cfg, { kind: "objects-no-bucket" }],
     ["xobjects.example.com", cfg, null],
     ["storage.example.com.evil.test", cfg, null],
     ["example.com", cfg, null],
@@ -97,13 +121,26 @@ if (import.meta.vitest) {
     ["https://media.objects.example.com", undefined, "objects.example.com", "COMPAT_OBJECTS_HOST"],
     ["https://example.com", "storage.example.com", "storage.example.com:8443", "COMPAT_OBJECTS_HOST"],
   ])("BASE_URL %s with COMPAT_GCS_HOST %s and COMPAT_OBJECTS_HOST %s is a config error naming %s", (baseUrl, api, objects, setting) => {
-    expect(() => parseCompatHosts({ api, objects }, baseUrl)).toThrow(setting);
+    expect(() => parseCompatHosts({ api, objects }, { baseUrl, siteHostSuffix: undefined })).toThrow(setting);
+  });
+
+  test.each<[string, string | undefined, string | undefined, string, string]>([
+    ["https://serve.example.com", undefined, ".sites.example.com", "objects.sites.example.com", "under the site-host suffix"],
+    ["https://serve.example.com", undefined, ".sites.example.com", "sites.example.com", "the site-host suffix's base"],
+    ["https://serve.example.com", undefined, ".a.objects.example.com", "objects.example.com", "over the site-host suffix"],
+    ["https://serve.example.com", undefined, undefined, "objects.serve.example.com", "under the BASE_URL host"],
+    ["https://serve.example.com", "storage.example.com", undefined, "objects.storage.example.com", "under the API host"],
+    ["https://serve.example.com", "media.objects.example.com", undefined, "objects.example.com", "over the API host"],
+    ["http://localhost:8788", "storage.localhost:8788", ".localhost:8788", "objects.localhost:8788", "under the BASE_URL host"],
+  ])("BASE_URL %s, COMPAT_GCS_HOST %s and SITE_HOST_SUFFIX %s refuse COMPAT_OBJECTS_HOST %s (%s)", (baseUrl, api, siteHostSuffix, objects) => {
+    expect(() => parseCompatHosts({ api, objects }, { baseUrl, siteHostSuffix })).toThrow("COMPAT_OBJECTS_HOST");
   });
 
   test("distinct compat hosts beside the apex parse", () => {
-    expect(parseCompatHosts({ api: "storage.example.com", objects: "objects.example.com" }, "https://example.com"))
-      .toEqual({ api: "storage.example.com", objects: "objects.example.com" });
-    expect(parseCompatHosts({ api: undefined, objects: undefined }, "https://example.com")).toEqual({ api: undefined, objects: undefined });
+    const site = { baseUrl: "https://serve.example.com", siteHostSuffix: ".sites.example.com" };
+    expect(parseCompatHosts({ api: "storage.example.com", objects: "objects.example.net" }, site))
+      .toEqual({ api: "storage.example.com", objects: "objects.example.net" });
+    expect(parseCompatHosts({ api: undefined, objects: undefined }, site)).toEqual({ api: undefined, objects: undefined });
   });
 
   test("a site host stays a site host, and the compat host is not taken for one only because it is checked first", () => {

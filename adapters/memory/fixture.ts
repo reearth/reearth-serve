@@ -8,7 +8,6 @@
  * labels of that shape (ADR-013 B1).
  */
 
-import { gzipSync } from "node:zlib";
 import { createApp } from "../../core/app";
 import type { Deps } from "../../core/types";
 import type { AssetMetadata, AssetVersion } from "../../core/asset/model";
@@ -36,6 +35,10 @@ export const SINGLE_FILE_ID = "fedcba9876543210";
 export const INDEX_HTML = "<!doctype html><title>site</title>";
 export const DOCS_HTML = "<!doctype html><title>docs</title>";
 export const APP_JS = "console.log('hello from a bundle that is long enough to matter')";
+// Fixed bytes: gzipSync writes the host OS into the header, so its output differs between macOS and Linux.
+export const APP_JS_GZIP = Uint8Array.from(atob(
+  "H4sIAAAAAAAA/wXBQQ6AMAgEwK/srXrxT1gRTCibtPT/znTmYugVtKO5RhDv5IDg3vmEolwK30IwDZrc5ihiSJXOdv63BVCyQAAAAA==",
+), (c) => c.charCodeAt(0));
 /** The archive's own error page, seeded on demand by {@link seedNotFoundPage}. */
 export const NOT_FOUND_HTML = "<!doctype html><title>not found</title><p>gone";
 
@@ -396,8 +399,7 @@ export async function fixture(overrides?: Partial<Deps>) {
   await storage.put(`${prefix}/site.zip`, stream(bytes("PK\x03")), "application/zip", 3);
   await storage.put(`${prefix}/files/index.html`, stream(bytes(INDEX_HTML)), "text/html; charset=utf-8", INDEX_HTML.length);
   await storage.put(`${prefix}/files/docs/index.html`, stream(bytes(DOCS_HTML)), "text/html; charset=utf-8", DOCS_HTML.length);
-  const gz = new Uint8Array(gzipSync(APP_JS));
-  await storage.put(`${prefix}/files/assets/app.js`, stream(gz), "text/javascript", gz.byteLength, { contentEncoding: "gzip" });
+  await storage.put(`${prefix}/files/assets/app.js`, stream(APP_JS_GZIP), "text/javascript", APP_JS_GZIP.byteLength, { contentEncoding: "gzip" });
 
   // Legacy single-file asset with no version row.
   const geojson = '{"type":"FeatureCollection","features":[]}';
@@ -519,4 +521,13 @@ export function memberTenancy(members: MemberStore): Tenancy {
       return { user: caller ? { id: caller.sub, sub: caller.sub } : null, scope };
     },
   };
+}
+
+if (import.meta.vitest) {
+  const { test, expect } = import.meta.vitest;
+  const { gunzipSync } = await import("node:zlib");
+
+  test("APP_JS_GZIP is APP_JS gzipped", () => {
+    expect(gunzipSync(APP_JS_GZIP).toString()).toBe(APP_JS);
+  });
 }

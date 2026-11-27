@@ -145,6 +145,13 @@ export function constantTimeEqual(a: string, b: string): boolean {
   return mismatch === 0;
 }
 
+const DECOY_SALT = new Uint8Array(16);
+
+export async function decoyPasswordCheck(authorization: string | null): Promise<void> {
+  const password = basicPassword(authorization);
+  if (password !== null) await derive(password, DECOY_SALT, DEFAULT_ITERATIONS);
+}
+
 /** `Authorization: Basic` → the password half, or null. The user part is ignored. */
 export function basicPassword(authorization: string | null | undefined): string | null {
   const match = (authorization ?? "").match(/^Basic\s+(\S+)$/i);

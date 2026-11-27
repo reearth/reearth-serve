@@ -11,6 +11,10 @@ export default defineConfig({
     reactRouter(),
     tsconfigPaths(),
   ],
+  // Vite answers 403 to a Host outside localhost and *.localhost.
+  server: {
+    allowedHosts: process.env.SERVE_DEV_ALLOWED_HOSTS?.split(",").filter(Boolean),
+  },
   // jSquash ships .wasm files that the Worker imports as default modules.
   // Vite's dep-optimizer otherwise rewrites them to file:// URLs, which the
   // Workers runtime cannot fetch — generation throws "Fetch API cannot load

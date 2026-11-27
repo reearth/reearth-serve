@@ -13,13 +13,15 @@ import { sessionMiddleware } from "./session/middleware";
 import { normalizeSiteHostSuffix, siteHostMiddleware } from "./site/middleware";
 import { composeSiteHostResolver } from "./site/resolver";
 import { bindsCaller, tenancyErrorResponse, tenancyMiddleware, TENANCY_RETRY_AFTER_SECONDS } from "./tenancy/middleware";
-import type { AppEnv, Deps } from "./types";
+import type { AppEnv, DeliveryHost, Deps } from "./types";
 import type { BearerVerifier } from "./access/restricted";
 import { buildSpec, jsonError, jsonResponse } from "./openapi";
 import { compatHostMiddleware, type CompatHost } from "./compat/hosts";
 import { compatApiOrigin } from "./compat/handler";
 import { gcsApp } from "./compat/gcs/app";
 import { gcsError } from "./compat/gcs/wire";
+import { objectReader } from "./compat/layer";
+import { objectsHost } from "./compat/objects-host";
 import { healthExamples } from "./openapi-examples";
 import { healthResponseSchema } from "../shared/openapi";
 
@@ -44,9 +46,11 @@ export function createApp(deps: Deps) {
     return c.text("Internal Server Error", 500);
   });
 
+  const site = siteApp(deps);
+  const objects = objectsApp(deps);
   app.use("*", compatHostMiddleware(
     { api: deps.compatApiHost, objects: deps.compatObjectsHost },
-    compatDispatch(deps),
+    compatDispatch(deps, (req) => objects.fetch(req)),
   ));
 
   // Site hosts (ADR-013 B1). First of the remaining middlewares and ahead of every
@@ -56,7 +60,6 @@ export function createApp(deps: Deps) {
   // OIDC and session tracking — a hosted page is pure file delivery, and
   // minting an anonymous session per page view would burn a KV write for an
   // identity nothing reads.
-  const site = siteApp(deps);
   // The resolver decides ID hosts, preview hosts and named hosts in that order
   // (ADR-013 B6). It needs the normalised suffix to rebuild the full hostname
   // a `site_hosts` row is keyed by; when site hosts are off the middleware
@@ -109,7 +112,7 @@ export function createApp(deps: Deps) {
   const bearerVerifier: BearerVerifier | null = deps.auth.issuer
     ? (jwt) => verifyAccessToken(jwt, deps.auth)
     : null;
-  app.use("*", injectDeps(deps, { siteHost: false, bearerVerifier }));
+  app.use("*", injectDeps(deps, { deliveryHost: "apex", bearerVerifier }));
 
   // Public API (versioned)
   app.get("/api/v1/health",
@@ -214,27 +217,43 @@ function siteApp(deps: Deps) {
   // delivery, and the handlers below read neither `user` nor `sessionId`. No
   // bearer verifier either: a restricted asset on a site host accepts only a
   // delivery token (ADR-014 §5).
-  app.use("*", injectDeps(deps, { siteHost: true, bearerVerifier: null }));
+  app.use("*", injectDeps(deps, { deliveryHost: "site", bearerVerifier: null }));
   app.route("/files", fileRoutes);
   return app;
 }
 
-function compatDispatch(deps: Deps): (host: CompatHost, req: Request) => Response | Promise<Response> {
+function objectsApp(deps: Deps) {
+  const app = new Hono<AppEnv>();
+  app.use("*", injectDeps(deps, { deliveryHost: "objects", bearerVerifier: null }));
+  app.route("/files", fileRoutes);
+  return app;
+}
+
+function compatDispatch(
+  deps: Deps,
+  objectsFetch: (req: Request) => Response | Promise<Response>,
+): (host: CompatHost, req: Request) => Response | Promise<Response> {
   const apiOrigin = compatApiOrigin(deps.compatApiHost, deps.baseUrl);
   const gcs = apiOrigin ? gcsApp(deps, apiOrigin) : null;
+  const objects = objectsHost(objectReader(deps), objectsFetch);
   return (host, req) => {
-    if (host.kind === "gcs-api" && gcs) return gcs.fetch(req);
-    if (host.kind === "gcs-api-virtual-host") {
-      return gcsError("xml", "not_implemented", `Not implemented: virtual-hosted-style URLs. Use path-style URLs on ${deps.compatApiHost}.`);
+    switch (host.kind) {
+      case "gcs-api":
+        return gcs ? gcs.fetch(req) : gcsError("xml", "not_implemented");
+      case "gcs-api-virtual-host":
+        return gcsError("xml", "not_implemented", `Not implemented: virtual-hosted-style URLs. Use path-style URLs on ${deps.compatApiHost}.`);
+      case "objects-path-style":
+      case "objects-virtual-host":
+      case "objects-no-bucket":
+        return objects(host, req);
     }
-    return gcsError("xml", "not_implemented");
   };
 }
 
 /** Request-independent collaborators, read off the context by every handler. */
 function injectDeps(
   deps: Deps,
-  opts: { siteHost: boolean; bearerVerifier: BearerVerifier | null },
+  opts: { deliveryHost: DeliveryHost; bearerVerifier: BearerVerifier | null },
 ): MiddlewareHandler<AppEnv> {
   return async (c, next) => {
     c.set("metadata", deps.metadata);
@@ -263,7 +282,7 @@ function injectDeps(
     c.set("deliveryTokens", deps.deliveryTokens);
     c.set("compat", deps.compat);
     c.set("compatApiHost", deps.compatApiHost);
-    c.set("siteHost", opts.siteHost);
+    c.set("deliveryHost", opts.deliveryHost);
     c.set("bearerVerifier", opts.bearerVerifier);
     await next();
   };
